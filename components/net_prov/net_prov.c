@@ -13,9 +13,14 @@
 #include "mdns.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "ptt_fsm.h"
 
 static const char *TAG = "net";
 static const char *NVS_NS = "vfo";
+
+/* Transmit time-out, seconds. The primary human-error guard for toggle PTT,
+ * so it is configurable and persisted rather than compiled in. */
+static uint16_t s_tot_s = PTT_TOT_DEFAULT_MS / 1000;
 
 static vfo_cfg_t          s_cfg;
 static EventGroupHandle_t s_events;
@@ -69,6 +74,7 @@ static void load_or_seed(void)
         if (nvs_get_u8(h, "vol",   &v) == ESP_OK) s_volume  = v;
         if (nvs_get_u8(h, "mic",   &v) == ESP_OK) s_micgain = v;
         if (nvs_get_u8(h, "boots", &v) == ESP_OK) s_boots   = v;
+        nvs_get_u16(h, "tot", &s_tot_s);
         nvs_close(h);
     }
     /* Count this boot straight away. If we never reach net_prov_boot_ok(),
@@ -178,6 +184,36 @@ bool net_prov_is_connected(void)    { return s_connected; }
  * enough of. With WiFi and USB-NCM both up there was not enough left for the
  * TCI client's 4 kB transmit task -- the knob connected, received, and could
  * not send a single command. */
+/* Persist the endpoint and credentials written by the configuration page. */
+esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
+{
+    if (!cfg) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    nvs_set_str(h, "ssid", cfg->ssid);
+    nvs_set_str(h, "pass", cfg->pass);
+    nvs_set_str(h, "host", cfg->tci_host);
+    nvs_set_u16(h, "port", cfg->tci_port);
+    err = nvs_commit(h);
+    nvs_close(h);
+    if (err == ESP_OK) s_cfg = *cfg;
+    return err;
+}
+
+uint16_t net_prov_tot_s(void) { return s_tot_s; }
+
+void net_prov_save_tot(uint16_t seconds)
+{
+    if (seconds == s_tot_s) return;
+    s_tot_s = seconds;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u16(h, "tot", seconds);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 esp_err_t net_prov_wifi_stop(void)
 {
     s_connected = false;

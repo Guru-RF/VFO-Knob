@@ -28,6 +28,14 @@ void    net_prov_save_audio(uint8_t volume, uint8_t mic_gain);
 
 esp_err_t net_prov_init(void);
 
+/* Written by the HTTP configuration page. Takes effect on the next boot: the
+ * transport is chosen once at startup and the TCI client has no restart path. */
+esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg);
+
+/* Transmit time-out in seconds, persisted. */
+uint16_t net_prov_tot_s(void);
+void     net_prov_save_tot(uint16_t seconds);
+
 /* Boot-loop guard. net_prov_boot_count() is incremented on every boot and
  * cleared once the device has been up long enough to be considered healthy;
  * call net_prov_boot_ok() from a timer for that. Three rapid boots in a row

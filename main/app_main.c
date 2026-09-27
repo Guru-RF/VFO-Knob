@@ -29,6 +29,7 @@
 #include "ui.h"
 #include "usb_net.h"
 #include "netlog.h"
+#include "webcfg.h"
 
 #include "lwip/sockets.h"
 #include "vfo_tune.h"
@@ -606,6 +607,11 @@ void app_main(void)
     bring_up("nvs", net_prov_init);
     /* net_prov_init() brings up esp_netif, so the log server can bind now. */
     netlog_start();
+    /* Configuration page. Started before the transport is chosen so it is
+     * reachable even when nothing else comes up -- which is exactly when
+     * someone needs to correct an SSID or a host address. */
+    bring_up("webcfg", webcfg_start);
+    tci_set_tot_ms((uint32_t)net_prov_tot_s() * 1000u);
 
     /* Three failed boots in a row: come up with the bare minimum so the device
      * stays usable and flashable while the cause is found. */

@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VFO-Knob</title>
+<style>
+:root{--bg:#14161a;--panel:#1c1f26;--line:#2b303b;--fg:#e6e9ef;--dim:#8b93a5;
+      --accent:#f2a33c;--ok:#4caf7d;--bad:#e5534b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 4px;letter-spacing:.04em}
+.sub{color:var(--dim);margin:0 0 20px;font-size:12px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:14px 16px;margin-bottom:14px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+   margin:0 0 12px;font-weight:600}
+.row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;
+     border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .k{color:var(--dim)}
+.row .v{font-variant-numeric:tabular-nums;text-align:right}
+label{display:block;margin:10px 0 4px;color:var(--dim);font-size:12px}
+input{width:100%;padding:8px 10px;background:#11131799;color:var(--fg);
+      border:1px solid var(--line);border-radius:6px;font:inherit}
+input:focus{outline:none;border-color:var(--accent)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+button{margin-top:14px;padding:9px 16px;border:0;border-radius:6px;
+       background:var(--accent);color:#1a1205;font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--dim);border:1px solid var(--line)}
+button:active{transform:translateY(1px)}
+.note{color:var(--dim);font-size:12px;margin-top:10px}
+.pill{padding:1px 8px;border-radius:99px;font-size:12px}
+.up{background:#4caf7d22;color:var(--ok)} .down{background:#e5534b22;color:var(--bad)}
+#msg{margin-top:10px;font-size:13px;min-height:18px}
+@media(max-width:520px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>VFO-Knob</h1>
+<p class="sub" id="ident">&nbsp;</p>
+
+<section>
+  <h2>Status</h2>
+  <div id="status"></div>
+</section>
+
+<section>
+  <h2>AetherSDR</h2>
+  <div class="grid">
+    <div><label>Host (IP, or a name ending .local)</label><input id="host"></div>
+    <div><label>Port</label><input id="port" inputmode="numeric"></div>
+  </div>
+  <label>Transmit time-out (seconds, 30&ndash;600)</label>
+  <input id="tot" inputmode="numeric">
+  <p class="note">The time-out is the main guard against a toggle-PTT left keyed.
+     Applies on the next boot.</p>
+</section>
+
+<section>
+  <h2>WiFi</h2>
+  <div class="grid">
+    <div><label>SSID</label><input id="ssid"></div>
+    <div><label>Password</label><input id="pass" type="password"
+         placeholder="unchanged"></div>
+  </div>
+  <p class="note">Used when no host answers over the USB cable. Applies on the
+     next boot.</p>
+</section>
+
+<section>
+  <h2>Audio</h2>
+  <div class="grid">
+    <div><label>Volume (0&ndash;100)</label><input id="vol" inputmode="numeric"></div>
+    <div><label>Mic gain (0&ndash;100)</label><input id="mic" inputmode="numeric"></div>
+  </div>
+  <p class="note">Volume and mic gain take effect immediately.</p>
+</section>
+
+<button id="save">Save</button>
+<button id="reboot" class="ghost">Reboot</button>
+<div id="msg"></div>
+</div>
+
+<script>
+const $=i=>document.getElementById(i);
+const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const row=(k,v)=>`<div class="row"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+function hhmmss(s){const h=s/3600|0,m=(s%3600)/60|0;return `${h}h ${m}m ${s%60|0}s`}
+function mhz(hz){return (hz/1e6).toFixed(6)+' MHz'}
+
+async function refresh(){
+  let s; try{ s=await (await fetch('/api/status')).json() }catch(e){ return }
+  $('ident').textContent = `${s.version} · ${s.transport} · up ${hhmmss(s.uptime_s)}`;
+  const pill = s.link==='READY' ? '<span class="pill up">READY</span>'
+                                : `<span class="pill down">${esc(s.link)}</span>`;
+  $('status').innerHTML =
+      row('TCI link', pill)
+    + row('Frequency', mhz(s.freq))
+    + row('Mode / filter', `${esc(s.mode)} ${s.filt_lo}..${s.filt_hi}`)
+    + row('S-meter', s.smeter.toFixed(0)+' dBm')
+    + row('PTT', esc(s.ptt))
+    + row('Transport', esc(s.transport))
+    + row('USB address', esc(s.usb_ip||'—'))
+    + row('WiFi address', esc(s.wifi_ip||'—'))
+    + row('Sent / echoed', `${s.sends} / ${s.echoes}`)
+    + row('Connects / closes', `${s.connects} / ${s.closes}`)
+    + row('Rejects / reconciles', `${s.rejects} / ${s.reconciles}`)
+    + row('Audio frames', `${s.aud_frames} (${s.aud_dropped} dropped)`)
+    + row('Free internal RAM', `${s.heap_internal} B`)
+    + row('Free PSRAM', `${s.heap_psram} B`)
+    + row('Boots since healthy', s.boots);
+}
+
+async function load(){
+  const c=await (await fetch('/api/config')).json();
+  $('host').value=c.host; $('port').value=c.port; $('ssid').value=c.ssid;
+  $('vol').value=c.vol;   $('mic').value=c.mic;   $('tot').value=c.tot;
+}
+
+$('save').onclick=async()=>{
+  const b=new URLSearchParams();
+  for(const k of ['host','port','ssid','vol','mic','tot']) b.append(k,$(k).value);
+  if($('pass').value) b.append('pass',$('pass').value);
+  const r=await fetch('/api/config',{method:'POST',body:b});
+  $('msg').textContent = r.ok ? 'Saved. Network and time-out changes apply on reboot.'
+                              : 'Save failed: '+await r.text();
+  $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+};
+
+$('reboot').onclick=async()=>{
+  $('msg').textContent='Rebooting…'; $('msg').style.color='var(--dim)';
+  try{ await fetch('/api/reboot',{method:'POST'}) }catch(e){}
+  setTimeout(()=>{ $('msg').textContent='Reconnecting…'; poll() },4000);
+};
+function poll(){ const t=setInterval(async()=>{
+  try{ await fetch('/api/status'); clearInterval(t); location.reload() }catch(e){} },2000) }
+
+load(); refresh(); setInterval(refresh,2000);
+</script>
+</body></html>
