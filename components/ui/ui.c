@@ -75,8 +75,14 @@ static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
-static lv_obj_t *s_mic_arc, *s_swr_arc, *s_rx_ticks, *s_tx_ticks;
-static lv_obj_t *s_swr_zone[3];
+static lv_obj_t *s_mic_arc, *s_rx_ticks, *s_tx_ticks;
+#define SWR_ZONES 3
+static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
+    { 1.0f, 2.0f, 0x4DD87A },   /* green */
+    { 2.0f, 2.5f, 0xFFB84D },   /* amber */
+    { 2.5f, 3.0f, 0xFF4D4D },   /* red   */
+};
+static lv_obj_t *s_swr_zone[SWR_ZONES];
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL,
@@ -589,16 +595,11 @@ static void build(void)
     lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
     lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
 
-    /* The scale itself is banded green / amber / red, rather than a single
-     * bar that changes colour. You can then see where the needle sits
-     * relative to the danger zone without reading a number -- which is the
-     * whole point of an analogue-looking meter. */
-    static const struct { float from, to; uint32_t rgb; } ZONES[] = {
-        { 1.0f, 2.0f, 0x4DD87A },   /* green  */
-        { 2.0f, 2.5f, 0xFFB84D },   /* amber  */
-        { 2.5f, 3.0f, 0xFF4D4D },   /* red    */
-    };
-    for (size_t z = 0; z < sizeof ZONES / sizeof ZONES[0]; z++) {
+    /* Three arcs laid end to end, each filling independently. The bar is
+     * therefore green up to 2.0, continues amber to 2.5 and red beyond --
+     * rather than one bar that changes colour all at once. Reading it is then
+     * a glance at how far into the red it has gone, not a colour lookup. */
+    for (size_t z = 0; z < SWR_ZONES; z++) {
         lv_obj_t *b = lv_arc_create(s_scr);
         lv_obj_set_size(b, ARC_R0 * 2, ARC_R0 * 2);
         lv_obj_center(b);
@@ -606,29 +607,64 @@ static void build(void)
         int a1 = (int)(swr_frac(ZONES[z].to)   * SWR_SPAN);
         lv_arc_set_rotation(b, SWR_ROT + a0);
         lv_arc_set_bg_angles(b, 0, a1 - a0);
+        lv_arc_set_range(b, 0, 1000);
+        lv_arc_set_value(b, 0);
         lv_obj_remove_style(b, NULL, LV_PART_KNOB);
         lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_arc_width(b, 12, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(b, lv_color_hex(ZONES[z].rgb), LV_PART_MAIN);
-        lv_obj_set_style_arc_opa(b, LV_OPA_40, LV_PART_MAIN);
-        lv_obj_set_style_arc_width(b, 0, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(b, C_SUBTLE, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(b, 12, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(b, lv_color_hex(ZONES[z].rgb), LV_PART_INDICATOR);
         lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
         s_swr_zone[z] = b;
     }
 
-    s_swr_arc = lv_arc_create(s_scr);
-    lv_obj_set_size(s_swr_arc, ARC_R0 * 2, ARC_R0 * 2);
-    lv_obj_center(s_swr_arc);
-    lv_arc_set_rotation(s_swr_arc, SWR_ROT);
-    lv_arc_set_bg_angles(s_swr_arc, 0, SWR_SPAN);
-    lv_arc_set_range(s_swr_arc, 0, 1000);
-    lv_arc_set_value(s_swr_arc, 0);
-    lv_obj_remove_style(s_swr_arc, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(s_swr_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_swr_arc, 0, LV_PART_MAIN);   /* bands show through */
-    lv_obj_set_style_arc_width(s_swr_arc, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_swr_arc, C_PEAK, LV_PART_INDICATOR);
-    lv_obj_add_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
+    add_ticks();
+    add_tx_ticks();
+    lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
+
+    /* In transmit the arc changes meaning entirely: MIC level across the left
+     * half, SWR across the right. Two separate arcs rather than one repurposed
+     * one, so the split is visible at a glance and neither has to share a
+     * scale with the other. */
+    s_mic_arc = lv_arc_create(s_scr);
+    lv_obj_set_size(s_mic_arc, ARC_R0 * 2, ARC_R0 * 2);
+    lv_obj_center(s_mic_arc);
+    lv_arc_set_rotation(s_mic_arc, AUD_ROT);
+    lv_arc_set_bg_angles(s_mic_arc, 0, AUD_SPAN);
+    lv_arc_set_range(s_mic_arc, 0, 1000);
+    lv_arc_set_value(s_mic_arc, 0);
+    lv_obj_remove_style(s_mic_arc, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(s_mic_arc, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_mic_arc, C_SUBTLE, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_mic_arc, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
+
+    /* Three arcs laid end to end, each filling independently. The bar is
+     * therefore green up to 2.0, continues amber to 2.5 and red beyond --
+     * rather than one bar that changes colour all at once. Reading it is then
+     * a glance at how far into the red it has gone, not a colour lookup. */
+    for (size_t z = 0; z < SWR_ZONES; z++) {
+        lv_obj_t *b = lv_arc_create(s_scr);
+        lv_obj_set_size(b, ARC_R0 * 2, ARC_R0 * 2);
+        lv_obj_center(b);
+        int a0 = (int)(swr_frac(ZONES[z].from) * SWR_SPAN);
+        int a1 = (int)(swr_frac(ZONES[z].to)   * SWR_SPAN);
+        lv_arc_set_rotation(b, SWR_ROT + a0);
+        lv_arc_set_bg_angles(b, 0, a1 - a0);
+        lv_arc_set_range(b, 0, 1000);
+        lv_arc_set_value(b, 0);
+        lv_obj_remove_style(b, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(b, 12, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(b, C_SUBTLE, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(b, 12, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(b, lv_color_hex(ZONES[z].rgb), LV_PART_INDICATOR);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+        s_swr_zone[z] = b;
+    }
 
     /* Signal, as a number as well as an arc: an arc shows trend, a number
      * lets you report a readable signal report. */
@@ -926,18 +962,27 @@ void ui_update(const ui_state_t *st)
 
         /* SWR: 1.0 at the left, 3.0 at full scale. Treat exactly 1.00 as
          * "not measured yet" rather than as a perfect match. */
+        /* Fill each zone by how far the reading reaches into it. */
         float w = st->tx_swr;
-        lv_arc_set_value(s_swr_arc, (int)(swr_frac(w) * 1000));
+        for (size_t z = 0; z < SWR_ZONES; z++) {
+            float lo = ZONES[z].from, hi = ZONES[z].to;
+            float f = (w <= lo) ? 0.0f : (w >= hi) ? 1.0f : (w - lo) / (hi - lo);
+            lv_arc_set_value(s_swr_zone[z], (int)(f * 1000));
+        }
         /* Yellow from 2.0, red from 2.5 -- matching the printed scale, so the
          * colour and the tick the needle sits on always agree. */
-        /* The value arc is bright and opaque over the banded scale, so the
-         * reading is legible whichever zone it lands in. */
-        lv_obj_set_style_arc_color(s_swr_arc,
-            w >= 2.5f ? C_DANGER : w >= 2.0f ? C_WARN : C_GREEN,
-            LV_PART_INDICATOR);
-
-        lv_label_set_text_fmt(s_srd, "%.0f W", (double)st->tx_fwd_w);
-        lv_label_set_text_fmt(s_dbm, "SWR %.1f", (double)(w < 1.0f ? 1.0f : w));
+        /* SWR is the number that tells you to stop, so it gets the big slot.
+         *
+         * ALC is the software ALC peak -- the radio limiting drive to protect
+         * itself. It is NOT compression: a speech compressor deliberately
+         * reduces dynamic range to raise average power, which is a different
+         * measurement entirely. AetherSDR has a compressor with its own
+         * gain-reduction meter, but tx_sensors carries exactly five fields
+         * (mic, fwd, peak, swr, alc) and there is no compressor reading
+         * anywhere in the TCI surface. See TODO.md. */
+        lv_label_set_text_fmt(s_srd, "SWR %.1f", (double)(w < 1.0f ? 1.0f : w));
+        lv_label_set_text_fmt(s_dbm, "%.1f W   ALC %.0f",
+                              (double)st->tx_fwd_w, (double)st->tx_alc);
     }
 
     if (st->tx != s_was_tx) {
@@ -948,17 +993,15 @@ void ui_update(const ui_state_t *st)
             lv_obj_add_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
-            for (int z = 0; z < 3; z++)
+            for (size_t z = 0; z < SWR_ZONES; z++)
                 lv_obj_remove_flag(s_swr_zone[z], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_remove_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
-            for (int z = 0; z < 3; z++)
+            for (size_t z = 0; z < SWR_ZONES; z++)
                 lv_obj_add_flag(s_swr_zone[z], LV_OBJ_FLAG_HIDDEN);
         }
         lv_obj_set_style_arc_color(s_ring, st->tx ? C_TX_RED : C_BG, LV_PART_MAIN);

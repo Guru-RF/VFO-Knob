@@ -34,7 +34,7 @@ typedef struct {
     char       mode[8];
     int32_t    filt_lo, filt_hi, rit_hz;
     float      smeter_dbm;
-    float      tx_mic_dbm, tx_fwd_w, tx_swr;
+    float      tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
     uint32_t   tx_sensor_frames, tx_sensor_log_ms;
     bool       slice_locked, tx;
     uint8_t    my_trx, n_trx;
@@ -230,7 +230,9 @@ static void apply_fact(const tci_fact_t *f)
          * never rendered. */
         S.tx_mic_dbm = f->f0;
         S.tx_fwd_w   = f->f1;
+        S.tx_peak_w  = f->f2;
         S.tx_swr     = f->f3;
+        S.tx_alc     = f->f4;
         S.tx_sensor_frames++;
         /* Rate-limited: the stream is 5 Hz and only flows while transmitting,
          * so one line a second is enough to see whether it is arriving at all
@@ -711,7 +713,9 @@ void tci_get_status(tci_status_t *o)
     o->smeter_dbm = S.smeter_dbm;
     o->tx_mic_dbm = S.tx_mic_dbm;
     o->tx_fwd_w   = S.tx_fwd_w;
+    o->tx_peak_w  = S.tx_peak_w;
     o->tx_swr     = S.tx_swr;
+    o->tx_alc     = S.tx_alc;
     o->slice_locked = S.slice_locked;
     o->tx         = S.tx;
     o->my_trx     = S.my_trx;

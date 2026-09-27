@@ -31,6 +31,50 @@ so the report carries a number rather than a theory.
 Until this lands, the README says — and should keep saying — that this device
 is not a primary PTT source for unattended operation.
 
+## Upstream: expose compressor gain reduction over TCI
+
+Smaller than the PTT lease, and worth bundling into the same conversation.
+
+`tx_sensors` carries exactly five fields — `mic_dbm`, `fwd_watts`,
+`peak_watts`, `swr`, `alc_dbfs` — and there is no compressor reading anywhere
+in AetherSDR's TCI surface. ALC is available and useful, but it is **not**
+compression: ALC is the radio limiting drive to protect itself, whereas a
+speech compressor deliberately reduces dynamic range to raise average power.
+An operator setting compression needs the gain-reduction figure, and AetherSDR
+already computes one for its own meter (`meter.gainReduction` exists in the
+theme).
+
+Note that `peak_watts` is currently the same cached value as `fwd_watts`
+("peak ≈ avg for now"), so a sixth field is not the only thing worth revisiting
+in that payload.
+
+**Action:** ask whether a compressor gain-reduction field can be appended to
+`tx_sensors`. Index-based parsers ignore trailing fields, which is exactly how
+`alc_dbfs` was added, so it is backward compatible by construction.
+
+## Upstream: compressor gain reduction, and a real peak-power figure
+
+Smaller than the PTT lease, and worth raising in the same conversation.
+
+`tx_sensors` carries exactly five fields — `mic_dbm`, `fwd_watts`,
+`peak_watts`, `swr`, `alc_dbfs` — and there is **no compressor reading anywhere
+in AetherSDR's TCI surface**. ALC is available and useful, but it is not
+compression: ALC is the radio limiting drive to protect itself, whereas a
+speech compressor deliberately reduces dynamic range to raise average power.
+An operator setting compression needs the gain-reduction figure, and AetherSDR
+already computes one for its own meter (`meter.gainReduction` exists in the
+theme).
+
+Separately, `peak_watts` is currently the same cached value as `fwd_watts`
+(`"peak ~ avg for now"`, TciServer.cpp), so the two are indistinguishable on
+the wire. This firmware reads the peak field regardless, so it becomes correct
+the moment upstream fills it in.
+
+**Action:** ask whether a compressor gain-reduction field can be appended to
+`tx_sensors`, and whether `peak_watts` can carry a real peak. Index-based
+parsers ignore trailing fields — which is exactly how `alc_dbfs` was added —
+so an extra field is backward compatible by construction.
+
 ## Firmware
 
 - [ ] **Endurance soak.** Nothing has run for 24 h. Watch free internal heap,

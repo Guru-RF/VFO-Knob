@@ -27,7 +27,7 @@ typedef struct {
     int32_t  filt_lo, filt_hi;
     int32_t  rit_hz;
     float    smeter_dbm;
-    float    tx_mic_dbm, tx_fwd_w, tx_swr;
+    float    tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
     bool     tx;         /* the radio is transmitting, whoever keyed it */
     bool     tx_remote;  /* ...and it was not us, so we cannot stop it */
     bool     link_ok;

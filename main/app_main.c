@@ -338,7 +338,9 @@ static void ui_task(void *arg)
             .smeter_dbm    = st.smeter_dbm,
             .tx_mic_dbm    = st.tx_mic_dbm,
             .tx_fwd_w      = st.tx_fwd_w,
+            .tx_peak_w     = st.tx_peak_w,
             .tx_swr        = st.tx_swr,
+            .tx_alc        = st.tx_alc,
             /* Follow the RADIO, not just our own PTT. MOX from the desktop,
              * another TCI client, or a foot switch all key the transmitter,
              * and a control head that shows RX while the rig is transmitting

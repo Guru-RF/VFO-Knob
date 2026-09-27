@@ -49,7 +49,12 @@ typedef struct {
     int32_t    filt_lo, filt_hi;
     int32_t    rit_hz;
     float      smeter_dbm;
-    float      tx_mic_dbm, tx_fwd_w, tx_swr;
+    float      tx_mic_dbm, tx_fwd_w, tx_swr, tx_alc;
+    /* NOTE: AetherSDR currently sends the same cached value for peak as for
+     * forward ("peak ~ avg for now"), so these read identically until that is
+     * implemented upstream. Wired to the peak field anyway, so it becomes
+     * correct without a change here. */
+    float      tx_peak_w;
     bool       slice_locked;
     bool       tx;
     uint8_t    my_trx;
