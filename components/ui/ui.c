@@ -1441,6 +1441,9 @@ static bool     s_dimmed;
 
 void ui_note_activity(void)
 {
+    /* Reachable from the configuration page, which is serving long before the
+     * display exists. lv_tick_get() before lv_init() is not survivable. */
+    if (!s_scr) return;
     s_last_use_ms = lv_tick_get();
     if (s_dimmed) {
         s_dimmed = false;
@@ -1451,11 +1454,12 @@ void ui_note_activity(void)
 void ui_dim_set_minutes(uint16_t minutes)
 {
     s_dim_after_ms = (uint32_t)minutes * 60u * 1000u;
-    ui_note_activity();
+    ui_note_activity();        /* no-op until the display is up */
 }
 
 void ui_dim_tick(bool transmitting)
 {
+    if (!s_scr) { return; }
     if (!s_dim_after_ms) { return; }          /* 0 = never dim */
     if (transmitting) { ui_note_activity(); return; }
     if (s_dimmed) { return; }

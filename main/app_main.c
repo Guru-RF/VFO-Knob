@@ -660,7 +660,6 @@ void app_main(void)
     bring_up("webcfg", webcfg_start);
     ota_init();
     ota_set_interval(net_prov_ota_hours());
-    ui_dim_set_minutes(net_prov_dim_min());
     tci_set_tot_ms((uint32_t)net_prov_tot_s() * 1000u);
 
     /* Three failed boots in a row: come up with the bare minimum so the device
@@ -678,6 +677,10 @@ void app_main(void)
 
     ui_set_levels(net_prov_volume(), net_prov_mic_gain());
     bool have_ui = have_panel && bring_up("ui", ui_init);
+    /* After ui_init, not before: this reaches into LVGL, and the version that
+     * called it up beside ota_init() crashed on boot -- caught by the OTA
+     * rollback, which put the previous image back. */
+    if (have_ui) ui_dim_set_minutes(net_prov_dim_min());
 
     bring_up("knob", hal_encoder_init);
 
