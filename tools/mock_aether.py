@@ -38,6 +38,7 @@ STATE = {
     "rit":    [0, 0],
     "lock":   [False, False],
     "ptt":    False,
+    "ptt_owner": None,   # which client keyed; only ITS loss aborts
     "smeter": -93.0,
 }
 
@@ -153,10 +154,12 @@ def handle_trx(c, trx, on):
             log(f"  FAULT ptt-slow: confirming in {delay:.2f}s")
             time.sleep(delay)
         STATE["ptt"] = True
+        STATE["ptt_owner"] = c
         broadcast(f"trx:{trx},true;")
         log("  *** TX ON ***")
     else:
         STATE["ptt"] = False
+        STATE["ptt_owner"] = None
         broadcast(f"trx:{trx},false;")
         log("  *** TX OFF ***")
 
@@ -278,13 +281,17 @@ def on_client(sock, addr):
         with LOCK:
             if c in CLIENTS:
                 CLIENTS.remove(c)
-        # Upstream: if the client that owned PTT disconnects, abortTciPtt()
-        # unkeys unconditionally. This is the single most important safety
-        # behaviour the knob depends on, so the mock must reproduce it.
-        if STATE["ptt"]:
+        # Upstream aborts only when the client that OWNS PTT disconnects
+        # (TciServer checks ws == m_tciPttClient). Unkeying on any client's
+        # loss makes a stale socket from a previous run look like a firmware
+        # bug, which is exactly what it did the first time.
+        if STATE["ptt"] and STATE["ptt_owner"] is c:
             STATE["ptt"] = False
-            log("  *** TX OFF (client disconnected -> abortTciPtt) ***")
+            STATE["ptt_owner"] = None
+            log("  *** TX OFF (PTT owner disconnected -> abortTciPtt) ***")
             broadcast("trx:0,false;")
+        elif STATE["ptt"]:
+            log("  (a non-owner disconnected; PTT is unaffected)")
         c.close()
         log(f"client removed: {addr}  ({len(CLIENTS)} left)")
 

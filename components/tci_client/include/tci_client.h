@@ -36,6 +36,13 @@ typedef enum {
 
 typedef struct {
     tci_link_t link;
+    uint8_t    ptt_state;      /* ptt_state_t */
+    uint8_t    ptt_rung;       /* teardown ladder position, 0 = not in it */
+    uint8_t    ptt_reason;     /* ptt_abort_t */
+    uint32_t   tot_remain_ms;
+    uint32_t   permit;         /* PERMIT_* bitmask; all bits = may key */
+    uint32_t   ptt_refusals;
+    int32_t    pong_age_ms;
     int64_t    f_display;      /* what the glass shows -- optimistic */
     int64_t    f_server;       /* newest authoritative value; never drawn */
     char       mode[8];
@@ -63,5 +70,17 @@ void tci_set_step(int32_t step_hz);
 
 void tci_get_status(tci_status_t *out);
 bool tci_is_ready(void);
+
+/* PTT is TOGGLE: tap to key, tap to unkey. Deliberate to enter, forgiving to
+ * exit -- you should never have to aim carefully to STOP transmitting. */
+void tci_ptt_key(void);
+void tci_ptt_unkey(void);
+void tci_ptt_toggle(void);
+
+/* Force an abort with a specific reason, for testing the teardown ladder. */
+void tci_ptt_force_abort(uint8_t reason);
+
+/* Configure the time-out timer, clamped to the FSM's limits. */
+void tci_set_tot_ms(uint32_t ms);
 
 #endif /* TCI_CLIENT_H */

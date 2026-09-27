@@ -30,6 +30,8 @@
 #include "esp_psram.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "driver/usb_serial_jtag.h"
+#include "ptt_fsm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -251,6 +253,58 @@ static void encoder_task(void *arg)
     }
 }
 
+/* The TCI client declares this weak so it stays free of a haptic dependency.
+ * PTT is the one place haptics are load-bearing: with no error frame and no
+ * button, the motor is the only channel that can tell the operator the radio
+ * said no. */
+void haptic_hook(uint8_t effect, uint8_t prio)
+{
+    (void)prio;
+    if (effect) drv2605_fire(&s_drv, effect);
+}
+
+/* Serial console. Touch does not exist yet, and every PTT fault path needs
+ * exercising long before a real transmitter is involved. */
+static void console_task(void *arg)
+{
+    (void)arg;
+    usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    if (usb_serial_jtag_driver_install(&cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "console unavailable");
+        vTaskDelete(NULL);
+    }
+    ESP_LOGI(TAG, "console: t=toggle PTT  k=key  u=unkey  s=status");
+    ESP_LOGI(TAG, "         p=abort:pong-stale  d=abort:link-down  o=TOT 10s");
+
+    for (;;) {
+        uint8_t ch;
+        if (usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(200)) != 1) continue;
+        switch (ch) {
+        case 't': ESP_LOGI(TAG, "console: toggle"); tci_ptt_toggle(); break;
+        case 'k': ESP_LOGI(TAG, "console: key");    tci_ptt_key();    break;
+        case 'u': ESP_LOGI(TAG, "console: unkey");  tci_ptt_unkey();  break;
+        case 'p': ESP_LOGI(TAG, "console: forcing pong-stale abort");
+                  tci_ptt_force_abort(PTT_AB_PONG_STALE); break;
+        case 'd': ESP_LOGI(TAG, "console: forcing link-down abort");
+                  tci_ptt_force_abort(PTT_AB_LINK_DOWN);  break;
+        case 'o': ESP_LOGI(TAG, "console: TOT -> 30 s (FSM minimum)");
+                  tci_set_tot_ms(30000); break;
+        case 's': {
+            tci_status_t st; tci_get_status(&st);
+            ESP_LOGI(TAG, "ptt=%s rung=%u reason=%s tot=%ums permit=0x%03X%s "
+                          "pong=%ldms refusals=%u",
+                     ptt_state_name((ptt_state_t)st.ptt_state), st.ptt_rung,
+                     ptt_abort_name((ptt_abort_t)st.ptt_reason),
+                     (unsigned)st.tot_remain_ms, (unsigned)st.permit,
+                     st.permit == PERMIT_ALL ? " (may key)" : " (BLOCKED)",
+                     (long)st.pong_age_ms, (unsigned)st.ptt_refusals);
+            break;
+        }
+        default: break;
+        }
+    }
+}
+
 static void net_task(void *arg)
 {
     (void)arg;
@@ -280,11 +334,12 @@ static void net_task(void *arg)
             static const char *L[] = { "down", "connecting", "greeting",
                                        "READY", "degraded" };
             ESP_LOGI(TAG,
-                "[TCI] %-10s f=%lld srv=%lld %s %ld..%ld s=%.0fdBm%s | "
+                "[TCI] %-10s f=%lld srv=%lld %s %ld..%ld s=%.0fdBm%s ptt=%s | "
                 "conn=%u close=%u send=%u echo=%u recon=%u rej=%u unk=%u%s%s",
                 L[st.link], (long long)st.f_display, (long long)st.f_server,
                 st.mode, (long)st.filt_lo, (long)st.filt_hi,
                 (double)st.smeter_dbm, st.slice_locked ? " LOCK" : "",
+                ptt_state_name((ptt_state_t)st.ptt_state),
                 (unsigned)st.connects, (unsigned)st.closes,
                 (unsigned)st.sends, (unsigned)st.echoes,
                 (unsigned)st.reconciles, (unsigned)st.rejects,
@@ -330,6 +385,7 @@ void app_main(void)
     ESP_ERROR_CHECK(net_prov_init());
     ESP_ERROR_CHECK(net_prov_wifi_start());
     xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
 
     /* Core 1 is the "feel" core: encoder, haptics, touch and LVGL. Core 0 is
      * reserved for WiFi and lwIP, whose burst timing we cannot control. */

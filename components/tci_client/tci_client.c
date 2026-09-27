@@ -9,6 +9,7 @@
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "ptt_fsm.h"
 #include "tci_parse.h"
 #include "vfo_tune.h"
 
@@ -34,6 +35,12 @@ typedef struct {
     uint8_t    my_trx, n_trx;
     uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
     char       last_close[48];
+    /* --- PTT --- */
+    ptt_fsm_t  ptt;
+    int64_t    last_pong_us;
+    bool       tx_enable_seen;
+    uint32_t   pending_key, pending_unkey, pending_toggle;
+    uint8_t    pending_abort;
 } state_t;
 
 static state_t     S;
@@ -42,8 +49,48 @@ static esp_websocket_client_handle_t s_ws;
 static char        s_rx[RX_CAP];
 static size_t      s_rx_len;
 static int64_t     s_greet_deadline_us;
+static int64_t     s_retry_at_us;      /* 0 = connected or connecting */
+static uint32_t    s_backoff_ms = 250;
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+/* Overridden by the application so this component stays free of a haptic
+ * dependency; PTT confirmations are the one place haptics are load-bearing,
+ * because the protocol gives the operator no other signal. */
+__attribute__((weak)) void haptic_hook(uint8_t effect, uint8_t prio)
+{
+    (void)effect; (void)prio;
+}
+
+static void send_cmd(const char *fmt, ...);
+
+/* Perform whatever the FSM decided. Rungs 2-4 tear down our own socket, which
+ * is a MORE reliable unkey than any command we can send: AetherSDR unkeys
+ * unconditionally when a PTT-owning client disconnects, whereas a trx:false may
+ * never be dispatched at all. */
+static void ptt_dispatch(const ptt_out_t *o)
+{
+    if (o->haptic) haptic_hook(o->haptic, o->haptic_prio);
+
+    if (o->send_key)   send_cmd("trx:%u,true;",  (unsigned)S.my_trx);
+    if (o->send_unkey) send_cmd("trx:%u,false;", (unsigned)S.my_trx);
+
+    if (o->close_socket) {
+        ESP_LOGW(TAG, "PTT ladder rung 2: closing the socket");
+        esp_websocket_client_close(s_ws, pdMS_TO_TICKS(300));
+    }
+    if (o->destroy_socket) {
+        ESP_LOGE(TAG, "PTT ladder rung 3: destroying the transport");
+        esp_websocket_client_stop(s_ws);
+    }
+    if (o->restart) {
+        ESP_LOGE(TAG, "PTT ladder rung 4: rebooting to guarantee an unkey");
+        esp_restart();
+    }
+    if (o->entered_tx) ESP_LOGW(TAG, "*** TX ***");
+    if (o->left_tx)    ESP_LOGI(TAG, "*** RX ***");
+    if (o->refused)    ESP_LOGW(TAG, "PTT REFUSED (%s)", ptt_abort_name(S.ptt.reason));
+}
 
 /* --------------------------------------------------------------- inbound */
 
@@ -125,6 +172,24 @@ static void apply_fact(const tci_fact_t *f)
 
     case TCI_TRX:
         S.tx = f->b0;
+        /* One frame, three meanings, disambiguated purely by our own state.
+         * In IDLE an unsolicited trx:true is someone ELSE keying -- possibly
+         * our own dead previous session -- and we must NOT try to unkey it,
+         * because a non-owner's trx:false only touches its own handle. */
+        {
+            ptt_out_t o;
+            ptt_fsm_event(&S.ptt, f->b0 ? PTT_EV_CONFIRM_TRUE
+                                        : PTT_EV_CONFIRM_FALSE,
+                          now_ms(), 0, &o);
+            ptt_dispatch(&o);
+            if (f->b0 && S.ptt.state == PTT_IDLE)
+                ESP_LOGE(TAG, "ALARM: trx:true while we are idle -- someone "
+                              "else has the transmitter keyed");
+        }
+        break;
+
+    case TCI_TX_ENABLE:
+        if (f->trx == S.my_trx) S.tx_enable_seen = f->b0;
         break;
 
     case TCI_RX_CHANNEL_SENSORS:
@@ -189,12 +254,17 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     case WEBSOCKET_EVENT_CONNECTED:
         S.connects++;
         S.link = TCI_LINK_GREETING;
+        s_retry_at_us = 0;
         s_rx_len = 0;
         s_greet_deadline_us = esp_timer_get_time() + GREET_TMO_MS * 1000;
         ESP_LOGI(TAG, "connected, awaiting greeting");
         break;
 
     case WEBSOCKET_EVENT_DATA:
+        if (e->op_code == 0x0A) {                       /* pong */
+            S.last_pong_us = esp_timer_get_time();
+            break;
+        }
         if (e->op_code == 0x08) {                       /* close */
             if (e->data_len > 2) {
                 size_t n = e->data_len - 2;
@@ -212,6 +282,24 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     case WEBSOCKET_EVENT_CLOSED:
         S.closes++;
         S.link = TCI_LINK_DOWN;
+        S.tx   = false;
+        /* AetherSDR calls abortTciPtt() when a PTT-owning client disconnects,
+         * so the radio is already unkeyed. Collapse our own state to match
+         * rather than continuing to climb a ladder against a dead socket. */
+        if (S.ptt.state != PTT_IDLE) {
+            ESP_LOGW(TAG, "link lost while %s -- server fails closed",
+                     ptt_state_name(S.ptt.state));
+            ptt_fsm_init(&S.ptt, S.ptt.tot_ms);
+        }
+        /* Schedule our own reconnect. We own this rather than the component,
+         * because a safety abort deliberately CLOSES the socket, and an
+         * explicit close disables the component's auto-reconnect -- which
+         * would leave the knob permanently offline after the one event where
+         * it most needs to come back. */
+        if (!s_retry_at_us) {
+            s_retry_at_us = esp_timer_get_time() + (int64_t)s_backoff_ms * 1000;
+            ESP_LOGI(TAG, "reconnect in %u ms", (unsigned)s_backoff_ms);
+        }
         ESP_LOGW(TAG, "link down%s%s", S.last_close[0] ? ": " : "", S.last_close);
         break;
 
@@ -221,6 +309,30 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     default:
         break;
     }
+}
+
+/* Every bit required before a key is accepted. Band and mode are pinned set in
+ * v1 (no band plan yet) so adding the table later does not touch the FSM. */
+static uint32_t ptt_permit_now(uint32_t t)
+{
+    uint32_t p = PERMIT_BAND | PERMIT_MODE | PERMIT_NO_OVERLAY | PERMIT_NO_FAULT;
+
+    if (S.link == TCI_LINK_READY || S.link == TCI_LINK_DEGRADED) {
+        if (t - S.t_ready_ms >= 500) p |= PERMIT_LINK;
+    }
+    if (S.n_trx > 0 || S.my_trx == 0)       p |= PERMIT_TRX;
+    if (S.tx_enable_seen)                   p |= PERMIT_TX_ENABLE;
+    if (!S.ptt.tot_latched)                 p |= PERMIT_TOT_CLEAR;
+    if (!S.reconcile_armed)                 p |= PERMIT_NO_RECONCILE;
+
+    /* A pong within 4 s. Before the first pong arrives we allow it, otherwise
+     * PTT would be unavailable for the first ping interval after connecting. */
+    /* Comfortably more than two ping intervals, so an ordinary missed pong
+     * does not make the transmitter unavailable mid-QSO. */
+    if (!S.last_pong_us ||
+        (esp_timer_get_time() - S.last_pong_us) / 1000 < 5000) p |= PERMIT_PONG_FRESH;
+
+    return p;
 }
 
 /* --------------------------------------------------------------- outbound */
@@ -246,15 +358,84 @@ static void tx_task(void *arg)
         vTaskDelayUntil(&next, pdMS_TO_TICKS(SEND_GATE_MS));
         uint32_t t = now_ms();
 
+        /* Reconnect supervisor. */
+        if (s_retry_at_us && esp_timer_get_time() >= s_retry_at_us) {
+            s_retry_at_us = 0;
+            S.link = TCI_LINK_CONNECTING;
+            esp_websocket_client_stop(s_ws);          /* idempotent */
+            if (esp_websocket_client_start(s_ws) != ESP_OK) {
+                s_backoff_ms = s_backoff_ms < 8000 ? s_backoff_ms * 2 : 8000;
+                s_retry_at_us = esp_timer_get_time() + (int64_t)s_backoff_ms * 1000;
+            } else {
+                s_backoff_ms = s_backoff_ms < 8000 ? s_backoff_ms * 2 : 8000;
+            }
+            continue;
+        }
+        /* Reset the backoff once the link has been solid for a while, so a
+         * long healthy session does not inherit a previous bad patch's delay. */
+        if (S.link == TCI_LINK_READY && (t - S.t_ready_ms) > 30000)
+            s_backoff_ms = 250;
+
         if (S.link == TCI_LINK_GREETING &&
             esp_timer_get_time() > s_greet_deadline_us) {
             ESP_LOGW(TAG, "no greeting within %d ms, reconnecting", GREET_TMO_MS);
             esp_websocket_client_close(s_ws, pdMS_TO_TICKS(200));
             continue;
         }
+        /* --- PTT: intents, deadlines and the ladder --------------------- */
+        {
+            ptt_out_t o;
+            uint32_t  permit = ptt_permit_now(t);
+
+            if (S.pending_toggle) {
+                S.pending_toggle = 0;
+                S.pending_key = (S.ptt.state == PTT_IDLE);
+                S.pending_unkey = !S.pending_key;
+            }
+            if (S.pending_key) {
+                S.pending_key = 0;
+                ptt_fsm_event(&S.ptt, PTT_EV_TAP_KEY, t, permit, &o);
+                ptt_dispatch(&o);
+            }
+            if (S.pending_unkey) {
+                S.pending_unkey = 0;
+                ptt_fsm_event(&S.ptt, PTT_EV_TAP_UNKEY, t, permit, &o);
+                ptt_dispatch(&o);
+            }
+            if (S.pending_abort) {
+                uint8_t r = S.pending_abort;
+                S.pending_abort = 0;
+                ptt_fsm_abort(&S.ptt, (ptt_abort_t)r, t, &o);
+                ptt_dispatch(&o);
+            }
+
+            /* Link liveness is PONG-only, never traffic: rx_smeter is
+             * suppressed below -200 dBm, so a rig with no radio attached emits
+             * nothing and a traffic watchdog would false-unkey every over. */
+            if (S.ptt.state == PTT_ON && S.last_pong_us) {
+                int64_t age = (esp_timer_get_time() - S.last_pong_us) / 1000;
+                /* Three consecutive missed 2 s pings. Tighter than this and a
+                 * momentary WiFi hiccup cuts the operator off mid-word, which
+                 * is its own kind of unsafe. */
+                if (age > 6000) {
+                    ESP_LOGE(TAG, "pong stale (%lld ms) while keyed", (long long)age);
+                    ptt_fsm_abort(&S.ptt, PTT_AB_PONG_STALE, t, &o);
+                    ptt_dispatch(&o);
+                }
+            }
+
+            ptt_fsm_event(&S.ptt, PTT_EV_TICK, t, permit, &o);
+            ptt_dispatch(&o);
+        }
+
         if (S.link != TCI_LINK_READY && S.link != TCI_LINK_DEGRADED) continue;
         /* Settle after a reconnect before pushing anything. */
         if (t - S.t_ready_ms < 500) continue;
+
+        /* No vfo: traffic while keyed. You are not tuning during a
+         * transmission, and an empty server queue guarantees the trx:false
+         * that ends the over is never stuck behind anything. */
+        if (S.ptt.state != PTT_IDLE) continue;
 
         bool     fire = false;
         int64_t  want = 0;
@@ -319,6 +500,20 @@ void tci_set_step(int32_t step_hz)
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
+void tci_ptt_key(void)    { S.pending_key = 1; }
+void tci_ptt_unkey(void)  { S.pending_unkey = 1; }
+void tci_ptt_toggle(void) { S.pending_toggle = 1; }
+void tci_ptt_force_abort(uint8_t reason) { S.pending_abort = reason; }
+
+void tci_set_tot_ms(uint32_t ms)
+{
+    ptt_fsm_t save = S.ptt;
+    ptt_fsm_init(&S.ptt, ms);
+    S.ptt.state = save.state;          /* keep any in-flight transmission */
+    S.ptt.t_key_ms = save.t_key_ms;
+    ESP_LOGI(TAG, "TOT set to %u ms", (unsigned)S.ptt.tot_ms);
+}
+
 bool tci_is_ready(void)
 {
     return S.link == TCI_LINK_READY || S.link == TCI_LINK_DEGRADED;
@@ -346,6 +541,14 @@ void tci_get_status(tci_status_t *o)
     o->unknown_cmds = S.unknown_cmds;
     o->sends      = S.sends;
     o->echoes     = S.echoes;
+    o->ptt_state  = (uint8_t)S.ptt.state;
+    o->ptt_rung   = S.ptt.rung;
+    o->ptt_reason = (uint8_t)S.ptt.reason;
+    o->ptt_refusals = S.ptt.refusals;
+    o->tot_remain_ms = ptt_tot_remaining_ms(&S.ptt, now_ms());
+    o->permit     = ptt_permit_now(now_ms());
+    o->pong_age_ms = S.last_pong_us
+        ? (int32_t)((esp_timer_get_time() - S.last_pong_us) / 1000) : -1;
     taskEXIT_CRITICAL(&S_LOCK);
     strlcpy(o->mode, S.mode, sizeof o->mode);
     strlcpy(o->last_close, S.last_close, sizeof o->last_close);
@@ -359,17 +562,22 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
     memset(&S, 0, sizeof S);
     tune_init(&S.tune, 14074000, 100);
     accel_init(&S.accel);
+    ptt_fsm_init(&S.ptt, PTT_TOT_DEFAULT_MS);
     strlcpy(S.mode, "usb", sizeof S.mode);
 
     esp_websocket_client_config_t cfg = {
         .uri                    = uri,
-        /* We own reconnect: the close REASON string is the richest error
-         * channel this protocol has and three different reasons need three
-         * different responses, which the component cannot express. */
-        .disable_auto_reconnect = false,
-        .reconnect_timeout_ms   = 2000,
+        /* We own reconnect. Two reasons: the close REASON string is the
+         * richest error channel this protocol has, and an explicit close --
+         * which the PTT safety ladder performs deliberately -- suppresses the
+         * component's own auto-reconnect entirely. */
+        .disable_auto_reconnect = true,
         .network_timeout_ms     = 5000,
-        .ping_interval_sec      = 10,
+        /* 2 s, not the default 10. Liveness is PONG-based (traffic cannot be
+         * used: rx_smeter is suppressed below -200 dBm, so a rig with no radio
+         * attached is silent). At a 10 s ping interval the freshness test below
+         * would block PTT for six seconds out of every ten. */
+        .ping_interval_sec      = 2,
         .pingpong_timeout_sec   = 8,
         .task_prio              = 6,
         .task_stack             = 6144,
