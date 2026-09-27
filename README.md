@@ -1,142 +1,157 @@
 # VFO-Knob
 
-A tactile hardware VFO knob and control head for
-[AetherSDR](https://github.com/aethersdr/AetherSDR), built on the Waveshare
-ESP32-S3-Knob-Touch-LCD-1.8.
+A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
+built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune, change step, key the
+transmitter, watch the S-meter — over a USB-C cable or over WiFi.
 
-Talks **TCI v2.0 over WiFi** — the same protocol AetherSDR already serves to
-WSJT-X and JTDX — so **no host-side software is required**. Enable the TCI
-server in AetherSDR and the knob finds it.
+<p align="center">
+  <img src="docs/display-rx.svg" width="300" alt="Receiving: S-meter filling through its colour blocks while the 100 Hz digit ticks">
+  &nbsp;&nbsp;
+  <img src="docs/display-tx.svg" width="300" alt="Transmitting: SWR on the left, forward power on the right, red PTT slab">
+</p>
+
+*Receiving, and transmitting. The meter blocks are notched in the background
+colour, so the separators appear where the bar has reached and vanish where it
+has not.*
+
+It speaks **TCI v2.0** over a WebSocket, which is AetherSDR's own control
+protocol — so the knob is not polling, it is told. Tune at the desktop and the
+knob follows; turn the knob and the desktop moves.
+
+---
 
 ## What it does
 
-- **Tune** with a real detented knob, with velocity acceleration
-- **Step** chosen by tapping a frequency digit (10 Hz … 1 MHz)
-- **PTT** (toggle), with a time-out timer and a multi-stage fail-safe teardown
-- **Mode, filter width, RIT and band** — tap to open an editor, turn to choose,
-  tap to accept
-- **Live S-meter**, signal in dBm, and forward power while transmitting
-- **Receive audio** to the onboard DAC and 3.5 mm jack, with a volume control
-- **Transmit audio** from the onboard microphone while keyed
+| | |
+|---|---|
+| **Tune** | Per-digit step selection: tap a digit to set the decade. Acceleration on top, so a flick crosses a band and a slow turn lands on 10 Hz. |
+| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. Time-out timer, a haptic reminder every 10 s while keyed, and a four-rung teardown that ends in dropping the socket. |
+| **Meters** | S-meter in receive; SWR and auto-ranging forward power (to 2.5 kW) in transmit. |
+| **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. |
+| **Mode / filter / RIT** | Tap to open, turn to choose, tap anywhere to accept. |
+| **Network** | Tap the meter arc to see the knob's addresses. |
 
-Tuning is deliberately silent. The knob has 30 real mechanical detents, so
-synthesising more on top adds nothing; the haptic motor is reserved for what
-you cannot otherwise perceive — PTT state, rejected commands, and link loss.
+## Two transports
 
-## Setup
+The knob is USB-powered, so it is always plugged into something — and whatever
+runs AetherSDR is a computer with a USB port.
 
-1. In AetherSDR, open the **TCI** panel from the button bar and enable the
-   server (it listens on port 50001).
-2. If the machine runs a firewall, allow TCI from your LAN:
-   ```sh
-   sudo ufw allow from 192.168.0.0/24 to any port 50001 proto tcp
-   ```
-3. Copy `sdkconfig.defaults.local.example` to `sdkconfig.defaults.local` and
-   fill in your WiFi and the AetherSDR host. That file is gitignored; **never
-   commit a PSK**.
+- **USB-C (preferred).** The knob enumerates as a **USB network adapter**
+  (CDC-NCM), hands your machine an address and talks TCI over the cable. No
+  configuration at all, and immune to what a machined metal case does to
+  2.4 GHz.
+- **WiFi.** Configure an SSID on the configuration page and power the knob from
+  any charger.
 
-## Build
+The cable wins when something answers on it; WiFi is the fallback. When the
+cable is chosen, WiFi is shut down — that frees about 40 kB of internal RAM,
+which this board genuinely needs.
 
-Requires ESP-IDF v5.5.x.
+## First run
 
-```sh
-. ~/esp/esp-idf/export.sh
-idf.py set-target esp32s3
-idf.py -p /dev/ttyACM0 flash monitor
-```
+1. Plug the knob into the computer running AetherSDR.
+2. Open **`http://10.55.42.1`** — user `admin`, password `admin`.
+3. Change the password. The page will nag until you do; it can key a
+   transmitter.
+4. Set the AetherSDR host if it is not on the same machine, and an SSID if you
+   want WiFi.
 
-The USB-C port is switchable between the two MCUs on this board. If the serial
-port does not appear, unplug, rotate the plug 180°, and reinsert.
+Enable AetherSDR's TCI server first — it is the `TCI` panel in the button bar.
 
-### USB-C networking build
+## Configuration page
 
-The knob can reach AetherSDR over the USB cable instead of WiFi, appearing to
-the host as a USB network adapter. Nothing above the IP layer changes, so TCI,
-PTT and audio work identically. Useful where 2.4 GHz struggles -- the CNC
-aluminium case is not kind to the onboard antenna.
+Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
+WiFi credentials, audio levels, transmit time-out, access credentials, and
+firmware updates.
+
+> **It is HTTP Basic over plain HTTP.** A lock on the door, not a safe — treat
+> the knob as something that belongs on a network you trust.
+
+## Updates
+
+Images are **RSA-3072 signed** and the signature is checked before an update is
+accepted. Nothing is burned into eFuse and Secure Boot is not enabled, so the
+board always stays ordinarily flashable — this protects the update path, not
+the hardware.
+
+- **On WiFi** the knob checks by itself (every 24 h by default) and installs
+  anything newer. It never reboots to apply it; the image waits in the spare
+  slot until you restart it.
+- **Over USB** the knob has no route to the internet — it is the DHCP *server*
+  on that link. The configuration page does the checking and the downloading
+  instead, then pushes the image over. Same image, same signature check.
+
+If an update fails to boot, the bootloader rolls back to the previous slot. The
+confirmation is tied to the same "this boot looks healthy" timer that clears the
+boot-loop guard.
+
+Publishing a release: `tools/release.sh 1.2.3 --push`.
+
+## Building
+
+Needs ESP-IDF 5.5.x.
 
 ```sh
 idf.py -B build_usbnet \
-  -D SDKCONFIG="build_usbnet/sdkconfig" \
-  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.usbnet" \
-  build flash
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usbnet" \
+       build flash
 ```
 
-Each build needs its OWN `SDKCONFIG` path. Without it both variants share the
-project's single `sdkconfig` and silently build each other's configuration.
+Leave off `sdkconfig.usbnet` for a WiFi-only build that keeps the serial
+console. **No credentials are compiled in** — a unit ships with empty storage
+and is configured over the cable.
 
-**A USB-networking build has no serial console** -- the ESP32-S3's
-USB-Serial-JTAG and USB-OTG peripherals share the same pins. To recover, or to
-reflash, **hold a finger on the screen while it boots**: USB networking is
-skipped and the console comes back.
-
-### Host tests
-
-The protocol parser, anti-echo classifier, tuning model and PTT state machine
-live in `components/vfo_core/`, which has **zero ESP-IDF dependencies** and is
-tested with plain gcc — including a byte-stream fuzzer under ASan/UBSan:
+Host-side tests (no hardware, no ESP-IDF):
 
 ```sh
-cmake -B build_host -S test/host && cmake --build build_host
-ctest --test-dir build_host --output-on-failure
+cmake -S test/host -B build_host && cmake --build build_host && (cd build_host && ctest)
 ```
 
-### Testing without a radio
+`tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
+paths without a radio.
 
-`tools/mock_aether.py` is a fault-injecting TCI server (standard library only):
+## Recovering a knob
 
-```sh
-python3 tools/mock_aether.py --lock --clamp 14000000 14080000 --ptt-refuse
-```
+Once TinyUSB owns the USB pads there is no serial port, and this board makes
+that awkward: GPIO0 doubles as the audio mux behind a single button inside the
+case, and **the other Type-C plug orientation reaches the board's second chip,
+not the ESP32-S3.** So the firmware leaves its own way back in.
 
-It reproduces the behaviours that actually break clients — locked slices that
-echo the old frequency, no-op tunes that emit nothing at all, backlog kills,
-and `abortTciPtt` when the PTT-owning client disconnects.
+- Every boot holds the ROM serial port open for **6 seconds** before starting
+  USB networking. `idf.py flash` catches it.
+- The PHY mux is put back to serial on *every* startup — it lives in the RTC
+  domain and survives a reset, so without that a crash would come back with no
+  serial port at all.
+- `echo reboot | nc <knob-ip> 3333` restarts it remotely and opens that window.
+- Holding a finger on the screen through boot skips USB networking entirely.
 
-## Serial console
-
-- `t` toggle PTT · `k` key · `u` unkey · `s` status
-- `p` force a pong-stale abort · `d` force a link-down abort · `o` TOT to 30 s
-- `r` cycle screen rotation
-
-## Hardware notes
-
-Findings that contradict commonly published information for this board:
-
-- The display is an **SH8601** over QSPI, not ST77916. Waveshare's own demo
-  depends on `esp_lcd_sh8601`. It honours MADCTL `MX` but **not** `MY`, so a
-  180° rotation has to be done in LVGL.
-- The knob is **not a quadrature encoder**. It is a bidirectional switch knob:
-  two independent active-low contacts, one per direction. Decoding it as
-  quadrature yields a net count of exactly zero. 30 detents per revolution.
-- Contact debounce must filter on **minimum contact duration**, not an edge
-  lockout — an edge lockout accepts the first edge of a bounce burst and masks
-  the real pulse behind it.
-- The haptic driver is a **DRV2605L driving an ERM**, confirmed by a passing
-  ERM auto-calibration.
-- PDM microphone capture is only available on **I2S0**, so the DAC must use
-  I2S1.
+Port 3333 is also a log stream — the USB build has no console, so it is the only
+way to watch a boot.
 
 ## Safety
 
-This device keys a transmitter over WiFi.
+The knob keys a transmitter. Two things are worth knowing:
 
-AetherSDR fails closed when a TCI client disconnects (`abortTciPtt()`), and this
-firmware adds a time-out timer, a pong-based link watchdog, a "still keyed"
-reminder every 10 s, and a four-stage teardown that ends by deliberately
-destroying its own socket — which is a more reliable unkey than any command,
-because the server unkeys on disconnect.
+- **Toggle PTT** means the radio stays keyed when you let go. That is why the
+  time-out timer, the periodic haptic reminder and the very loud red screen all
+  exist.
+- **A client that loses power while keyed cannot unkey itself.** No firmware on
+  this device can fix that; the server has to notice. Filed upstream as
+  [aethersdr#5985](https://github.com/aethersdr/AetherSDR/issues/5985).
 
-**The gap that remains:** AetherSDR does not ping its TCI clients and has no
-idle timeout, so if this device loses power *instantaneously* while
-transmitting, detection falls to TCP retransmission — potentially several
-minutes with the radio keyed. No firmware on the device can fix that; it needs
-an application-layer PTT lease on the AetherSDR side, at the `abortTciPtt()`
-hook that already exists.
+## Hardware
 
-**Do not use this as a primary PTT source for unattended operation until that
-is addressed.**
+Waveshare ESP32-S3-Knob-Touch-LCD-1.8: ESP32-S3 with 16 MB flash and 8 MB PSRAM,
+360×360 round SH8601 display, CST816 touch, DRV2605L haptics, PCM5100A DAC and a
+PDM microphone. Every GPIO number lives in `components/board/board_pins.h`.
 
-## Licence
+## Licensing — not settled yet
 
-GPL-3.0-or-later, matching AetherSDR.
+There is **no LICENSE file**, which means all rights reserved by default. Two
+things need deciding before that changes:
+
+- `components/panel/sh8601_init_cmds.c` is copied verbatim from Waveshare's
+  `08_LVGL_Test` demo, and that demo ships no licence at all.
+- The intended licence for the rest (Apache-2.0 would match ESP-IDF).
+
+Treat the repository as source-available and ask before redistributing.
