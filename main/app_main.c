@@ -179,6 +179,7 @@ static void encoder_task(void *arg)
             continue;
         }
 
+        ui_note_activity();
         if (!moving) { moving = true; run_counts = 0; }
         idle_since  = now_us;
         run_counts += delta;
@@ -417,10 +418,20 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
                                   bool *via_usb)
 {
 #if CONFIG_VFO_USB_NET
-    if (usb_net_is_up() && host_answers(usb_net_host(), cfg->tci_port, 500)) {
-        ESP_LOGI(TAG, "--- transport: USB cable (%s) ---", usb_net_host());
-        *via_usb = true;
-        return usb_net_host();
+    if (usb_net_host_present()) {
+        if (host_answers(usb_net_host(), cfg->tci_port, 500)) {
+            ESP_LOGI(TAG, "--- transport: USB cable (%s) ---", usb_net_host());
+            *via_usb = true;
+            return usb_net_host();
+        }
+        /* A computer is on the cable, so the cable IS the transport; AetherSDR
+         * not being up yet is a temporary condition, not a reason to change
+         * networks. Falling back here was actively harmful: WiFi's driver
+         * takes the internal RAM the WebSocket client needs, so the knob ended
+         * up on a network it could not open a socket on -- "Error create
+         * websocket task", retrying forever with 9 kB free. Waiting costs
+         * nothing; switching costs the link. */
+        return NULL;
     }
     /* Give the cable until a little after it is due before settling for WiFi. */
     static const int64_t usb_grace_us =
@@ -493,6 +504,12 @@ static void net_task(void *arg)
                      wifi[0] ? wifi : "-",
                      usb[0] ? usb : (wifi[0] ? wifi : "-"));
             ui_set_netinfo(info);
+        }
+
+        {   /* Transmitting counts as use, however long the over runs. */
+            tci_status_t ds;
+            tci_get_status(&ds);
+            ui_dim_tick(ds.tx || ds.ptt_state != PTT_IDLE);
         }
 
         if (started) {
@@ -643,6 +660,7 @@ void app_main(void)
     bring_up("webcfg", webcfg_start);
     ota_init();
     ota_set_interval(net_prov_ota_hours());
+    ui_dim_set_minutes(net_prov_dim_min());
     tci_set_tot_ms((uint32_t)net_prov_tot_s() * 1000u);
 
     /* Three failed boots in a row: come up with the bare minimum so the device

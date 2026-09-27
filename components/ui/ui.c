@@ -3,6 +3,7 @@
 #include "board_pins.h"
 #include "hal_touch.h"
 #include "panel.h"
+#include "net_prov.h"
 
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -82,7 +83,7 @@ static const int DIG_STEP[N_DIG] = {
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl;
-static lv_obj_t *s_warn_panel;
+static lv_obj_t *s_warn_panel, *s_warn_net;
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_mic_arc, *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
 static float s_mic_peak = -60.0f;
@@ -526,12 +527,12 @@ static void touch_cb(lv_event_t *e)
     if (!indev) return;
     lv_point_t p;
     lv_indev_get_point(indev, &p);
+    ui_note_activity();
 
     /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
      * selection on the precise one. */
     if (s_edit != ED_NONE) { edit_commit(); return; }
 
-    if (p.y >= PTT_TOP) { s_ptt_tap = true; return; }   /* the whole slab */
 
     /* The meter arc: show the addresses, tap again to dismiss. */
     if (p.y < 104) {
@@ -546,6 +547,15 @@ static void touch_cb(lv_event_t *e)
         }
         return;
     }
+
+    /* With no link there is nothing behind any of these: opening an editor
+     * would let the operator choose a mode or a filter that goes nowhere, and
+     * the PTT slab would arm a transmitter we cannot reach. The warning panel
+     * is the only thing on screen that means anything, so leave it alone --
+     * the meter tap still works, since the addresses are what you want. */
+    if (!s_last.link_ok) return;
+
+    if (p.y >= PTT_TOP) { s_ptt_tap = true; return; }   /* the whole slab */
 
     /* band | mode | filter */
     if (p.y >= 104 && p.y < 140) {
@@ -1037,7 +1047,7 @@ static void build(void)
      * the readout and again under it, which is worse than saying it once:
      * two copies of "NO LINK" invite a look for two different faults. */
     s_warn_panel = lv_obj_create(s_scr);
-    lv_obj_set_size(s_warn_panel, 250, 86);
+    lv_obj_set_size(s_warn_panel, 268, 116);
     lv_obj_align(s_warn_panel, LV_ALIGN_CENTER, 0, -6);
     lv_obj_set_style_radius(s_warn_panel, 18, 0);
     lv_obj_set_style_bg_color(s_warn_panel, C_BG1, 0);
@@ -1055,7 +1065,18 @@ static void build(void)
     lv_obj_set_style_text_font(s_warn, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_warn, C_DANGER, 0);
     lv_label_set_text(s_warn, "");
-    lv_obj_center(s_warn);
+    lv_obj_align(s_warn, LV_ALIGN_TOP_MID, 0, 8);
+
+    /* The addresses live inside the warning, not on a card behind it. With no
+     * link they are the single most useful thing on the screen -- they are how
+     * you reach the configuration page to fix whatever is wrong -- and having
+     * them peek out from under the panel was worse than not showing them. */
+    s_warn_net = lv_label_create(s_warn_panel);
+    lv_obj_set_style_text_font(s_warn_net, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_warn_net, C_TEXT2, 0);
+    lv_obj_set_style_text_align(s_warn_net, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_warn_net, "");
+    lv_obj_align(s_warn_net, LV_ALIGN_BOTTOM_MID, 0, -8);
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
@@ -1211,10 +1232,16 @@ void ui_update(const ui_state_t *st)
     if (st->warn && st->warn[0]) {
         if (strcmp(lv_label_get_text(s_warn), st->warn) != 0) {
             lv_label_set_text(s_warn, st->warn);
-            lv_obj_center(s_warn);
+            lv_obj_align(s_warn, LV_ALIGN_TOP_MID, 0, 8);
+        }
+        if (strcmp(lv_label_get_text(s_warn_net), s_netinfo_text) != 0) {
+            lv_label_set_text(s_warn_net, s_netinfo_text);
+            lv_obj_align(s_warn_net, LV_ALIGN_BOTTOM_MID, 0, -8);
         }
         lv_obj_remove_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_warn_panel);
+        /* The address card and the warning would otherwise stack. */
+        if (s_netinfo) lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1396,3 +1423,43 @@ uint8_t ui_rotation(void) { return s_rot; }
 
 int32_t ui_take_step_request(void) { int32_t v = s_step_req; s_step_req = 0; return v; }
 bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false; return v; }
+
+
+/* ------------------------------------------------------------------- dim */
+
+/* A knob on a desk spends most of its life being looked at, not touched, so
+ * "idle" has to mean nothing happened at all -- no detent, no tap, and no
+ * transmit. Dimming rather than blanking: the frequency stays readable across
+ * the room, which is the whole point of the thing, while an OLED-ish panel
+ * left at full brightness for days is asking for trouble. */
+#define DIM_FULL 200
+#define DIM_LOW   18
+
+static uint32_t s_dim_after_ms = 30u * 60u * 1000u;
+static uint32_t s_last_use_ms;
+static bool     s_dimmed;
+
+void ui_note_activity(void)
+{
+    s_last_use_ms = lv_tick_get();
+    if (s_dimmed) {
+        s_dimmed = false;
+        panel_set_brightness(DIM_FULL);
+    }
+}
+
+void ui_dim_set_minutes(uint16_t minutes)
+{
+    s_dim_after_ms = (uint32_t)minutes * 60u * 1000u;
+    ui_note_activity();
+}
+
+void ui_dim_tick(bool transmitting)
+{
+    if (!s_dim_after_ms) { return; }          /* 0 = never dim */
+    if (transmitting) { ui_note_activity(); return; }
+    if (s_dimmed) { return; }
+    if (lv_tick_elaps(s_last_use_ms) < s_dim_after_ms) { return; }
+    s_dimmed = true;
+    panel_set_brightness(DIM_LOW);
+}

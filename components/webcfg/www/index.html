@@ -88,6 +88,10 @@ button:active{transform:translateY(1px)}
     <div><label>Mic gain (0&ndash;100)</label><input id="mic" inputmode="numeric"></div>
   </div>
   <p class="note">Volume and mic gain take effect immediately.</p>
+  <label>Dim the screen after (minutes idle, 0 = never)</label>
+  <input id="dim" inputmode="numeric">
+  <p class="note">Turning the knob, touching the screen or transmitting all
+     count as use.</p>
 </section>
 
 <section>
@@ -169,12 +173,12 @@ async function load(){
   $('host').value=c.host; $('port').value=c.port; $('ssid').value=c.ssid;
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('tot').value=c.tot;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
-  $('otah').value=c.otah; FWBASE=c.fwbase||'';
+  $('otah').value=c.otah; $('dim').value=c.dim; FWBASE=c.fwbase||'';
 }
 
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
-  for(const k of ['host','port','ssid','vol','mic','tot','user','otah']) b.append(k,$(k).value);
+  for(const k of ['host','port','ssid','vol','mic','tot','user','otah','dim']) b.append(k,$(k).value);
   if($('pass').value) b.append('pass',$('pass').value);
   if($('webpass').value) b.append('webpass',$('webpass').value);
   const r=await fetch('/api/config',{method:'POST',body:b});

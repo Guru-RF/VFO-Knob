@@ -195,6 +195,18 @@ void usb_net_prepare_reboot(void)
              esp_err_to_name(err));
 }
 
+bool usb_net_host_present(void)
+{
+    if (!s_netif) return false;
+    /* A DHCP lease is the difference between "a cable with power on it" and
+     * "a computer". esp_netif_is_netif_up() cannot tell those apart -- it is
+     * true for a phone charger -- and that distinction decides which network
+     * the knob should be using. */
+    esp_netif_pair_mac_ip_t pair = { 0 };
+    if (esp_netif_dhcps_get_clients_by_mac(s_netif, 1, &pair) != ESP_OK) return false;
+    return pair.ip.addr != 0;
+}
+
 bool usb_net_is_up(void)
 {
     if (!s_netif) return false;

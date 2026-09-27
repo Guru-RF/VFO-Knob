@@ -42,6 +42,10 @@ void usb_net_release_phy(void);
  * physically power-cycled. */
 void usb_net_prepare_reboot(void);
 
+/* True once a computer has actually taken a DHCP lease on the cable, as
+ * opposed to the cable merely having power on it. */
+bool usb_net_host_present(void);
+
 bool usb_net_is_up(void);
 
 /* The host's address, or NULL when the link is down. */
