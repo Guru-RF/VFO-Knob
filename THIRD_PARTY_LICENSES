@@ -1,0 +1,40 @@
+# Third-party components
+
+The firmware links or embeds the following. All are redistributable under
+permissive terms, with one exception noted at the end.
+
+| Component | Licence |
+|---|---|
+| ESP-IDF (Espressif) | Apache-2.0 |
+| LVGL | MIT |
+| TinyUSB (via `espressif/esp_tinyusb`) | MIT |
+| Mbed TLS | Apache-2.0 |
+| lwIP | BSD-3-Clause |
+| FreeRTOS | MIT |
+| `espressif/esp_lcd_sh8601` | Apache-2.0 |
+| `espressif/esp_lcd_touch_cst816s` | Apache-2.0 |
+| `espressif/esp_lvgl_port` | Apache-2.0 |
+| `espressif/esp_websocket_client` | Apache-2.0 |
+| `espressif/mdns` | Apache-2.0 |
+
+MIT and BSD-3-Clause both require their copyright notice and licence text to
+accompany binary distributions. Shipping a device means shipping those notices
+somewhere the buyer can reach them -- the manual, a legal-notices page, or this
+file in the source repository the device points at.
+
+## Unresolved: the display initialisation table
+
+`components/panel/sh8601_init_cmds.c` is 185 register writes copied verbatim
+from Waveshare's `08_LVGL_Test` demo for the ESP32-S3-Knob-Touch-LCD-1.8. That
+demo ships **no licence file of any kind**, which under default copyright means
+all rights reserved.
+
+This is the one thing in the tree that is not cleanly redistributable, and it
+is compiled into every binary. Before selling devices or publishing images,
+either:
+
+- obtain written permission or a licence grant from Waveshare, or
+- re-derive the sequence from the SH8601 datasheet and replace the file.
+
+"They are just register values" is a weak argument for 185 undocumented,
+ordered writes, and is not worth relying on commercially.

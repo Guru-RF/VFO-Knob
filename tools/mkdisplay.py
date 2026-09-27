@@ -15,6 +15,8 @@ RC = ARC_R0 - BAND / 2                      # centreline of the band
 SWR_ROT, SWR_SPAN = ARC_ROT, ARC_SPAN // 2 - 3
 AUD_ROT, AUD_SPAN = ARC_ROT + ARC_SPAN // 2 + 3, ARC_SPAN // 2 - 3
 PTT_TOP = 248
+MIC_R = ARC_R0 - 22            # inner ring, the mic level
+MIC_BAND = 5
 
 BG, BG1, BG_TX = "#0F0F1A", "#1A2A3A", "#3A2A0E"
 ACCENT, ACCENT_HI = "#00B4D8", "#00C8F0"
@@ -110,6 +112,50 @@ def cycling_digit(x, y, size, colour, digits, dur, weight=700):
     return "".join(out)
 
 
+def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
+            colour=TEXT, sep_colour=LABEL, underline=None):
+    """Eight digits: three MHz with leading blanks, three kHz, two Hz.
+    PITCH 33 for the first six, 28 for the Hz pair, separators 11 wide."""
+    PITCH, SMALL, SEPW, FS = 33, 28, 11, 44
+    total = 6 * PITCH + 2 * SMALL + 2 * SEPW
+    x = CX - total / 2
+    out, xs = [], [0] * 8
+    for i in range(8):
+        w = SMALL if i >= 6 else PITCH
+        cx = x + w / 2
+        xs[i] = cx
+        ch = digits[i]
+        if i == cycle_idx and cycle_vals:
+            out.append(cycling_digit(cx, 186, FS, ACCENT_HI, cycle_vals, dur))
+        elif ch != " ":
+            out.append(f'<text x="{cx:.1f}" y="186" font-size="{FS}" fill="{colour}" '
+                       f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700" '
+                       f'text-anchor="middle">{ch}</text>')
+        x += w
+        if i in (2, 5):
+            out.append(f'<text x="{x + SEPW / 2:.1f}" y="186" font-size="{FS}" '
+                       f'fill="{sep_colour}" font-family="DejaVu Sans,Verdana,sans-serif" '
+                       f'text-anchor="middle">.</text>')
+            x += SEPW
+    if underline is not None:
+        out.append(f'<rect x="{xs[underline] - (PITCH - 9) / 2:.1f}" y="196" '
+                   f'width="{PITCH - 9}" height="3" fill="{ACCENT}"/>')
+    return "".join(out)
+
+
+def ptt_slab(fill, text, text_colour, pulse=False):
+    """The slab carries a 2 px accent border along its top edge only."""
+    anim = ('<animate attributeName="opacity" dur="2s" repeatCount="indefinite" '
+            'values="1;0.78;1"/>') if pulse else ""
+    return (f'<rect x="0" y="{PTT_TOP}" width="360" height="{360 - PTT_TOP}" '
+            f'fill="{fill}">{anim}</rect>'
+            f'<line x1="0" y1="{PTT_TOP + 1}" x2="360" y2="{PTT_TOP + 1}" '
+            f'stroke="{ACCENT}" stroke-width="2"/>'
+            f'<text x="180" y="{PTT_TOP + 44}" font-size="30" fill="{text_colour}" '
+            f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif" '
+            f'font-weight="700" letter-spacing="4">{text}</text>')
+
+
 def head(title):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 360" '
             f'width="360" height="360" role="img" aria-label="{title}">'
@@ -140,40 +186,28 @@ def rx_face():
         col = TEXT2 if d == -73 else (WARN if d > -73 else LABEL)
         s.append(tick(ARC_ROT + smeter_frac(d) * ARC_SPAN, ln, col,
                       3 if d == -73 else 2))
-    s.append(f'<text x="180" y="86" font-size="19" fill="{TEXT}" text-anchor="middle" '
+    s.append(f'<text x="180" y="83" font-size="20" fill="{TEXT}" text-anchor="middle" '
              f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700">S7</text>')
-    s.append(f'<text x="180" y="128" font-size="14" fill="{LABEL}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif">40m &#183; LSB &#183; 2.8k</text>')
-    # Fixed pitch, centred, with the 100 Hz digit ticking as if the knob were
-    # being turned and the step underline sitting beneath it.
-    chars = list("7.161.230")
-    pitch, dotw, fs = 26, 12, 40
-    total = sum(dotw if c == "." else pitch for c in chars)
-    x = CX - total / 2
-    tick_x = None
-    for i, c in enumerate(chars):
-        w = dotw if c == "." else pitch
-        cx = x + w / 2
-        if i == 6:                      # the 100 Hz digit
-            s.append(cycling_digit(cx, 196, fs, ACCENT_HI,
-                                   list("2345678901"), "6s"))
-            tick_x = cx
-        else:
-            s.append(f'<text x="{cx:.1f}" y="196" font-size="{fs}" '
-                     f'fill="{LABEL if c == "." else TEXT}" '
-                     f'font-family="DejaVu Sans,Verdana,sans-serif" '
-                     f'font-weight="{400 if c == "." else 700}" '
-                     f'text-anchor="middle">{c}</text>')
-        x += w
-    s.append(f'<rect x="{tick_x - 13:.1f}" y="206" width="26" height="3" '
-             f'fill="{ACCENT}"/>')
-    s.append(f'<text x="180" y="232" font-size="13" fill="{LABEL}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif">'
-             f'100 Hz &#183; RIT 0 &#183; VOL 40</text>')
-    s.append(f'<rect x="0" y="{PTT_TOP}" width="360" height="{360 - PTT_TOP}" fill="{BG1}"/>')
-    s.append(f'<text x="180" y="{PTT_TOP + 40}" font-size="30" fill="{TEXT2}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif" '
-             f'font-weight="700" letter-spacing="4">PTT</text>')
+    s.append(f'<text x="180" y="103" font-size="14" fill="{LABEL}" text-anchor="middle" '
+             f'font-family="DejaVu Sans,Verdana,sans-serif">-86 dBm</text>')
+    s.append(f'<text x="{CX - 76}" y="129" font-size="20" fill="{ACCENT}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">40m</text>')
+    s.append(f'<text x="{CX}" y="129" font-size="20" fill="{TEXT}" text-anchor="middle" '
+             f'font-family="DejaVu Sans,Verdana,sans-serif">LSB</text>')
+    s.append(f'<text x="{CX + 76}" y="129" font-size="20" fill="{TEXT2}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">2.8k</text>')
+    # 7.161.73 -- three MHz digits with two blanked, three kHz, two Hz.
+    s.append(readout("  7161" "73", cycle_idx=6,
+                     cycle_vals=list("7890123456"), underline=6))
+    s.append(f'<text x="{CX - 98}" y="227" font-size="20" fill="{ACCENT}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">100 Hz</text>')
+    s.append(f'<text x="{CX - 24}" y="227" font-size="14" fill="{WARN}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">RIT 0</text>')
+    s.append(f'<text x="{CX + 42}" y="227" font-size="14" fill="{TEXT2}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">VOL 40</text>')
+    s.append(f'<text x="{CX + 104}" y="227" font-size="14" fill="{TEXT2}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">MIC 100</text>')
+    s.append(ptt_slab(BG1, "PTT", TEXT2))
     s.append(tail())
     return "".join(s)
 
@@ -202,21 +236,35 @@ def tx_face():
                          [.87, .62, .88, .70, .95, .81, .55, .70, .87], "5s"))
     for f in (0.10, 0.50):
         s.append(notch(AUD_ROT + f * AUD_SPAN))
-    s.append(f'<text x="96" y="92" font-size="17" fill="{TX_TEXT}" text-anchor="middle" '
+    # The mic level is a thin inner ring under the power bar, filling the
+    # other way so two bars on the same side are not read as one quantity.
+    rc_mic = MIC_R - MIC_BAND / 2
+    s.append(f'<path d="{arc_path(AUD_ROT, AUD_ROT + AUD_SPAN, rc_mic)}" fill="none" '
+             f'stroke="{SUBTLE}" stroke-width="{MIC_BAND}"/>')
+    Lm = arc_len(AUD_ROT, AUD_ROT + AUD_SPAN, rc_mic)
+    mic = [.55, .72, .41, .83, .60, .35, .77, .50, .55]
+    lens = " ; ".join(f"{Lm * v:.2f} {Lm + 10:.2f}" for v in mic)
+    s.append(f'<path d="{arc_path(AUD_ROT + AUD_SPAN, AUD_ROT, rc_mic)}" fill="none" '
+             f'stroke="{ACCENT}" stroke-width="{MIC_BAND}" '
+             f'stroke-dasharray="{Lm * mic[0]:.2f} {Lm + 10:.2f}">'
+             f'<animate attributeName="stroke-dasharray" dur="5s" '
+             f'repeatCount="indefinite" values="{lens}"/></path>')
+    # Both readouts are centred and stacked, the same two labels the receive
+    # face uses for S-units and dBm.
+    s.append(f'<text x="180" y="83" font-size="20" fill="{TX_TEXT}" text-anchor="middle" '
              f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700">SWR 1.3</text>')
-    s.append(f'<text x="264" y="92" font-size="17" fill="{TX_TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700">PWR 87W</text>')
-    s.append(f'<text x="180" y="150" font-size="14" fill="{TX_TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif">40m &#183; LSB &#183; 2.8k</text>')
-    s.append(f'<text x="180" y="200" font-size="44" fill="{TX_TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700">'
-             f'7.161.230</text>')
-    s.append(f'<rect x="0" y="{PTT_TOP}" width="360" height="{360 - PTT_TOP}" '
-             f'fill="{TX_RED}"><animate attributeName="opacity" dur="2s" '
-             f'repeatCount="indefinite" values="1;0.78;1"/></rect>')
-    s.append(f'<text x="180" y="{PTT_TOP + 40}" font-size="30" fill="#FFFFFF" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif" '
-             f'font-weight="700" letter-spacing="4">TX  102s</text>')
+    s.append(f'<text x="180" y="103" font-size="14" fill="{TX_TEXT}" text-anchor="middle" '
+             f'font-family="DejaVu Sans,Verdana,sans-serif">PWR 87 W</text>')
+    s.append(f'<text x="{CX - 76}" y="129" font-size="20" fill="{ACCENT}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">40m</text>')
+    s.append(f'<text x="{CX}" y="129" font-size="20" fill="{TX_TEXT}" text-anchor="middle" '
+             f'font-family="DejaVu Sans,Verdana,sans-serif">LSB</text>')
+    s.append(f'<text x="{CX + 76}" y="129" font-size="20" fill="{TEXT2}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">2.8k</text>')
+    s.append(readout("  7161" "73", colour=TX_TEXT, underline=6))
+    s.append(f'<text x="{CX - 98}" y="227" font-size="20" fill="{ACCENT}" '
+             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">100 Hz</text>')
+    s.append(ptt_slab(TX_RED, "TX 102s", "#FFFFFF", pulse=True))
     s.append(tail())
     return "".join(s)
 

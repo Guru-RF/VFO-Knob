@@ -1,0 +1,11 @@
+VFO-Knob
+Copyright 2026 Joeri Van Dooren / Guru-RF
+
+This product includes software developed as part of the VFO-Knob project,
+licensed under the Apache License, Version 2.0.
+
+Third-party components distributed with, or built into, the firmware are
+listed in THIRD_PARTY_LICENSES. One of them -- the display initialisation
+table in components/panel/sh8601_init_cmds.c -- carries no licence from its
+author and is NOT covered by the Apache licence above. See that file for
+details before redistributing binaries.

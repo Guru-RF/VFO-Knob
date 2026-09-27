@@ -145,13 +145,16 @@ Waveshare ESP32-S3-Knob-Touch-LCD-1.8: ESP32-S3 with 16 MB flash and 8 MB PSRAM,
 360×360 round SH8601 display, CST816 touch, DRV2605L haptics, PCM5100A DAC and a
 PDM microphone. Every GPIO number lives in `components/board/board_pins.h`.
 
-## Licensing — not settled yet
+## Licence
 
-There is **no LICENSE file**, which means all rights reserved by default. Two
-things need deciding before that changes:
+[Apache-2.0](LICENSE). You may use, modify, sell and ship this firmware,
+including on hardware you sell, with no obligation to publish your changes. It
+carries an explicit patent grant. Keep the `LICENSE` and `NOTICE` files with
+any redistribution, and state what you changed.
 
-- `components/panel/sh8601_init_cmds.c` is copied verbatim from Waveshare's
-  `08_LVGL_Test` demo, and that demo ships no licence at all.
-- The intended licence for the rest (Apache-2.0 would match ESP-IDF).
-
-Treat the repository as source-available and ask before redistributing.
+**One caveat, and it is a real one.** `components/panel/sh8601_init_cmds.c` is
+copied verbatim from a Waveshare demo that ships no licence at all, so it is
+not mine to license and the Apache grant above does not reach it. It is
+compiled into every binary. Settle it — permission from Waveshare, or re-derive
+the table from the SH8601 datasheet — before selling devices with this
+firmware on them. See [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).
