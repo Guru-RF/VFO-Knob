@@ -14,6 +14,13 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+# Static .bss to PSRAM. Internal RAM is the binding constraint on this board --
+# LVGL draw buffers, WiFi descriptors, two I2S channels and the WebSocket
+# client all want it, and the failure mode is obscure (a WebSocket upgrade that
+# cannot read its response, or a bare TCP connect that times out while the
+# server is demonstrably healthy). Static buffers have no reason to compete:
+# only DMA needs to be internal.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # WiFi/lwIP buffers stay in internal RAM. Moving them to PSRAM was measured
 # and made things WORSE (10.7 kB internal free at TCI start, against 38 kB
 # without it), and it cannot relocate the static RX descriptors anyway --

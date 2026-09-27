@@ -32,6 +32,8 @@ typedef struct {
 } __attribute__((packed)) tci_audio_hdr_t;
 
 #define TCI_AUDIO_TYPE_RX     1
+#define TCI_AUDIO_TYPE_TX     2
+#define TCI_AUDIO_TYPE_CHRONO 3
 #define TCI_AUDIO_FMT_INT16   0
 #define TCI_AUDIO_FMT_FLOAT32 3
 

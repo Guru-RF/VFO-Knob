@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "antiecho.h"
+#include "audio_in.h"
 #include "audio_out.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -60,6 +61,11 @@ static int64_t     s_retry_at_us;      /* 0 = connected or connecting */
 #define AUD_CAP 12288
 static uint8_t    *s_aud;
 static size_t      s_aud_len;
+/* Outbound TX_AUDIO frame: 64-byte header + 2 * TX_CHRONO_FRAMES floats.
+ * PSRAM, because internal RAM is the contended resource here. */
+#define TXA_FLOATS (2 * TX_CHRONO_FRAMES)
+#define TXA_BYTES  (64 + TXA_FLOATS * 4)
+static uint8_t    *s_txa;
 static uint32_t    s_backoff_ms = 250;
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -97,8 +103,10 @@ static void ptt_dispatch(const ptt_out_t *o)
         ESP_LOGE(TAG, "PTT ladder rung 4: rebooting to guarantee an unkey");
         esp_restart();
     }
-    if (o->entered_tx) ESP_LOGW(TAG, "*** TX ***");
-    if (o->left_tx)    ESP_LOGI(TAG, "*** RX ***");
+    /* The microphone runs only while keyed. A live mic when the operator has
+     * not asked to transmit is a privacy bug, not just a wasted buffer. */
+    if (o->entered_tx) { audio_in_set_active(true);  ESP_LOGW(TAG, "*** TX ***"); }
+    if (o->left_tx)    { audio_in_set_active(false); ESP_LOGI(TAG, "*** RX ***"); }
     if (o->refused)    ESP_LOGW(TAG, "PTT REFUSED (%s)", ptt_abort_name(S.ptt.reason));
 }
 
@@ -268,6 +276,34 @@ static void consume(const char *data, size_t len)
     }
 }
 
+/* Answer one TX_CHRONO with one TX_AUDIO frame.
+ *
+ * Transmit is paced by the server: it asks every 21.33 ms and we answer, which
+ * is why this is driven from the receive path rather than from a timer of our
+ * own. Answering late shows up as a chrono stall server-side. If the
+ * microphone has not produced enough samples we still send a full frame,
+ * padded with silence -- a gap in transmitted audio is worse than quiet. */
+static void send_tx_audio(uint32_t receiver)
+{
+    if (!s_txa || !s_ws) return;
+
+    tci_audio_hdr_t *h = (tci_audio_hdr_t *)s_txa;
+    memset(h, 0, sizeof *h);
+    h->receiver    = receiver;
+    h->sample_rate = TX_AUDIO_RATE_HZ;   /* server resamples 1:1 from 24 kHz */
+    h->format      = TCI_AUDIO_FMT_FLOAT32;
+    h->length      = TXA_FLOATS;
+    h->type        = TCI_AUDIO_TYPE_TX;
+    h->channels    = 2;
+
+    float *pcm = (float *)(s_txa + sizeof *h);
+    if (!audio_in_take(pcm, TXA_FLOATS))
+        memset(pcm, 0, TXA_FLOATS * sizeof(float));
+
+    esp_websocket_client_send_bin(s_ws, (const char *)s_txa, TXA_BYTES,
+                                  pdMS_TO_TICKS(50));
+}
+
 static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)base;
@@ -310,7 +346,11 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
                 break;
             }
             if (e->payload_offset + e->data_len >= (size_t)e->payload_len) {
-                audio_out_feed(s_aud, s_aud_len);
+                const tci_audio_hdr_t *h = (const tci_audio_hdr_t *)s_aud;
+                if (s_aud_len >= sizeof *h) {
+                    if (h->type == TCI_AUDIO_TYPE_RX)      audio_out_feed(s_aud, s_aud_len);
+                    else if (h->type == TCI_AUDIO_TYPE_CHRONO) send_tx_audio(h->receiver);
+                }
                 s_aud_len = 0;
             }
             break;
@@ -331,6 +371,7 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             ESP_LOGW(TAG, "link lost while %s -- server fails closed",
                      ptt_state_name(S.ptt.state));
             ptt_fsm_init(&S.ptt, S.ptt.tot_ms);
+            audio_in_set_active(false);     /* never leave the mic live */
         }
         /* Schedule our own reconnect. We own this rather than the component,
          * because a safety abort deliberately CLOSES the socket, and an
@@ -670,6 +711,7 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
         s_aud = heap_caps_malloc(AUD_CAP, MALLOC_CAP_SPIRAM);
         if (!s_aud) ESP_LOGW(TAG, "no PSRAM for audio reassembly; RX audio off");
     }
+    if (!s_txa) s_txa = heap_caps_malloc(TXA_BYTES, MALLOC_CAP_SPIRAM);
     s_aud_len = 0;
 
     esp_websocket_client_config_t cfg = {

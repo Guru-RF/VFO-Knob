@@ -3,6 +3,7 @@
 
 #include "esp_log.h"
 #include "driver/i2c_master.h"
+#include "esp_rom_sys.h"
 
 static const char *TAG = "board";
 static i2c_master_bus_handle_t s_i2c;
@@ -17,6 +18,34 @@ esp_err_t board_init(void)
     };
     ESP_ERROR_CHECK(gpio_config(&io));
     ESP_ERROR_CHECK(gpio_set_level(BOARD_PIN_AUDIO_MUX_SEL, 1));
+
+    /* Free a hung bus before claiming it.
+     *
+     * If the chip resets in the middle of a read -- which it does constantly
+     * during development, and which the touch poll makes likely at 50 Hz --
+     * the slave can be left mid-byte holding SDA low. The controller then sees
+     * a permanently busy bus and every probe times out, which looks exactly
+     * like dead hardware. Nine clock pulses walk any slave out of its transfer,
+     * then a STOP re-synchronises it. Cheap, and it only does anything when
+     * the bus is actually stuck. */
+    gpio_config_t rec = {
+        .pin_bit_mask = (1ULL << BOARD_PIN_I2C_SCL) | (1ULL << BOARD_PIN_I2C_SDA),
+        .mode         = GPIO_MODE_INPUT_OUTPUT_OD,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&rec));
+    if (gpio_get_level(BOARD_PIN_I2C_SDA) == 0) {
+        ESP_LOGW(TAG, "SDA stuck low -- clocking the bus free");
+        for (int i = 0; i < 9; i++) {
+            gpio_set_level(BOARD_PIN_I2C_SCL, 0); esp_rom_delay_us(5);
+            gpio_set_level(BOARD_PIN_I2C_SCL, 1); esp_rom_delay_us(5);
+        }
+        /* STOP: SDA low->high while SCL is high. */
+        gpio_set_level(BOARD_PIN_I2C_SDA, 0); esp_rom_delay_us(5);
+        gpio_set_level(BOARD_PIN_I2C_SCL, 1); esp_rom_delay_us(5);
+        gpio_set_level(BOARD_PIN_I2C_SDA, 1); esp_rom_delay_us(5);
+        ESP_LOGW(TAG, "recovery done, SDA=%d", gpio_get_level(BOARD_PIN_I2C_SDA));
+    }
 
     i2c_master_bus_config_t bus = {
         .i2c_port                     = BOARD_I2C_PORT,

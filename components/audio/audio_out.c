@@ -86,7 +86,9 @@ esp_err_t audio_out_init(void)
                                        MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(s_ring, ESP_ERR_NO_MEM, TAG, "ring");
 
-    i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+        /* I2S1 explicitly, not AUTO: PDM receive for the microphone is only
+     * available on I2S0 on the ESP32-S3, so the DAC must not take it. */
+    i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     /* 4 x 180 frames = 2.9 kB of DMA memory, about half the default. Internal
      * RAM is the contended resource on this board; at 24 kHz this is still
      * 30 ms of buffering, comfortably more than the scheduler needs. */

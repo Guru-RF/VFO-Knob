@@ -574,17 +574,19 @@ esp_err_t ui_init(void)
     lvgl_port_display_cfg_t dc = {
         .io_handle     = panel_io_handle(),
         .panel_handle  = panel_handle(),
-        /* 2 x 16 lines of internal DMA memory (23 kB). Every bound here was
+        /* 2 x 12 lines of internal DMA memory (17 kB). Every bound here was
          * MEASURED on hardware, not chosen:
          *   40 lines                        -> WebSocket task could not spawn
          *   24 lines                        -> TCP connects timed out
          *   32 lines + WiFi buffers in PSRAM-> WiFi could not init its static
          *                                      RX descriptors
-         * 16 lines leaves ~38 kB internal free with WiFi and TCI both up.
+         *   16 lines + microphone       -> WebSocket client could not allocate
+         * 12 lines is what fits once the display, WiFi, BOTH I2S channels and
+         * the TCI client are all resident.
          * Partial rendering means buffer height costs latency only on large
          * redraws, and the readout is per-digit precisely so those are rare.
          * Never a full framebuffer; never PSRAM for flush buffers. */
-        .buffer_size   = BOARD_LCD_H_RES * 16,
+        .buffer_size   = BOARD_LCD_H_RES * 12,
         .double_buffer = true,
         .hres          = BOARD_LCD_H_RES,
         .vres          = BOARD_LCD_V_RES,

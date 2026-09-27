@@ -15,6 +15,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
+#include "audio_in.h"
 #include "audio_out.h"
 #include "board.h"
 #include "board_pins.h"
@@ -380,6 +381,14 @@ static void net_task(void *arg)
                 (unsigned)st.unknown_cmds,
                 st.last_close[0] ? " last_close=" : "", st.last_close);
 
+            audio_in_stats_t m;
+            audio_in_stats(&m);
+            if (audio_in_active() || m.blocks)
+                ESP_LOGI(TAG, "[MIC] %s blocks=%u starved=%u overruns=%u peak=%.2f",
+                         audio_in_active() ? "LIVE" : "idle",
+                         (unsigned)m.blocks, (unsigned)m.starved,
+                         (unsigned)m.overruns, (double)m.peak);
+
             audio_stats_t a;
             audio_out_stats(&a);
             if (a.frames || a.dropped)
@@ -431,6 +440,8 @@ void app_main(void)
     ESP_ERROR_CHECK(hal_encoder_init());
     if (audio_out_init() != ESP_OK)
         ESP_LOGE(TAG, "audio output unavailable -- continuing without it");
+    if (audio_in_init() != ESP_OK)
+        ESP_LOGE(TAG, "microphone unavailable -- continuing without TX audio");
 
     /* Deliberately NOT ESP_ERROR_CHECK. A WiFi failure must leave a working
      * display showing why, not abort into a reboot loop that hides it. */
