@@ -307,9 +307,30 @@ static void ui_task(void *arg)
         }
 
         audio_out_set_volume(ui_volume());
+        audio_in_set_gain(ui_mic_gain());
 
         tci_status_t st;
         tci_get_status(&st);
+
+        /* AetherSDR owns the band plan and every other transmit precondition.
+         * The protocol gives no reason for a refusal -- only trx:false -- so
+         * the banner and the refusal haptic are all the operator gets. Hold a
+         * refusal on screen for 3 s; it is otherwise a single frame. */
+        static uint32_t s_seen_refusals;
+        static int64_t  s_warn_until;
+        const char     *warn = NULL;
+        int64_t nowms = esp_timer_get_time() / 1000;
+
+        if (st.ptt_refusals != s_seen_refusals) {
+            s_seen_refusals = st.ptt_refusals;
+            s_warn_until    = nowms + 3000;
+        }
+        if (nowms < s_warn_until)                    warn = "TX REFUSED";
+        else if (!(st.link == TCI_LINK_READY ||
+                   st.link == TCI_LINK_DEGRADED))    warn = "NO LINK";
+        else if (st.slice_locked)                    warn = "VFO LOCKED";
+        else if (!(st.permit & PERMIT_TX_ENABLE))    warn = "TX DISABLED";
+
         ui_state_t u = {
             .freq_hz       = st.f_display,
             .step_hz       = atomic_load(&s_step_hz),
@@ -324,6 +345,7 @@ static void ui_task(void *arg)
             .slice_locked  = st.slice_locked,
             .tot_remain_ms = st.tot_remain_ms,
             .may_key       = (st.permit == PERMIT_ALL),
+            .warn          = warn,
         };
         ui_update(&u);
     }

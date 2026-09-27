@@ -1,0 +1,60 @@
+# TODO
+
+## Upstream: propose a PTT lease for AetherSDR
+
+**This is the highest-value outstanding item, and it cannot be fixed here.**
+
+AetherSDR fails closed when a TCI client disconnects — `abortTciPtt()` at
+`src/core/TciServer.cpp:975` unkeys the radio unconditionally. That covers every
+failure this firmware can detect, and the teardown ladder deliberately destroys
+its own socket to trigger it.
+
+What it does not cover is a client that dies *instantaneously* — power pulled,
+brownout, a crash with no chance to close the socket. AetherSDR never pings its
+TCI clients and has no idle timeout, so detection falls to TCP retransmission.
+On Linux, `tcp_retries2` defaults to 15, which is roughly **13–15 minutes with
+the radio keyed**.
+
+No firmware on the device can close this. It needs an application-layer lease:
+
+- While a client holds PTT, require some liveness signal within N seconds
+  (a WebSocket pong is sufficient and costs the client nothing).
+- On expiry, call the `abortTciPtt()` path that already exists.
+- Roughly 50 lines and a timer, at a hook that is already there and already
+  does the right thing.
+
+**Action:** file an issue against `aethersdr/AetherSDR` describing the failure
+mode and proposing the lease. Measure the real duration first (unplug the
+device while keyed into a dummy load and time how long the rig stays keyed)
+so the report carries a number rather than a theory.
+
+Until this lands, the README says — and should keep saying — that this device
+is not a primary PTT source for unattended operation.
+
+## Firmware
+
+- [ ] **Endurance soak.** Nothing has run for 24 h. Watch free internal heap,
+      task high-water marks, `hap_drops`, WS closes and audio underruns.
+- [ ] **Tabular-figure font.** Montserrat is proportional, so digits shift
+      width as they change and the readout shimmers slightly while tuning. A
+      subset of a monospaced-digit face to `0-9 . M k H z` is about 18 kB.
+- [ ] **On-screen provisioning.** WiFi and host currently come from Kconfig via
+      NVS seeding. A SoftAP captive portal plus an on-screen host editor would
+      remove the reflash-to-change-networks step.
+- [ ] **Persist settings to NVS** — volume, mic gain, TOT, brightness, rotation.
+      All are currently lost on reboot.
+- [ ] **Slice following.** The knob can only *follow* focus: AetherSDR ignores
+      `active_slice` SETs and `set_in_focus` is a stub, so a slice *selector*
+      is not implementable against today's server.
+- [ ] **OTA.** The partition table already has two app slots and `otadata`;
+      only `esp_https_ota` and a trigger are missing.
+
+## Known hardware quirks
+
+Recorded so they are not rediscovered — see the README for detail.
+
+- SH8601 display, not ST77916. Honours MADCTL `MX` but not `MY`.
+- The knob is a bidirectional switch, not a quadrature encoder.
+- PDM microphone capture is I2S0-only; the DAC must use I2S1.
+- A reset mid-I²C-read leaves a slave holding SDA low; `board_init()` clocks
+  the bus free.

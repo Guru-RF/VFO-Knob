@@ -67,15 +67,17 @@ static const int DIG_STEP[N_DIG] = {
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
-static lv_obj_t *s_dbm, *s_rit, *s_vol;
+static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
-typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL } edit_t;
+typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL,
+               ED_MIC } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int32_t s_edit_rit;
 static bool    s_edit_lsb;   /* passband sits below the carrier */
 static uint8_t s_volume = 40;
+static uint8_t s_micgain = 100;
 static ui_commit_t s_commit;
 static bool    s_have_commit;
 
@@ -198,6 +200,10 @@ static void edit_render(void)
         title = "VOLUME";
         snprintf(v, sizeof v, "%d", s_volume);
         break;
+    case ED_MIC:
+        title = "MIC GAIN";
+        snprintf(v, sizeof v, "%d", s_micgain);
+        break;
     default: return;
     }
     lv_label_set_text(s_edit_title, title);
@@ -280,7 +286,7 @@ static void edit_commit(void)
         break;
     default: break;      /* volume is local-only for now */
     }
-    s_have_commit = (s_edit != ED_NONE && s_edit != ED_VOL);
+    s_have_commit = (s_edit != ED_NONE && s_edit != ED_VOL && s_edit != ED_MIC);
     s_edit = ED_NONE;
     edit_render();
 }
@@ -319,6 +325,15 @@ void ui_edit_rotate(int32_t detents)
         s_volume = (uint8_t)v;
         break;
     }
+    case ED_MIC: {
+        /* Up to 200%: the PDM element is quiet, and the alternative to gain
+         * here is asking the operator to shout at a knob. */
+        int v = s_micgain + detents * 5;
+        if (v < 0)   v = 0;
+        if (v > 200) v = 200;
+        s_micgain = (uint8_t)v;
+        break;
+    }
     default: break;
     }
     edit_render();
@@ -333,7 +348,8 @@ bool ui_take_commit(ui_commit_t *out)
     return true;
 }
 
-uint8_t ui_volume(void) { return s_volume; }
+uint8_t ui_volume(void)  { return s_volume; }
+uint8_t ui_mic_gain(void) { return s_micgain; }
 
 /* --- touch --------------------------------------------------------------- */
 
@@ -379,10 +395,11 @@ static void touch_cb(lv_event_t *e)
         s_step_req   = DIG_STEP[s_active_dig];
         return;
     }
-    /* step | rit | volume */
-    if (p.y >= 212 && p.y < PTT_TOP) {
-        if      (p.x > CX + 40) edit_open(ED_VOL, &s_last);
-        else if (p.x > CX - 20) edit_open(ED_RIT, &s_last);
+    /* step | rit | volume | mic */
+    if (p.y >= 208 && p.y < PTT_TOP) {
+        if      (p.x > CX + 74) edit_open(ED_MIC, &s_last);
+        else if (p.x > CX + 12) edit_open(ED_VOL, &s_last);
+        else if (p.x > CX - 56) edit_open(ED_RIT, &s_last);
         return;
     }
 }
@@ -500,10 +517,12 @@ static void build(void)
     lv_obj_remove_flag(s_underline, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_underline, LV_OBJ_FLAG_CLICKABLE);
 
-    s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 72, 220, "1 kHz");
-    s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX + 12, 222, "");
-    s_vol      = mklabel(&lv_font_montserrat_20, C_TEXT2,  CX + 72, 220,
+    s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 98, 220, "1 kHz");
+    s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX - 24, 222, "RIT 0");
+    s_vol      = mklabel(&lv_font_montserrat_14, C_TEXT2,  CX + 42, 222,
                          LV_SYMBOL_VOLUME_MID " 40");
+    s_mic      = mklabel(&lv_font_montserrat_14, C_TEXT2,  CX + 104, 222,
+                         LV_SYMBOL_AUDIO " 100");
     s_status   = mklabel(&lv_font_montserrat_14, C_LABEL,  CX,      240, "");
 
     /* Full width, hard to the bottom edge. The circle clips it to a chord. */
@@ -512,7 +531,9 @@ static void build(void)
     lv_obj_align(s_ptt, LV_ALIGN_TOP_LEFT, 0, PTT_TOP);
     lv_obj_set_style_radius(s_ptt, 0, 0);
     lv_obj_set_style_bg_color(s_ptt, C_BG1, 0);
-    lv_obj_set_style_border_width(s_ptt, 0, 0);
+    lv_obj_set_style_border_width(s_ptt, 2, 0);
+    lv_obj_set_style_border_side(s_ptt, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_color(s_ptt, C_ACCENT, 0);
     lv_obj_set_style_pad_all(s_ptt, 0, 0);
     lv_obj_remove_flag(s_ptt, LV_OBJ_FLAG_SCROLLABLE);
     /* An lv_obj is CLICKABLE by default, so the slab swallowed every tap and
@@ -525,8 +546,13 @@ static void build(void)
     lv_obj_set_style_text_font(s_ptt_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_ptt_lbl, C_TEXT2, 0);
     lv_label_set_text(s_ptt_lbl, "PTT");
+    /* Absolute position and an explicit full width. Auto-sized labels centre
+     * on their own content, which shifts as the text changes between "PTT",
+     * "----" and "TX 118" -- so the caption appeared to wander. */
+    lv_obj_set_width(s_ptt_lbl, 360);
     lv_obj_set_style_text_align(s_ptt_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_ptt_lbl, LV_ALIGN_TOP_MID, 0, PTT_TOP + 12);
+    lv_obj_set_style_pad_all(s_ptt_lbl, 0, 0);
+    lv_obj_set_pos(s_ptt_lbl, 0, PTT_TOP + 14);
     lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
 
     /* Editor overlay: hidden until a field is tapped. */
@@ -561,6 +587,16 @@ static void build(void)
     lv_obj_set_style_text_color(s_edit_hint, C_LABEL, 0);
     lv_obj_align(s_edit_hint, LV_ALIGN_BOTTOM_MID, 0, -2);
     lv_label_set_text(s_edit_hint, "turn to choose  -  tap to accept");
+
+    /* AetherSDR owns the band plan. When it refuses a key -- out of band, a
+     * locked slice, TX disabled -- the protocol gives no reason, only a
+     * trx:false. This banner and the refusal haptic are the whole of the
+     * operator's feedback, so they have to be unmissable. */
+    s_warn = mklabel(&lv_font_montserrat_20, C_DANGER, CX, 196, "");
+    lv_obj_set_style_bg_color(s_warn, C_BG, 0);
+    lv_obj_set_style_bg_opa(s_warn, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(s_warn, 4, 0);
+    lv_obj_add_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
@@ -694,6 +730,14 @@ void ui_update(const ui_state_t *st)
     }
 
     lv_label_set_text_fmt(s_vol, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
+    lv_label_set_text_fmt(s_mic, LV_SYMBOL_AUDIO " %u", (unsigned)s_micgain);
+
+    if (st->warn && st->warn[0]) {
+        lv_label_set_text(s_warn, st->warn);
+        lv_obj_remove_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     lv_label_set_text(s_status,
         !st->link_ok     ? "NO LINK" :

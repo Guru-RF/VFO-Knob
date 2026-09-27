@@ -32,6 +32,8 @@ typedef struct {
     bool     slice_locked;
     uint32_t tot_remain_ms;
     bool     may_key;
+    /* Transient banner: AetherSDR's refusal reason, or ours. NULL for none. */
+    const char *warn;
 } ui_state_t;
 
 void ui_update(const ui_state_t *st);
@@ -66,6 +68,7 @@ bool ui_take_commit(ui_commit_t *out);
  * its icon exist now so the interaction is settled before the audio path
  * arrives. */
 uint8_t ui_volume(void);
+uint8_t ui_mic_gain(void);
 
 /* Step through 0/90/180/270. Orientation is a physical property of how the
  * panel is mounted, and guessing it costs a flash cycle each time -- so make

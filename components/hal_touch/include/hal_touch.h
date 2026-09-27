@@ -15,7 +15,10 @@
 #include "esp_err.h"
 #include "esp_lcd_touch.h"
 
-#define TOUCH_POLL_MS 20
+/* 10 ms, not 20. At 20 ms a brisk tap could fall between samples and simply
+ * not register, which reads as "you have to press firmly". PTT release latency
+ * is also a safety figure, so this is not a place to economise. */
+#define TOUCH_POLL_MS 10
 
 typedef struct {
     bool     pressed;
