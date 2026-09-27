@@ -229,11 +229,21 @@ async function ota(){
   const busy = o.phase==='checking'||o.phase==='downloading';
   const latest = (webLatest && webLatest.version) || o.available || '';
   const have   = latest && newer(latest, o.running);
+
+  /* The device cannot reach the internet over USB -- it is the DHCP server on
+     a link with no gateway -- so its own check failing is the expected case,
+     not news. When this page has managed the lookup itself, say what WE found
+     instead of reporting the device's failure as the headline. */
+  const devBlind = o.phase==='failed' && /no route/i.test(o.message||'');
+  let status;
+  if (o.phase==='downloading')      status = `downloading ${o.percent}%`;
+  else if (webLatest && devBlind)   status = have ? `${latest} available`
+                                                  : 'up to date';
+  else                              status = o.message;
   $('otarow').innerHTML =
       row('Running', esc(o.running))
     + row('Latest', esc(latest||'\u2014') + (webLatest?' <span class="pill up">via browser</span>':''))
-    + row('Status', o.phase==='downloading' ? `downloading ${o.percent}%`
-                                            : esc(o.message));
+    + row('Status', esc(status));
   $('check').disabled = busy;
   $('install').hidden = !(have && o.phase!=='installed') || busy;
   if(o.phase==='installed'){
