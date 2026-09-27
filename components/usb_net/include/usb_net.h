@@ -31,6 +31,17 @@ esp_err_t usb_net_init(void);
 
 /* True once the host has taken a DHCP lease, i.e. the USB link is actually
  * carrying traffic rather than merely being plugged into a charger. */
+/* Routes the USB PHY back to USB-Serial-JTAG, so the ROM's serial port is
+ * present and the device can be flashed. Call early at startup: the mux is in
+ * the RTC domain and survives a reset, so without this a crash leaves the
+ * device reachable only by unplugging it. */
+void usb_net_release_phy(void);
+
+/* Releases the USB PHY so the ROM's serial port comes back on the next reset.
+ * Without this a software reboot leaves the device unflashable until it is
+ * physically power-cycled. */
+void usb_net_prepare_reboot(void);
+
 bool usb_net_is_up(void);
 
 /* The host's address, or NULL when the link is down. */

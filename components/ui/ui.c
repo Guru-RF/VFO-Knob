@@ -963,7 +963,14 @@ esp_err_t ui_init(void)
     ESP_RETURN_ON_FALSE(disp, ESP_FAIL, TAG, "add disp");
 
     s_disp = disp;
+    /* Raw lv_* calls must hold the port lock. lvgl_port_init() has already
+     * started the LVGL task by this point, so rotating unguarded races its
+     * render pass: main spins forever inside lv_inv_area() and the task
+     * watchdog reboots the device before the UI is ever drawn. It was benign
+     * for a long time purely because the timing happened not to collide. */
+    lvgl_port_lock(0);
     lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
+    lvgl_port_unlock();
     const lvgl_port_touch_cfg_t tc = { .disp = disp, .handle = hal_touch_handle() };
     ESP_RETURN_ON_FALSE(lvgl_port_add_touch(&tc), ESP_FAIL, TAG, "add touch");
 

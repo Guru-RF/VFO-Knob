@@ -40,6 +40,10 @@ const vfo_cfg_t *net_prov_cfg(void);
 /* Start the station and keep it connected. Non-blocking. */
 esp_err_t net_prov_wifi_start(void);
 
+/* Stops and deinitialises the radio, freeing its internal RAM. Used when the
+ * USB cable wins the transport choice and WiFi is dead weight. */
+esp_err_t net_prov_wifi_stop(void);
+
 bool net_prov_is_connected(void);
 
 /* Resolve the configured host. mDNS for *.local, getaddrinfo otherwise.

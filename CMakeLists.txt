@@ -15,5 +15,15 @@ if(NOT DEFINED SDKCONFIG_DEFAULTS)
     set(SDKCONFIG_DEFAULTS "${_vfo_defaults}")
 endif()
 
+# Keep each build directory's configuration to itself. By default IDF writes
+# sdkconfig next to the project, so `idf.py -B build_usbnet` and `idf.py -B
+# build` share one file: whichever ran last wins, and SDKCONFIG_DEFAULTS is
+# only consulted when that file does not yet exist. The failure is silent --
+# a USB-networking build comes out with USB networking compiled out, reports
+# success, flashes, and simply does nothing.
+if(NOT DEFINED SDKCONFIG)
+    set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(vfo-knob)

@@ -48,6 +48,9 @@ typedef struct {
     bool       need_sensors_enable;
     bool       need_audio_start;
     bool       audio_on;
+    uint32_t   t_audio_start_ms;   /* when audio_start went out, 0 if not yet */
+    uint8_t    audio_kills;        /* links dropped right after audio_start */
+    bool       audio_blocked;      /* stop asking; audio is what breaks us */
     uint32_t   pending_key, pending_unkey, pending_toggle;
     uint8_t    pending_abort;
 } state_t;
@@ -125,8 +128,9 @@ static void apply_fact(const tci_fact_t *f)
         S.t_ready_ms = now_ms();
         S.have_chan_sensors   = false;
         S.need_sensors_enable = true;
-        S.need_audio_start    = true;
+        S.need_audio_start    = !S.audio_blocked;
         S.audio_on            = false;
+        S.t_audio_start_ms    = 0;
         /* The greeting is authoritative: adopt the rig's frequency wholesale
          * and forget anything we thought we knew. */
         tune_assign(&S.tune, S.f_server);
@@ -394,10 +398,27 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
-    case WEBSOCKET_EVENT_CLOSED:
+    case WEBSOCKET_EVENT_CLOSED: {
+        /* If the link keeps dying within a moment of asking for audio, then
+         * audio is what is killing it -- give up on audio rather than
+         * reconnect forever. A knob that tunes without RX audio is useful; one
+         * stuck in a reconnect loop is not. Seen on the USB-NCM transport,
+         * where the WebSocket frame parser loses sync ~40 ms after
+         * audio_start; the same code is stable over WiFi. */
+        uint32_t tnow = now_ms();
+        if (S.t_audio_start_ms && (tnow - S.t_audio_start_ms) < 2000 &&
+            !S.audio_blocked) {
+            if (++S.audio_kills >= 3) {
+                S.audio_blocked = true;
+                ESP_LOGE(TAG, "link died %u times just after audio_start -- "
+                              "disabling RX audio for this session",
+                         (unsigned)S.audio_kills);
+            }
+        }
         S.closes++;
         S.link = TCI_LINK_DOWN;
         S.tx   = false;
+    }
         /* AetherSDR calls abortTciPtt() when a PTT-owning client disconnects,
          * so the radio is already unkeyed. Collapse our own state to match
          * rather than continuing to climb a ladder against a dead socket. */
@@ -572,6 +593,7 @@ static void tx_task(void *arg)
             send_cmd("audio_stream_sample_type:int16;");
             send_cmd("audio_start:%u;", (unsigned)S.my_trx);
             S.audio_on = true;
+            S.t_audio_start_ms = t;
             ESP_LOGI(TAG, "RX audio requested on trx %u at %d Hz",
                      (unsigned)S.my_trx, AUDIO_RATE_HZ);
         }
@@ -740,6 +762,15 @@ void tci_get_status(tci_status_t *o)
     strlcpy(o->last_close, S.last_close, sizeof o->last_close);
 }
 
+/* How much of a WebSocket receive buffer internal RAM can spare. */
+static int ws_buffer_size(void)
+{
+    size_t big = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (big > 48000) return 8192;
+    if (big > 24000) return 4096;
+    return 2048;
+}
+
 esp_err_t tci_client_start(const char *host, uint16_t port)
 {
     char uri[96];
@@ -774,12 +805,17 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
         .pingpong_timeout_sec   = 8,
         .task_prio              = 6,
         .task_stack             = 6144,
-        /* Deliberately small. Internal RAM is the contended resource here --
-         * LVGL, WiFi and I2S all want DMA-capable memory -- and a buffer big
-         * enough for a whole audio frame could not be allocated alongside this
-         * client's task stack. Audio arrives fragmented instead and is
-         * reassembled in PSRAM below, where there is 8 MB spare. */
-        .buffer_size            = 2048,
+        /* Sized to what internal RAM can actually spare right now.
+         *
+         * 2 kB was forced by the WiFi path, where LVGL, the WiFi driver and
+         * I2S leave barely enough for this client's task stack. On the USB
+         * path WiFi has been shut down by the time we get here, which frees
+         * about 40 kB -- and the small buffer turned out to matter: within
+         * 70 ms of audio_start the frame parser lost sync ("Non-zero RSV bits
+         * detected") and the link entered a reconnect loop. Audio over the
+         * cable arrives far faster than over WiFi, so a whole frame no longer
+         * fits between reads. Fragments are still reassembled in PSRAM. */
+        .buffer_size            = ws_buffer_size(),
     };
     s_ws = esp_websocket_client_init(&cfg);
     ESP_RETURN_ON_FALSE(s_ws, ESP_FAIL, TAG, "ws init");
@@ -798,7 +834,24 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
     }
 
     S.link = TCI_LINK_CONNECTING;
-    xTaskCreatePinnedToCore(tx_task, "tci_tx", 4096, NULL, 8, NULL, 0);
+    /* Check this. An unchecked failure here is the nastiest outcome the client
+     * has: the socket connects, the greeting parses, the S-meter moves and the
+     * status line says READY -- while nothing is ever transmitted, because
+     * every outbound command goes through tx_task. The knob looks connected
+     * and simply does not tune. It is also the allocation most likely to fail,
+     * being 4 kB of internal RAM asked for last. */
+    if (xTaskCreatePinnedToCore(tx_task, "tci_tx", 4096, NULL, 8, NULL, 0)
+        != pdPASS) {
+        ESP_LOGE(TAG, "no internal RAM for tci_tx (%u free, largest %u) -- "
+                      "refusing to run receive-only",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        esp_websocket_client_stop(s_ws);
+        esp_websocket_client_destroy(s_ws);
+        s_ws = NULL;
+        S.link = TCI_LINK_DOWN;
+        return ESP_ERR_NO_MEM;
+    }
     ESP_LOGI(TAG, "connecting to %s", uri);
     return ESP_OK;
 }

@@ -122,6 +122,19 @@ esp_err_t net_prov_init(void)
     }
     ESP_RETURN_ON_ERROR(err, TAG, "nvs");
     load_or_seed();
+
+    /* The TCP/IP stack and the default event loop are prerequisites for ANY
+     * netif -- WiFi, USB-NCM or the log server -- so they belong here, not in
+     * whichever transport happens to start first. Having them in
+     * net_prov_wifi_start() meant usb_net_init(), which runs earlier, called
+     * esp_netif_new() against an uninitialised stack and quietly failed; the
+     * knob then fell back to WiFi and looked like USB was simply unsupported.
+     * lwIP is unforgiving here -- a socket created before its thread exists
+     * asserts ("Invalid mbox") rather than returning an error. */
+    ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");
+    esp_err_t lerr = esp_event_loop_create_default();
+    if (lerr != ESP_OK && lerr != ESP_ERR_INVALID_STATE)
+        ESP_RETURN_ON_ERROR(lerr, TAG, "evt loop");
     return ESP_OK;
 }
 
@@ -158,11 +171,26 @@ void net_prov_save_audio(uint8_t volume, uint8_t mic_gain)
 }
 bool net_prov_is_connected(void)    { return s_connected; }
 
+/* Shuts the radio down and hands its internal RAM back.
+ *
+ * Worth doing, not just tidy: the WiFi driver's static RX descriptors live in
+ * internal DMA-capable RAM, which is the one resource this board never has
+ * enough of. With WiFi and USB-NCM both up there was not enough left for the
+ * TCI client's 4 kB transmit task -- the knob connected, received, and could
+ * not send a single command. */
+esp_err_t net_prov_wifi_stop(void)
+{
+    s_connected = false;
+    esp_err_t err = esp_wifi_stop();
+    if (err == ESP_ERR_WIFI_NOT_INIT) return ESP_OK;
+    if (err == ESP_OK) err = esp_wifi_deinit();
+    return err;
+}
+
 esp_err_t net_prov_wifi_start(void)
 {
     s_events = xEventGroupCreate();
-    ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");
-    ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "evt loop");
+    /* esp_netif and the default event loop are set up in net_prov_init(). */
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t ic = WIFI_INIT_CONFIG_DEFAULT();

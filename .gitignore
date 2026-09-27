@@ -17,3 +17,4 @@ managed_components/
 .DS_Store
 compile_commands.json
 build_usbnet/
+build_usbdiag/

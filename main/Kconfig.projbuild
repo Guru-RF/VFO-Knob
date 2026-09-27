@@ -20,6 +20,25 @@ config VFO_USB_NET
       the same pins, so a build with this enabled HAS NO SERIAL CONSOLE. Build
       with sdkconfig.usbnet, which also turns the console off.
 
+config VFO_USB_NET_DELAY_MS
+    int "Delay before USB networking takes the USB pads (ms)"
+    depends on VFO_USB_NET
+    range 0 30000
+    default 6000
+    help
+      How long to leave the ROM's USB-Serial-JTAG port enumerated before
+      installing TinyUSB.
+
+      This is the device's only way back in. Once TinyUSB owns the PHY the
+      serial port is gone, GPIO0 is behind a single button inside the case,
+      and the other Type-C orientation reaches the board's second chip rather
+      than the ESP32-S3 -- so without this window a bad build can only be
+      recovered by opening the case.
+
+      The host needs ~300-500 ms just to enumerate before esptool can open the
+      port, so anything under a second or so loses the race. Set 0 only if you
+      have reliable physical access to the BOOT button.
+
 config VFO_PANEL_SELFTEST
     bool "Run the display self-test loop at boot"
     default n

@@ -6,8 +6,22 @@
 # unavailable in this build -- use a console build for development.
 CONFIG_VFO_USB_NET=y
 CONFIG_TINYUSB_NET_MODE_NCM=y
-# The console is left configured for USB-Serial-JTAG on purpose. TinyUSB takes
-# the PHY at runtime, so the console simply goes quiet once USB networking
-# starts -- but if USB networking is SKIPPED (hold a finger on the screen
-# through boot) the console still works and the device can be reflashed.
-# Setting CONFIG_ESP_CONSOLE_NONE here would remove that escape entirely.
+# The console MUST be off in this build. USB-Serial-JTAG and USB-OTG share the
+# same PHY, and leaving the console on it while installing TinyUSB crashed the
+# device on every boot -- dmesg showed it re-enumerating as a JTAG/serial unit
+# over and over, never as a network device.
+#
+# This does not make the device unflashable: the ROM bootloader brings up
+# USB-Serial-JTAG on every reset regardless of app configuration, so ttyACM0
+# always reappears for esptool. Holding a finger on the screen through boot
+# additionally skips USB networking, so the port stays up after boot too.
+CONFIG_ESP_CONSOLE_NONE=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+# ESP_CONSOLE_NONE only disables the PRIMARY console. The SECONDARY console
+# defaults to USB-Serial-JTAG, which sets ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
+# and initialises that peripheral at startup -- so it keeps hold of the USB PHY
+# that TinyUSB needs. Symptom: the device boots and runs perfectly stably, but
+# never re-enumerates; the host keeps seeing 303a:1001 "USB JTAG/serial debug
+# unit" and no network interface ever appears. Both consoles must be off.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set

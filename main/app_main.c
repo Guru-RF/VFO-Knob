@@ -28,6 +28,9 @@
 #include "panel.h"
 #include "ui.h"
 #include "usb_net.h"
+#include "netlog.h"
+
+#include "lwip/sockets.h"
 #include "vfo_tune.h"
 
 #include "esp_chip_info.h"
@@ -231,23 +234,28 @@ static void console_task(void *arg)
         ESP_LOGW(TAG, "console unavailable");
         vTaskDelete(NULL);
     }
-    ESP_LOGI(TAG, "console: t=toggle PTT  k=key  u=unkey  s=status");
-    ESP_LOGI(TAG, "         p=abort:pong-stale  d=abort:link-down  o=TOT 30s");
-    ESP_LOGI(TAG, "         r=cycle screen rotation");
+    /* NOTHING HERE MAY START A TRANSMISSION.
+     *
+     * The keying commands were removed after a stray byte on the port -- just
+     * from opening and closing it -- was read as 't' and toggled PTT on a live
+     * radio. A serial line is not a deliberate act by an operator, and PTT now
+     * has a real button on the screen, so the console keeps only commands that
+     * are safe to receive by accident: unkey and the aborts both STOP a
+     * transmission, and the rest are read-only. */
+    ESP_LOGI(TAG, "console: u=unkey  s=status  r=rotate");
+    ESP_LOGI(TAG, "         p=abort:pong-stale  d=abort:link-down");
 
     for (;;) {
         uint8_t ch;
         if (usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(200)) != 1) continue;
         switch (ch) {
-        case 't': ESP_LOGI(TAG, "console: toggle"); tci_ptt_toggle(); break;
-        case 'k': ESP_LOGI(TAG, "console: key");    tci_ptt_key();    break;
+        /* No key/toggle: see the banner above. Unkey stays -- it can only
+         * ever make things safer. */
         case 'u': ESP_LOGI(TAG, "console: unkey");  tci_ptt_unkey();  break;
         case 'p': ESP_LOGI(TAG, "console: forcing pong-stale abort");
                   tci_ptt_force_abort(PTT_AB_PONG_STALE); break;
         case 'd': ESP_LOGI(TAG, "console: forcing link-down abort");
                   tci_ptt_force_abort(PTT_AB_LINK_DOWN);  break;
-        case 'o': ESP_LOGI(TAG, "console: TOT -> 30 s (FSM minimum)");
-                  tci_set_tot_ms(30000); break;
         case 'r': ui_cycle_rotation();
                   ESP_LOGI(TAG, "rotation -> %u degrees", ui_rotation() * 90u);
                   break;
@@ -364,6 +372,59 @@ static void ui_task(void *arg)
     }
 }
 
+/* Does anything answer on this address and port? A plain TCP connect, used to
+ * choose a transport.
+ *
+ * "Is the USB netif up?" is the wrong question: it comes up as soon as the
+ * cable has power, including a charger with no computer behind it, and
+ * esp_netif's DHCP *server* raises no event when it hands out a lease. The
+ * only honest test is whether AetherSDR actually answers over the cable. */
+static bool host_answers(const char *ip, uint16_t port, int timeout_ms)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    struct timeval tv = { .tv_sec  =  timeout_ms / 1000,
+                          .tv_usec = (timeout_ms % 1000) * 1000 };
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port) };
+    a.sin_addr.s_addr = inet_addr(ip);
+    bool ok = connect(fd, (struct sockaddr *)&a, sizeof a) == 0;
+    close(fd);
+    return ok;
+}
+
+/* Picks the transport for the TCI link, cable first.
+ *
+ * The cable is preferred because it is the whole point of the USB build: the
+ * machined case makes 2.4 GHz unreliable, and with both interfaces up the
+ * routing table would send TCI over WiFi regardless -- the USB subnet does not
+ * contain AetherSDR's LAN address, so the knob has to talk to the host's
+ * cable-side address instead. WiFi is held back briefly so that a cable that
+ * is merely slower to come up still wins. */
+static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
+                                  bool *via_usb)
+{
+#if CONFIG_VFO_USB_NET
+    if (usb_net_is_up() && host_answers(usb_net_host(), cfg->tci_port, 500)) {
+        ESP_LOGI(TAG, "--- transport: USB cable (%s) ---", usb_net_host());
+        *via_usb = true;
+        return usb_net_host();
+    }
+    /* Give the cable until a little after it is due before settling for WiFi. */
+    static const int64_t usb_grace_us =
+        ((int64_t)CONFIG_VFO_USB_NET_DELAY_MS + 5000) * 1000;
+    if (esp_timer_get_time() < usb_grace_us) return NULL;
+#endif
+    if (!net_prov_is_connected()) return NULL;
+    if (net_prov_resolve(ip, iplen) != ESP_OK) {
+        ESP_LOGE(TAG, "  cannot resolve %s", cfg->tci_host);
+        return NULL;
+    }
+    ESP_LOGI(TAG, "--- transport: WiFi (%s -> %s) ---", cfg->tci_host, ip);
+    return ip;
+}
+
 static void net_task(void *arg)
 {
     (void)arg;
@@ -372,19 +433,30 @@ static void net_task(void *arg)
     bool started = false;
 
     for (;;) {
-        if (!net_prov_is_connected()) {
-            started = false;
-        } else if (!started) {
-            ESP_LOGI(TAG, "--- M12 WiFi up ---");
-            if (net_prov_resolve(ip, sizeof ip) == ESP_OK) {
-                ESP_LOGI(TAG, "  AetherSDR %s -> ws://%s:%u",
-                         cfg->tci_host, ip, (unsigned)cfg->tci_port);
-                ESP_LOGI(TAG, "--- M13 TCI client --- (free internal %u, "
-                              "largest DMA %u)",
+        if (!started) {
+            bool via_usb = false;
+            const char *host = pick_transport(cfg, ip, sizeof ip, &via_usb);
+            if (host && via_usb) {
+                /* Hand the radio's internal RAM back before asking for the
+                 * client's transmit stack. Both transports up leaves too
+                 * little for it, and the failure is silent in the worst way:
+                 * the link connects and receives, and the knob will not tune. */
+                esp_err_t werr = net_prov_wifi_stop();
+                ESP_LOGI(TAG, "  wifi stopped for USB transport (%s); "
+                              "free internal %u -> largest %u",
+                         esp_err_to_name(werr),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_largest_free_block(
+                             MALLOC_CAP_INTERNAL));
+            }
+            if (host) {
+                ESP_LOGI(TAG, "--- M13 TCI client --- ws://%s:%u "
+                              "(free internal %u, largest DMA %u)",
+                         host, (unsigned)cfg->tci_port,
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_largest_free_block(
                              MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
-                if (tci_client_start(ip, cfg->tci_port) == ESP_OK) {
+                if (tci_client_start(host, cfg->tci_port) == ESP_OK) {
                     started = true;
                 } else {
                     /* Usually means internal RAM was too tight to spawn the
@@ -393,14 +465,28 @@ static void net_task(void *arg)
                      * deaf with no indication why. */
                     ESP_LOGE(TAG, "  client failed to start; retrying");
                 }
-            } else {
-                ESP_LOGE(TAG, "  cannot resolve %s", cfg->tci_host);
             }
         }
 
         if (started) {
             tci_status_t st;
             tci_get_status(&st);
+
+            /* Choosing USB means WiFi has been shut down, so an unplugged
+             * cable leaves no way back -- and the transport is only chosen at
+             * startup. Reboot rather than sit there deaf: the boot path picks
+             * a transport again, and dropping the TCI socket is the safe
+             * direction (AetherSDR unkeys a client that disconnects). */
+            static uint32_t down_ticks;
+            if (st.link == TCI_LINK_DOWN) {
+                if (++down_ticks > 30) {      /* ~60 s at the 2 s loop period */
+                    ESP_LOGE(TAG, "link down 60 s -- restarting to re-choose "
+                                  "a transport");
+                    esp_restart();
+                }
+            } else {
+                down_ticks = 0;
+            }
             static const char *L[] = { "down", "connecting", "greeting",
                                        "READY", "degraded" };
             ESP_LOGI(TAG,
@@ -475,6 +561,19 @@ static bool bring_up(const char *what, esp_err_t (*fn)(void))
     return false;
 }
 
+#if CONFIG_VFO_USB_NET
+/* Deferred so that every boot has a flashing window -- see the comment at the
+ * call site. */
+static void usb_net_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_VFO_USB_NET_DELAY_MS));
+    if (bring_up("usb-net", usb_net_init))
+        netlog_on_reboot(usb_net_prepare_reboot);
+    vTaskDelete(NULL);
+}
+#endif
+
 static void boot_ok_cb(void *arg)
 {
     (void)arg;
@@ -483,6 +582,15 @@ static void boot_ok_cb(void *arg)
 
 void app_main(void)
 {
+    /* Before anything else: the USB networking build has no serial console at
+     * all, so without this there is no way to see an init failure. */
+    netlog_init();
+#if CONFIG_VFO_USB_NET
+    /* Before anything else, and unconditionally: a previous run may have left
+     * the USB PHY on the OTG controller, and that choice survives a reset. */
+    usb_net_release_phy();
+#endif
+
     esp_chip_info_t chip;
     esp_chip_info(&chip);
     ESP_LOGI(TAG, "VFO-Knob | ESP32-S3 rev%d.%d, %d core(s), reset=%d",
@@ -496,6 +604,8 @@ void app_main(void)
     return;
 #else
     bring_up("nvs", net_prov_init);
+    /* net_prov_init() brings up esp_netif, so the log server can bind now. */
+    netlog_start();
 
     /* Three failed boots in a row: come up with the bare minimum so the device
      * stays usable and flashable while the cause is found. */
@@ -528,23 +638,42 @@ void app_main(void)
     if (esp_timer_create(&ok, &okt) == ESP_OK)
         esp_timer_start_once(okt, 20 * 1000 * 1000);
 
+    bool usb_net_on = false;
     if (!safe) {
 #if CONFIG_VFO_USB_NET
-        /* RECOVERY PATH, and the reason this is not unconditional.
+        /* KEEPING THE DEVICE FLASHABLE. Read before shortening the delay.
          *
-         * Enabling TinyUSB takes the USB PHY away from USB-Serial-JTAG, so the
-         * device stops enumerating as a serial port -- and esptool then has no
-         * port to reset. GPIO0 is inside the CNC case and unreachable, so
-         * without an escape a bad USB-net build could be very hard to reflash.
-         * Holding a finger on the screen through boot skips USB networking and
-         * leaves the console alive. */
+         * Installing TinyUSB takes the USB PHY away from USB-Serial-JTAG, so
+         * the serial port the ROM put up at reset disappears -- and esptool
+         * has nothing left to open. The only strap that would force ROM
+         * download mode is GPIO0, which on this board is also the audio mux
+         * and sits behind a single button in the CNC case. Flipping the
+         * Type-C plug does NOT rescue it either: that orientation reaches the
+         * board's other chip (an ESP32 behind a CH340), not the S3.
+         *
+         * So the firmware has to leave its own way back in. The ROM enumerates
+         * USB-Serial-JTAG on every reset regardless of what we do, and it
+         * stays up until we take the PHY. Waiting a few seconds first means
+         * esptool can always connect and reset the chip into download mode --
+         * no button, no disassembly, on every boot. Enumeration on the host
+         * takes ~300-500 ms, so the window has to be seconds, not milliseconds:
+         * an immediate install lost the race every single time.
+         *
+         * Holding a finger on the screen through boot skips USB networking
+         * altogether and keeps the console, which is the second way out. */
         touch_sample_t t0s;
         hal_touch_get(&t0s);
+        ESP_LOGI(TAG, "usb-net gate: touch.pressed=%d", (int)t0s.pressed);
         if (t0s.pressed) {
             ESP_LOGW(TAG, "touch held at boot -- skipping USB networking, "
                           "serial console stays available");
         } else {
-            bring_up("usb-net", usb_net_init);
+            /* Claim the pads now (so the console does not grab them) but do
+             * the actual install late. */
+            usb_net_on = true;
+            ESP_LOGW(TAG, "usb-net starts in %d ms -- serial flash window open",
+                     CONFIG_VFO_USB_NET_DELAY_MS);
+            xTaskCreatePinnedToCore(usb_net_task, "usbnet", 4096, NULL, 5, NULL, 0);
         }
 #endif
         esp_err_t werr = net_prov_wifi_start();
@@ -554,7 +683,17 @@ void app_main(void)
         xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
     }
 
-    xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
+    /* The console and USB networking cannot coexist: both want the USB pads.
+     * usb_serial_jtag_driver_install() re-enables the USJ peripheral, which
+     * takes the internal PHY back from the OTG controller -- silently, and
+     * milliseconds after usb_net_init() reported success. Everything on the
+     * device looks healthy; the host simply never sees the network adapter.
+     * When the touch-held escape skipped USB networking, the console is still
+     * the right thing to have, so this is conditional rather than compiled out. */
+    if (usb_net_on)
+        ESP_LOGI(TAG, "console off: USB pads belong to USB networking");
+    else
+        xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
     if (have_ui)
         xTaskCreatePinnedToCore(ui_task, "ui", 5120, NULL, 4, NULL, 1);
     /* Core 1 is the "feel" core: knob, haptics, touch and LVGL. Core 0 is
