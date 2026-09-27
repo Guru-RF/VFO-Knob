@@ -104,37 +104,20 @@ static void haptic_bringup(void)
 
 /* ------------------------------------------------------------- M6 / M8 --- */
 
-/* Strongest first. Confirmed distinguishable by hand at M5. */
-static const uint8_t LADDER[6] = { 24, 25, 26, 61, 62, 63 };
-#define EFF_ROLLOVER 27
+/* NO HAPTICS WHILE TUNING.
+ *
+ * The original design synthesised a click per detent, on the assumption the
+ * knob might be detentless. It is not -- it has 30 real mechanical detents, so
+ * a motor pulse on top of a detent you can already feel is redundant, and it
+ * spends the haptic channel on the one event that needs it least.
+ *
+ * Haptics are reserved for what the operator CANNOT otherwise perceive:
+ * PTT state, a rejected or clamped tune, link loss, and band edges when the
+ * band plan lands. The velocity estimate below stays because acceleration
+ * needs it.
+ */
 
-/* Velocity bands, detents/s. ERM values: the motor's 20-40 ms rise time is
- * what sets these, so they move with the actuator, not with taste. */
-#define V_MODERATE 13.0f
-#define V_BRISK    20.0f
-#define V_FAST     33.0f
-#define V_SPIN     70.0f
-
-/* Hard floor between plays. Below this an ERM has not finished the previous
- * pulse and the two merge into mush. */
-#define GOV_FLOOR_US   55000
-/* A click this far behind its detent has lost causal binding; playing it makes
- * the knob feel MUSHIER than silence would. Drop, never delay. */
-#define GOV_STALE_US   12000
-
-/* One contact pulse per detent per direction -- this is a switch knob, not a
- * quadrature encoder, so there is no x4 multiplier to divide out. */
 static int s_counts_per_detent = ENC_COUNTS_PER_DETENT_DEFAULT;
-
-/* Character varies by decade, not just amplitude: the operator learns
- * "heavy = moving fast" in ten minutes and stops looking at the screen. */
-static int base_rung(int32_t step_hz)
-{
-    if (step_hz >= 1000000) return -1;          /* special-cased to EFF_ROLLOVER */
-    if (step_hz >= 10000)   return 0;           /* 24, full strength */
-    if (step_hz >= 100)     return 2;           /* 26 */
-    return 4;                                   /* 62, a whisper */
-}
 
 static void encoder_task(void *arg)
 {
@@ -144,17 +127,12 @@ static void encoder_task(void *arg)
 
     TickType_t next       = xTaskGetTickCount();
     int32_t  residue      = 0;
-    int64_t  last_play_us = 0;
     int64_t  idle_since   = esp_timer_get_time();
     int64_t  run_counts   = 0;
     bool     moving       = false;
-    uint32_t drops        = 0;
     float    v_peak       = 0.0f;
 
-    ESP_LOGI(TAG, "--- M6/M8 ready ---");
-    ESP_LOGI(TAG, "  turn RIGHT one full revolution, pause 2 s;");
-    ESP_LOGI(TAG, "  then LEFT one full revolution, pause 2 s;");
-    ESP_LOGI(TAG, "  then spin hard. You should feel a click per detent.");
+    ESP_LOGI(TAG, "--- knob ready (tuning is silent by design) ---");
 
     for (;;) {
         /* Fixed 1 ms cadence. The contact-duration filter needs regular
@@ -174,12 +152,11 @@ static void encoder_task(void *arg)
                  * that is too long shows up as lost detents at speed. */
                 ESP_LOGI(TAG, "[M6] idle. run=%+lld  net=%+ld  peak=%.1f det/s | "
                               "raw A=%u B=%u | accepted A=%u B=%u | rejected=%u | "
-                              "f=%lld Hz | hap drops=%u",
+                              "f=%lld Hz",
                          (long long)run_counts, (long)hal_encoder_count(),
                          (double)v_peak, (unsigned)st.raw_a, (unsigned)st.raw_b,
                          (unsigned)st.accepted_a, (unsigned)st.accepted_b,
-                         (unsigned)st.rejected,
-                         (long long)tune.f_display, (unsigned)drops);
+                         (unsigned)st.rejected, (long long)tune.f_display);
                 run_counts = 0; v_peak = 0.0f;
             }
             continue;
@@ -199,64 +176,25 @@ static void encoder_task(void *arg)
         uint8_t mult = accel_update(&accel, detents, now_ms);
         if (accel.v_detents > v_peak) v_peak = accel.v_detents;
 
-        int64_t before = tune.f_display;
-        tune_apply(&tune, detents, mult, 5, 1000LL, 75000000LL);
-        /* The local model exists only to drive the haptics with zero network
-         * latency. The client keeps its own optimistic copy, because that one
-         * has to survive reconciliation against the radio. */
-        tci_tune_by(detents, mult, tune.step_hz);
+        /* ONE frequency, not two. The client owns the optimistic value because
+         * it also has to survive reconciliation against the radio; the haptics
+         * read it back so rollover and decimation fire on the frequency the
+         * operator is actually on. Keeping a second local copy let the two
+         * drift 10 MHz apart during the first real-radio test. */
+        int64_t before = tci_tune_by(0, 1, tune.step_hz);
+        int64_t after  = tci_tune_by(detents, mult, tune.step_hz);
+        tune.f_display = after;        /* keep the local step model in step */
 
-        /* --- velocity-aware haptic scheduling ------------------------------
-         * Above ~33 det/s an ERM physically cannot render one click per detent
-         * (pulses fuse below ~30 ms apart), so instead of buzzing we tick on
-         * round-number crossings. The tick then means "you just passed
-         * 14.075.00" rather than "four clicks happened": more information per
-         * event, not less, which is why it fires one rung STRONGER. */
-        float v = accel.v_detents;
-        int rung = base_rung(tune.step_hz);
-        bool play = true;
-
-        if (rung < 0) {
-            /* 1 MHz step: every detent is a rollover. */
-            rung = 0;
-        } else if (v > V_SPIN) {
-            play = false;                       /* silence beats mush */
-        } else if (v > V_FAST) {
-            int32_t decade = tune.step_hz * 50;
-            play = (before / decade) != (tune.f_display / decade);
-            if (rung > 0) rung--;               /* stronger: it carries more */
-        } else if (v > V_BRISK) {
-            rung += 2;
-        } else if (v > V_MODERATE) {
-            rung += 1;
-        }
-        if (rung > 5) rung = 5;
-
-        /* A 1 MHz boundary crossing replaces that detent's tick; it never
-         * stacks on top of it, because two ERM events inside 30 ms merge. */
-        uint8_t effect = LADDER[rung];
-        if ((before / 1000000) != (tune.f_display / 1000000)) {
-            effect = EFF_ROLLOVER;
-            play = true;
-        }
-
-        if (play) {
-            if (now_us - last_play_us < GOV_FLOOR_US) {
-                drops++;                        /* drop, never delay */
-            } else if (esp_timer_get_time() - now_us > GOV_STALE_US) {
-                drops++;                        /* already too late to bind */
-            } else {
-                drv2605_fire(&s_drv, effect);
-                last_play_us = now_us;
-            }
-        }
+        /* Tuning is silent by design; see the note above. `before` and
+         * `after` remain wired up so the band-edge signal can hook in here
+         * without restructuring anything. */
+        (void)before; (void)after;
     }
 }
 
 /* The TCI client declares this weak so it stays free of a haptic dependency.
- * PTT is the one place haptics are load-bearing: with no error frame and no
- * button, the motor is the only channel that can tell the operator the radio
- * said no. */
+ * This is where the haptic channel is actually spent: PTT state, a rejected
+ * tune, link loss. Never tuning -- the knob has real detents of its own. */
 void haptic_hook(uint8_t effect, uint8_t prio)
 {
     (void)prio;
@@ -274,7 +212,7 @@ static void console_task(void *arg)
         vTaskDelete(NULL);
     }
     ESP_LOGI(TAG, "console: t=toggle PTT  k=key  u=unkey  s=status");
-    ESP_LOGI(TAG, "         p=abort:pong-stale  d=abort:link-down  o=TOT 10s");
+    ESP_LOGI(TAG, "         p=abort:pong-stale  d=abort:link-down  o=TOT 30s");
 
     for (;;) {
         uint8_t ch;
@@ -350,6 +288,7 @@ static void net_task(void *arg)
     }
 }
 
+#if CONFIG_VFO_PANEL_SELFTEST
 static void selftest_task(void *arg)
 {
     (void)arg;
@@ -360,6 +299,7 @@ static void selftest_task(void *arg)
     ESP_LOGI(TAG, "=== M4 self-test finished ===");
     vTaskDelete(NULL);
 }
+#endif
 
 void app_main(void)
 {
@@ -386,6 +326,9 @@ void app_main(void)
     ESP_ERROR_CHECK(net_prov_wifi_start());
     xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
+#if CONFIG_VFO_PANEL_SELFTEST
+    xTaskCreatePinnedToCore(selftest_task, "m4", 4096, NULL, 3, NULL, 0);
+#endif
 
     /* Core 1 is the "feel" core: encoder, haptics, touch and LVGL. Core 0 is
      * reserved for WiFi and lwIP, whose burst timing we cannot control. */

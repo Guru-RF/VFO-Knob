@@ -62,8 +62,12 @@ typedef struct {
 
 esp_err_t tci_client_start(const char *host, uint16_t port);
 
-/* Called from the knob task. Moves f_display immediately; the wire catches up. */
-void tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz);
+/* Called from the knob task. Moves f_display immediately; the wire catches up.
+ * Returns the new f_display so the caller can base haptic decisions (MHz
+ * rollover, decade decimation) on the SAME frequency the radio is being told
+ * about -- a second local copy silently drifts, and then the rollover accent
+ * fires on a boundary the operator never crossed. */
+int64_t tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz);
 
 /* Adopt a step size (tapping a digit, later). Re-latches the anchor. */
 void tci_set_step(int32_t step_hz);

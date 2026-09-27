@@ -31,7 +31,7 @@
 #define PTT_TOT_MIN_MS      30000u
 #define PTT_TOT_MAX_MS     600000u
 #define PTT_TOT_WARN_MS     10000u   /* haptic warning before expiry      */
-#define PTT_KEYED_NAG_MS    15000u   /* "still transmitting" reminder     */
+#define PTT_KEYED_NAG_MS    10000u   /* "still transmitting" reminder     */
 
 /* Teardown ladder deadlines. */
 #define PTT_RUNG1_MS  600u   /* trx:false; on the existing socket */

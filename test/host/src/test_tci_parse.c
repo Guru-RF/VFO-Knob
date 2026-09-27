@@ -78,6 +78,38 @@ static void test_greeting(void)
     CHECK_EQ(P("receive_only:false;").kind, TCI_RECEIVE_ONLY);
     CHECK(!P("receive_only:false;").b0);
     CHECK(P("receive_only:true;").b0);
+
+    /* Captured from a live AetherSDR greeting. active_slice carries a display
+     * LETTER as well as an index, which the first implementation dropped. */
+    tci_fact_t a = P("active_slice:0,A;");
+    CHECK_EQ(a.kind, TCI_ACTIVE_SLICE);
+    CHECK_EQ(a.i0, 0);
+    CHECK_STR(a.s0, "A");
+
+    /* Audio format is advertised up front; v1 stores it so v2 need not touch
+     * the parser. */
+    CHECK_EQ(P("audio_samplerate:48000;").i0, 48000);
+    CHECK_STR(P("audio_stream_sample_type:float32;").s0, "float32");
+    CHECK_EQ(P("audio_stream_channels:2;").i0, 2);
+    CHECK_EQ(P("audio_stream_samples:2048;").i0, 2048);
+    CHECK_EQ(P("tx_stream_audio_buffering:50;").i0, 50);
+
+    /* Everything else in the real greeting must be recognised, not unknown. */
+    static const char *GREETING_REST[] = {
+        "rx_enable:0,true;", "sql_enable:0,false;", "sql_level:0,20;",
+        "agc_mode:0,med;", "rx_nb_enable:0,false;", "rx_nr_enable:0,false;",
+        "rx_anf_enable:0,false;", "rx_apf_enable:0,false;", "mute:0,false;",
+        "tune_drive:0,10;", "mic_level:99;", "volume:0;",
+        "iq_samplerate:48000;", "start;",
+    };
+    for (size_t i = 0; i < sizeof GREETING_REST / sizeof GREETING_REST[0]; i++) {
+        tci_fact_t g = P(GREETING_REST[i]);
+        t_run++;
+        if (g.kind == TCI_UNKNOWN) {
+            t_fail++;
+            fprintf(stderr, "FAIL [greeting] unparsed: %s\n", GREETING_REST[i]);
+        }
+    }
     /* Hardcoded server-side, so recognised but ignorable. */
     CHECK(tci_is_ignorable(P("vfo_limits:1000,75000000;").kind));
     CHECK(tci_is_ignorable(P("if_limits:-48000,48000;").kind));

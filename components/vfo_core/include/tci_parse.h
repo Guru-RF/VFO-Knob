@@ -44,7 +44,15 @@ typedef enum {
     TCI_TX_ENABLE,          /* trx, b0                          */
     TCI_DRIVE,              /* trx, i0                          */
     TCI_TUNE,               /* trx, b0                          */
-    TCI_ACTIVE_SLICE,       /* i0                               */
+    TCI_ACTIVE_SLICE,       /* i0 = index, s0 = display letter   */
+
+    /* Audio stream format, advertised in the greeting. v1 stores and ignores
+     * these so that v2's RX audio work does not have to touch the parser. */
+    TCI_AUDIO_SAMPLERATE,      /* i0 */
+    TCI_AUDIO_SAMPLE_TYPE,     /* s0 */
+    TCI_AUDIO_CHANNELS,        /* i0 */
+    TCI_AUDIO_SAMPLES,         /* i0 */
+    TCI_TX_AUDIO_BUFFERING,    /* i0 */
 
     /* telemetry */
     TCI_RX_SMETER,          /* trx, i0 = dBm (int, truncated)   */

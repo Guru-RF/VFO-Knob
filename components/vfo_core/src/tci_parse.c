@@ -32,6 +32,12 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "trx_count",           TCI_TRX_COUNT           },
     { "modulations_list",    TCI_MODULATIONS_LIST    },
     { "receive_only",        TCI_RECEIVE_ONLY        },
+    /* Audio stream format from the greeting -- stored for v2, unused in v1. */
+    { "audio_samplerate",         TCI_AUDIO_SAMPLERATE   },
+    { "audio_stream_sample_type", TCI_AUDIO_SAMPLE_TYPE  },
+    { "audio_stream_channels",    TCI_AUDIO_CHANNELS     },
+    { "audio_stream_samples",     TCI_AUDIO_SAMPLES      },
+    { "tx_stream_audio_buffering",TCI_TX_AUDIO_BUFFERING },
     { "channels_count",      TCI_CHANNELS_COUNT      },
     { "vfo_limits",          TCI_VFO_LIMITS          },
     { "if_limits",           TCI_IF_LIMITS           },
@@ -56,6 +62,22 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "rx_nr_enable",        TCI_IGNORED             },
     { "rx_anf_enable",       TCI_IGNORED             },
     { "rx_nf_enable",        TCI_IGNORED             },
+    { "rx_apf_enable",       TCI_IGNORED             },
+    { "rx_dse_enable",       TCI_IGNORED             },
+    { "rx_anc_enable",       TCI_IGNORED             },
+    { "rx_bin_enable",       TCI_IGNORED             },
+    { "rx_channel_enable",   TCI_IGNORED             },
+    { "rx_nb_param",         TCI_IGNORED             },
+    { "rx_play",             TCI_IGNORED             },
+    { "rx_record",           TCI_IGNORED             },
+    { "mon_enable",          TCI_IGNORED             },
+    { "mon_volume",          TCI_IGNORED             },
+    { "tx_frequency",        TCI_IGNORED             },
+    { "tx_gain",             TCI_IGNORED             },
+    { "cw_macros_delay",     TCI_IGNORED             },
+    { "cw_macros_stop",      TCI_IGNORED             },
+    { "cw_terminal",         TCI_IGNORED             },
+    { "callsign",            TCI_IGNORED             },
     { "cw_macros_speed",     TCI_IGNORED             },
     { "cw_keyer_speed",      TCI_IGNORED             },
     { "spot",                TCI_IGNORED             },
@@ -65,7 +87,6 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "iq_stop",             TCI_IGNORED             },
     { "audio_start",         TCI_IGNORED             },
     { "audio_stop",          TCI_IGNORED             },
-    { "audio_samplerate",    TCI_IGNORED             },
     { "iq_samplerate",       TCI_IGNORED             },
     { "rx_sensors_enable",   TCI_IGNORED             },
     { "tx_sensors_enable",   TCI_IGNORED             },
@@ -233,9 +254,30 @@ bool tci_parse(const char *line, size_t len, tci_fact_t *out)
         break;
 
     case TCI_TRX_COUNT:
-    case TCI_ACTIVE_SLICE:
     case TCI_CHANNELS_COUNT:
+    case TCI_AUDIO_SAMPLERATE:
+    case TCI_AUDIO_CHANNELS:
+    case TCI_AUDIO_SAMPLES:
+    case TCI_TX_AUDIO_BUFFERING:
         out->i0 = (int32_t)arg_i64(argv, argc, 0, 0);
+        break;
+
+    case TCI_ACTIVE_SLICE:
+        /* Real form is "active_slice:0,A;" -- index AND display letter. The
+         * knob can only FOLLOW focus (the server ignores SETs and
+         * set_in_focus is a stub), so the letter is a display, not a control. */
+        out->i0 = (int32_t)arg_i64(argv, argc, 0, 0);
+        if (argc > 1 && argv[1]) {
+            strncpy(out->s0, argv[1], TCI_STR_MAX - 1);
+            out->s0[TCI_STR_MAX - 1] = '\0';
+        }
+        break;
+
+    case TCI_AUDIO_SAMPLE_TYPE:
+        if (argc > 0 && argv[0]) {
+            strncpy(out->s0, argv[0], TCI_STR_MAX - 1);
+            out->s0[TCI_STR_MAX - 1] = '\0';
+        }
         break;
 
     case TCI_RECEIVE_ONLY:
@@ -264,6 +306,11 @@ const char *tci_kind_name(tci_kind_t k)
     case TCI_TRX_COUNT:           return "trx_count";
     case TCI_MODULATIONS_LIST:    return "modulations_list";
     case TCI_RECEIVE_ONLY:        return "receive_only";
+    case TCI_AUDIO_SAMPLERATE:    return "audio_samplerate";
+    case TCI_AUDIO_SAMPLE_TYPE:   return "audio_stream_sample_type";
+    case TCI_AUDIO_CHANNELS:      return "audio_stream_channels";
+    case TCI_AUDIO_SAMPLES:       return "audio_stream_samples";
+    case TCI_TX_AUDIO_BUFFERING:  return "tx_stream_audio_buffering";
     case TCI_CHANNELS_COUNT:      return "channels_count";
     case TCI_VFO_LIMITS:          return "vfo_limits";
     case TCI_IF_LIMITS:           return "if_limits";

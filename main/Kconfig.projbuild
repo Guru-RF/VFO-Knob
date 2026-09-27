@@ -7,6 +7,13 @@ config VFO_GPIO_SCAN
       Samples every plausible GPIO and reports transition counts while the knob
       is turned. Use when a pin assignment is in doubt.
 
+config VFO_PANEL_SELFTEST
+    bool "Run the display self-test loop at boot"
+    default n
+    help
+      Cycles solid colours, a geometry ring and a backlight ramp three times.
+      Useful after touching the panel init table.
+
 config VFO_DEV_CREDENTIALS
     bool "Seed NVS with development WiFi/host credentials on first boot"
     default n

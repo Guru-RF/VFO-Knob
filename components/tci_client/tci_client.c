@@ -481,16 +481,20 @@ static void tx_task(void *arg)
 
 /* ----------------------------------------------------------------- public */
 
-void tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
+int64_t tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
 {
-    if (!detents) return;
     uint32_t t = now_ms();
+    int64_t f;
     taskENTER_CRITICAL(&S_LOCK);
-    if (S.tune.step_hz != step_hz) tune_set_step(&S.tune, step_hz);
-    tune_apply(&S.tune, detents, accel_mult, SEND_GATE_MS, 1000LL, 75000000LL);
-    S.t_last_input_ms  = t;
-    S.reconcile_armed  = false;   /* operator intent beats a pending reconcile */
+    if (detents) {
+        if (S.tune.step_hz != step_hz) tune_set_step(&S.tune, step_hz);
+        tune_apply(&S.tune, detents, accel_mult, SEND_GATE_MS, 1000LL, 75000000LL);
+        S.t_last_input_ms = t;
+        S.reconcile_armed = false;  /* operator intent beats a pending reconcile */
+    }
+    f = S.tune.f_display;
     taskEXIT_CRITICAL(&S_LOCK);
+    return f;
 }
 
 void tci_set_step(int32_t step_hz)
