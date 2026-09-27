@@ -821,6 +821,16 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
     ESP_RETURN_ON_FALSE(s_ws, ESP_FAIL, TAG, "ws init");
     esp_err_t err = esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY,
                                                   ws_event, NULL);
+    /* Set the state BEFORE starting. esp_websocket_client_start() launches the
+     * connection on its own task, and over the USB cable the handshake and the
+     * TCI greeting can both land before this function reaches its next few
+     * statements -- about 30 ms, measured. Assigning CONNECTING afterwards
+     * then overwrote the READY the receive handler had already set, and since
+     * "ready;" arrives exactly once the link never recovered: a healthy,
+     * ESTABLISHED socket stuck at CONNECTING forever, sending nothing. Over
+     * WiFi the handshake was always slower than these instructions, so it
+     * never showed. */
+    S.link = TCI_LINK_CONNECTING;
     if (err == ESP_OK) err = esp_websocket_client_start(s_ws);
     if (err != ESP_OK) {
         /* Destroy the handle before returning. Leaving it allocated leaked an
@@ -829,11 +839,11 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
          * there -- a far worse failure than the one being retried. */
         esp_websocket_client_destroy(s_ws);
         s_ws = NULL;
+        S.link = TCI_LINK_DOWN;
         ESP_LOGE(TAG, "websocket start failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    S.link = TCI_LINK_CONNECTING;
     /* Check this. An unchecked failure here is the nastiest outcome the client
      * has: the socket connects, the greeting parses, the S-meter moves and the
      * status line says READY -- while nothing is ever transmitted, because
