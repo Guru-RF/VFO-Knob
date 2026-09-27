@@ -1,0 +1,388 @@
+#include "tci_client.h"
+
+#include <string.h>
+
+#include "antiecho.h"
+#include "esp_check.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_websocket_client.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "tci_parse.h"
+#include "vfo_tune.h"
+
+static const char *TAG = "tci";
+
+#define RX_CAP        2048
+#define SEND_GATE_MS  5       /* how often we look for work */
+#define GREET_TMO_MS  4000    /* a socket that accepts but never greets is a
+                                 real failure mode when AetherSDR is starting */
+
+typedef struct {
+    tci_link_t link;
+    tune_t     tune;
+    accel_t    accel;
+    echo_ring_t echo;
+    int64_t    f_committed, f_server;
+    uint32_t   t_last_input_ms, t_last_send_ms, t_ready_ms;
+    bool       reconcile_armed;
+    char       mode[8];
+    int32_t    filt_lo, filt_hi, rit_hz;
+    float      smeter_dbm;
+    bool       slice_locked, tx;
+    uint8_t    my_trx, n_trx;
+    uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
+    char       last_close[48];
+} state_t;
+
+static state_t     S;
+static portMUX_TYPE S_LOCK = portMUX_INITIALIZER_UNLOCKED;
+static esp_websocket_client_handle_t s_ws;
+static char        s_rx[RX_CAP];
+static size_t      s_rx_len;
+static int64_t     s_greet_deadline_us;
+
+static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+/* --------------------------------------------------------------- inbound */
+
+static void apply_fact(const tci_fact_t *f)
+{
+    switch (f->kind) {
+
+    case TCI_READY:
+        taskENTER_CRITICAL(&S_LOCK);
+        S.link       = TCI_LINK_READY;
+        S.t_ready_ms = now_ms();
+        /* The greeting is authoritative: adopt the rig's frequency wholesale
+         * and forget anything we thought we knew. */
+        tune_assign(&S.tune, S.f_server);
+        S.f_committed = S.f_server;
+        echo_clear(&S.echo);
+        taskEXIT_CRITICAL(&S_LOCK);
+        ESP_LOGI(TAG, "ready: trx=%u f=%lld mode=%s filt=%ld..%ld%s",
+                 (unsigned)S.my_trx, (long long)S.f_server, S.mode,
+                 (long)S.filt_lo, (long)S.filt_hi,
+                 S.slice_locked ? " LOCKED" : "");
+        break;
+
+    case TCI_TRX_COUNT:
+        S.n_trx = (uint8_t)f->i0;
+        break;
+
+    case TCI_ACTIVE_SLICE:
+        /* We can only FOLLOW focus: the server ignores active_slice SETs and
+         * set_in_focus is a stub, so a slice selector is not implementable. */
+        if (f->i0 >= 0) S.my_trx = (uint8_t)f->i0;
+        break;
+
+    case TCI_VFO: {
+        if (f->trx != S.my_trx || f->channel != 0) break;
+        uint32_t t = now_ms();
+        taskENTER_CRITICAL(&S_LOCK);
+        S.f_server = f->hz;
+        if (S.link != TCI_LINK_READY) {           /* still in the greeting */
+            taskEXIT_CRITICAL(&S_LOCK);
+            break;
+        }
+        ae_class_t cls = antiecho_classify(&S.echo, f->hz, t,
+                                           S.t_last_input_ms, S.t_last_send_ms);
+        if (cls == AE_OUR_ECHO) {
+            S.echoes++;
+            taskEXIT_CRITICAL(&S_LOCK);
+            break;
+        }
+        if (cls == AE_AMBIGUOUS) {
+            S.reconcile_armed = true;             /* decide within 250 ms */
+            taskEXIT_CRITICAL(&S_LOCK);
+            break;
+        }
+        /* Unambiguous remote change: the operator tuned at the PC. */
+        tune_assign(&S.tune, f->hz);
+        S.f_committed = f->hz;
+        echo_clear(&S.echo);
+        taskEXIT_CRITICAL(&S_LOCK);
+        ESP_LOGI(TAG, "remote tune -> %lld", (long long)f->hz);
+        break;
+    }
+
+    case TCI_MODULATION:
+        if (f->trx == S.my_trx) strlcpy(S.mode, f->s0, sizeof S.mode);
+        break;
+
+    case TCI_RX_FILTER_BAND:
+        if (f->trx == S.my_trx) { S.filt_lo = f->i0; S.filt_hi = f->i1; }
+        break;
+
+    case TCI_RIT_OFFSET:
+        if (f->trx == S.my_trx) S.rit_hz = f->i0;
+        break;
+
+    case TCI_LOCK:
+        if (f->trx == S.my_trx) S.slice_locked = f->b0;
+        break;
+
+    case TCI_TRX:
+        S.tx = f->b0;
+        break;
+
+    case TCI_RX_CHANNEL_SENSORS:
+        if (f->trx == S.my_trx) S.smeter_dbm = f->f0;
+        break;
+
+    case TCI_RX_SMETER:
+        /* Integer and truncated toward zero; prefer rx_channel_sensors when
+         * it is flowing. Kept as a fallback only. */
+        if (f->trx == S.my_trx && S.smeter_dbm == 0.0f) S.smeter_dbm = (float)f->i0;
+        break;
+
+    case TCI_UNKNOWN:
+        S.unknown_cmds++;   /* named by consume(); M15 requires this to be 0 */
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void consume(const char *data, size_t len)
+{
+    if (s_rx_len + len > RX_CAP) { s_rx_len = 0; return; }   /* bounded, no malloc */
+    memcpy(s_rx + s_rx_len, data, len);
+    s_rx_len += len;
+
+    size_t start = 0;
+    for (size_t i = 0; i < s_rx_len; i++) {
+        if (s_rx[i] != ';') continue;
+        tci_fact_t f;
+        /* Split on ';' regardless of framing. The server sends one command per
+         * frame today, but relying on that is exactly what a proxy breaks. */
+        if (tci_parse(s_rx + start, i - start, &f)) {
+            if (f.kind == TCI_UNKNOWN) {
+                /* Name it. "zero unparsed commands over a full session" is an
+                 * M15 acceptance criterion, and a bare counter cannot tell you
+                 * WHICH field the research missed. */
+                size_t n = i - start;
+                if (n > 63) n = 63;
+                char raw[64];
+                memcpy(raw, s_rx + start, n);
+                raw[n] = '\0';
+                ESP_LOGW(TAG, "UNPARSED: %s;", raw);
+            }
+            apply_fact(&f);
+        }
+        start = i + 1;
+    }
+    if (start) {
+        memmove(s_rx, s_rx + start, s_rx_len - start);
+        s_rx_len -= start;
+    }
+}
+
+static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg; (void)base;
+    esp_websocket_event_data_t *e = data;
+
+    switch (id) {
+    case WEBSOCKET_EVENT_CONNECTED:
+        S.connects++;
+        S.link = TCI_LINK_GREETING;
+        s_rx_len = 0;
+        s_greet_deadline_us = esp_timer_get_time() + GREET_TMO_MS * 1000;
+        ESP_LOGI(TAG, "connected, awaiting greeting");
+        break;
+
+    case WEBSOCKET_EVENT_DATA:
+        if (e->op_code == 0x08) {                       /* close */
+            if (e->data_len > 2) {
+                size_t n = e->data_len - 2;
+                if (n >= sizeof S.last_close) n = sizeof S.last_close - 1;
+                memcpy(S.last_close, e->data_ptr + 2, n);
+                S.last_close[n] = '\0';
+            }
+            break;
+        }
+        if (e->op_code != 0x01 && e->op_code != 0x00) break;   /* text/continuation */
+        if (e->data_len > 0) consume(e->data_ptr, e->data_len);
+        break;
+
+    case WEBSOCKET_EVENT_DISCONNECTED:
+    case WEBSOCKET_EVENT_CLOSED:
+        S.closes++;
+        S.link = TCI_LINK_DOWN;
+        ESP_LOGW(TAG, "link down%s%s", S.last_close[0] ? ": " : "", S.last_close);
+        break;
+
+    case WEBSOCKET_EVENT_ERROR:
+        ESP_LOGW(TAG, "websocket error");
+        break;
+    default:
+        break;
+    }
+}
+
+/* --------------------------------------------------------------- outbound */
+
+static void send_cmd(const char *fmt, ...)
+{
+    char buf[96];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (n <= 0 || !s_ws) return;
+    esp_websocket_client_send_text(s_ws, buf, n, pdMS_TO_TICKS(200));
+    S.sends++;
+}
+
+static void tx_task(void *arg)
+{
+    (void)arg;
+    TickType_t next = xTaskGetTickCount();
+
+    for (;;) {
+        vTaskDelayUntil(&next, pdMS_TO_TICKS(SEND_GATE_MS));
+        uint32_t t = now_ms();
+
+        if (S.link == TCI_LINK_GREETING &&
+            esp_timer_get_time() > s_greet_deadline_us) {
+            ESP_LOGW(TAG, "no greeting within %d ms, reconnecting", GREET_TMO_MS);
+            esp_websocket_client_close(s_ws, pdMS_TO_TICKS(200));
+            continue;
+        }
+        if (S.link != TCI_LINK_READY && S.link != TCI_LINK_DEGRADED) continue;
+        /* Settle after a reconnect before pushing anything. */
+        if (t - S.t_ready_ms < 500) continue;
+
+        bool     fire = false;
+        int64_t  want = 0;
+        uint32_t period = (S.link == TCI_LINK_DEGRADED) ? 100 : AE_SEND_PERIOD_MS;
+
+        taskENTER_CRITICAL(&S_LOCK);
+        /* Deferred reconcile: both quiet windows must have expired. */
+        if (S.reconcile_armed &&
+            (t - S.t_last_input_ms) >= AE_QUIET_MS &&
+            (t - S.t_last_send_ms)  >= AE_QUIET_MS) {
+            if (S.f_server != S.f_committed) {
+                tune_assign(&S.tune, S.f_server);
+                S.f_committed = S.f_server;
+                echo_clear(&S.echo);
+                S.reconciles++;
+                S.rejects++;         /* the only rejection signal that exists */
+            }
+            S.reconcile_armed = false;
+        }
+
+        if (S.tune.f_display != S.f_committed) {
+            bool settle = (t - S.t_last_input_ms) >= AE_SETTLE_MS;
+            if (settle || (t - S.t_last_send_ms) >= period) {
+                if (S.slice_locked) {
+                    /* Predictable spring-back: refuse locally and put nothing
+                     * on the wire at all. */
+                    tune_assign(&S.tune, S.f_committed);
+                    S.rejects++;
+                } else {
+                    want = S.tune.f_display;
+                    S.f_committed   = want;
+                    S.t_last_send_ms = t;
+                    echo_push(&S.echo, want, t);
+                    fire = true;
+                }
+            }
+        }
+        taskEXIT_CRITICAL(&S_LOCK);
+
+        if (fire) send_cmd("vfo:%u,0,%lld;", (unsigned)S.my_trx, (long long)want);
+    }
+}
+
+/* ----------------------------------------------------------------- public */
+
+void tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
+{
+    if (!detents) return;
+    uint32_t t = now_ms();
+    taskENTER_CRITICAL(&S_LOCK);
+    if (S.tune.step_hz != step_hz) tune_set_step(&S.tune, step_hz);
+    tune_apply(&S.tune, detents, accel_mult, SEND_GATE_MS, 1000LL, 75000000LL);
+    S.t_last_input_ms  = t;
+    S.reconcile_armed  = false;   /* operator intent beats a pending reconcile */
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+void tci_set_step(int32_t step_hz)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    tune_set_step(&S.tune, step_hz);
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+bool tci_is_ready(void)
+{
+    return S.link == TCI_LINK_READY || S.link == TCI_LINK_DEGRADED;
+}
+
+void tci_get_status(tci_status_t *o)
+{
+    if (!o) return;
+    taskENTER_CRITICAL(&S_LOCK);
+    o->link       = S.link;
+    o->f_display  = S.tune.f_display;
+    o->f_server   = S.f_server;
+    o->filt_lo    = S.filt_lo;
+    o->filt_hi    = S.filt_hi;
+    o->rit_hz     = S.rit_hz;
+    o->smeter_dbm = S.smeter_dbm;
+    o->slice_locked = S.slice_locked;
+    o->tx         = S.tx;
+    o->my_trx     = S.my_trx;
+    o->n_trx      = S.n_trx;
+    o->connects   = S.connects;
+    o->closes     = S.closes;
+    o->reconciles = S.reconciles;
+    o->rejects    = S.rejects;
+    o->unknown_cmds = S.unknown_cmds;
+    o->sends      = S.sends;
+    o->echoes     = S.echoes;
+    taskEXIT_CRITICAL(&S_LOCK);
+    strlcpy(o->mode, S.mode, sizeof o->mode);
+    strlcpy(o->last_close, S.last_close, sizeof o->last_close);
+}
+
+esp_err_t tci_client_start(const char *host, uint16_t port)
+{
+    char uri[96];
+    snprintf(uri, sizeof uri, "ws://%s:%u/", host, (unsigned)port);
+
+    memset(&S, 0, sizeof S);
+    tune_init(&S.tune, 14074000, 100);
+    accel_init(&S.accel);
+    strlcpy(S.mode, "usb", sizeof S.mode);
+
+    esp_websocket_client_config_t cfg = {
+        .uri                    = uri,
+        /* We own reconnect: the close REASON string is the richest error
+         * channel this protocol has and three different reasons need three
+         * different responses, which the component cannot express. */
+        .disable_auto_reconnect = false,
+        .reconnect_timeout_ms   = 2000,
+        .network_timeout_ms     = 5000,
+        .ping_interval_sec      = 10,
+        .pingpong_timeout_sec   = 8,
+        .task_prio              = 6,
+        .task_stack             = 6144,
+        .buffer_size            = 2048,
+    };
+    s_ws = esp_websocket_client_init(&cfg);
+    ESP_RETURN_ON_FALSE(s_ws, ESP_FAIL, TAG, "ws init");
+    ESP_RETURN_ON_ERROR(esp_websocket_register_events(
+        s_ws, WEBSOCKET_EVENT_ANY, ws_event, NULL), TAG, "events");
+    ESP_RETURN_ON_ERROR(esp_websocket_client_start(s_ws), TAG, "ws start");
+
+    S.link = TCI_LINK_CONNECTING;
+    xTaskCreatePinnedToCore(tx_task, "tci_tx", 4096, NULL, 8, NULL, 0);
+    ESP_LOGI(TAG, "connecting to %s", uri);
+    return ESP_OK;
+}
