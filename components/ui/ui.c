@@ -137,6 +137,14 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
 static lv_obj_t *s_swr_zone[SWR_ZONES];
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
+/* Tap the meter arc to see where the knob actually is on the network. The one
+ * question a headless box cannot answer for itself, and the display is the
+ * only channel that needs nothing else already working. */
+static lv_obj_t *s_netinfo;
+static char      s_netinfo_text[128] = "no network yet";
+static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
+#define NETINFO_MS 10000
+
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL,
                ED_MIC } edit_t;
 static edit_t  s_edit;
@@ -429,6 +437,18 @@ bool ui_take_commit(ui_commit_t *out)
 uint8_t ui_volume(void)  { return s_volume; }
 uint8_t ui_mic_gain(void) { return s_micgain; }
 
+void ui_set_netinfo(const char *text)
+{
+    if (!text) return;
+    /* Copied under the port lock because the card may be on screen and the
+     * label points straight at this buffer. */
+    if (!lvgl_port_lock(20)) return;
+    strlcpy(s_netinfo_text, text, sizeof s_netinfo_text);
+    if (s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN))
+        lv_label_set_text(s_netinfo, s_netinfo_text);
+    lvgl_port_unlock();
+}
+
 void ui_set_levels(uint8_t volume, uint8_t mic_gain)
 {
     if (volume   <= 100) s_volume  = volume;
@@ -465,6 +485,20 @@ static void touch_cb(lv_event_t *e)
     if (s_edit != ED_NONE) { edit_commit(); return; }
 
     if (p.y >= PTT_TOP) { s_ptt_tap = true; return; }   /* the whole slab */
+
+    /* The meter arc: show the addresses, tap again to dismiss. */
+    if (p.y < 104) {
+        if (s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
+            s_netinfo_until = 0;
+        } else if (s_netinfo) {
+            lv_label_set_text(s_netinfo, s_netinfo_text);
+            lv_obj_clear_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_netinfo);
+            s_netinfo_until = lv_tick_get() + NETINFO_MS;
+        }
+        return;
+    }
 
     /* band | mode | filter */
     if (p.y >= 104 && p.y < 140) {
@@ -875,6 +909,23 @@ static void build(void)
     lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
 
     /* Editor overlay: hidden until a field is tapped. */
+    /* Network address card. Same treatment as the editor panel, and equally
+     * not clickable -- the tap that dismisses it lands on the screen. */
+    s_netinfo = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_netinfo, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_netinfo, C_ACCENT_HI, 0);
+    lv_obj_set_style_text_align(s_netinfo, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_bg_color(s_netinfo, C_BG1, 0);
+    lv_obj_set_style_bg_opa(s_netinfo, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_netinfo, C_ACCENT, 0);
+    lv_obj_set_style_border_width(s_netinfo, 2, 0);
+    lv_obj_set_style_radius(s_netinfo, 14, 0);
+    lv_obj_set_style_pad_all(s_netinfo, 12, 0);
+    lv_obj_align(s_netinfo, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_remove_flag(s_netinfo, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_netinfo, s_netinfo_text);
+
     s_edit_panel = lv_obj_create(s_scr);
     lv_obj_set_size(s_edit_panel, 250, 132);
     lv_obj_align(s_edit_panel, LV_ALIGN_CENTER, 0, -6);
@@ -1005,6 +1056,13 @@ void ui_update(const ui_state_t *st)
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter. */
     if (s_edit != ED_NONE) { lvgl_port_unlock(); return; }
+
+    /* The address card times out on its own: it covers the frequency, and an
+     * operator who walked away should come back to a working dial. */
+    if (s_netinfo_until && lv_tick_get() > s_netinfo_until) {
+        lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
+        s_netinfo_until = 0;
+    }
 
     int64_t f = st->freq_hz < 0 ? 0 : st->freq_hz;
     int mhz = (int)(f / 1000000);

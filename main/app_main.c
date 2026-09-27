@@ -37,6 +37,7 @@
 #include "esp_chip_info.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_psram.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -467,6 +468,22 @@ static void net_task(void *arg)
                     ESP_LOGE(TAG, "  client failed to start; retrying");
                 }
             }
+        }
+
+        {   /* Keep the tap-to-show address card current. */
+            char usb[20] = { 0 }, wifi[20] = { 0 }, info[128];
+            esp_netif_ip_info_t a;
+            esp_netif_t *n = esp_netif_get_handle_from_ifkey("ETH_DEF");
+            if (n && esp_netif_get_ip_info(n, &a) == ESP_OK && a.ip.addr)
+                snprintf(usb, sizeof usb, IPSTR, IP2STR(&a.ip));
+            n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            if (n && esp_netif_get_ip_info(n, &a) == ESP_OK && a.ip.addr)
+                snprintf(wifi, sizeof wifi, IPSTR, IP2STR(&a.ip));
+            snprintf(info, sizeof info, "USB   %s\nWiFi  %s\nsetup  http://%s",
+                     usb[0]  ? usb  : "-",
+                     wifi[0] ? wifi : "-",
+                     usb[0] ? usb : (wifi[0] ? wifi : "-"));
+            ui_set_netinfo(info);
         }
 
         if (started) {

@@ -75,6 +75,10 @@ uint8_t ui_mic_gain(void);
 /* Restore persisted levels at boot, before ui_init() draws anything. */
 void ui_set_levels(uint8_t volume, uint8_t mic_gain);
 
+/* Text shown when the meter arc is tapped: where the knob is on the network.
+ * Kept as formatted text so the UI needs no networking headers. */
+void ui_set_netinfo(const char *text);
+
 /* Step through 0/90/180/270. Orientation is a physical property of how the
  * panel is mounted, and guessing it costs a flash cycle each time -- so make
  * it switchable from the console instead. */

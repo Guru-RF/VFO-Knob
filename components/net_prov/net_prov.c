@@ -55,25 +55,15 @@ static void load_or_seed(void)
         nvs_close(h);
     }
 
-#if CONFIG_VFO_DEV_CREDENTIALS
-    if (!have) {
-        ESP_LOGW(TAG, "NVS empty -- seeding from build-time dev credentials");
-        strlcpy(s_cfg.ssid,     CONFIG_VFO_DEV_WIFI_SSID, sizeof s_cfg.ssid);
-        strlcpy(s_cfg.pass,     CONFIG_VFO_DEV_WIFI_PASS, sizeof s_cfg.pass);
-        strlcpy(s_cfg.tci_host, CONFIG_VFO_DEV_TCI_HOST,  sizeof s_cfg.tci_host);
-        s_cfg.tci_port = CONFIG_VFO_DEV_TCI_PORT;
-        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-            nvs_set_str(h, "ssid", s_cfg.ssid);
-            nvs_set_str(h, "pass", s_cfg.pass);
-            nvs_set_str(h, "host", s_cfg.tci_host);
-            nvs_set_u16(h, "port", s_cfg.tci_port);
-            nvs_commit(h);
-            nvs_close(h);
-        }
-        have = true;
-    }
-#endif
-    if (!have) ESP_LOGE(TAG, "no credentials: provisioning UI is a v1.1 item");
+    /* NO CREDENTIALS ARE COMPILED IN. A unit ships with empty NVS and is
+     * configured over the USB cable: it enumerates as a network adapter, hands
+     * the host an address, and serves the configuration page -- none of which
+     * needs WiFi. Baking a build-time SSID in would put whoever's network was
+     * used to build the image into every unit flashed from it. */
+    if (!have) ESP_LOGW(TAG, "no WiFi credentials stored -- USB only until the "
+                             "configuration page is used");
+    if (!s_cfg.tci_host[0])
+        strlcpy(s_cfg.tci_host, "aethersdr.local", sizeof s_cfg.tci_host);
     if (!s_cfg.tci_port) s_cfg.tci_port = 50001;
 
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
