@@ -296,6 +296,10 @@ static esp_err_t ota_post(httpd_req_t *r)
     return httpd_resp_sendstr(r, "started");
 }
 
+/* Six consecutive recv timeouts at the server's 5 s wait: half a minute of
+ * silence from a client that is supposed to be streaming 1.7 MB. */
+#define kUploadStalls 6
+
 static void reboot_cb(void *arg);
 
 static esp_err_t ota_upload_post(httpd_req_t *r)
@@ -323,9 +327,24 @@ static esp_err_t ota_upload_post(httpd_req_t *r)
     const int total = r->content_len;
     int remaining = total;
     int last_pct = -1;
+    int stalls = 0;
     while (remaining > 0) {
         int n = httpd_req_recv(r, buf, remaining > 2048 ? 2048 : remaining);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            /* Bounded, because an unbounded retry here is not a stall -- it
+             * is a permanent wedge. esp_http_server serves from a small
+             * socket pool, so a handler that never returns takes the whole
+             * configuration page down with it, and the only way back is the
+             * log port's reboot command. That happened: a client that went
+             * away mid-upload left this loop spinning on timeouts forever. */
+            if (++stalls > kUploadStalls) {
+                free(buf);
+                ota_upload_abort();
+                goto failed;
+            }
+            continue;
+        }
+        stalls = 0;
         if (n <= 0) { free(buf); ota_upload_abort(); goto failed; }
         if (ota_upload_write(buf, n) != ESP_OK) {
             free(buf);
@@ -407,6 +426,8 @@ esp_err_t webcfg_start(void)
     c.stack_size       = 4608;
     /* Below LVGL and the knob: a page refresh must never cost a detent. */
     c.task_priority    = 3;
+    c.recv_wait_timeout = 5;
+    c.send_wait_timeout = 5;
     c.core_id          = 0;
 
     esp_err_t err = httpd_start(&s_srv, &c);
