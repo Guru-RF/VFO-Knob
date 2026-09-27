@@ -29,6 +29,7 @@
 #include "ui.h"
 #include "usb_net.h"
 #include "netlog.h"
+#include "ota.h"
 #include "webcfg.h"
 
 #include "lwip/sockets.h"
@@ -596,6 +597,10 @@ static void boot_ok_cb(void *arg)
 {
     (void)arg;
     net_prov_boot_ok();
+    /* Same moment, same meaning: this boot looks healthy. If the running image
+     * arrived over the air it is on trial until now, and the bootloader will
+     * put the previous one back if we never get here. */
+    ota_mark_valid();
 }
 
 void app_main(void)
@@ -628,6 +633,7 @@ void app_main(void)
      * reachable even when nothing else comes up -- which is exactly when
      * someone needs to correct an SSID or a host address. */
     bring_up("webcfg", webcfg_start);
+    ota_init();
     tci_set_tot_ms((uint32_t)net_prov_tot_s() * 1000u);
 
     /* Three failed boots in a row: come up with the bare minimum so the device

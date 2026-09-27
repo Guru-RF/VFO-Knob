@@ -112,6 +112,19 @@ button:active{transform:translateY(1px)}
      lock on the door, not a safe.</p>
 </section>
 
+<section>
+  <h2>Firmware</h2>
+  <div id="otarow"></div>
+  <button id="check" class="ghost">Check GitHub</button>
+  <button id="install" hidden>Download and install</button>
+  <p class="note">Checking GitHub needs the knob on WiFi &mdash; over the USB
+     cable it has no route to the internet. Either way you can download the
+     release yourself and upload it here.</p>
+  <label>Upload firmware (.bin)</label>
+  <input id="fw" type="file" accept=".bin">
+  <button id="upload" class="ghost">Upload and install</button>
+</section>
+
 <button id="save">Save</button>
 <button id="reboot" class="ghost">Reboot</button>
 <div id="msg"></div>
@@ -184,6 +197,41 @@ $('reboot').onclick=async()=>{
 function poll(){ const t=setInterval(async()=>{
   try{ await fetch('/api/status'); clearInterval(t); location.reload() }catch(e){} },2000) }
 
-load(); refresh(); setInterval(refresh,2000);
+async function ota(){
+  let o; try{ o=await (await fetch('/api/ota')).json() }catch(e){ return }
+  const busy = o.phase==='checking'||o.phase==='downloading';
+  $('otarow').innerHTML =
+      row('Running', esc(o.running))
+    + row('Latest', esc(o.available||'\u2014'))
+    + row('Status', o.phase==='downloading' ? `downloading ${o.percent}%`
+                                            : esc(o.message));
+  $('check').disabled = busy;
+  $('install').hidden = !(o.available && o.available!==o.running &&
+                          o.phase!=='uptodate' && o.phase!=='installed');
+  if(o.phase==='installed'){
+    $('install').hidden=true;
+    $('msg').textContent='Update installed \u2014 reboot to run it.';
+    $('msg').style.color='var(--ok)';
+  }
+}
+$('check').onclick  =()=>fetch('/api/ota',{method:'POST'}).then(ota);
+$('upload').onclick = async()=>{
+  const f=$('fw').files[0];
+  if(!f){ $('msg').textContent='Choose a .bin first'; $('msg').style.color='var(--bad)'; return }
+  $('msg').style.color='var(--dim)';
+  $('msg').textContent=`Uploading ${(f.size/1048576).toFixed(2)} MB\u2026`;
+  $('upload').disabled=true;
+  try{
+    const r=await fetch('/api/ota/upload',{method:'POST',body:f});
+    const t=await r.text();
+    $('msg').textContent = r.ok ? 'Installed \u2014 reboot to run it.' : 'Rejected: '+t;
+    $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  }catch(e){ $('msg').textContent='Upload failed: '+e; $('msg').style.color='var(--bad)' }
+  $('upload').disabled=false; ota();
+};
+$('install').onclick=()=>{ $('msg').textContent='Downloading\u2026';
+  fetch('/api/ota?install=1',{method:'POST'}).then(ota) };
+
+load(); refresh(); ota(); setInterval(refresh,2000); setInterval(ota,2000);
 </script>
 </body></html>

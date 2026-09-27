@@ -66,3 +66,22 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
 CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_USE_PERF_MONITOR=n
+
+# --- OTA: signed images, no Secure Boot ------------------------------------
+# The signature is verified before an update is accepted, but nothing is burned
+# into eFuse: the board stays ordinarily flashable and nothing here is
+# irreversible. This is integrity, not licensing -- it stops a corrupt or
+# hostile image reaching a radio, which is the real risk once updates are
+# pushed to other people's transceivers.
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="ota_signing_key.pem"
+# A new image must prove itself before it is made permanent. Paired with the
+# boot-loop guard: the same 20 s "this boot looks healthy" timer that clears
+# the safe-mode counter is what marks the app valid, so an update that panics
+# on startup rolls back to the previous slot by itself.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Root certificates for https://github.com and the redirect to
+# objects.githubusercontent.com that release assets are actually served from.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y

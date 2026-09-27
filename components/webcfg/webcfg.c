@@ -14,6 +14,7 @@
 
 #include "audio_out.h"
 #include "net_prov.h"
+#include "ota.h"
 #include "ptt_fsm.h"
 #include "tci_client.h"
 #include "ui.h"
@@ -249,6 +250,82 @@ static esp_err_t config_post(httpd_req_t *r)
     return httpd_resp_sendstr(r, "ok");
 }
 
+/* ------------------------------------------------------------------- ota */
+
+static esp_err_t ota_get(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    ota_status_t o;
+    ota_get_status(&o);
+    static const char *P[] = { "idle", "checking", "downloading",
+                               "installed", "uptodate", "failed" };
+    char buf[320];
+    snprintf(buf, sizeof buf,
+             "{\"phase\":\"%s\",\"percent\":%d,\"running\":\"%s\","
+             "\"available\":\"%s\",\"message\":\"%s\"}",
+             o.phase < 6 ? P[o.phase] : "?", o.percent,
+             o.running, o.available, o.message);
+    return send_json(r, buf);
+}
+
+static esp_err_t ota_post(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    /* ?install=1 downloads and applies; without it this only looks. */
+    char q[32] = { 0 }, v[8] = { 0 };
+    bool install = false;
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK &&
+        httpd_query_key_value(q, "install", v, sizeof v) == ESP_OK)
+        install = (v[0] == '1');
+
+    esp_err_t err = ota_start_check(install);
+    if (err == ESP_ERR_INVALID_STATE)
+        return httpd_resp_sendstr(r, "already running");
+    if (err != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "could not start");
+        return ESP_FAIL;
+    }
+    return httpd_resp_sendstr(r, "started");
+}
+
+static esp_err_t ota_upload_post(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    esp_err_t err = ota_upload_begin();
+    if (err != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "an update is already running");
+        return ESP_FAIL;
+    }
+    /* Streamed straight to flash: the image is over 1.5 MB and there is
+     * nowhere to buffer it. */
+    char *buf = heap_caps_malloc(2048, MALLOC_CAP_SPIRAM);
+    if (!buf) buf = malloc(2048);
+    if (!buf) { ota_upload_abort(); return httpd_resp_send_500(r); }
+
+    int remaining = r->content_len;
+    while (remaining > 0) {
+        int n = httpd_req_recv(r, buf, remaining > 2048 ? 2048 : remaining);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) { free(buf); ota_upload_abort(); return ESP_FAIL; }
+        if (ota_upload_write(buf, n) != ESP_OK) {
+            free(buf);
+            ota_upload_abort();
+            httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed");
+            return ESP_FAIL;
+        }
+        remaining -= n;
+    }
+    free(buf);
+
+    if (ota_upload_end() != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                            "image rejected -- wrong signature or not a "
+                            "VFO-Knob build");
+        return ESP_FAIL;
+    }
+    return httpd_resp_sendstr(r, "installed");
+}
+
 /* ---------------------------------------------------------------- reboot */
 
 static void reboot_cb(void *arg)
@@ -286,7 +363,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 6;
+    c.max_uri_handlers = 9;
     c.stack_size       = 4608;
     /* Below LVGL and the knob: a page refresh must never cost a detent. */
     c.task_priority    = 3;
@@ -303,6 +380,9 @@ esp_err_t webcfg_start(void)
         { .uri = "/api/status",  .method = HTTP_GET,  .handler = status_get },
         { .uri = "/api/config",  .method = HTTP_GET,  .handler = config_get },
         { .uri = "/api/config",  .method = HTTP_POST, .handler = config_post },
+        { .uri = "/api/ota",     .method = HTTP_GET,  .handler = ota_get },
+        { .uri = "/api/ota",     .method = HTTP_POST, .handler = ota_post },
+        { .uri = "/api/ota/upload", .method = HTTP_POST, .handler = ota_upload_post },
         { .uri = "/api/reboot",  .method = HTTP_POST, .handler = reboot_post },
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++)

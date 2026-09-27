@@ -18,3 +18,8 @@ managed_components/
 compile_commands.json
 build_usbnet/
 build_usbdiag/
+
+# OTA image signing key -- NEVER commit. Losing it means no more updates
+# for devices already in the field; leaking it means anyone can sign one.
+ota_signing_key.pem
+*_signing_key.pem
