@@ -48,6 +48,28 @@ idf.py -p /dev/ttyACM0 flash monitor
 The USB-C port is switchable between the two MCUs on this board. If the serial
 port does not appear, unplug, rotate the plug 180°, and reinsert.
 
+### USB-C networking build
+
+The knob can reach AetherSDR over the USB cable instead of WiFi, appearing to
+the host as a USB network adapter. Nothing above the IP layer changes, so TCI,
+PTT and audio work identically. Useful where 2.4 GHz struggles -- the CNC
+aluminium case is not kind to the onboard antenna.
+
+```sh
+idf.py -B build_usbnet \
+  -D SDKCONFIG="build_usbnet/sdkconfig" \
+  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.usbnet" \
+  build flash
+```
+
+Each build needs its OWN `SDKCONFIG` path. Without it both variants share the
+project's single `sdkconfig` and silently build each other's configuration.
+
+**A USB-networking build has no serial console** -- the ESP32-S3's
+USB-Serial-JTAG and USB-OTG peripherals share the same pins. To recover, or to
+reflash, **hold a finger on the screen while it boots**: USB networking is
+skipped and the console comes back.
+
 ### Host tests
 
 The protocol parser, anti-echo classifier, tuning model and PTT state machine

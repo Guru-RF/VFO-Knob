@@ -13,6 +13,7 @@ const char *usb_net_host(void)  { return NULL; }
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_event.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -66,7 +67,10 @@ esp_err_t usb_net_init(void)
 
     tinyusb_net_config_t ncfg = { .on_recv_callback = usb_recv };
     memcpy(ncfg.mac_addr, mac, 6);
-    ESP_RETURN_ON_ERROR(tinyusb_net_init(&ncfg), TAG, "net init");
+    /* This version takes the device index first -- the signature differs from
+     * upstream master, so check the installed header, not the docs. */
+    ESP_RETURN_ON_ERROR(tinyusb_net_init(TINYUSB_USBDEV_0, &ncfg),
+                        TAG, "net init");
 
     /* An Ethernet-like netif that runs a DHCP SERVER: the host is the client
      * here, so we hand it an address rather than asking for one. */
