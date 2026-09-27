@@ -57,6 +57,7 @@ static esp_websocket_client_handle_t s_ws;
 static char        s_rx[RX_CAP];
 static size_t      s_rx_len;
 static int64_t     s_greet_deadline_us;
+static bool        s_last_remote_tx;
 static int64_t     s_retry_at_us;      /* 0 = connected or connecting */
 /* Audio reassembly, in PSRAM. Allocated once; never on the hot path. */
 #define AUD_CAP 12288
@@ -205,9 +206,16 @@ static void apply_fact(const tci_fact_t *f)
                                         : PTT_EV_CONFIRM_FALSE,
                           now_ms(), 0, &o);
             ptt_dispatch(&o);
-            if (f->b0 && S.ptt.state == PTT_IDLE)
-                ESP_LOGE(TAG, "ALARM: trx:true while we are idle -- someone "
-                              "else has the transmitter keyed");
+            /* Log once per transition. This is genuinely worth knowing --
+             * it means the desktop, a foot switch or another client is
+             * transmitting -- but it was one line per frame, which buried
+             * everything else. The UI follows the state either way. */
+            if (f->b0 != s_last_remote_tx) {
+                s_last_remote_tx = f->b0;
+                if (f->b0 && S.ptt.state == PTT_IDLE)
+                    ESP_LOGW(TAG, "transmitting, keyed elsewhere (MOX, another "
+                                  "client, or a foot switch)");
+            }
         }
         break;
 

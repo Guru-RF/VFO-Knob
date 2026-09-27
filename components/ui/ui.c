@@ -441,9 +441,11 @@ static lv_obj_t *mkgroup(void)
     return g;
 }
 
-/* SWR runs 1.0 at the left of the right-hand arc to 3.0 at its end. */
-#define SWR_ROT  (ARC_ROT + ARC_SPAN / 2 + 3)
+/* SWR occupies the LEFT half of the arc, audio level the right. */
+#define SWR_ROT  ARC_ROT
 #define SWR_SPAN (ARC_SPAN / 2 - 3)
+#define AUD_ROT  (ARC_ROT + ARC_SPAN / 2 + 3)
+#define AUD_SPAN (ARC_SPAN / 2 - 3)
 static float swr_frac(float w)
 {
     if (w <= 1.0f) return 0.0f;
@@ -489,22 +491,10 @@ static void add_tx_ticks(void)
         }
     }
 
-    /* Name both halves, so it is obvious the arc has changed meaning. */
-    float la = (ARC_ROT + SWR_SPAN * 0.5f) * 3.14159265f / 180.0f;
-    lv_obj_t *al = lv_label_create(s_tx_ticks);
-    lv_obj_set_style_text_font(al, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(al, C_LABEL, 0);
-    lv_label_set_text(al, "AUDIO");
-    lv_obj_align(al, LV_ALIGN_CENTER, (int)(132 * cosf(la)),
-                 (int)(132 * sinf(la)));
-
-    lv_obj_t *sl = lv_label_create(s_tx_ticks);
-    lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(sl, C_LABEL, 0);
-    lv_label_set_text(sl, "SWR");
-    float sa = (SWR_ROT + SWR_SPAN * 0.5f) * 3.14159265f / 180.0f;
-    lv_obj_align(sl, LV_ALIGN_CENTER, (int)(132 * cosf(sa)),
-                 (int)(132 * sinf(sa)));
+    /* No "SWR" / "AUDIO" captions. At this diameter they land in the same
+     * radial band as the tick marks and overlap them, and they are redundant:
+     * only one half carries a numbered scale, and the centre already reads out
+     * the SWR figure and the forward power in words. */
 }
 
 static void add_ticks(void)
@@ -585,8 +575,8 @@ static void build(void)
     s_mic_arc = lv_arc_create(s_scr);
     lv_obj_set_size(s_mic_arc, ARC_R0 * 2, ARC_R0 * 2);
     lv_obj_center(s_mic_arc);
-    lv_arc_set_rotation(s_mic_arc, ARC_ROT);
-    lv_arc_set_bg_angles(s_mic_arc, 0, ARC_SPAN / 2 - 3);
+    lv_arc_set_rotation(s_mic_arc, AUD_ROT);
+    lv_arc_set_bg_angles(s_mic_arc, 0, AUD_SPAN);
     lv_arc_set_range(s_mic_arc, 0, 1000);
     lv_arc_set_value(s_mic_arc, 0);
     lv_obj_remove_style(s_mic_arc, NULL, LV_PART_KNOB);
@@ -600,8 +590,8 @@ static void build(void)
     s_swr_arc = lv_arc_create(s_scr);
     lv_obj_set_size(s_swr_arc, ARC_R0 * 2, ARC_R0 * 2);
     lv_obj_center(s_swr_arc);
-    lv_arc_set_rotation(s_swr_arc, ARC_ROT + ARC_SPAN / 2 + 3);
-    lv_arc_set_bg_angles(s_swr_arc, 0, ARC_SPAN / 2 - 3);
+    lv_arc_set_rotation(s_swr_arc, SWR_ROT);
+    lv_arc_set_bg_angles(s_swr_arc, 0, SWR_SPAN);
     lv_arc_set_range(s_swr_arc, 0, 1000);
     lv_arc_set_value(s_swr_arc, 0);
     lv_obj_remove_style(s_swr_arc, NULL, LV_PART_KNOB);
@@ -941,7 +931,12 @@ void ui_update(const ui_state_t *st)
         lv_obj_set_style_text_color(s_ptt_lbl,
             st->tx ? lv_color_white() : C_TEXT2, 0);
     }
-    if (st->tx)
+    if (st->tx_remote)
+        /* Keyed by the desktop, a foot switch or another client. Our trx:false
+         * would only touch our own producer handle, so tapping cannot stop it
+         * and the caption must not imply otherwise. */
+        lv_label_set_text(s_ptt_lbl, "TX  REMOTE");
+    else if (st->tx)
         lv_label_set_text_fmt(s_ptt_lbl, "TX  %lu",
                               (unsigned long)(st->tot_remain_ms / 1000));
     else

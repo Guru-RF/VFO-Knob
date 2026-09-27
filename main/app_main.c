@@ -339,7 +339,12 @@ static void ui_task(void *arg)
             .tx_mic_dbm    = st.tx_mic_dbm,
             .tx_fwd_w      = st.tx_fwd_w,
             .tx_swr        = st.tx_swr,
-            .tx            = (st.ptt_state == PTT_ON),
+            /* Follow the RADIO, not just our own PTT. MOX from the desktop,
+             * another TCI client, or a foot switch all key the transmitter,
+             * and a control head that shows RX while the rig is transmitting
+             * is worse than useless. st.tx is the server's reported state. */
+            .tx            = st.tx,
+            .tx_remote     = (st.tx && st.ptt_state != PTT_ON),
             .link_ok       = (st.link == TCI_LINK_READY ||
                               st.link == TCI_LINK_DEGRADED),
             .slice_locked  = st.slice_locked,
