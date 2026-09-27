@@ -198,13 +198,16 @@ void usb_net_prepare_reboot(void)
 bool usb_net_host_present(void)
 {
     if (!s_netif) return false;
-    /* A DHCP lease is the difference between "a cable with power on it" and
-     * "a computer". esp_netif_is_netif_up() cannot tell those apart -- it is
-     * true for a phone charger -- and that distinction decides which network
-     * the knob should be using. */
-    esp_netif_pair_mac_ip_t pair = { 0 };
-    if (esp_netif_dhcps_get_clients_by_mac(s_netif, 1, &pair) != ESP_OK) return false;
-    return pair.ip.addr != 0;
+    /* USB enumeration is the honest test, and TinyUSB already knows the
+     * answer: a host CONFIGURES a device, a charger only powers it.
+     *
+     * The DHCP lease table looked like the obvious source and is not. The
+     * host keeps its address across a reboot of this device and never
+     * re-requests it, so after the knob restarts the table is empty while a
+     * computer is plainly sitting on the other end of the cable -- which sent
+     * the knob onto WiFi, where the driver's memory left too little for the
+     * WebSocket client to start at all. */
+    return tud_mounted();
 }
 
 bool usb_net_is_up(void)
