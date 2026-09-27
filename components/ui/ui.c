@@ -81,7 +81,8 @@ static const int DIG_STEP[N_DIG] = {
 
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
-static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
+static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl;
+static lv_obj_t *s_warn_panel;
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_mic_arc, *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
 static float s_mic_peak = -60.0f;
@@ -944,7 +945,6 @@ static void build(void)
                          LV_SYMBOL_VOLUME_MID " 40");
     s_mic      = mklabel(&lv_font_montserrat_14, C_TEXT2,  CX + 104, 222,
                          LV_SYMBOL_AUDIO " 100");
-    s_status   = mklabel(&lv_font_montserrat_14, C_LABEL,  CX,      240, "");
 
     /* Full width, hard to the bottom edge. The circle clips it to a chord.
      */
@@ -1031,11 +1031,31 @@ static void build(void)
      * locked slice, TX disabled -- the protocol gives no reason, only a
      * trx:false. This banner and the refusal haptic are the whole of the
      * operator's feedback, so they have to be unmissable. */
-    s_warn = mklabel(&lv_font_montserrat_20, C_DANGER, CX, 196, "");
-    lv_obj_set_style_bg_color(s_warn, C_BG, 0);
-    lv_obj_set_style_bg_opa(s_warn, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(s_warn, 4, 0);
-    lv_obj_add_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
+    /* One warning, in the same shape as the editors -- an operator already
+     * reads a panel in the middle of the dial as the device saying something
+     * -- but in the danger colour. It used to be said twice, as a label over
+     * the readout and again under it, which is worse than saying it once:
+     * two copies of "NO LINK" invite a look for two different faults. */
+    s_warn_panel = lv_obj_create(s_scr);
+    lv_obj_set_size(s_warn_panel, 250, 86);
+    lv_obj_align(s_warn_panel, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_radius(s_warn_panel, 18, 0);
+    lv_obj_set_style_bg_color(s_warn_panel, C_BG1, 0);
+    lv_obj_set_style_bg_opa(s_warn_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_warn_panel, C_DANGER, 0);
+    lv_obj_set_style_border_width(s_warn_panel, 2, 0);
+    lv_obj_set_style_pad_all(s_warn_panel, 0, 0);
+    lv_obj_remove_flag(s_warn_panel, LV_OBJ_FLAG_SCROLLABLE);
+    /* Not clickable, for the same reason the editor panel is not: a tap
+     * anywhere must still reach the screen handler. */
+    lv_obj_remove_flag(s_warn_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+
+    s_warn = lv_label_create(s_warn_panel);
+    lv_obj_set_style_text_font(s_warn, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_warn, C_DANGER, 0);
+    lv_label_set_text(s_warn, "");
+    lv_obj_center(s_warn);
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
@@ -1189,17 +1209,15 @@ void ui_update(const ui_state_t *st)
     lv_label_set_text_fmt(s_mic, LV_SYMBOL_AUDIO " %u", (unsigned)s_micgain);
 
     if (st->warn && st->warn[0]) {
-        lv_label_set_text(s_warn, st->warn);
-        lv_obj_remove_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
+        if (strcmp(lv_label_get_text(s_warn), st->warn) != 0) {
+            lv_label_set_text(s_warn, st->warn);
+            lv_obj_center(s_warn);
+        }
+        lv_obj_remove_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_warn_panel);
     } else {
-        lv_obj_add_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
     }
-
-    lv_label_set_text(s_status,
-        !st->link_ok     ? "NO LINK" :
-        st->slice_locked ? "LOCKED"  : "");
-    lv_obj_set_style_text_color(s_status,
-        !st->link_ok ? C_DANGER : C_WARN, 0);
 
     /* Attack instantly, decay slowly: a meter that falls as fast as it rises
      * is unreadable, and the sample rate is only 5 Hz. */

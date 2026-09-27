@@ -327,6 +327,8 @@ static void ui_task(void *arg)
          * the banner and the refusal haptic are all the operator gets. Hold a
          * refusal on screen for 3 s; it is otherwise a single frame. */
         static uint32_t s_seen_refusals;
+        const bool link_ok = (st.link == TCI_LINK_READY ||
+                              st.link == TCI_LINK_DEGRADED);
         static int64_t  s_warn_until;
         const char     *warn = NULL;
         int64_t nowms = esp_timer_get_time() / 1000;
@@ -358,14 +360,20 @@ static void ui_task(void *arg)
              * another TCI client, or a foot switch all key the transmitter,
              * and a control head that shows RX while the rig is transmitting
              * is worse than useless. st.tx is the server's reported state. */
-            .tx            = st.tx,
+            /* ...but only while we can still SEE the radio. st.tx is the
+             * server's last reported state, and a dead link freezes it: the
+             * knob went on painting the transmit face, claiming the rig was
+             * keyed, for as long as the socket took to fail. Claiming TX is
+             * a claim about the radio, and with no link there is nothing
+             * behind it -- the warning is the honest thing to show. Our own
+             * PTT is aborted by the ladder long before this matters. */
+            .tx            = (st.tx && link_ok),
             /* Only IDLE counts as "someone else". During our own RELEASING --
              * between sending trx:false and the confirmation arriving -- the
              * radio is still transmitting and the state is not PTT_ON, which
              * briefly and wrongly read as a remote transmission. */
-            .tx_remote     = (st.tx && st.ptt_state == PTT_IDLE),
-            .link_ok       = (st.link == TCI_LINK_READY ||
-                              st.link == TCI_LINK_DEGRADED),
+            .tx_remote     = (st.tx && link_ok && st.ptt_state == PTT_IDLE),
+            .link_ok       = link_ok,
             .slice_locked  = st.slice_locked,
             .tot_remain_ms = st.tot_remain_ms,
             .may_key       = (st.permit == PERMIT_ALL),
