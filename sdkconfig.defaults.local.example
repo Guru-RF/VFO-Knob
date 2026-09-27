@@ -1,0 +1,7 @@
+# Copy to sdkconfig.defaults.local (gitignored) and fill in.
+# These seed NVS on first boot only; later they are editable on-device.
+CONFIG_VFO_DEV_CREDENTIALS=y
+CONFIG_VFO_DEV_WIFI_SSID="Your SSID"
+CONFIG_VFO_DEV_WIFI_PASS="your-psk"
+CONFIG_VFO_DEV_TCI_HOST="aethersdr.local"
+CONFIG_VFO_DEV_TCI_PORT=50001

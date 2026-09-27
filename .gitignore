@@ -1,0 +1,18 @@
+# ESP-IDF build output
+build/
+build_host/
+sdkconfig
+sdkconfig.old
+
+# Local credentials — NEVER COMMIT. WiFi PSK and AetherSDR host live here.
+sdkconfig.defaults.local
+
+# Managed components are fetched from the registry; dependencies.lock IS committed.
+managed_components/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+compile_commands.json

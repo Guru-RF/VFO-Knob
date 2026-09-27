@@ -1,0 +1,38 @@
+menu "VFO-Knob"
+
+config VFO_GPIO_SCAN
+    bool "Diagnostic: scan GPIOs for knob activity instead of running the knob"
+    default n
+    help
+      Samples every plausible GPIO and reports transition counts while the knob
+      is turned. Use when a pin assignment is in doubt.
+
+config VFO_DEV_CREDENTIALS
+    bool "Seed NVS with development WiFi/host credentials on first boot"
+    default n
+    help
+      Writes the values below into NVS if NVS is empty. Intended for bench work
+      before the on-screen settings UI exists. Keep the real values in
+      sdkconfig.defaults.local, which is gitignored -- never commit a PSK.
+
+if VFO_DEV_CREDENTIALS
+
+config VFO_DEV_WIFI_SSID
+    string "WiFi SSID"
+    default ""
+
+config VFO_DEV_WIFI_PASS
+    string "WiFi passphrase"
+    default ""
+
+config VFO_DEV_TCI_HOST
+    string "AetherSDR host (IP, or a name ending in .local for mDNS)"
+    default "aethersdr.local"
+
+config VFO_DEV_TCI_PORT
+    int "AetherSDR TCI port"
+    default 50001
+
+endif
+
+endmenu

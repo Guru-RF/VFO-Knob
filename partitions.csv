@@ -1,0 +1,12 @@
+# Name,     Type, SubType,  Offset,   Size,     Flags
+# 16 MB flash. Two OTA slots because a transmitter control head you cannot
+# field-update is a liability, and a coredump partition because knowing which
+# task died with the rig keyed is worth 256 KB.
+nvs,        data, nvs,      0x9000,   0x6000,
+otadata,    data, ota,      0xf000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+nvs_keys,   data, nvs_keys, 0x12000,  0x1000,   encrypted
+ota_0,      app,  ota_0,    0x20000,  0x300000,
+ota_1,      app,  ota_1,    0x320000, 0x300000,
+storage,    data, littlefs, 0x620000, 0x200000,
+coredump,   data, coredump, 0x820000, 0x40000,

@@ -1,0 +1,45 @@
+# Shared, non-secret defaults. Local WiFi/host overrides go in
+# sdkconfig.defaults.local (gitignored).
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- clock / memory -------------------------------------------------------
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+# 120M QIO is rejected by the static assert in mspi_timing_tuning.c when
+# paired with 80 MHz octal PSRAM. We stream nothing from flash at runtime, so
+# 80 MHz costs nothing.
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# --- partitions -----------------------------------------------------------
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- console over the native USB-Serial-JTAG (no external UART bridge) ----
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# --- scheduling -----------------------------------------------------------
+# A 20 ms touch poll and a 5 ms encoder backstop are both meaningless at the
+# default 10 ms tick.
+CONFIG_FREERTOS_HZ=1000
+# Quarantine the network stack on core 0 so nothing it does can jitter the
+# haptic or encoder timing on core 1.
+CONFIG_ESP_WIFI_TASK_CORE_ID=0
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0=y
+
+# --- watchdogs ------------------------------------------------------------
+# Panic deliberately: a reboot drops the TCI socket, and AetherSDR unkeys the
+# radio when a PTT-owning client disconnects. A watchdog reboot is a SAFE
+# outcome for this device.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
