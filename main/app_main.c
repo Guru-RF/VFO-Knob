@@ -27,6 +27,7 @@
 #include "hal_touch.h"
 #include "panel.h"
 #include "ui.h"
+#include "usb_net.h"
 #include "vfo_tune.h"
 
 #include "esp_chip_info.h"
@@ -528,6 +529,24 @@ void app_main(void)
         esp_timer_start_once(okt, 20 * 1000 * 1000);
 
     if (!safe) {
+#if CONFIG_VFO_USB_NET
+        /* RECOVERY PATH, and the reason this is not unconditional.
+         *
+         * Enabling TinyUSB takes the USB PHY away from USB-Serial-JTAG, so the
+         * device stops enumerating as a serial port -- and esptool then has no
+         * port to reset. GPIO0 is inside the CNC case and unreachable, so
+         * without an escape a bad USB-net build could be very hard to reflash.
+         * Holding a finger on the screen through boot skips USB networking and
+         * leaves the console alive. */
+        touch_sample_t t0s;
+        hal_touch_get(&t0s);
+        if (t0s.pressed) {
+            ESP_LOGW(TAG, "touch held at boot -- skipping USB networking, "
+                          "serial console stays available");
+        } else {
+            bring_up("usb-net", usb_net_init);
+        }
+#endif
         esp_err_t werr = net_prov_wifi_start();
         if (werr != ESP_OK)
             ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",

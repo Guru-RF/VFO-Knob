@@ -7,6 +7,19 @@ config VFO_GPIO_SCAN
       Samples every plausible GPIO and reports transition counts while the knob
       is turned. Use when a pin assignment is in doubt.
 
+config VFO_USB_NET
+    bool "USB-C networking (CDC-NCM) as a transport alongside WiFi"
+    default n
+    help
+      The knob appears to the host as a USB network adapter and reaches
+      AetherSDR over the cable. Nothing above the IP layer changes, so TCI,
+      PTT and audio all work exactly as they do over WiFi -- and it is immune
+      to the metal case's effect on 2.4 GHz.
+
+      IMPORTANT: the ESP32-S3's USB-Serial-JTAG and USB-OTG peripherals share
+      the same pins, so a build with this enabled HAS NO SERIAL CONSOLE. Build
+      with sdkconfig.usbnet, which also turns the console off.
+
 config VFO_PANEL_SELFTEST
     bool "Run the display self-test loop at boot"
     default n

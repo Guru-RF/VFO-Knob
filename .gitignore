@@ -16,3 +16,4 @@ managed_components/
 *.swp
 .DS_Store
 compile_commands.json
+build_usbnet/

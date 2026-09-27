@@ -1,0 +1,13 @@
+# Overlay for USB-C networking builds:
+#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usbnet" build
+#
+# The ESP32-S3's USB-Serial-JTAG and USB-OTG peripherals share the same two
+# pins, so enabling TinyUSB necessarily removes the serial console. Logs are
+# unavailable in this build -- use a console build for development.
+CONFIG_VFO_USB_NET=y
+CONFIG_TINYUSB_NET_MODE_NCM=y
+# The console is left configured for USB-Serial-JTAG on purpose. TinyUSB takes
+# the PHY at runtime, so the console simply goes quiet once USB networking
+# starts -- but if USB networking is SKIPPED (hold a finger on the screen
+# through boot) the console still works and the device can be reflashed.
+# Setting CONFIG_ESP_CONSOLE_NONE here would remove that escape entirely.

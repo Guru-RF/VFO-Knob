@@ -9,7 +9,11 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults.local")
     list(APPEND _vfo_defaults "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults.local")
     message(STATUS "VFO: using sdkconfig.defaults.local")
 endif()
-set(SDKCONFIG_DEFAULTS "${_vfo_defaults}")
+# Honour a caller-supplied list (used by the USB-networking overlay) rather
+# than clobbering it.
+if(NOT DEFINED SDKCONFIG_DEFAULTS)
+    set(SDKCONFIG_DEFAULTS "${_vfo_defaults}")
+endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(vfo-knob)
