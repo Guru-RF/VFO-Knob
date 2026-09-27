@@ -12,6 +12,7 @@
  *                                 reached with no graphics and no network
  */
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 #include "board.h"
@@ -21,7 +22,9 @@
 #include "hal_encoder.h"
 #include "net_prov.h"
 #include "tci_client.h"
+#include "hal_touch.h"
 #include "panel.h"
+#include "ui.h"
 #include "vfo_tune.h"
 
 #include "esp_chip_info.h"
@@ -119,11 +122,15 @@ static void haptic_bringup(void)
 
 static int s_counts_per_detent = ENC_COUNTS_PER_DETENT_DEFAULT;
 
+/* Step decade is chosen by tapping a frequency digit. One value, shared: the
+ * knob reads it, the UI writes it. */
+static _Atomic int32_t s_step_hz = 1000;
+
 static void encoder_task(void *arg)
 {
     (void)arg;
     accel_t accel; accel_init(&accel);
-    tune_t  tune;  tune_init(&tune, 14074000, 100);
+    tune_t  tune;  tune_init(&tune, 14074000, 1000);
 
     TickType_t next       = xTaskGetTickCount();
     int32_t  residue      = 0;
@@ -173,6 +180,7 @@ static void encoder_task(void *arg)
         residue -= detents * s_counts_per_detent;
         if (detents == 0) continue;
 
+        tune.step_hz = atomic_load(&s_step_hz);
         uint8_t mult = accel_update(&accel, detents, now_ms);
         if (accel.v_detents > v_peak) v_peak = accel.v_detents;
 
@@ -243,6 +251,45 @@ static void console_task(void *arg)
     }
 }
 
+static void ui_task(void *arg)
+{
+    (void)arg;
+    TickType_t next = xTaskGetTickCount();
+    for (;;) {
+        vTaskDelayUntil(&next, pdMS_TO_TICKS(50));   /* 20 Hz is plenty */
+
+        int32_t req = ui_take_step_request();
+        if (req) {
+            atomic_store(&s_step_hz, req);
+            tci_set_step(req);
+            ESP_LOGI(TAG, "step -> %ld Hz", (long)req);
+            drv2605_fire(&s_drv, 26);      /* confirm the tap landed */
+        }
+        if (ui_take_ptt_tap()) {
+            ESP_LOGI(TAG, "PTT pill tapped");
+            tci_ptt_toggle();
+        }
+
+        tci_status_t st;
+        tci_get_status(&st);
+        ui_state_t u = {
+            .freq_hz       = st.f_display,
+            .step_hz       = atomic_load(&s_step_hz),
+            .mode          = st.mode,
+            .filt_lo       = st.filt_lo,
+            .filt_hi       = st.filt_hi,
+            .smeter_dbm    = st.smeter_dbm,
+            .tx            = (st.ptt_state == PTT_ON),
+            .link_ok       = (st.link == TCI_LINK_READY ||
+                              st.link == TCI_LINK_DEGRADED),
+            .slice_locked  = st.slice_locked,
+            .tot_remain_ms = st.tot_remain_ms,
+            .may_key       = (st.permit == PERMIT_ALL),
+        };
+        ui_update(&u);
+    }
+}
+
 static void net_task(void *arg)
 {
     (void)arg;
@@ -259,8 +306,15 @@ static void net_task(void *arg)
                 ESP_LOGI(TAG, "  AetherSDR %s -> ws://%s:%u",
                          cfg->tci_host, ip, (unsigned)cfg->tci_port);
                 ESP_LOGI(TAG, "--- M13 TCI client ---");
-                tci_client_start(ip, cfg->tci_port);
-                started = true;
+                if (tci_client_start(ip, cfg->tci_port) == ESP_OK) {
+                    started = true;
+                } else {
+                    /* Usually means internal RAM was too tight to spawn the
+                     * WebSocket task. Retrying is right: memory pressure is
+                     * transient, and giving up leaves the knob permanently
+                     * deaf with no indication why. */
+                    ESP_LOGE(TAG, "  client failed to start; retrying");
+                }
             } else {
                 ESP_LOGE(TAG, "  cannot resolve %s", cfg->tci_host);
             }
@@ -320,12 +374,17 @@ void app_main(void)
     xTaskCreatePinnedToCore(gpio_scan_task, "enctest", 4096, NULL, 5, NULL, 1);
 #else
     ESP_ERROR_CHECK(panel_init());
+    ESP_ERROR_CHECK(hal_touch_init());
+    ESP_ERROR_CHECK(ui_init());
     ESP_ERROR_CHECK(hal_encoder_init());
 
     ESP_ERROR_CHECK(net_prov_init());
     ESP_ERROR_CHECK(net_prov_wifi_start());
     xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
+    /* Core 1 with the knob: everything the operator can see or feel lives
+     * away from lwIP's scheduler. */
+    xTaskCreatePinnedToCore(ui_task, "ui", 5120, NULL, 4, NULL, 1);
 #if CONFIG_VFO_PANEL_SELFTEST
     xTaskCreatePinnedToCore(selftest_task, "m4", 4096, NULL, 3, NULL, 0);
 #endif

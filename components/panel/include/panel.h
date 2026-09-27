@@ -11,12 +11,17 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 
 esp_err_t panel_init(void);
 
-/* Handle for LVGL to flush into, once the UI layer exists. */
+/* Handle for LVGL to flush into. */
 esp_lcd_panel_handle_t panel_handle(void);
+
+/* The panel IO handle. esp_lvgl_port needs it to hook the transfer-done
+ * callback, which is how it knows a flush has completed. */
+esp_lcd_panel_io_handle_t panel_io_handle(void);
 
 /* 0..255. LEDC 8-bit at 50 kHz on GPIO47, matching the vendor demo. */
 void panel_set_brightness(uint8_t duty);

@@ -23,6 +23,7 @@ extern const size_t                vfo_sh8601_init_cmds_len;
 #define BL_MODE        LEDC_LOW_SPEED_MODE
 
 static esp_lcd_panel_handle_t s_panel;
+static esp_lcd_panel_io_handle_t s_io;
 
 static void backlight_init(void)
 {
@@ -75,6 +76,7 @@ esp_err_t panel_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(
         (esp_lcd_spi_bus_handle_t)BOARD_LCD_SPI_HOST, &io_cfg, &io),
         TAG, "panel io");
+    s_io = io;
 
     sh8601_vendor_config_t vendor = {
         .init_cmds      = vfo_sh8601_init_cmds,
@@ -99,6 +101,7 @@ esp_err_t panel_init(void)
 }
 
 esp_lcd_panel_handle_t panel_handle(void) { return s_panel; }
+esp_lcd_panel_io_handle_t panel_io_handle(void) { return s_io; }
 
 /* --- M4 self-test --------------------------------------------------------
  * Drawn a row at a time: a full RGB565 frame is 259 kB, far more than internal

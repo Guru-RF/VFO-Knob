@@ -1,0 +1,5 @@
+dependencies:
+  lvgl/lvgl:
+    version: "~9.3.0"   # 9.2 lacks LV_COLOR_FORMAT_RGB565_SWAPPED, which esp_lvgl_port needs
+  espressif/esp_lvgl_port:
+    version: "^2.4"
