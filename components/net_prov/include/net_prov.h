@@ -32,6 +32,12 @@ esp_err_t net_prov_init(void);
  * transport is chosen once at startup and the TCI client has no restart path. */
 esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg);
 
+/* Credentials for the HTTP configuration page, default admin/admin. */
+const char *net_prov_web_user(void);
+const char *net_prov_web_pass(void);
+bool        net_prov_web_is_default(void);
+void        net_prov_save_web(const char *user, const char *pass);
+
 /* Transmit time-out in seconds, persisted. */
 uint16_t net_prov_tot_s(void);
 void     net_prov_save_tot(uint16_t seconds);

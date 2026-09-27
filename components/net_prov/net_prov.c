@@ -22,6 +22,13 @@ static const char *NVS_NS = "vfo";
  * so it is configurable and persisted rather than compiled in. */
 static uint16_t s_tot_s = PTT_TOT_DEFAULT_MS / 1000;
 
+/* Credentials for the configuration page. Shipped as admin/admin so a new
+ * owner can get in, and the page nags until they are changed -- this device
+ * can key a transmitter, so leaving the default in place on someone else's
+ * network is not a small thing. */
+static char s_web_user[24] = "admin";
+static char s_web_pass[33] = "admin";
+
 static vfo_cfg_t          s_cfg;
 static EventGroupHandle_t s_events;
 static bool               s_connected;
@@ -75,6 +82,8 @@ static void load_or_seed(void)
         if (nvs_get_u8(h, "mic",   &v) == ESP_OK) s_micgain = v;
         if (nvs_get_u8(h, "boots", &v) == ESP_OK) s_boots   = v;
         nvs_get_u16(h, "tot", &s_tot_s);
+        len = sizeof s_web_user; nvs_get_str(h, "wuser", s_web_user, &len);
+        len = sizeof s_web_pass; nvs_get_str(h, "wpass", s_web_pass, &len);
         nvs_close(h);
     }
     /* Count this boot straight away. If we never reach net_prov_boot_ok(),
@@ -202,6 +211,26 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
 }
 
 uint16_t net_prov_tot_s(void) { return s_tot_s; }
+
+const char *net_prov_web_user(void) { return s_web_user; }
+const char *net_prov_web_pass(void) { return s_web_pass; }
+
+bool net_prov_web_is_default(void)
+{
+    return strcmp(s_web_user, "admin") == 0 && strcmp(s_web_pass, "admin") == 0;
+}
+
+void net_prov_save_web(const char *user, const char *pass)
+{
+    if (user && *user) strlcpy(s_web_user, user, sizeof s_web_user);
+    if (pass && *pass) strlcpy(s_web_pass, pass, sizeof s_web_pass);
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "wuser", s_web_user);
+    nvs_set_str(h, "wpass", s_web_pass);
+    nvs_commit(h);
+    nvs_close(h);
+}
 
 void net_prov_save_tot(uint16_t seconds)
 {

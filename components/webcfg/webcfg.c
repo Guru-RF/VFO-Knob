@@ -10,6 +10,7 @@
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "mbedtls/base64.h"
 
 #include "audio_out.h"
 #include "net_prov.h"
@@ -24,6 +25,47 @@ extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[]   asm("_binary_index_html_end");
 
 static httpd_handle_t s_srv;
+
+/* ------------------------------------------------------------------ auth */
+
+/* HTTP Basic, default admin/admin.
+ *
+ * Basic sends the password in the clear, which is honest about what this is:
+ * a guard against a curious housemate on the same LAN, not against an attacker
+ * on the path. TLS on the device would need a certificate the owner cannot
+ * meaningfully verify, so it would buy warm feelings rather than security.
+ * What matters more is that the page refuses to stop nagging while the
+ * credentials are still the shipped ones. */
+static bool authorized(httpd_req_t *r)
+{
+    char hdr[128];
+    if (httpd_req_get_hdr_value_str(r, "Authorization", hdr, sizeof hdr) != ESP_OK)
+        return false;
+    if (strncmp(hdr, "Basic ", 6) != 0) return false;
+
+    unsigned char dec[96];
+    size_t n = 0;
+    if (mbedtls_base64_decode(dec, sizeof dec - 1, &n,
+                              (const unsigned char *)hdr + 6,
+                              strlen(hdr + 6)) != 0)
+        return false;
+    dec[n] = 0;
+
+    char want[64];
+    int w = snprintf(want, sizeof want, "%s:%s",
+                     net_prov_web_user(), net_prov_web_pass());
+    if (w <= 0 || w >= (int)sizeof want) return false;
+    return strcmp((char *)dec, want) == 0;
+}
+
+static esp_err_t deny(httpd_req_t *r)
+{
+    httpd_resp_set_status(r, "401 Unauthorized");
+    httpd_resp_set_hdr(r, "WWW-Authenticate", "Basic realm=\"VFO-Knob\"");
+    return httpd_resp_sendstr(r, "authentication required");
+}
+
+#define REQUIRE_AUTH(r) do { if (!authorized(r)) return deny(r); } while (0)
 
 /* --------------------------------------------------------------- helpers */
 
@@ -48,6 +90,7 @@ static void netif_addr(const char *key, char *out, size_t len)
 
 static esp_err_t status_get(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     tci_status_t st;
     tci_get_status(&st);
 
@@ -99,16 +142,20 @@ static esp_err_t status_get(httpd_req_t *r)
 
 static esp_err_t config_get(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     const vfo_cfg_t *c = net_prov_cfg();
     char buf[320];
     /* The password is deliberately not returned. The page sends one only when
      * the field is non-empty, so a save does not have to round-trip it. */
     snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
-             "\"vol\":%u,\"mic\":%u,\"tot\":%u}",
+             "\"vol\":%u,\"mic\":%u,\"tot\":%u,"
+             "\"user\":\"%s\",\"defaultpw\":%s}",
              c->tci_host, (unsigned)c->tci_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
-             (unsigned)net_prov_tot_s());
+             (unsigned)net_prov_tot_s(),
+             net_prov_web_user(),
+             net_prov_web_is_default() ? "true" : "false");
     return send_json(r, buf);
 }
 
@@ -150,6 +197,7 @@ static long clampl(long v, long lo, long hi)
 
 static esp_err_t config_post(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     char body[512];
     int total = r->content_len;
     if (total <= 0 || total >= (int)sizeof body) {
@@ -183,6 +231,15 @@ static esp_err_t config_post(httpd_req_t *r)
     uint8_t vol = net_prov_volume(), mic = net_prov_mic_gain();
     if (field_num(body, "vol", &v)) vol = (uint8_t)clampl(v, 0, 100);
     if (field_num(body, "mic", &v)) mic = (uint8_t)clampl(v, 0, 100);
+    /* Credentials last: changing them invalidates the browser's cached
+     * Authorization for the NEXT request, so everything else must already be
+     * committed by the time that happens. */
+    char user[24] = { 0 }, pass[33] = { 0 };
+    bool got_user = field(body, "user", user, sizeof user);
+    bool got_pass = field(body, "webpass", pass, sizeof pass);
+    if ((got_user && user[0]) || (got_pass && pass[0]))
+        net_prov_save_web(got_user ? user : NULL, got_pass ? pass : NULL);
+
     net_prov_save_audio(vol, mic);
     ui_set_levels(vol, mic);      /* audio is the one thing that applies live */
 
@@ -202,6 +259,7 @@ static void reboot_cb(void *arg)
 
 static esp_err_t reboot_post(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     httpd_resp_sendstr(r, "rebooting");
     /* Answer first, then restart from a timer, so the browser sees the reply
      * rather than a dropped connection. */
@@ -215,6 +273,7 @@ static esp_err_t reboot_post(httpd_req_t *r)
 
 static esp_err_t root_get(httpd_req_t *r)
 {
+    REQUIRE_AUTH(r);
     httpd_resp_set_type(r, "text/html");
     return httpd_resp_send(r, index_html_start,
                            index_html_end - index_html_start - 1);

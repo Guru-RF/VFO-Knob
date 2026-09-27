@@ -34,12 +34,24 @@ button:active{transform:translateY(1px)}
 .pill{padding:1px 8px;border-radius:99px;font-size:12px}
 .up{background:#4caf7d22;color:var(--ok)} .down{background:#e5534b22;color:var(--bad)}
 #msg{margin-top:10px;font-size:13px;min-height:18px}
+.warn{background:#e5534b1f;border:1px solid #e5534b66;color:#f0b3ae;
+      border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
+.warn{background:#e5534b1f;border:1px solid #e5534b66;color:#f0b3ae;
+      border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
 @media(max-width:520px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body><div class="wrap">
 <h1>VFO-Knob</h1>
 <p class="sub" id="ident">&nbsp;</p>
+<div id="warn" class="warn" hidden>
+  This knob still uses the shipped password (<b>admin/admin</b>). Anyone on this
+  network can key your transmitter with it &mdash; set your own below.
+</div>
+<div id="warn" class="warn" hidden>
+  This knob still uses the shipped password (<b>admin/admin</b>) and anyone on
+  this network can key your transmitter with it. Set your own below.
+</div>
 
 <section>
   <h2>Status</h2>
@@ -76,6 +88,28 @@ button:active{transform:translateY(1px)}
     <div><label>Mic gain (0&ndash;100)</label><input id="mic" inputmode="numeric"></div>
   </div>
   <p class="note">Volume and mic gain take effect immediately.</p>
+</section>
+
+<section>
+  <h2>Access</h2>
+  <div class="grid">
+    <div><label>Username</label><input id="user"></div>
+    <div><label>New password</label><input id="webpass" type="password"
+         placeholder="unchanged"></div>
+  </div>
+  <p class="note">Guards this page only. It is sent unencrypted, so treat it as
+     a lock on the door rather than a safe.</p>
+</section>
+
+<section>
+  <h2>Access</h2>
+  <div class="grid">
+    <div><label>Username</label><input id="user"></div>
+    <div><label>New password</label><input id="webpass" type="password"
+         placeholder="unchanged"></div>
+  </div>
+  <p class="note">Guards this page only, and it is sent unencrypted &mdash; a
+     lock on the door, not a safe.</p>
 </section>
 
 <button id="save">Save</button>
@@ -118,16 +152,28 @@ async function load(){
   const c=await (await fetch('/api/config')).json();
   $('host').value=c.host; $('port').value=c.port; $('ssid').value=c.ssid;
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('tot').value=c.tot;
+  $('user').value=c.user; $('warn').hidden=!c.defaultpw;
 }
 
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
-  for(const k of ['host','port','ssid','vol','mic','tot']) b.append(k,$(k).value);
+  for(const k of ['host','port','ssid','vol','mic','tot','user']) b.append(k,$(k).value);
   if($('pass').value) b.append('pass',$('pass').value);
+  if($('webpass').value) b.append('webpass',$('webpass').value);
   const r=await fetch('/api/config',{method:'POST',body:b});
   $('msg').textContent = r.ok ? 'Saved. Network and time-out changes apply on reboot.'
                               : 'Save failed: '+await r.text();
   $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  if(r.ok && $('webpass').value){
+    $('webpass').value='';
+    $('msg').textContent += ' Password changed \u2014 the browser will ask again.';
+  }
+  if(r.ok) load();
+  if(r.ok && $('webpass').value){
+    $('webpass').value='';
+    $('msg').textContent+=' Password changed \u2014 the browser will ask again.';
+  }
+  if(r.ok) load();
 };
 
 $('reboot').onclick=async()=>{
