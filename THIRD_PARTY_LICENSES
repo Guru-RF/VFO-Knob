@@ -22,19 +22,21 @@ accompany binary distributions. Shipping a device means shipping those notices
 somewhere the buyer can reach them -- the manual, a legal-notices page, or this
 file in the source repository the device points at.
 
-## Unresolved: the display initialisation table
+## The display initialisation table
 
 `components/panel/sh8601_init_cmds.c` is 185 register writes copied verbatim
-from Waveshare's `08_LVGL_Test` demo for the ESP32-S3-Knob-Touch-LCD-1.8. That
-demo ships **no licence file of any kind**, which under default copyright means
-all rights reserved.
+from Waveshare's `08_LVGL_Test` demo for the ESP32-S3-Knob-Touch-LCD-1.8.
 
-This is the one thing in the tree that is not cleanly redistributable, and it
-is compiled into every binary. Before selling devices or publishing images,
-either:
+Waveshare confirmed on enquiry (2026-09-27) that their demo code for ESP32
+boards is released under **Apache-2.0** — MIT for their non-ESP hardware —
+except where a particular part is bound by a third party's terms. That matches
+this project's own licence, so it redistributes cleanly in source and in
+binaries.
 
-- obtain written permission or a licence grant from Waveshare, or
-- re-derive the sequence from the SH8601 datasheet and replace the file.
+That confirmation came by correspondence rather than from a LICENSE file in
+the demo package. Worth keeping the reply on file alongside the commercial
+paperwork.
 
-"They are just register values" is a weak argument for 185 undocumented,
-ordered writes, and is not worth relying on commercially.
+| Component | Licence |
+|---|---|
+| Waveshare ESP32-S3-Knob-Touch-LCD-1.8 demo (display init table) | Apache-2.0 |

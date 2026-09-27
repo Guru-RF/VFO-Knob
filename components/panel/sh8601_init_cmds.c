@@ -4,6 +4,11 @@
  * "tidy" these: they are undocumented vendor register writes and the only
  * evidence they are correct is that the panel lights up.
  *
+ * Copyright (c) Waveshare Electronics. Waveshare confirmed on 2026-09-27, on
+ * enquiry, that their demo code for ESP32 boards is released under Apache-2.0
+ * (MIT for their non-ESP hardware) except where a part is bound by a third
+ * party's terms. Same licence as this project, so it redistributes cleanly.
+ *
  * Note the board pairs an SH8601 controller with a real PWM backlight on
  * GPIO47 -- the vendor demo drives both, so brightness goes through LEDC
  * rather than the DCS 0x51 command.

@@ -152,9 +152,8 @@ including on hardware you sell, with no obligation to publish your changes. It
 carries an explicit patent grant. Keep the `LICENSE` and `NOTICE` files with
 any redistribution, and state what you changed.
 
-**One caveat, and it is a real one.** `components/panel/sh8601_init_cmds.c` is
-copied verbatim from a Waveshare demo that ships no licence at all, so it is
-not mine to license and the Apache grant above does not reach it. It is
-compiled into every binary. Settle it — permission from Waveshare, or re-derive
-the table from the SH8601 datasheet — before selling devices with this
-firmware on them. See [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).
+The display initialisation table in `components/panel/sh8601_init_cmds.c` comes
+from Waveshare's demo for this board. Waveshare confirmed on enquiry that their
+ESP32 demo code is Apache-2.0, so it carries the same terms as the rest and
+redistributes cleanly. Full list in
+[THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).
