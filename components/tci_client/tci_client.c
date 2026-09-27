@@ -3,7 +3,9 @@
 #include <string.h>
 
 #include "antiecho.h"
+#include "audio_out.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
@@ -41,6 +43,8 @@ typedef struct {
     bool       tx_enable_seen;
     bool       have_chan_sensors;   /* the opt-in, higher-precision stream */
     bool       need_sensors_enable;
+    bool       need_audio_start;
+    bool       audio_on;
     uint32_t   pending_key, pending_unkey, pending_toggle;
     uint8_t    pending_abort;
 } state_t;
@@ -52,6 +56,10 @@ static char        s_rx[RX_CAP];
 static size_t      s_rx_len;
 static int64_t     s_greet_deadline_us;
 static int64_t     s_retry_at_us;      /* 0 = connected or connecting */
+/* Audio reassembly, in PSRAM. Allocated once; never on the hot path. */
+#define AUD_CAP 12288
+static uint8_t    *s_aud;
+static size_t      s_aud_len;
 static uint32_t    s_backoff_ms = 250;
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -106,6 +114,8 @@ static void apply_fact(const tci_fact_t *f)
         S.t_ready_ms = now_ms();
         S.have_chan_sensors   = false;
         S.need_sensors_enable = true;
+        S.need_audio_start    = true;
+        S.audio_on            = false;
         /* The greeting is authoritative: adopt the rig's frequency wholesale
          * and forget anything we thought we knew. */
         tune_assign(&S.tune, S.f_server);
@@ -287,6 +297,24 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             }
             break;
         }
+        if (e->op_code == 0x02 || (e->op_code == 0x00 && s_aud_len)) {
+            /* Binary: RX audio, delivered in buffer_size chunks. Reassembled
+             * into PSRAM so the socket buffer can stay small. */
+            if (!s_aud) break;
+            if (e->payload_offset == 0) s_aud_len = 0;
+            if (s_aud_len + e->data_len <= AUD_CAP) {
+                memcpy(s_aud + s_aud_len, e->data_ptr, e->data_len);
+                s_aud_len += e->data_len;
+            } else {
+                s_aud_len = 0;                  /* oversize: drop the frame */
+                break;
+            }
+            if (e->payload_offset + e->data_len >= (size_t)e->payload_len) {
+                audio_out_feed(s_aud, s_aud_len);
+                s_aud_len = 0;
+            }
+            break;
+        }
         if (e->op_code != 0x01 && e->op_code != 0x00) break;   /* text/continuation */
         if (e->data_len > 0) consume(e->data_ptr, e->data_len);
         break;
@@ -451,6 +479,21 @@ static void tx_task(void *arg)
         if (S.need_sensors_enable) {
             S.need_sensors_enable = false;
             send_cmd("rx_sensors_enable:true;");
+        }
+
+        /* Audio is declared on the SAME trx we control. effectiveTrx()
+         * redirects a PTT request for trx 0 to the client's declared audio
+         * receiver, so declaring a different one would key a slice the
+         * operator never addressed, on that slice's band and antenna. Same
+         * receiver means the redirect is a no-op. */
+        if (S.need_audio_start && !S.need_sensors_enable) {
+            S.need_audio_start = false;
+            send_cmd("audio_samplerate:%d;", AUDIO_RATE_HZ);
+            send_cmd("audio_stream_sample_type:int16;");
+            send_cmd("audio_start:%u;", (unsigned)S.my_trx);
+            S.audio_on = true;
+            ESP_LOGI(TAG, "RX audio requested on trx %u at %d Hz",
+                     (unsigned)S.my_trx, AUDIO_RATE_HZ);
         }
 
         /* No vfo: traffic while keyed. You are not tuning during a
@@ -623,6 +666,12 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
     ptt_fsm_init(&S.ptt, PTT_TOT_DEFAULT_MS);
     strlcpy(S.mode, "usb", sizeof S.mode);
 
+    if (!s_aud) {
+        s_aud = heap_caps_malloc(AUD_CAP, MALLOC_CAP_SPIRAM);
+        if (!s_aud) ESP_LOGW(TAG, "no PSRAM for audio reassembly; RX audio off");
+    }
+    s_aud_len = 0;
+
     esp_websocket_client_config_t cfg = {
         .uri                    = uri,
         /* We own reconnect. Two reasons: the close REASON string is the
@@ -639,6 +688,11 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
         .pingpong_timeout_sec   = 8,
         .task_prio              = 6,
         .task_stack             = 6144,
+        /* Deliberately small. Internal RAM is the contended resource here --
+         * LVGL, WiFi and I2S all want DMA-capable memory -- and a buffer big
+         * enough for a whole audio frame could not be allocated alongside this
+         * client's task stack. Audio arrives fragmented instead and is
+         * reassembled in PSRAM below, where there is 8 MB spare. */
         .buffer_size            = 2048,
     };
     s_ws = esp_websocket_client_init(&cfg);

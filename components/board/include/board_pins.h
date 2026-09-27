@@ -72,4 +72,14 @@
  * interaction design. */
 #define BOARD_PIN_AUDIO_MUX_SEL GPIO_NUM_0
 
+/* PCM5100A stereo DAC -> 3.5 mm jack, I2S standard mode. GPIO0 must be HIGH
+ * for the ESP32-S3 (rather than the secondary ESP32) to drive it. */
+#define BOARD_PIN_I2S_BCLK      GPIO_NUM_39
+#define BOARD_PIN_I2S_WS        GPIO_NUM_40
+#define BOARD_PIN_I2S_DOUT      GPIO_NUM_41
+
+/* PDM microphone, for v2 transmit audio. Not initialised. */
+#define BOARD_PIN_PDM_CLK       GPIO_NUM_45
+#define BOARD_PIN_PDM_DATA      GPIO_NUM_46
+
 #endif /* BOARD_PINS_H */

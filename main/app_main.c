@@ -15,6 +15,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
+#include "audio_out.h"
 #include "board.h"
 #include "board_pins.h"
 #include "drv2605.h"
@@ -304,6 +305,8 @@ static void ui_task(void *arg)
             tci_ptt_toggle();
         }
 
+        audio_out_set_volume(ui_volume());
+
         tci_status_t st;
         tci_get_status(&st);
         ui_state_t u = {
@@ -376,6 +379,16 @@ static void net_task(void *arg)
                 (unsigned)st.reconciles, (unsigned)st.rejects,
                 (unsigned)st.unknown_cmds,
                 st.last_close[0] ? " last_close=" : "", st.last_close);
+
+            audio_stats_t a;
+            audio_out_stats(&a);
+            if (a.frames || a.dropped)
+                ESP_LOGI(TAG, "[AUD] frames=%u dropped=%u underruns=%u | "
+                              "%u Hz fmt=%u ch=%u vol=%u",
+                         (unsigned)a.frames, (unsigned)a.dropped,
+                         (unsigned)a.underruns, (unsigned)a.sample_rate,
+                         (unsigned)a.format, (unsigned)a.channels,
+                         (unsigned)ui_volume());
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
@@ -416,6 +429,8 @@ void app_main(void)
     ESP_ERROR_CHECK(hal_touch_init());
     ESP_ERROR_CHECK(ui_init());
     ESP_ERROR_CHECK(hal_encoder_init());
+    if (audio_out_init() != ESP_OK)
+        ESP_LOGE(TAG, "audio output unavailable -- continuing without it");
 
     /* Deliberately NOT ESP_ERROR_CHECK. A WiFi failure must leave a working
      * display showing why, not abort into a reboot loop that hides it. */
