@@ -10,6 +10,8 @@
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "mbedtls/base64.h"
 
 #include "audio_out.h"
@@ -294,6 +296,8 @@ static esp_err_t ota_post(httpd_req_t *r)
     return httpd_resp_sendstr(r, "started");
 }
 
+static void reboot_cb(void *arg);
+
 static esp_err_t ota_upload_post(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
@@ -308,18 +312,30 @@ static esp_err_t ota_upload_post(httpd_req_t *r)
     if (!buf) buf = malloc(2048);
     if (!buf) { ota_upload_abort(); return httpd_resp_send_500(r); }
 
-    int remaining = r->content_len;
+    /* Hand the whole device over to the transfer. RX audio is a continuous
+     * ~96 kB/s inbound stream on the same socket and the same USB pipe, and
+     * with both running the upload broke midway -- thousands of dropped audio
+     * frames and a truncated image. The screen says so, and being a separate
+     * screen it also puts PTT out of reach while the flash is rewritten. */
+    tci_audio_suspend(true);
+    ui_updating_show();
+
+    const int total = r->content_len;
+    int remaining = total;
+    int last_pct = -1;
     while (remaining > 0) {
         int n = httpd_req_recv(r, buf, remaining > 2048 ? 2048 : remaining);
         if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
-        if (n <= 0) { free(buf); ota_upload_abort(); return ESP_FAIL; }
+        if (n <= 0) { free(buf); ota_upload_abort(); goto failed; }
         if (ota_upload_write(buf, n) != ESP_OK) {
             free(buf);
             ota_upload_abort();
             httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed");
-            return ESP_FAIL;
+            goto failed_sent;
         }
         remaining -= n;
+        const int pct = total > 0 ? (int)((int64_t)(total - remaining) * 100 / total) : 0;
+        if (pct != last_pct) { last_pct = pct; ui_updating_progress(pct); }
     }
     free(buf);
 
@@ -327,9 +343,27 @@ static esp_err_t ota_upload_post(httpd_req_t *r)
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
                             "image rejected -- wrong signature or not a "
                             "VFO-Knob build");
-        return ESP_FAIL;
+        goto failed_sent;
     }
-    return httpd_resp_sendstr(r, "installed");
+
+    /* An upload is something an operator is standing over, unlike the
+     * background check, so finishing the job is what they expect. */
+    ui_updating_result(true, "Restarting");
+    httpd_resp_sendstr(r, "installed");
+    const esp_timer_create_args_t a = { .callback = reboot_cb, .name = "otaboot" };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 1500 * 1000);
+    return ESP_OK;
+
+failed:
+    httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "transfer interrupted");
+failed_sent:
+    ui_updating_result(false, "Update failed");
+    /* Leave the message up briefly, then give the dial back. */
+    vTaskDelay(pdMS_TO_TICKS(2500));
+    ui_updating_hide();
+    tci_audio_suspend(false);
+    return ESP_FAIL;
 }
 
 /* ---------------------------------------------------------------- reboot */

@@ -677,7 +677,19 @@ void app_main(void)
         esp_timer_start_once(okt, 20 * 1000 * 1000);
 
     bool usb_net_on = false;
-    if (!safe) {
+    /* USB networking comes up even in SAFE MODE, deliberately.
+     *
+     * Safe mode used to skip it along with WiFi and audio, which made the
+     * device unreachable by the only channel it has: no USB network means no
+     * configuration page and no log, and the knob can then only be recovered
+     * over the ROM serial port. That happened for real -- a server outage made
+     * the link-down guard restart the knob repeatedly, the boot counter passed
+     * three, and safe mode then removed the very thing needed to look at it.
+     *
+     * Safe mode is for shedding what might have caused a crash loop, and this
+     * is not that: it is local, it needs no radio and no credentials, and the
+     * touch-held escape below still disables it if TinyUSB itself is the
+     * problem. Observability is the last thing to drop, not the first. */
 #if CONFIG_VFO_USB_NET
         /* KEEPING THE DEVICE FLASHABLE. Read before shortening the delay.
          *
@@ -714,6 +726,7 @@ void app_main(void)
             xTaskCreatePinnedToCore(usb_net_task, "usbnet", 4096, NULL, 5, NULL, 0);
         }
 #endif
+    if (!safe) {
         esp_err_t werr = net_prov_wifi_start();
         if (werr != ESP_OK)
             ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",

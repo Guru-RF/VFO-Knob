@@ -7,8 +7,10 @@
  * operator nothing.
  */
 #include "splash.h"
+#include "ui.h"
 
 #include "lvgl.h"
+#include "esp_lvgl_port.h"
 
 /* Sampled from the logo and from rfguru.app. */
 #define RFG_GOLD   lv_color_hex(0xE9B61D)
@@ -154,4 +156,110 @@ void ui_splash_start(void)
     anim_to(prod,  a_opa,    0, 255,  900, 420, NULL);
 
     lv_timer_create(done_cb, SPLASH_MS, NULL);
+}
+
+
+/* ---------------------------------------------------------------- update */
+
+/* A firmware upload owns the device.
+ *
+ * RX audio is a continuous ~96 kB/s inbound stream sharing the socket and the
+ * USB pipe with the image, and with both running the upload broke midway --
+ * thousands of dropped audio frames and a truncated transfer. Quiescing is
+ * therefore not just presentation: it is what makes the upload survive.
+ *
+ * Presentation matters too, though. A knob that looks perfectly normal while
+ * its flash is being rewritten invites exactly the one thing that must not
+ * happen, so this says so, in the branding, with a bar that is visibly moving.
+ * Being a separate screen, it also puts PTT out of reach for the duration. */
+static lv_obj_t *s_upd;
+static lv_obj_t *s_upd_arc;
+static lv_obj_t *s_upd_pct;
+static lv_obj_t *s_upd_msg;
+
+void ui_updating_show(void)
+{
+    if (!lvgl_port_lock(200)) return;
+    if (!s_upd) {
+        s_upd = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(s_upd, RFG_GLOW, 0);
+        lv_obj_set_style_bg_grad_color(s_upd, RFG_INK, 0);
+        lv_obj_set_style_bg_grad_dir(s_upd, LV_GRAD_DIR_VER, 0);
+        lv_obj_set_style_bg_opa(s_upd, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_upd, 0, 0);
+        lv_obj_remove_flag(s_upd, LV_OBJ_FLAG_SCROLLABLE);
+
+        s_upd_arc = lv_arc_create(s_upd);
+        lv_obj_set_size(s_upd_arc, 300, 300);
+        lv_obj_center(s_upd_arc);
+        lv_arc_set_rotation(s_upd_arc, 270);
+        lv_arc_set_bg_angles(s_upd_arc, 0, 360);
+        lv_arc_set_range(s_upd_arc, 0, 100);
+        lv_arc_set_value(s_upd_arc, 0);
+        lv_obj_remove_style(s_upd_arc, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(s_upd_arc, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(s_upd_arc, 10, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(s_upd_arc, lv_color_hex(0x1A1D25), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(s_upd_arc, 10, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(s_upd_arc, RFG_GOLD, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(s_upd_arc, false, LV_PART_INDICATOR);
+
+        lv_obj_t *t = lv_label_create(s_upd);
+        lv_label_set_text(t, "UPDATING");
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(t, RFG_TEXT, 0);
+        lv_obj_align(t, LV_ALIGN_CENTER, 0, -62);
+
+        s_upd_pct = lv_label_create(s_upd);
+        lv_label_set_text(s_upd_pct, "0%");
+        lv_obj_set_style_text_font(s_upd_pct, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_color(s_upd_pct, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_align(s_upd_pct, LV_ALIGN_CENTER, 0, -6);
+
+        s_upd_msg = lv_label_create(s_upd);
+        lv_label_set_text(s_upd_msg, "Do not unplug");
+        lv_obj_set_style_text_font(s_upd_msg, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_upd_msg, lv_color_hex(0xFF9A3C), 0);
+        lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
+    }
+    lv_arc_set_value(s_upd_arc, 0);
+    lv_label_set_text(s_upd_pct, "0%");
+    lv_label_set_text(s_upd_msg, "Do not unplug");
+    lv_obj_set_style_text_color(s_upd_msg, lv_color_hex(0xFF9A3C), 0);
+    lv_screen_load(s_upd);
+    lvgl_port_unlock();
+}
+
+void ui_updating_progress(int percent)
+{
+    if (!s_upd) return;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    /* Never block the transfer for the sake of a redraw. */
+    if (!lvgl_port_lock(5)) return;
+    if (lv_arc_get_value(s_upd_arc) != percent) {
+        lv_arc_set_value(s_upd_arc, percent);
+        lv_label_set_text_fmt(s_upd_pct, "%d%%", percent);
+        lv_obj_align(s_upd_pct, LV_ALIGN_CENTER, 0, -6);
+    }
+    lvgl_port_unlock();
+}
+
+void ui_updating_result(bool ok, const char *message)
+{
+    if (!s_upd) return;
+    if (!lvgl_port_lock(200)) return;
+    lv_label_set_text(s_upd_msg, message ? message : (ok ? "Restarting" : "Failed"));
+    lv_obj_set_style_text_color(s_upd_msg,
+        ok ? lv_color_hex(0x4DD87A) : lv_color_hex(0xFF4D4D), 0);
+    lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
+    lvgl_port_unlock();
+}
+
+void ui_updating_hide(void)
+{
+    if (!s_upd || !s_main) return;
+    if (!lvgl_port_lock(200)) return;
+    lv_screen_load(s_main);
+    lvgl_port_unlock();
 }

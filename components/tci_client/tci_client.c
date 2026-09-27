@@ -51,6 +51,7 @@ typedef struct {
     uint32_t   t_audio_start_ms;   /* when audio_start went out, 0 if not yet */
     uint8_t    audio_kills;        /* links dropped right after audio_start */
     bool       audio_blocked;      /* stop asking; audio is what breaks us */
+    bool       audio_suspend;      /* held off while something else needs the link */
     uint32_t   pending_key, pending_unkey, pending_toggle;
     uint8_t    pending_abort;
 } state_t;
@@ -587,7 +588,19 @@ static void tx_task(void *arg)
          * receiver, so declaring a different one would key a slice the
          * operator never addressed, on that slice's band and antenna. Same
          * receiver means the redirect is a no-op. */
-        if (S.need_audio_start && !S.need_sensors_enable) {
+        /* Give the link back while a firmware image is being pushed in. RX
+         * audio is a continuous ~96 kB/s inbound stream on the same socket
+         * and the same USB pipe as the upload; with both running the upload
+         * broke midway and the audio counters showed thousands of dropped
+         * frames. Nobody needs to listen to the radio while updating it. */
+        if (S.audio_suspend && S.audio_on) {
+            send_cmd("audio_stop:%u;", (unsigned)S.my_trx);
+            S.audio_on = false;
+            S.need_audio_start = false;
+            ESP_LOGW(TAG, "RX audio suspended");
+        }
+
+        if (S.need_audio_start && !S.need_sensors_enable && !S.audio_suspend) {
             S.need_audio_start = false;
             send_cmd("audio_samplerate:%d;", AUDIO_RATE_HZ);
             send_cmd("audio_stream_sample_type:int16;");
@@ -661,6 +674,15 @@ int64_t tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
     f = S.tune.f_display;
     taskEXIT_CRITICAL(&S_LOCK);
     return f;
+}
+
+void tci_audio_suspend(bool suspend)
+{
+    if (S.audio_suspend == suspend) return;
+    S.audio_suspend = suspend;
+    /* Resuming re-arms the request; the tx task sends it on its next pass. */
+    if (!suspend && !S.audio_blocked) S.need_audio_start = true;
+    ESP_LOGW(TAG, "RX audio %s", suspend ? "suspend requested" : "resume requested");
 }
 
 void tci_set_step(int32_t step_hz)

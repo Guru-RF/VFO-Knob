@@ -78,6 +78,10 @@ int64_t tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz);
 /* Adopt a step size (tapping a digit, later). Re-latches the anchor. */
 void tci_set_step(int32_t step_hz);
 
+/* Stops the RX audio stream while something else needs the link -- currently
+ * a firmware upload, which shares the socket and the USB pipe with it. */
+void tci_audio_suspend(bool suspend);
+
 void tci_get_status(tci_status_t *out);
 bool tci_is_ready(void);
 

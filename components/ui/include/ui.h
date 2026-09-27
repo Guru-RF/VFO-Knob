@@ -79,6 +79,14 @@ void ui_set_levels(uint8_t volume, uint8_t mic_gain);
  * Kept as formatted text so the UI needs no networking headers. */
 void ui_set_netinfo(const char *text);
 
+/* Firmware-update screen. Takes over the display for the duration of an
+ * upload: it frees the device for the transfer, tells the operator not to
+ * unplug, and -- being a separate screen -- puts PTT out of reach. */
+void ui_updating_show(void);
+void ui_updating_progress(int percent);
+void ui_updating_result(bool ok, const char *message);
+void ui_updating_hide(void);
+
 /* Step through 0/90/180/270. Orientation is a physical property of how the
  * panel is mounted, and guessing it costs a flash cycle each time -- so make
  * it switchable from the console instead. */
