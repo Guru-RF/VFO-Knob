@@ -195,11 +195,11 @@ const sh8601_lcd_init_cmd_t vfo_sh8601_init_cmds[] = {
     {0x21, (uint8_t[]){0x00}, 1, 0},
     {0x11, (uint8_t[]){0x00}, 1, 120},
     {0x29, (uint8_t[]){0x00}, 1, 0},
-#ifdef VFO_ROTATE_90
-    {0x36, (uint8_t[]){0x60}, 1, 0},
-#else
+    /* MADCTL left at the vendor default. This panel honours MX (bit 6) but NOT
+     * MY -- the driver says so outright ("mirror_y is not supported") -- so
+     * 0xC0 flips only X and leaves the image still upside down. The 180-degree
+     * rotation is done in LVGL instead, where touch rotates with it. */
     {0x36, (uint8_t[]){0x00}, 1, 0},
-#endif
 };
 
 const size_t vfo_sh8601_init_cmds_len =

@@ -41,4 +41,10 @@ int32_t ui_take_step_request(void);
 /* A tap landed on the PTT pill. Consumed by the caller. */
 bool ui_take_ptt_tap(void);
 
+/* Step through 0/90/180/270. Orientation is a physical property of how the
+ * panel is mounted, and guessing it costs a flash cycle each time -- so make
+ * it switchable from the console instead. */
+void    ui_cycle_rotation(void);
+uint8_t ui_rotation(void);
+
 #endif /* VFO_UI_H */

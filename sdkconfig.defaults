@@ -14,6 +14,10 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+# WiFi/lwIP buffers stay in internal RAM. Moving them to PSRAM was measured
+# and made things WORSE (10.7 kB internal free at TCI start, against 38 kB
+# without it), and it cannot relocate the static RX descriptors anyway --
+# which is the allocation that actually competes with the draw buffers.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
 # --- partitions -----------------------------------------------------------
@@ -48,6 +52,7 @@ CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 # Large digits for the frequency readout. Montserrat is proportional, so the
 # readout shimmers slightly at tuning speed; a tabular-figure subset is the
 # proper fix and is a later refinement.
+CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_48=y

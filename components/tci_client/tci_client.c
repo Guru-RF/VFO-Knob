@@ -589,9 +589,19 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
     };
     s_ws = esp_websocket_client_init(&cfg);
     ESP_RETURN_ON_FALSE(s_ws, ESP_FAIL, TAG, "ws init");
-    ESP_RETURN_ON_ERROR(esp_websocket_register_events(
-        s_ws, WEBSOCKET_EVENT_ANY, ws_event, NULL), TAG, "events");
-    ESP_RETURN_ON_ERROR(esp_websocket_client_start(s_ws), TAG, "ws start");
+    esp_err_t err = esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY,
+                                                  ws_event, NULL);
+    if (err == ESP_OK) err = esp_websocket_client_start(s_ws);
+    if (err != ESP_OK) {
+        /* Destroy the handle before returning. Leaving it allocated leaked an
+         * entire client per attempt, and because the caller retries every 2 s
+         * the device walked itself down to 23 bytes of internal RAM and stayed
+         * there -- a far worse failure than the one being retried. */
+        esp_websocket_client_destroy(s_ws);
+        s_ws = NULL;
+        ESP_LOGE(TAG, "websocket start failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
     S.link = TCI_LINK_CONNECTING;
     xTaskCreatePinnedToCore(tx_task, "tci_tx", 4096, NULL, 8, NULL, 0);

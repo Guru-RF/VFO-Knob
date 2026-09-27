@@ -221,6 +221,7 @@ static void console_task(void *arg)
     }
     ESP_LOGI(TAG, "console: t=toggle PTT  k=key  u=unkey  s=status");
     ESP_LOGI(TAG, "         p=abort:pong-stale  d=abort:link-down  o=TOT 30s");
+    ESP_LOGI(TAG, "         r=cycle screen rotation");
 
     for (;;) {
         uint8_t ch;
@@ -235,6 +236,9 @@ static void console_task(void *arg)
                   tci_ptt_force_abort(PTT_AB_LINK_DOWN);  break;
         case 'o': ESP_LOGI(TAG, "console: TOT -> 30 s (FSM minimum)");
                   tci_set_tot_ms(30000); break;
+        case 'r': ui_cycle_rotation();
+                  ESP_LOGI(TAG, "rotation -> %u degrees", ui_rotation() * 90u);
+                  break;
         case 's': {
             tci_status_t st; tci_get_status(&st);
             ESP_LOGI(TAG, "ptt=%s rung=%u reason=%s tot=%ums permit=0x%03X%s "
@@ -305,7 +309,11 @@ static void net_task(void *arg)
             if (net_prov_resolve(ip, sizeof ip) == ESP_OK) {
                 ESP_LOGI(TAG, "  AetherSDR %s -> ws://%s:%u",
                          cfg->tci_host, ip, (unsigned)cfg->tci_port);
-                ESP_LOGI(TAG, "--- M13 TCI client ---");
+                ESP_LOGI(TAG, "--- M13 TCI client --- (free internal %u, "
+                              "largest DMA %u)",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_largest_free_block(
+                             MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
                 if (tci_client_start(ip, cfg->tci_port) == ESP_OK) {
                     started = true;
                 } else {
@@ -378,8 +386,13 @@ void app_main(void)
     ESP_ERROR_CHECK(ui_init());
     ESP_ERROR_CHECK(hal_encoder_init());
 
+    /* Deliberately NOT ESP_ERROR_CHECK. A WiFi failure must leave a working
+     * display showing why, not abort into a reboot loop that hides it. */
     ESP_ERROR_CHECK(net_prov_init());
-    ESP_ERROR_CHECK(net_prov_wifi_start());
+    esp_err_t werr = net_prov_wifi_start();
+    if (werr != ESP_OK)
+        ESP_LOGE(TAG, "WiFi did not start (%s) -- continuing offline",
+                 esp_err_to_name(werr));
     xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
     /* Core 1 with the knob: everything the operator can see or feel lives

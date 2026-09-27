@@ -94,6 +94,12 @@ esp_err_t panel_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "reset");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel),  TAG, "init");
 
+    /* Turn the backlight ON. LEDC is configured with duty 0, and until the
+     * UI existed the only thing that ever raised it was the self-test -- so
+     * disabling the self-test turned the screen black while everything behind
+     * it carried on working perfectly. */
+    panel_set_brightness(200);
+
     ESP_LOGI(TAG, "SH8601 up: %dx%d RGB565, QSPI on host %d, %u init cmds",
              BOARD_LCD_H_RES, BOARD_LCD_V_RES, BOARD_LCD_SPI_HOST,
              (unsigned)vfo_sh8601_init_cmds_len);
