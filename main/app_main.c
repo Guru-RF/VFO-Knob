@@ -302,12 +302,9 @@ static void ui_task(void *arg)
         }
 
         if (ui_take_ptt_tap()) {
-            ESP_LOGI(TAG, "PTT pill tapped");
+            ESP_LOGI(TAG, "PTT tapped");
             tci_ptt_toggle();
         }
-
-        audio_out_set_volume(ui_volume());
-        audio_in_set_gain(ui_mic_gain());
 
         tci_status_t st;
         tci_get_status(&st);
@@ -339,6 +336,9 @@ static void ui_task(void *arg)
             .filt_hi       = st.filt_hi,
             .rit_hz        = st.rit_hz,
             .smeter_dbm    = st.smeter_dbm,
+            .tx_mic_dbm    = st.tx_mic_dbm,
+            .tx_fwd_w      = st.tx_fwd_w,
+            .tx_swr        = st.tx_swr,
             .tx            = (st.ptt_state == PTT_ON),
             .link_ok       = (st.link == TCI_LINK_READY ||
                               st.link == TCI_LINK_DEGRADED),

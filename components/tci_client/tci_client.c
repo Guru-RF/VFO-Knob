@@ -34,6 +34,7 @@ typedef struct {
     char       mode[8];
     int32_t    filt_lo, filt_hi, rit_hz;
     float      smeter_dbm;
+    float      tx_mic_dbm, tx_fwd_w, tx_swr;
     bool       slice_locked, tx;
     uint8_t    my_trx, n_trx;
     uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
@@ -212,6 +213,15 @@ static void apply_fact(const tci_fact_t *f)
 
     case TCI_TX_ENABLE:
         if (f->trx == S.my_trx) S.tx_enable_seen = f->b0;
+        break;
+
+    case TCI_TX_SENSORS:
+        /* tx_sensors:0,<mic_dbm>,<fwd_w>,<peak_w>,<swr>,<alc_dbfs>;
+         * Field 2 is "peak" but carries the same cached value as fwd, so it is
+         * never rendered. */
+        S.tx_mic_dbm = f->f0;
+        S.tx_fwd_w   = f->f1;
+        S.tx_swr     = f->f3;
         break;
 
     case TCI_RX_CHANNEL_SENSORS:
@@ -520,6 +530,10 @@ static void tx_task(void *arg)
         if (S.need_sensors_enable) {
             S.need_sensors_enable = false;
             send_cmd("rx_sensors_enable:true;");
+            /* Opt-in, like the RX sensors. Without it there is no mic level
+             * and no SWR, which are exactly what you want to see while the
+             * transmitter is running. */
+            send_cmd("tx_sensors_enable:true;");
         }
 
         /* Audio is declared on the SAME trx we control. effectiveTrx()
@@ -672,6 +686,9 @@ void tci_get_status(tci_status_t *o)
     o->filt_hi    = S.filt_hi;
     o->rit_hz     = S.rit_hz;
     o->smeter_dbm = S.smeter_dbm;
+    o->tx_mic_dbm = S.tx_mic_dbm;
+    o->tx_fwd_w   = S.tx_fwd_w;
+    o->tx_swr     = S.tx_swr;
     o->slice_locked = S.slice_locked;
     o->tx         = S.tx;
     o->my_trx     = S.my_trx;

@@ -49,6 +49,7 @@ typedef struct {
     int32_t    filt_lo, filt_hi;
     int32_t    rit_hz;
     float      smeter_dbm;
+    float      tx_mic_dbm, tx_fwd_w, tx_swr;
     bool       slice_locked;
     bool       tx;
     uint8_t    my_trx;
@@ -98,5 +99,11 @@ void tci_set_rit(int32_t hz);
 /* Jump to a frequency (band change). Goes through the same optimistic model
  * and echo ring as knob tuning, so it cannot confuse the anti-echo logic. */
 void tci_goto_freq(int64_t hz);
+
+/* NOTE: there is deliberately no tune() here. TCI does expose
+ * "tune:<trx>,<bool>;" and it works, but it emits a carrier and therefore
+ * needs the same treatment PTT gets -- a timeout, a link-loss abort and a
+ * permit mask. A tune button shipped without those left a carrier running at
+ * full power. If it comes back, it comes back with all of it. */
 
 #endif /* TCI_CLIENT_H */

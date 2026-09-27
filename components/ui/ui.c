@@ -57,7 +57,13 @@ static const char *TAG = "ui";
  * glass clips it into a chord, which is the intended shape. Making it the
  * largest target on the face is deliberate -- with toggle PTT, stopping a
  * transmission must never require aim. */
-#define PTT_TOP 248
+#define PTT_TOP   248
+/* The whole bottom slab is PTT. There was briefly a TUNE button in the left
+ * corner; it was removed because it keys the transmitter and had none of the
+ * safeguards the PTT path has -- no timeout, no drop on link loss. If tune
+ * returns it needs all of that first. */
+#define PTT_LEFT  0
+#define PTT_RIGHT 360
 
 #define N_DIG 8
 static const int DIG_STEP[N_DIG] = {
@@ -68,6 +74,7 @@ static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
+static lv_obj_t *s_mic_arc, *s_swr_arc, *s_rx_ticks, *s_tx_ticks;
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL,
@@ -380,7 +387,7 @@ static void touch_cb(lv_event_t *e)
      * selection on the precise one. */
     if (s_edit != ED_NONE) { edit_commit(); return; }
 
-    if (p.y >= PTT_TOP) { s_ptt_tap = true; return; }   /* the whole bottom slab */
+    if (p.y >= PTT_TOP) { s_ptt_tap = true; return; }   /* the whole slab */
 
     /* band | mode | filter */
     if (p.y >= 104 && p.y < 140) {
@@ -421,6 +428,85 @@ static lv_obj_t *mklabel(const lv_font_t *f, lv_color_t c, int x, int y,
  * collided with the band/mode row and made the face look cluttered; short
  * radial marks read as a scale instantly and cost nothing. The precise value
  * lives in the numeric S-readout instead. */
+static lv_obj_t *mkgroup(void)
+{
+    lv_obj_t *g = lv_obj_create(s_scr);
+    lv_obj_set_size(g, 360, 360);
+    lv_obj_set_pos(g, 0, 0);
+    lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g, 0, 0);
+    lv_obj_set_style_pad_all(g, 0, 0);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_CLICKABLE);
+    return g;
+}
+
+/* SWR runs 1.0 at the left of the right-hand arc to 3.0 at its end. */
+#define SWR_ROT  (ARC_ROT + ARC_SPAN / 2 + 3)
+#define SWR_SPAN (ARC_SPAN / 2 - 3)
+static float swr_frac(float w)
+{
+    if (w <= 1.0f) return 0.0f;
+    float f = (w - 1.0f) / 2.0f;
+    return f > 1.0f ? 1.0f : f;
+}
+
+/* Scale for the transmit half: SWR ticks and labels on the right, and a label
+ * for the audio meter on the left. Without a scale the SWR arc is just a
+ * coloured bar, and 2.5 looks much like 1.5. */
+static void add_tx_ticks(void)
+{
+    static const struct { float swr; const char *t; uint8_t kind; } T[] = {
+        { 1.0f, "1",   0 }, { 1.5f, NULL, 0 }, { 2.0f, "2", 1 },
+        { 2.5f, NULL, 2 }, { 3.0f, "3",  2 },
+    };
+    static lv_point_precise_t pts[5][2];
+
+    for (size_t i = 0; i < sizeof T / sizeof T[0]; i++) {
+        float a = (SWR_ROT + swr_frac(T[i].swr) * SWR_SPAN) * 3.14159265f / 180.0f;
+        float c = cosf(a), sn = sinf(a);
+        int r1 = ARC_R0 - 15, r0 = r1 - (T[i].t ? 10 : 6);
+        pts[i][0].x = (lv_value_precise_t)(CX + r0 * c);
+        pts[i][0].y = (lv_value_precise_t)(CY + r0 * sn);
+        pts[i][1].x = (lv_value_precise_t)(CX + r1 * c);
+        pts[i][1].y = (lv_value_precise_t)(CY + r1 * sn);
+
+        lv_color_t col = T[i].kind == 2 ? C_DANGER
+                       : T[i].kind == 1 ? C_WARN : C_LABEL;
+        lv_obj_t *ln = lv_line_create(s_tx_ticks);
+        lv_line_set_points(ln, pts[i], 2);
+        lv_obj_set_style_line_width(ln, T[i].t ? 3 : 2, 0);
+        lv_obj_set_style_line_color(ln, col, 0);
+        lv_obj_set_style_line_rounded(ln, true, 0);
+
+        if (T[i].t) {
+            lv_obj_t *l = lv_label_create(s_tx_ticks);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(l, col, 0);
+            lv_label_set_text(l, T[i].t);
+            lv_obj_align(l, LV_ALIGN_CENTER,
+                         (int)(139 * c), (int)(139 * sn));
+        }
+    }
+
+    /* Name both halves, so it is obvious the arc has changed meaning. */
+    float la = (ARC_ROT + SWR_SPAN * 0.5f) * 3.14159265f / 180.0f;
+    lv_obj_t *al = lv_label_create(s_tx_ticks);
+    lv_obj_set_style_text_font(al, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(al, C_LABEL, 0);
+    lv_label_set_text(al, "AUDIO");
+    lv_obj_align(al, LV_ALIGN_CENTER, (int)(132 * cosf(la)),
+                 (int)(132 * sinf(la)));
+
+    lv_obj_t *sl = lv_label_create(s_tx_ticks);
+    lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(sl, C_LABEL, 0);
+    lv_label_set_text(sl, "SWR");
+    float sa = (SWR_ROT + SWR_SPAN * 0.5f) * 3.14159265f / 180.0f;
+    lv_obj_align(sl, LV_ALIGN_CENTER, (int)(132 * cosf(sa)),
+                 (int)(132 * sinf(sa)));
+}
+
 static void add_ticks(void)
 {
     static const struct { float dbm; uint8_t len; uint8_t kind; } TICKS[] = {
@@ -440,7 +526,7 @@ static void add_ticks(void)
         pts[i][1].x = (lv_value_precise_t)(CX + r1 * c);
         pts[i][1].y = (lv_value_precise_t)(CY + r1 * sn);
 
-        lv_obj_t *ln = lv_line_create(s_scr);
+        lv_obj_t *ln = lv_line_create(s_rx_ticks);
         lv_line_set_points(ln, pts[i], 2);
         lv_obj_set_style_line_width(ln, TICKS[i].kind == 1 ? 3 : 2, 0);
         lv_obj_set_style_line_color(ln,
@@ -454,6 +540,12 @@ static void build(void)
     s_scr = lv_screen_active();
     lv_obj_set_style_bg_color(s_scr, C_BG, 0);
     lv_obj_remove_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
+    /* The screen carries default padding, and lv_obj_set_pos() is relative to
+     * the parent's CONTENT area -- so x=0 was not the left edge and a
+     * full-width label was not centred. This is why the caption kept looking
+     * off no matter how it was aligned. */
+    lv_obj_set_style_pad_all(s_scr, 0, 0);
+    lv_obj_set_style_border_width(s_scr, 0, 0);
 
     /* TX hairline: a complete ring, which peripheral vision catches instantly
      * and which shares no geometry with anything shown in receive. */
@@ -480,7 +572,45 @@ static void build(void)
     lv_obj_set_style_arc_color(s_meter, C_SUBTLE, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_meter, 12, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_meter, C_ACCENT, LV_PART_INDICATOR);
+    s_rx_ticks = mkgroup();
+    s_tx_ticks = mkgroup();
     add_ticks();
+    add_tx_ticks();
+    lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
+
+    /* In transmit the arc changes meaning entirely: MIC level across the left
+     * half, SWR across the right. Two separate arcs rather than one repurposed
+     * one, so the split is visible at a glance and neither has to share a
+     * scale with the other. */
+    s_mic_arc = lv_arc_create(s_scr);
+    lv_obj_set_size(s_mic_arc, ARC_R0 * 2, ARC_R0 * 2);
+    lv_obj_center(s_mic_arc);
+    lv_arc_set_rotation(s_mic_arc, ARC_ROT);
+    lv_arc_set_bg_angles(s_mic_arc, 0, ARC_SPAN / 2 - 3);
+    lv_arc_set_range(s_mic_arc, 0, 1000);
+    lv_arc_set_value(s_mic_arc, 0);
+    lv_obj_remove_style(s_mic_arc, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(s_mic_arc, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_mic_arc, C_SUBTLE, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_mic_arc, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
+
+    s_swr_arc = lv_arc_create(s_scr);
+    lv_obj_set_size(s_swr_arc, ARC_R0 * 2, ARC_R0 * 2);
+    lv_obj_center(s_swr_arc);
+    lv_arc_set_rotation(s_swr_arc, ARC_ROT + ARC_SPAN / 2 + 3);
+    lv_arc_set_bg_angles(s_swr_arc, 0, ARC_SPAN / 2 - 3);
+    lv_arc_set_range(s_swr_arc, 0, 1000);
+    lv_arc_set_value(s_swr_arc, 0);
+    lv_obj_remove_style(s_swr_arc, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(s_swr_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(s_swr_arc, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_swr_arc, C_SUBTLE, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_swr_arc, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_swr_arc, C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_add_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
 
     /* Signal, as a number as well as an arc: an arc shows trend, a number
      * lets you report a readable signal report. */
@@ -525,10 +655,11 @@ static void build(void)
                          LV_SYMBOL_AUDIO " 100");
     s_status   = mklabel(&lv_font_montserrat_14, C_LABEL,  CX,      240, "");
 
-    /* Full width, hard to the bottom edge. The circle clips it to a chord. */
+    /* Full width, hard to the bottom edge. The circle clips it to a chord.
+     */
     s_ptt = lv_obj_create(s_scr);
-    lv_obj_set_size(s_ptt, 360, 360 - PTT_TOP);
-    lv_obj_align(s_ptt, LV_ALIGN_TOP_LEFT, 0, PTT_TOP);
+    lv_obj_set_size(s_ptt, PTT_RIGHT - PTT_LEFT, 360 - PTT_TOP);
+    lv_obj_set_pos(s_ptt, PTT_LEFT, PTT_TOP);
     lv_obj_set_style_radius(s_ptt, 0, 0);
     lv_obj_set_style_bg_color(s_ptt, C_BG1, 0);
     lv_obj_set_style_border_width(s_ptt, 2, 0);
@@ -549,10 +680,10 @@ static void build(void)
     /* Absolute position and an explicit full width. Auto-sized labels centre
      * on their own content, which shifts as the text changes between "PTT",
      * "----" and "TX 118" -- so the caption appeared to wander. */
-    lv_obj_set_width(s_ptt_lbl, 360);
+    lv_obj_set_width(s_ptt_lbl, PTT_RIGHT - PTT_LEFT);
     lv_obj_set_style_text_align(s_ptt_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_all(s_ptt_lbl, 0, 0);
-    lv_obj_set_pos(s_ptt_lbl, 0, PTT_TOP + 14);
+    lv_obj_set_pos(s_ptt_lbl, PTT_LEFT, PTT_TOP + 14);
     lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
 
     /* Editor overlay: hidden until a field is tapped. */
@@ -756,13 +887,53 @@ void ui_update(const ui_state_t *st)
         st->tx ? C_TX_BORDER : meter_color(frac), LV_PART_INDICATOR);
     char sbuf[10];
     smeter_text(s_meter_disp, sbuf, sizeof sbuf);
-    lv_label_set_text(s_srd, st->tx ? "TX" : sbuf);
-    lv_label_set_text_fmt(s_dbm, "%d dBm", (int)s_meter_disp);
+    if (!st->tx) {
+        lv_label_set_text(s_srd, sbuf);
+        lv_label_set_text_fmt(s_dbm, "%d dBm", (int)s_meter_disp);
+    }
     lv_obj_set_style_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT, 0);
+
+    if (st->tx) {
+        /* MIC: -40..0 dBm is the useful span of AetherSDR's mic meter. */
+        float m = (st->tx_mic_dbm + 40.0f) / 40.0f;
+        if (m < 0) m = 0;
+        if (m > 1) m = 1;
+        lv_arc_set_value(s_mic_arc, (int)(m * 1000));
+        lv_obj_set_style_arc_color(s_mic_arc,
+            m > 0.92f ? C_DANGER : m > 0.7f ? C_WARN : C_ACCENT,
+            LV_PART_INDICATOR);
+
+        /* SWR: 1.0 at the left, 3.0 at full scale. Treat exactly 1.00 as
+         * "not measured yet" rather than as a perfect match. */
+        float w = st->tx_swr;
+        lv_arc_set_value(s_swr_arc, (int)(swr_frac(w) * 1000));
+        /* Yellow from 2.0, red from 2.5 -- matching the printed scale, so the
+         * colour and the tick the needle sits on always agree. */
+        lv_obj_set_style_arc_color(s_swr_arc,
+            w >= 2.5f ? C_DANGER : w >= 2.0f ? C_WARN : C_ACCENT,
+            LV_PART_INDICATOR);
+
+        lv_label_set_text_fmt(s_srd, "%.0f W", (double)st->tx_fwd_w);
+        lv_label_set_text_fmt(s_dbm, "SWR %.1f", (double)(w < 1.0f ? 1.0f : w));
+    }
 
     if (st->tx != s_was_tx) {
         s_was_tx = st->tx;
         lv_obj_set_style_bg_color(s_scr, st->tx ? C_BG_TX : C_BG, 0);
+        /* Swap the meter set wholesale. */
+        if (st->tx) {
+            lv_obj_add_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
+        }
         lv_obj_set_style_arc_color(s_ring, st->tx ? C_TX_RED : C_BG, LV_PART_MAIN);
         /* Unmissable: the whole bottom slab goes solid red. With toggle PTT
          * you can walk away from it, so it has to shout. */
@@ -797,4 +968,4 @@ void ui_cycle_rotation(void)
 uint8_t ui_rotation(void) { return s_rot; }
 
 int32_t ui_take_step_request(void) { int32_t v = s_step_req; s_step_req = 0; return v; }
-bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap = false; return v; }
+bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false; return v; }

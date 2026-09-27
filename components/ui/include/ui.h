@@ -27,6 +27,7 @@ typedef struct {
     int32_t  filt_lo, filt_hi;
     int32_t  rit_hz;
     float    smeter_dbm;
+    float    tx_mic_dbm, tx_fwd_w, tx_swr;
     bool     tx;
     bool     link_ok;
     bool     slice_locked;
