@@ -438,6 +438,16 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
         ((int64_t)CONFIG_VFO_USB_NET_DELAY_MS + 5000) * 1000;
     if (esp_timer_get_time() < usb_grace_us) return NULL;
 #endif
+    /* Only now is WiFi worth its memory. */
+    static bool wifi_started;
+    if (!wifi_started) {
+        wifi_started = true;
+        esp_err_t werr = net_prov_wifi_start();
+        if (werr != ESP_OK)
+            ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",
+                     esp_err_to_name(werr));
+        return NULL;                       /* give it a moment to associate */
+    }
     if (!net_prov_is_connected()) return NULL;
     if (net_prov_resolve(ip, iplen) != ESP_OK) {
         ESP_LOGE(TAG, "  cannot resolve %s", cfg->tci_host);
@@ -456,6 +466,15 @@ static void net_task(void *arg)
 
     for (;;) {
         if (!started) {
+            /* Never chose a transport at all. Something is wrong that waiting
+             * will not fix -- a cable with no server behind it, or a WiFi that
+             * will not associate -- and a knob showing NO LINK forever is no
+             * use to anyone. Restarting re-runs the whole choice. */
+            static uint32_t idle_ticks;
+            if (++idle_ticks > 90) {          /* ~3 min at the 2 s period */
+                ESP_LOGE(TAG, "no transport after 3 minutes -- restarting");
+                esp_restart();
+            }
             bool via_usb = false;
             const char *host = pick_transport(cfg, ip, sizeof ip, &via_usb);
             if (host && via_usb) {
@@ -480,6 +499,7 @@ static void net_task(void *arg)
                              MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
                 if (tci_client_start(host, cfg->tci_port) == ESP_OK) {
                     started = true;
+                    idle_ticks = 0;
                 } else {
                     /* Usually means internal RAM was too tight to spawn the
                      * WebSocket task. Retrying is right: memory pressure is
@@ -748,10 +768,12 @@ void app_main(void)
         }
 #endif
     if (!safe) {
-        esp_err_t werr = net_prov_wifi_start();
-        if (werr != ESP_OK)
-            ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",
-                     esp_err_to_name(werr));
+        /* WiFi is started by net_task, and only if the cable turns out not to
+         * be an option. Starting it here unconditionally was the root of a
+         * deadlock: the driver takes the internal RAM the WebSocket client
+         * needs, so a knob that fell back to WiFi could not open a socket at
+         * all -- and could not be updated out of that state either, because
+         * the OTA path needs the same memory. The bug blocked its own fix. */
         xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
     }
 
