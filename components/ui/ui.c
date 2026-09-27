@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "splash.h"
 #include "board_pins.h"
 #include "hal_touch.h"
 #include "panel.h"
@@ -1095,6 +1096,9 @@ esp_err_t ui_init(void)
 
     lvgl_port_lock(0);
     build();
+    /* Straight after build(), so the splash covers a screen that is already
+     * finished rather than one still being assembled. */
+    ui_splash_start();
     lvgl_port_unlock();
     ESP_LOGI(TAG, "LVGL up; free internal %u, largest DMA %u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),

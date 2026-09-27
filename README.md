@@ -30,6 +30,7 @@ knob follows; turn the knob and the desktop moves.
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. |
 | **Mode / filter / RIT** | Tap to open, turn to choose, tap anywhere to accept. |
 | **Network** | Tap the meter arc to see the knob's addresses. |
+| **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
 
