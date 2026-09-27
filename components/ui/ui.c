@@ -56,6 +56,7 @@ static const int DIG_STEP[N_DIG] = {
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
+static lv_obj_t *s_dbm, *s_rit, *s_pip;
 static int   s_dig_x[N_DIG];
 static int   s_active_dig = 5;
 static int32_t s_step_req;
@@ -157,6 +158,38 @@ static lv_obj_t *mklabel(const lv_font_t *f, lv_color_t c, int x, int y,
     return l;
 }
 
+/* Scale ticks are LINES, not text. Seven scattered labels at this diameter
+ * collided with the band/mode row and made the face look cluttered; short
+ * radial marks read as a scale instantly and cost nothing. The precise value
+ * lives in the numeric S-readout instead. */
+static void add_ticks(void)
+{
+    static const struct { float dbm; uint8_t len; uint8_t kind; } TICKS[] = {
+        { -121, 6, 0 }, { -109, 6, 0 }, { -97, 6, 0 }, { -85, 6, 0 },
+        { -73, 11, 1 },                                  /* S9 -- the landmark */
+        { -53, 6, 2 }, { -33, 6, 2 }, { -13, 9, 2 },
+    };
+    static lv_point_precise_t pts[sizeof TICKS / sizeof TICKS[0]][2];
+
+    for (size_t i = 0; i < sizeof TICKS / sizeof TICKS[0]; i++) {
+        float a = (ARC_ROT + smeter_frac(TICKS[i].dbm) * ARC_SPAN)
+                  * 3.14159265f / 180.0f;
+        float c = cosf(a), sn = sinf(a);
+        int r1 = ARC_R0 - 15, r0 = r1 - TICKS[i].len;
+        pts[i][0].x = (lv_value_precise_t)(CX + r0 * c);
+        pts[i][0].y = (lv_value_precise_t)(CY + r0 * sn);
+        pts[i][1].x = (lv_value_precise_t)(CX + r1 * c);
+        pts[i][1].y = (lv_value_precise_t)(CY + r1 * sn);
+
+        lv_obj_t *ln = lv_line_create(s_scr);
+        lv_line_set_points(ln, pts[i], 2);
+        lv_obj_set_style_line_width(ln, TICKS[i].kind == 1 ? 3 : 2, 0);
+        lv_obj_set_style_line_color(ln,
+            TICKS[i].kind == 1 ? C_TEXT2 : TICKS[i].kind == 2 ? C_WARN : C_LABEL, 0);
+        lv_obj_set_style_line_rounded(ln, true, 0);
+    }
+}
+
 static void build(void)
 {
     s_scr = lv_screen_active();
@@ -175,7 +208,6 @@ static void build(void)
     lv_obj_set_style_arc_color(s_ring, C_BG, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_ring, 0, LV_PART_INDICATOR);
 
-    /* S-meter. */
     s_meter = lv_arc_create(s_scr);
     lv_obj_set_size(s_meter, ARC_R0 * 2, ARC_R0 * 2);
     lv_obj_center(s_meter);
@@ -185,34 +217,21 @@ static void build(void)
     lv_arc_set_value(s_meter, 0);
     lv_obj_remove_style(s_meter, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(s_meter, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_meter, 13, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_meter, 12, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_meter, C_SUBTLE, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_meter, 13, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_meter, 12, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_meter, C_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(s_meter, false, LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(s_meter, false, LV_PART_INDICATOR);
+    add_ticks();
 
-    /* Scale labels. Without these the arc is just a coloured bar and nobody
-     * can tell what it means. */
-    static const struct { float dbm; const char *t; } TICKS[] = {
-        { -121, "1" }, { -109, "3" }, { -97, "5" }, { -85, "7" },
-        { -73, "9" }, { -53, "+20" }, { -33, "+40" },
-    };
-    for (size_t i = 0; i < sizeof TICKS / sizeof TICKS[0]; i++) {
-        float a = (ARC_ROT + smeter_frac(TICKS[i].dbm) * ARC_SPAN) * 3.14159265f / 180.0f;
-        int x = CX + (int)(139 * cosf(a));
-        int y = CY + (int)(139 * sinf(a));
-        mklabel(&lv_font_montserrat_14, C_LABEL, x, y, TICKS[i].t);
-    }
+    /* Signal, as a number as well as an arc: an arc shows trend, a number
+     * lets you report a readable signal report. */
+    s_srd  = mklabel(&lv_font_montserrat_20, C_TEXT,  CX, 76,  "S0");
+    s_dbm  = mklabel(&lv_font_montserrat_14, C_LABEL, CX, 98,  "-127 dBm");
 
-    s_srd  = mklabel(&lv_font_montserrat_20, C_TEXT2, CX, 92, "S0");
-    s_band = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 66, 126, "80m");
-    s_mode = mklabel(&lv_font_montserrat_20, C_TEXT,   CX,      126, "LSB");
-    s_filt = mklabel(&lv_font_montserrat_20, C_TEXT2,  CX + 66, 126, "2700");
+    s_band = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 76, 122, "--");
+    s_mode = mklabel(&lv_font_montserrat_20, C_TEXT,   CX,      122, "USB");
+    s_filt = mklabel(&lv_font_montserrat_20, C_TEXT2,  CX + 76, 122, "0");
 
-    /* Frequency: one label per digit on a fixed pitch. Hz digits are smaller
-     * and baseline-aligned, which is how a real radio reads and which buys back
-     * the width the round glass takes away. */
     const int PITCH = 33, SMALL = 21, SEPW = 13;
     int total = 6 * PITCH + 2 * SMALL + 2 * SEPW;
     int x = CX - total / 2;
@@ -222,11 +241,13 @@ static void build(void)
         int w = small ? SMALL : PITCH;
         s_dig_x[i] = x + w / 2;
         s_dig[i] = mklabel(small ? &lv_font_montserrat_28 : &lv_font_montserrat_48,
-                           C_TEXT, s_dig_x[i], small ? 182 : 174, "0");
+                           C_TEXT, s_dig_x[i], small ? 178 : 170, "0");
         x += w;
-        if (i == 2 || i == 5)
+        if (i == 2 || i == 5) {
             s_sep[sep++] = mklabel(&lv_font_montserrat_48, C_LABEL,
-                                   x + SEPW / 2, 174, "."), x += SEPW;
+                                   x + SEPW / 2, 170, ".");
+            x += SEPW;
+        }
     }
 
     s_underline = lv_obj_create(s_scr);
@@ -236,13 +257,14 @@ static void build(void)
     lv_obj_set_style_radius(s_underline, 2, 0);
     lv_obj_remove_flag(s_underline, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX, 222, "1 kHz");
-    s_status   = mklabel(&lv_font_montserrat_14, C_LABEL,  CX, 244, "");
+    s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 44, 218, "1 kHz");
+    s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX + 52, 220, "");
+    s_status   = mklabel(&lv_font_montserrat_14, C_LABEL,  CX,      240, "");
 
     s_ptt = lv_obj_create(s_scr);
-    lv_obj_set_size(s_ptt, 188, 58);
-    lv_obj_align(s_ptt, LV_ALIGN_CENTER, 0, 96);
-    lv_obj_set_style_radius(s_ptt, 29, 0);
+    lv_obj_set_size(s_ptt, 186, 56);
+    lv_obj_align(s_ptt, LV_ALIGN_CENTER, 0, 100);
+    lv_obj_set_style_radius(s_ptt, 28, 0);
     lv_obj_set_style_bg_color(s_ptt, C_BG1, 0);
     lv_obj_set_style_border_color(s_ptt, C_SUBTLE, 0);
     lv_obj_set_style_border_width(s_ptt, 2, 0);
@@ -252,6 +274,15 @@ static void build(void)
     lv_obj_set_style_text_color(s_ptt_lbl, C_TEXT2, 0);
     lv_label_set_text(s_ptt_lbl, "PTT");
     lv_obj_center(s_ptt_lbl);
+
+    /* Link pip: small, low in the face, out of the way until it matters. */
+    s_pip = lv_obj_create(s_scr);
+    lv_obj_set_size(s_pip, 10, 10);
+    lv_obj_align(s_pip, LV_ALIGN_CENTER, 0, 138);
+    lv_obj_set_style_radius(s_pip, 5, 0);
+    lv_obj_set_style_border_width(s_pip, 0, 0);
+    lv_obj_set_style_bg_color(s_pip, C_DISABLED, 0);
+    lv_obj_remove_flag(s_pip, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
@@ -366,6 +397,14 @@ void ui_update(const ui_state_t *st)
     lv_label_set_text_fmt(s_filt, "%ld", (long)(st->filt_hi - st->filt_lo));
     lv_label_set_text(s_step_lbl, step_name(st->step_hz));
 
+    /* RIT only appears when it is doing something. A chip reading "RIT 0" is
+     * just noise, but RIT silently non-zero is a classic way to lose a QSO. */
+    if (st->rit_hz) lv_label_set_text_fmt(s_rit, "RIT %+ld", (long)st->rit_hz);
+    else            lv_label_set_text(s_rit, "");
+
+    lv_obj_set_style_bg_color(s_pip,
+        !st->link_ok ? C_DANGER : st->tx ? C_TX_BORDER : C_ACCENT, 0);
+
     lv_label_set_text(s_status,
         !st->link_ok     ? "NO LINK" :
         st->slice_locked ? "LOCKED"  : "");
@@ -384,6 +423,8 @@ void ui_update(const ui_state_t *st)
     char sbuf[10];
     smeter_text(s_meter_disp, sbuf, sizeof sbuf);
     lv_label_set_text(s_srd, st->tx ? "TX" : sbuf);
+    lv_label_set_text_fmt(s_dbm, "%d dBm", (int)s_meter_disp);
+    lv_obj_set_style_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT, 0);
 
     if (st->tx != s_was_tx) {
         s_was_tx = st->tx;

@@ -39,6 +39,8 @@ typedef struct {
     ptt_fsm_t  ptt;
     int64_t    last_pong_us;
     bool       tx_enable_seen;
+    bool       have_chan_sensors;   /* the opt-in, higher-precision stream */
+    bool       need_sensors_enable;
     uint32_t   pending_key, pending_unkey, pending_toggle;
     uint8_t    pending_abort;
 } state_t;
@@ -102,6 +104,8 @@ static void apply_fact(const tci_fact_t *f)
         taskENTER_CRITICAL(&S_LOCK);
         S.link       = TCI_LINK_READY;
         S.t_ready_ms = now_ms();
+        S.have_chan_sensors   = false;
+        S.need_sensors_enable = true;
         /* The greeting is authoritative: adopt the rig's frequency wholesale
          * and forget anything we thought we knew. */
         tune_assign(&S.tune, S.f_server);
@@ -193,13 +197,22 @@ static void apply_fact(const tci_fact_t *f)
         break;
 
     case TCI_RX_CHANNEL_SENSORS:
-        if (f->trx == S.my_trx) S.smeter_dbm = f->f0;
+        if (f->trx == S.my_trx) {
+            S.have_chan_sensors = true;      /* 0.1 dB resolution */
+            S.smeter_dbm = f->f0;
+        }
         break;
 
     case TCI_RX_SMETER:
-        /* Integer and truncated toward zero; prefer rx_channel_sensors when
-         * it is flowing. Kept as a fallback only. */
-        if (f->trx == S.my_trx && S.smeter_dbm == 0.0f) S.smeter_dbm = (float)f->i0;
+        /* Broadcast unconditionally by the server, but integer and truncated
+         * toward zero. Use it whenever the finer stream is not flowing.
+         *
+         * This previously read "only if smeter_dbm == 0", meaning it latched
+         * on the very first sample and the meter never moved again. It looked
+         * correct against the mock only because the mock sends the opt-in
+         * stream without being asked. */
+        if (f->trx == S.my_trx && !S.have_chan_sensors)
+            S.smeter_dbm = (float)f->i0;
         break;
 
     case TCI_UNKNOWN:
@@ -431,6 +444,14 @@ static void tx_task(void *arg)
         if (S.link != TCI_LINK_READY && S.link != TCI_LINK_DEGRADED) continue;
         /* Settle after a reconnect before pushing anything. */
         if (t - S.t_ready_ms < 500) continue;
+
+        /* Ask for the finer sensor stream once the link settles. Sent from
+         * here rather than from the receive handler, which runs on the
+         * WebSocket task and must not re-enter the transport. */
+        if (S.need_sensors_enable) {
+            S.need_sensors_enable = false;
+            send_cmd("rx_sensors_enable:true;");
+        }
 
         /* No vfo: traffic while keyed. You are not tuning during a
          * transmission, and an empty server queue guarantees the trx:false

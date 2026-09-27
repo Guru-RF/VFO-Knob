@@ -282,6 +282,7 @@ static void ui_task(void *arg)
             .mode          = st.mode,
             .filt_lo       = st.filt_lo,
             .filt_hi       = st.filt_hi,
+            .rit_hz        = st.rit_hz,
             .smeter_dbm    = st.smeter_dbm,
             .tx            = (st.ptt_state == PTT_ON),
             .link_ok       = (st.link == TCI_LINK_READY ||

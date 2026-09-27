@@ -25,6 +25,7 @@ typedef struct {
     uint8_t  accel_mult;
     const char *mode;
     int32_t  filt_lo, filt_hi;
+    int32_t  rit_hz;
     float    smeter_dbm;
     bool     tx;
     bool     link_ok;

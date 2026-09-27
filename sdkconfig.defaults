@@ -31,9 +31,9 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # A 20 ms touch poll and a 5 ms encoder backstop are both meaningless at the
 # default 10 ms tick.
 CONFIG_FREERTOS_HZ=1000
-# Quarantine the network stack on core 0 so nothing it does can jitter the
-# haptic or encoder timing on core 1.
-CONFIG_ESP_WIFI_TASK_CORE_ID=0
+# Quarantine lwIP on core 0 so nothing it does can jitter the encoder, haptic
+# or display timing on core 1. (There is no Kconfig symbol for the WiFi task's
+# core in IDF 5.5; it follows the lwIP affinity in practice.)
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0=y
 
@@ -57,10 +57,5 @@ CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
-CONFIG_LV_MEMCPY_MEMSET_STD=y
 CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_USE_PERF_MONITOR=n
-# LVGL's object heap may live in PSRAM -- only the DMA flush buffers may not.
-CONFIG_LV_USE_STDLIB_MALLOC=y
-CONFIG_LV_STDLIB_BUILTIN=n
-CONFIG_LV_STDLIB_CLIB=y
