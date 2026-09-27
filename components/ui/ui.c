@@ -144,15 +144,49 @@ static lv_obj_t *s_swr_zone[SWR_ZONES];
  * The bar still sweeps the whole arc -- the bands only decide what colour each
  * part of that sweep is, so the fill is continuous and steps through the
  * palette as the signal climbs. */
-#define RX_ZONES 5
-static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
-    { -127.0f, -97.0f, 0x2F9E6A },   /* dark green: S0 to S5      */
-    {  -97.0f, -73.0f, 0x4DD87A },   /* green:      S5 to S9      */
-    {  -73.0f, -63.0f, 0xFFD24D },   /* yellow:     S9 to S9+10   */
-    {  -63.0f, -43.0f, 0xFF9A3C },   /* orange:     S9+10 to +30  */
-    {  -43.0f, -13.0f, 0xFF4D4D },   /* red:        S9+30 and up  */
+#define RX_LO   (-127.0f)
+#define RX_HI    (-13.0f)
+#define RX_ZONES 16
+
+/* Colour stops, interpolated between. Sixteen segments across the arc is
+ * enough that the eye reads a wash rather than a staircase, while each one is
+ * still a solid block that fills in turn. */
+static const struct { float dbm; uint32_t rgb; } RXSTOPS[] = {
+    { -127.0f, 0x1F7A52 },   /* deep green                       */
+    {  -97.0f, 0x2F9E6A },   /* S5                               */
+    {  -85.0f, 0x4DD87A },   /* green                            */
+    {  -73.0f, 0xC8E04A },   /* S9 -- green giving way to yellow */
+    {  -63.0f, 0xFFD24D },   /* yellow                           */
+    {  -43.0f, 0xFF9A3C },   /* orange                           */
+    {  -13.0f, 0xFF4D4D },   /* red                              */
 };
+#define RX_STOPS (sizeof RXSTOPS / sizeof RXSTOPS[0])
+
+static uint32_t rx_shade(float dbm)
+{
+    if (dbm <= RXSTOPS[0].dbm) return RXSTOPS[0].rgb;
+    for (size_t i = 1; i < RX_STOPS; i++) {
+        if (dbm > RXSTOPS[i].dbm) continue;
+        float t = (dbm - RXSTOPS[i - 1].dbm) /
+                  (RXSTOPS[i].dbm - RXSTOPS[i - 1].dbm);
+        uint32_t a = RXSTOPS[i - 1].rgb, b = RXSTOPS[i].rgb;
+        uint32_t out = 0;
+        for (int sh = 16; sh >= 0; sh -= 8) {
+            int ca = (int)((a >> sh) & 0xFF), cb = (int)((b >> sh) & 0xFF);
+            int c  = ca + (int)(t * (float)(cb - ca) + 0.5f);
+            out |= (uint32_t)(c < 0 ? 0 : c > 255 ? 255 : c) << sh;
+        }
+        return out;
+    }
+    return RXSTOPS[RX_STOPS - 1].rgb;
+}
+
+static inline float rx_zone_lo(size_t z)
+{
+    return RX_LO + (RX_HI - RX_LO) * (float)z / (float)RX_ZONES;
+}
 static lv_obj_t *s_rx_zone[RX_ZONES];
+static int16_t   s_rx_val[RX_ZONES];   /* last value written, to skip redraws */
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
 /* Tap the meter arc to see where the knob actually is on the network. The one
@@ -700,8 +734,9 @@ static void build(void)
         lv_obj_t *b = lv_arc_create(s_scr);
         lv_obj_set_size(b, ARC_R0 * 2, ARC_R0 * 2);
         lv_obj_center(b);
-        int a0 = (int)(smeter_frac(RXZONES[z].from) * ARC_SPAN);
-        int a1 = (int)(smeter_frac(RXZONES[z].to)   * ARC_SPAN);
+        float zlo = rx_zone_lo(z), zhi = rx_zone_lo(z + 1);
+        int a0 = (int)(smeter_frac(zlo) * ARC_SPAN);
+        int a1 = (int)(smeter_frac(zhi) * ARC_SPAN);
         lv_arc_set_rotation(b, ARC_ROT + a0);
         lv_arc_set_bg_angles(b, 0, a1 - a0);
         lv_arc_set_range(b, 0, 1000);
@@ -711,9 +746,12 @@ static void build(void)
         /* No background of its own: s_meter already draws the track. */
         lv_obj_set_style_arc_opa(b, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_arc_width(b, 12, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_color(b, lv_color_hex(RXZONES[z].rgb),
+        /* Shade taken at the middle of the span, so consecutive segments step
+         * by a fraction of the distance between two stops. */
+        lv_obj_set_style_arc_color(b, lv_color_hex(rx_shade((zlo + zhi) / 2.0f)),
                                    LV_PART_INDICATOR);
         s_rx_zone[z] = b;
+        s_rx_val[z]  = 0;
     }
     s_rx_ticks = mkgroup();
     s_tx_ticks = mkgroup();
@@ -1171,11 +1209,17 @@ void ui_update(const ui_state_t *st)
     /* Each band fills only across its own span: full once the signal is past
      * its top, empty until the signal reaches its bottom. */
     for (size_t z = 0; z < RX_ZONES; z++) {
-        float lo = RXZONES[z].from, hi = RXZONES[z].to;
+        float lo = rx_zone_lo(z), hi = rx_zone_lo(z + 1);
         float f = (s_meter_disp - lo) / (hi - lo);
         if (f < 0.0f) f = 0.0f;
         if (f > 1.0f) f = 1.0f;
-        lv_arc_set_value(s_rx_zone[z], (int)(f * 1000));
+        int16_t v = (int16_t)(f * 1000.0f);
+        /* Only write what changed. An arc's bounding box is the whole screen,
+         * so a redundant set on sixteen of them would invalidate the display
+         * sixteen times a frame for nothing. In practice one segment moves. */
+        if (v == s_rx_val[z]) continue;
+        s_rx_val[z] = v;
+        lv_arc_set_value(s_rx_zone[z], v);
     }
     char sbuf[10];
     smeter_text(s_meter_disp, sbuf, sizeof sbuf);
