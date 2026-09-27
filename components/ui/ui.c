@@ -104,6 +104,13 @@ static const struct {
     { 2000.0f, { 1000, 1500, 2000 }, { "1k",  "1.5k","2k"  } },
 };
 static lv_obj_t *s_pwr_tick[PWR_PEGS];
+static lv_obj_t *s_pwr_notch[PWR_PEGS];
+static lv_point_precise_t s_pwr_npts[PWR_PEGS][2];
+
+/* Defined with the other meter drawing further down; needed here because the
+ * power pegs move with the auto-range and take their notches with them. */
+static void      notch_points(float deg, lv_point_precise_t out[2]);
+static lv_obj_t *mknotch(lv_obj_t *parent);
 static lv_obj_t *s_pwr_lbl[PWR_PEGS];
 static lv_point_precise_t s_pwr_pts[PWR_PEGS][2];
 
@@ -121,6 +128,17 @@ static void pwr_set_range(int r)
         s_pwr_pts[i][1].x = (lv_value_precise_t)(CX + r1 * c);
         s_pwr_pts[i][1].y = (lv_value_precise_t)(CY + r1 * sn);
         lv_line_set_points(s_pwr_tick[i], s_pwr_pts[i], 2);
+        /* The top peg sits at full scale, which is the end of the arc: a notch
+         * there would cut nothing and only nibble the end cap. */
+        if (s_pwr_notch[i]) {
+            if (frac < 0.995f) {
+                notch_points(AUD_ROT + frac * AUD_SPAN, s_pwr_npts[i]);
+                lv_line_set_points(s_pwr_notch[i], s_pwr_npts[i], 2);
+                lv_obj_remove_flag(s_pwr_notch[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_pwr_notch[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
         lv_label_set_text(s_pwr_lbl[i], PWR[r].lbl[i]);
         /* 128, not 139: the last peg sits at the very end of the arc and its
          * label ran off the edge of the round glass -- "10" lost its zero. */
@@ -144,47 +162,30 @@ static lv_obj_t *s_swr_zone[SWR_ZONES];
  * The bar still sweeps the whole arc -- the bands only decide what colour each
  * part of that sweep is, so the fill is continuous and steps through the
  * palette as the signal climbs. */
-#define RX_LO   (-127.0f)
-#define RX_HI    (-13.0f)
-#define RX_ZONES 16
-
-/* Colour stops, interpolated between. Sixteen segments across the arc is
- * enough that the eye reads a wash rather than a staircase, while each one is
- * still a solid block that fills in turn. */
-static const struct { float dbm; uint32_t rgb; } RXSTOPS[] = {
-    { -127.0f, 0x1F7A52 },   /* deep green                       */
-    {  -97.0f, 0x2F9E6A },   /* S5                               */
-    {  -85.0f, 0x4DD87A },   /* green                            */
-    {  -73.0f, 0xC8E04A },   /* S9 -- green giving way to yellow */
-    {  -63.0f, 0xFFD24D },   /* yellow                           */
-    {  -43.0f, 0xFF9A3C },   /* orange                           */
-    {  -13.0f, 0xFF4D4D },   /* red                              */
+/* Blocks, not a wash. The boundaries are the S-unit marks, and a notch in the
+ * background colour is drawn across the band at each one -- so where the bar
+ * has reached, the notches read as gaps cut into it, and where it has not they
+ * vanish into the unfilled track. That is what separates the blocks; no
+ * gradient is involved and the arcs are square-ended so the segments butt up
+ * against each other cleanly. */
+#define RX_ZONES 8
+static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
+    { -127.0f, -121.0f, 0x1A6B47 },   /* S0 to S1   */
+    { -121.0f, -109.0f, 0x1F7A52 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0x2F9E6A },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0x4DD87A },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0x9BD94A },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0xFFD24D },   /* S9 to +20  */
+    {  -53.0f,  -33.0f, 0xFF9A3C },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0xFF4D4D },   /* +40 to +60 */
 };
-#define RX_STOPS (sizeof RXSTOPS / sizeof RXSTOPS[0])
 
-static uint32_t rx_shade(float dbm)
-{
-    if (dbm <= RXSTOPS[0].dbm) return RXSTOPS[0].rgb;
-    for (size_t i = 1; i < RX_STOPS; i++) {
-        if (dbm > RXSTOPS[i].dbm) continue;
-        float t = (dbm - RXSTOPS[i - 1].dbm) /
-                  (RXSTOPS[i].dbm - RXSTOPS[i - 1].dbm);
-        uint32_t a = RXSTOPS[i - 1].rgb, b = RXSTOPS[i].rgb;
-        uint32_t out = 0;
-        for (int sh = 16; sh >= 0; sh -= 8) {
-            int ca = (int)((a >> sh) & 0xFF), cb = (int)((b >> sh) & 0xFF);
-            int c  = ca + (int)(t * (float)(cb - ca) + 0.5f);
-            out |= (uint32_t)(c < 0 ? 0 : c > 255 ? 255 : c) << sh;
-        }
-        return out;
-    }
-    return RXSTOPS[RX_STOPS - 1].rgb;
-}
+/* Every boundary gets a notch, which means every printed tick gets one -- the
+ * ends excepted, since they are the ends. */
+static const float RXNOTCH[] = { -121.0f, -109.0f, -97.0f, -85.0f, -73.0f,
+                                  -53.0f, -33.0f };
 
-static inline float rx_zone_lo(size_t z)
-{
-    return RX_LO + (RX_HI - RX_LO) * (float)z / (float)RX_ZONES;
-}
+
 static lv_obj_t *s_rx_zone[RX_ZONES];
 static int16_t   s_rx_val[RX_ZONES];   /* last value written, to skip redraws */
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
@@ -647,6 +648,16 @@ static void add_tx_ticks(void)
      * the SWR figure and the forward power in words. */
 }
 
+/* Created separately from the pegs because they belong on top of the power
+ * arc, which does not exist yet when the pegs are made. */
+static void add_pwr_notches(void)
+{
+    for (int i = 0; i < PWR_PEGS; i++) s_pwr_notch[i] = mknotch(s_tx_ticks);
+    int r = s_pwr_range;
+    s_pwr_range = -1;          /* force pwr_set_range to redo the geometry */
+    pwr_set_range(r);
+}
+
 static void add_pwr_pegs(void)
 {
     for (int i = 0; i < PWR_PEGS; i++) {
@@ -659,6 +670,41 @@ static void add_pwr_pegs(void)
         lv_obj_set_style_text_font(s_pwr_lbl[i], &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(s_pwr_lbl[i], C_LABEL, 0);
         lv_label_set_text(s_pwr_lbl[i], "");
+    }
+}
+
+/* Cuts across the meter band at each S-unit boundary, in the background
+ * colour. Static: on the filled part of the bar they are gaps, on the unfilled
+ * track they disappear, so nothing has to be recoloured as the signal moves. */
+/* One cut across a meter band, in the background colour, at a given angle.
+ * Runs a pixel proud at both ends so no anti-aliased sliver joins two blocks. */
+static void notch_points(float deg, lv_point_precise_t out[2])
+{
+    float a = deg * 3.14159265f / 180.0f;
+    float c = cosf(a), sn = sinf(a);
+    int r1 = ARC_R0 + 1, r0 = ARC_R0 - 13;
+    out[0].x = (lv_value_precise_t)(CX + r0 * c);
+    out[0].y = (lv_value_precise_t)(CY + r0 * sn);
+    out[1].x = (lv_value_precise_t)(CX + r1 * c);
+    out[1].y = (lv_value_precise_t)(CY + r1 * sn);
+}
+
+static lv_obj_t *mknotch(lv_obj_t *parent)
+{
+    lv_obj_t *ln = lv_line_create(parent);
+    lv_obj_set_style_line_width(ln, 3, 0);
+    lv_obj_set_style_line_color(ln, C_BG, 0);
+    lv_obj_set_style_line_rounded(ln, false, 0);
+    return ln;
+}
+
+static void add_rx_notches(void)
+{
+    static lv_point_precise_t pts[sizeof RXNOTCH / sizeof RXNOTCH[0]][2];
+
+    for (size_t i = 0; i < sizeof RXNOTCH / sizeof RXNOTCH[0]; i++) {
+        notch_points(ARC_ROT + smeter_frac(RXNOTCH[i]) * ARC_SPAN, pts[i]);
+        lv_line_set_points(mknotch(s_rx_ticks), pts[i], 2);
     }
 }
 
@@ -729,12 +775,13 @@ static void build(void)
      * below, so its own indicator must not draw or the two would overlap. */
     lv_obj_set_style_arc_width(s_meter, 12, LV_PART_INDICATOR);
     lv_obj_set_style_arc_opa(s_meter, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_meter, false, LV_PART_MAIN);
 
     for (size_t z = 0; z < RX_ZONES; z++) {
         lv_obj_t *b = lv_arc_create(s_scr);
         lv_obj_set_size(b, ARC_R0 * 2, ARC_R0 * 2);
         lv_obj_center(b);
-        float zlo = rx_zone_lo(z), zhi = rx_zone_lo(z + 1);
+        float zlo = RXZONES[z].from, zhi = RXZONES[z].to;
         int a0 = (int)(smeter_frac(zlo) * ARC_SPAN);
         int a1 = (int)(smeter_frac(zhi) * ARC_SPAN);
         lv_arc_set_rotation(b, ARC_ROT + a0);
@@ -746,15 +793,18 @@ static void build(void)
         /* No background of its own: s_meter already draws the track. */
         lv_obj_set_style_arc_opa(b, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_arc_width(b, 12, LV_PART_INDICATOR);
-        /* Shade taken at the middle of the span, so consecutive segments step
-         * by a fraction of the distance between two stops. */
-        lv_obj_set_style_arc_color(b, lv_color_hex(rx_shade((zlo + zhi) / 2.0f)),
+        lv_obj_set_style_arc_color(b, lv_color_hex(RXZONES[z].rgb),
                                    LV_PART_INDICATOR);
+        /* Square ends: rounded caps make neighbouring blocks overlap into
+         * lozenges and round off the leading edge of the bar. */
+        lv_obj_set_style_arc_rounded(b, false, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(b, false, LV_PART_MAIN);
         s_rx_zone[z] = b;
         s_rx_val[z]  = 0;
     }
     s_rx_ticks = mkgroup();
     s_tx_ticks = mkgroup();
+    add_rx_notches();
     add_ticks();
     add_tx_ticks();
     add_pwr_pegs();
@@ -779,6 +829,8 @@ static void build(void)
     lv_obj_remove_flag(s_pwr_arc, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_arc_width(s_pwr_arc, 12, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_pwr_arc, C_SUBTLE, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(s_pwr_arc, false, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(s_pwr_arc, false, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(s_pwr_arc, 12, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_pwr_arc, C_ACCENT, LV_PART_INDICATOR);
     lv_obj_add_flag(s_pwr_arc, LV_OBJ_FLAG_HIDDEN);
@@ -824,82 +876,28 @@ static void build(void)
         lv_obj_set_style_arc_color(b, C_SUBTLE, LV_PART_MAIN);
         lv_obj_set_style_arc_width(b, 12, LV_PART_INDICATOR);
         lv_obj_set_style_arc_color(b, lv_color_hex(ZONES[z].rgb), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(b, false, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(b, false, LV_PART_MAIN);
         lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
         s_swr_zone[z] = b;
     }
 
-    add_ticks();
-    add_tx_ticks();
-    add_pwr_pegs();
-    pwr_set_range(0);
-    lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
-
-    /* In transmit the arc changes meaning entirely: MIC level across the left
-     * half, SWR across the right. Two separate arcs rather than one repurposed
-     * one, so the split is visible at a glance and neither has to share a
-     * scale with the other. */
-    /* Forward power takes the right-hand outer arc. Auto-ranged, because this
-     * has to read sensibly at 5 W and at 2.5 kW without the operator picking a
-     * scale. */
-    s_pwr_arc = lv_arc_create(s_scr);
-    lv_obj_set_size(s_pwr_arc, ARC_R0 * 2, ARC_R0 * 2);
-    lv_obj_center(s_pwr_arc);
-    lv_arc_set_rotation(s_pwr_arc, AUD_ROT);
-    lv_arc_set_bg_angles(s_pwr_arc, 0, AUD_SPAN);
-    lv_arc_set_range(s_pwr_arc, 0, 1000);
-    lv_arc_set_value(s_pwr_arc, 0);
-    lv_obj_remove_style(s_pwr_arc, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(s_pwr_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_pwr_arc, 12, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_pwr_arc, C_SUBTLE, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_pwr_arc, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_pwr_arc, C_ACCENT, LV_PART_INDICATOR);
-    lv_obj_add_flag(s_pwr_arc, LV_OBJ_FLAG_HIDDEN);
-
-    /* Mic level: a thin inner ring. Demoted deliberately -- it is a nice-to-
-     * have next to SWR and power, and it should not compete with them. */
-    s_mic_arc = lv_arc_create(s_scr);
-    lv_obj_set_size(s_mic_arc, (ARC_R0 - 22) * 2, (ARC_R0 - 22) * 2);
-    lv_obj_center(s_mic_arc);
-    lv_arc_set_rotation(s_mic_arc, AUD_ROT);
-    lv_arc_set_bg_angles(s_mic_arc, 0, AUD_SPAN);
-    lv_arc_set_range(s_mic_arc, 0, 1000);
-    lv_arc_set_value(s_mic_arc, 0);
-    lv_obj_remove_style(s_mic_arc, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_mic_arc, C_SUBTLE, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_INDICATOR);
-    /* Fills from the bottom end upward, opposite to the power bar above it.
-     * Two bars growing the same way on the same side invite being read as one
-     * quantity. */
-    lv_arc_set_mode(s_mic_arc, LV_ARC_MODE_REVERSE);
-    lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
-    lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
-
-    /* Three arcs laid end to end, each filling independently. The bar is
-     * therefore green up to 2.0, continues amber to 2.5 and red beyond --
-     * rather than one bar that changes colour all at once. Reading it is then
-     * a glance at how far into the red it has gone, not a colour lookup. */
-    for (size_t z = 0; z < SWR_ZONES; z++) {
-        lv_obj_t *b = lv_arc_create(s_scr);
-        lv_obj_set_size(b, ARC_R0 * 2, ARC_R0 * 2);
-        lv_obj_center(b);
-        int a0 = (int)(swr_frac(ZONES[z].from) * SWR_SPAN);
-        int a1 = (int)(swr_frac(ZONES[z].to)   * SWR_SPAN);
-        lv_arc_set_rotation(b, SWR_ROT + a0);
-        lv_arc_set_bg_angles(b, 0, a1 - a0);
-        lv_arc_set_range(b, 0, 1000);
-        lv_arc_set_value(b, 0);
-        lv_obj_remove_style(b, NULL, LV_PART_KNOB);
-        lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_arc_width(b, 12, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(b, C_SUBTLE, LV_PART_MAIN);
-        lv_obj_set_style_arc_width(b, 12, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_color(b, lv_color_hex(ZONES[z].rgb), LV_PART_INDICATOR);
-        lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
-        s_swr_zone[z] = b;
+    /* Notch the SWR band at each printed mark, exactly as the receive meter is
+     * notched. 1.0 and 3.0 are the ends of the arc and are left alone.
+     *
+     * These are created after the transmit arcs, and s_tx_ticks was created
+     * before them, so the group has to be lifted or the notches would be drawn
+     * underneath the bar they are supposed to cut. */
+    {
+        static const float SWRNOTCH[] = { 1.5f, 2.0f, 2.5f };
+        static lv_point_precise_t np[sizeof SWRNOTCH / sizeof SWRNOTCH[0]][2];
+        for (size_t i = 0; i < sizeof SWRNOTCH / sizeof SWRNOTCH[0]; i++) {
+            notch_points(SWR_ROT + swr_frac(SWRNOTCH[i]) * SWR_SPAN, np[i]);
+            lv_line_set_points(mknotch(s_tx_ticks), np[i], 2);
+        }
     }
+    add_pwr_notches();
+    lv_obj_move_foreground(s_tx_ticks);
 
     /* Signal, as a number as well as an arc: an arc shows trend, a number
      * lets you report a readable signal report. */
@@ -1209,7 +1207,7 @@ void ui_update(const ui_state_t *st)
     /* Each band fills only across its own span: full once the signal is past
      * its top, empty until the signal reaches its bottom. */
     for (size_t z = 0; z < RX_ZONES; z++) {
-        float lo = rx_zone_lo(z), hi = rx_zone_lo(z + 1);
+        float lo = RXZONES[z].from, hi = RXZONES[z].to;
         float f = (s_meter_disp - lo) / (hi - lo);
         if (f < 0.0f) f = 0.0f;
         if (f > 1.0f) f = 1.0f;
