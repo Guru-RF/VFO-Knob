@@ -72,6 +72,9 @@ bool ui_take_commit(ui_commit_t *out);
 uint8_t ui_volume(void);
 uint8_t ui_mic_gain(void);
 
+/* Restore persisted levels at boot, before ui_init() draws anything. */
+void ui_set_levels(uint8_t volume, uint8_t mic_gain);
+
 /* Step through 0/90/180/270. Orientation is a physical property of how the
  * panel is mounted, and guessing it costs a flash cycle each time -- so make
  * it switchable from the console instead. */

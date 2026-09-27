@@ -122,8 +122,10 @@ static void pwr_set_range(int r)
         s_pwr_pts[i][1].y = (lv_value_precise_t)(CY + r1 * sn);
         lv_line_set_points(s_pwr_tick[i], s_pwr_pts[i], 2);
         lv_label_set_text(s_pwr_lbl[i], PWR[r].lbl[i]);
+        /* 128, not 139: the last peg sits at the very end of the arc and its
+         * label ran off the edge of the round glass -- "10" lost its zero. */
         lv_obj_align(s_pwr_lbl[i], LV_ALIGN_CENTER,
-                     (int)(139 * c), (int)(139 * sn));
+                     (int)(128 * c), (int)(128 * sn));
     }
 }
 #define SWR_ZONES 3
@@ -427,6 +429,12 @@ bool ui_take_commit(ui_commit_t *out)
 uint8_t ui_volume(void)  { return s_volume; }
 uint8_t ui_mic_gain(void) { return s_micgain; }
 
+void ui_set_levels(uint8_t volume, uint8_t mic_gain)
+{
+    if (volume   <= 100) s_volume  = volume;
+    if (mic_gain <= 200) s_micgain = mic_gain;
+}
+
 /* --- touch --------------------------------------------------------------- */
 
 static int nearest_digit(int x)
@@ -551,7 +559,7 @@ static void add_tx_ticks(void)
             lv_obj_set_style_text_color(l, col, 0);
             lv_label_set_text(l, T[i].t);
             lv_obj_align(l, LV_ALIGN_CENTER,
-                         (int)(139 * c), (int)(139 * sn));
+                         (int)(128 * c), (int)(128 * sn));
         }
     }
 

@@ -20,7 +20,21 @@ typedef struct {
     uint16_t tci_port;
 } vfo_cfg_t;
 
-esp_err_t net_prov_init(void);          /* NVS + seed from Kconfig if empty */
+/* Audio levels persist across reboots. Written debounced, because NVS wear is
+ * real and the knob can produce a lot of intermediate values in a second. */
+uint8_t net_prov_volume(void);
+uint8_t net_prov_mic_gain(void);
+void    net_prov_save_audio(uint8_t volume, uint8_t mic_gain);
+
+esp_err_t net_prov_init(void);
+
+/* Boot-loop guard. net_prov_boot_count() is incremented on every boot and
+ * cleared once the device has been up long enough to be considered healthy;
+ * call net_prov_boot_ok() from a timer for that. Three rapid boots in a row
+ * put the firmware into a reduced mode so it stays reachable and flashable
+ * instead of disappearing from USB in a panic loop. */
+uint8_t net_prov_boot_count(void);
+void    net_prov_boot_ok(void);          /* NVS + seed from Kconfig if empty */
 const vfo_cfg_t *net_prov_cfg(void);
 
 /* Start the station and keep it connected. Non-blocking. */

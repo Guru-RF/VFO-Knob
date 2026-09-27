@@ -35,6 +35,7 @@
 #include "esp_psram.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
 #include "ptt_fsm.h"
 #include "freertos/FreeRTOS.h"
@@ -346,7 +347,11 @@ static void ui_task(void *arg)
              * and a control head that shows RX while the rig is transmitting
              * is worse than useless. st.tx is the server's reported state. */
             .tx            = st.tx,
-            .tx_remote     = (st.tx && st.ptt_state != PTT_ON),
+            /* Only IDLE counts as "someone else". During our own RELEASING --
+             * between sending trx:false and the confirmation arriving -- the
+             * radio is still transmitting and the state is not PTT_ON, which
+             * briefly and wrongly read as a remote transmission. */
+            .tx_remote     = (st.tx && st.ptt_state == PTT_IDLE),
             .link_ok       = (st.link == TCI_LINK_READY ||
                               st.link == TCI_LINK_DEGRADED),
             .slice_locked  = st.slice_locked,
@@ -445,51 +450,100 @@ static void selftest_task(void *arg)
 }
 #endif
 
+/* Bring one subsystem up, timed, and never fatally.
+ *
+ * ESP_ERROR_CHECK aborts, and an abort during init is a reboot loop -- which
+ * on this board also stops the USB-JTAG enumerating, so the device simply
+ * vanishes and cannot even be reflashed until it is physically unplugged.
+ * A knob that boots and says "no display" is strictly better than one that
+ * disappears. The timing is logged because a stall during init is otherwise
+ * invisible: the watchdog fires and you cannot tell which step was in
+ * progress. */
+static bool bring_up(const char *what, esp_err_t (*fn)(void))
+{
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t err = fn();
+    int ms = (int)((esp_timer_get_time() - t0) / 1000);
+    if (err == ESP_OK) {
+        if (ms > 200) ESP_LOGW(TAG, "%-8s ok (%d ms -- slow)", what, ms);
+        else          ESP_LOGI(TAG, "%-8s ok (%d ms)", what, ms);
+        return true;
+    }
+    ESP_LOGE(TAG, "%-8s FAILED after %d ms: %s -- continuing without it",
+             what, ms, esp_err_to_name(err));
+    return false;
+}
+
+static void boot_ok_cb(void *arg)
+{
+    (void)arg;
+    net_prov_boot_ok();
+}
+
 void app_main(void)
 {
     esp_chip_info_t chip;
     esp_chip_info(&chip);
-    ESP_LOGI(TAG, "VFO-Knob bring-up | ESP32-S3 rev%d.%d, %d core(s)",
-             chip.revision / 100, chip.revision % 100, chip.cores);
+    ESP_LOGI(TAG, "VFO-Knob | ESP32-S3 rev%d.%d, %d core(s), reset=%d",
+             chip.revision / 100, chip.revision % 100, chip.cores,
+             (int)esp_reset_reason());
 
-#if !CONFIG_VFO_GPIO_SCAN
-    ESP_ERROR_CHECK(board_init());
-    report_memory();
-    probe_i2c();
-    haptic_bringup();
-#endif
 #if CONFIG_VFO_GPIO_SCAN
-    /* Diagnostic build: do NOT claim GPIO 7/8 for PCNT, so the analyser can
-     * observe them like any other pin. */
+    bring_up("nvs", net_prov_init);
+    bring_up("board", board_init);
     xTaskCreatePinnedToCore(gpio_scan_task, "enctest", 4096, NULL, 5, NULL, 1);
+    return;
 #else
-    ESP_ERROR_CHECK(panel_init());
-    ESP_ERROR_CHECK(hal_touch_init());
-    ESP_ERROR_CHECK(ui_init());
-    ESP_ERROR_CHECK(hal_encoder_init());
-    if (audio_out_init() != ESP_OK)
-        ESP_LOGE(TAG, "audio output unavailable -- continuing without it");
-    if (audio_in_init() != ESP_OK)
-        ESP_LOGE(TAG, "microphone unavailable -- continuing without TX audio");
+    bring_up("nvs", net_prov_init);
 
-    /* Deliberately NOT ESP_ERROR_CHECK. A WiFi failure must leave a working
-     * display showing why, not abort into a reboot loop that hides it. */
-    ESP_ERROR_CHECK(net_prov_init());
-    esp_err_t werr = net_prov_wifi_start();
-    if (werr != ESP_OK)
-        ESP_LOGE(TAG, "WiFi did not start (%s) -- continuing offline",
-                 esp_err_to_name(werr));
-    xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
+    /* Three failed boots in a row: come up with the bare minimum so the device
+     * stays usable and flashable while the cause is found. */
+    const bool safe = net_prov_boot_count() >= 3;
+    if (safe)
+        ESP_LOGE(TAG, "SAFE MODE after %u boots -- audio and WiFi disabled",
+                 net_prov_boot_count());
+
+    bool have_board = bring_up("board", board_init);
+    if (have_board) { report_memory(); probe_i2c(); haptic_bringup(); }
+
+    bool have_panel = bring_up("panel", panel_init);
+    bool have_touch = bring_up("touch", hal_touch_init);
+
+    ui_set_levels(net_prov_volume(), net_prov_mic_gain());
+    bool have_ui = have_panel && bring_up("ui", ui_init);
+
+    bring_up("knob", hal_encoder_init);
+
+    if (!safe) {
+        bring_up("audio-out", audio_out_init);
+        bring_up("mic", audio_in_init);
+    }
+
+    /* Declare the boot healthy once we have been up a while. Anything that
+     * panics before this leaves the counter raised and edges us toward safe
+     * mode on the next attempt. */
+    const esp_timer_create_args_t ok = { .callback = boot_ok_cb, .name = "bootok" };
+    esp_timer_handle_t okt;
+    if (esp_timer_create(&ok, &okt) == ESP_OK)
+        esp_timer_start_once(okt, 20 * 1000 * 1000);
+
+    if (!safe) {
+        esp_err_t werr = net_prov_wifi_start();
+        if (werr != ESP_OK)
+            ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",
+                     esp_err_to_name(werr));
+        xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
+    }
+
     xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
-    /* Core 1 with the knob: everything the operator can see or feel lives
-     * away from lwIP's scheduler. */
-    xTaskCreatePinnedToCore(ui_task, "ui", 5120, NULL, 4, NULL, 1);
-#if CONFIG_VFO_PANEL_SELFTEST
-    xTaskCreatePinnedToCore(selftest_task, "m4", 4096, NULL, 3, NULL, 0);
-#endif
-
-    /* Core 1 is the "feel" core: encoder, haptics, touch and LVGL. Core 0 is
+    if (have_ui)
+        xTaskCreatePinnedToCore(ui_task, "ui", 5120, NULL, 4, NULL, 1);
+    /* Core 1 is the "feel" core: knob, haptics, touch and LVGL. Core 0 is
      * reserved for WiFi and lwIP, whose burst timing we cannot control. */
     xTaskCreatePinnedToCore(encoder_task, "enc_input", 4096, NULL, 15, NULL, 1);
+
+    ESP_LOGI(TAG, "--- up: board=%d panel=%d touch=%d ui=%d %s---",
+             have_board, have_panel, have_touch, have_ui,
+             safe ? "SAFE MODE " : "");
 #endif
 }

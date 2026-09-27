@@ -21,6 +21,8 @@ static vfo_cfg_t          s_cfg;
 static EventGroupHandle_t s_events;
 static bool               s_connected;
 static int                s_retries;
+static uint8_t            s_volume = 40, s_micgain = 100;
+static uint8_t            s_boots;
 
 #define BIT_GOT_IP BIT0
 
@@ -61,6 +63,23 @@ static void load_or_seed(void)
 #endif
     if (!have) ESP_LOGE(TAG, "no credentials: provisioning UI is a v1.1 item");
     if (!s_cfg.tci_port) s_cfg.tci_port = 50001;
+
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v;
+        if (nvs_get_u8(h, "vol",   &v) == ESP_OK) s_volume  = v;
+        if (nvs_get_u8(h, "mic",   &v) == ESP_OK) s_micgain = v;
+        if (nvs_get_u8(h, "boots", &v) == ESP_OK) s_boots   = v;
+        nvs_close(h);
+    }
+    /* Count this boot straight away. If we never reach net_prov_boot_ok(),
+     * the next boot sees a higher count and can back off. */
+    if (s_boots < 250) s_boots++;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "boots", s_boots);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    if (s_boots > 1) ESP_LOGW(TAG, "boot #%u since last healthy run", s_boots);
 
     /* Never log the passphrase, only whether one is present. */
     ESP_LOGI(TAG, "ssid=\"%s\" psk=%s host=%s:%u",
@@ -107,6 +126,36 @@ esp_err_t net_prov_init(void)
 }
 
 const vfo_cfg_t *net_prov_cfg(void) { return &s_cfg; }
+uint8_t net_prov_volume(void)   { return s_volume; }
+uint8_t net_prov_mic_gain(void) { return s_micgain; }
+
+uint8_t net_prov_boot_count(void) { return s_boots; }
+
+void net_prov_boot_ok(void)
+{
+    if (!s_boots) return;
+    s_boots = 0;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "boots", 0);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "boot considered healthy; loop counter cleared");
+}
+
+void net_prov_save_audio(uint8_t volume, uint8_t mic_gain)
+{
+    if (volume == s_volume && mic_gain == s_micgain) return;
+    s_volume = volume;
+    s_micgain = mic_gain;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "vol", volume);
+    nvs_set_u8(h, "mic", mic_gain);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "saved volume=%u mic=%u", volume, mic_gain);
+}
 bool net_prov_is_connected(void)    { return s_connected; }
 
 esp_err_t net_prov_wifi_start(void)
