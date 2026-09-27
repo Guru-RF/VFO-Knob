@@ -1,0 +1,32 @@
+/* SH8601 QSPI panel, 360x360 RGB565, plus the LEDC backlight.
+ *
+ * Driver and init sequence taken from Waveshare's own 08_LVGL_Test demo, which
+ * is the only authority for this board: the controller is an SH8601 but the
+ * panel also has a real PWM backlight on GPIO47, a combination that several
+ * third-party sources get wrong in one direction or the other.
+ */
+#ifndef VFO_PANEL_H
+#define VFO_PANEL_H
+
+#include <stdint.h>
+
+#include "esp_err.h"
+#include "esp_lcd_panel_ops.h"
+
+esp_err_t panel_init(void);
+
+/* Handle for LVGL to flush into, once the UI layer exists. */
+esp_lcd_panel_handle_t panel_handle(void);
+
+/* 0..255. LEDC 8-bit at 50 kHz on GPIO47, matching the vendor demo. */
+void panel_set_brightness(uint8_t duty);
+
+/* M4 acceptance test, drawn directly with no LVGL in the way:
+ *   - solid red / green / blue  -> wrong order means rgb_ele_order is wrong
+ *   - a 1 px white circle at r=179 -> must touch all four screen extremes,
+ *     which is how a panel gap offset shows itself in a single flash
+ *   - a backlight ramp          -> proves the PWM path
+ */
+esp_err_t panel_selftest(void);
+
+#endif /* VFO_PANEL_H */

@@ -1,0 +1,6 @@
+dependencies:
+  # Waveshare's own 08_LVGL_Test uses this driver for this exact board.
+  # Third-party sources claiming ST77916 are wrong: the controller is an SH8601
+  # that happens to sit behind a real PWM backlight on GPIO47.
+  esp_lcd_sh8601:
+    version: "*"
