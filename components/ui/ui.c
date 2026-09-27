@@ -12,6 +12,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 static const char *TAG = "ui";
 
@@ -35,18 +36,28 @@ static const char *TAG = "ui";
 #define C_TX_BORDER lv_color_hex(0xD08020)   /* tx.mox.border    */
 #define C_TX_TEXT   lv_color_hex(0xF0C890)   /* tx.mox.text      */
 #define C_PEAK      lv_color_hex(0xE6F0FA)   /* meter.peak       */
+/* AetherSDR's own TX tint is a muted amber. On a 45 mm face that is not
+ * emphatic enough for "you are radiating", so the slab uses a saturated red
+ * while the finer TX details keep the theme's amber. */
+#define C_TX_RED    lv_color_hex(0xE01010)
 
-/* meter.bar.fillGradient from the same theme. */
-static const struct { float at; uint32_t rgb; } METER_STOPS[] = {
-    { 0.00f, 0x2F9E6A }, { 0.55f, 0x6CC56A }, { 0.80f, 0xE8B94C },
-    { 0.95f, 0xE8553C }, { 1.00f, 0xF2362A },
-};
+/* The theme's own meter.bar gradient runs green -> amber -> red but only
+ * reaches red at 95% of full scale. On an S-meter that is roughly S9+53, so a
+ * genuinely strong signal still read green. meter_color() below keeps the
+ * theme's colours but moves the thresholds to where an operator expects them.
+ */
 
 #define CX 180
 #define CY 180
 #define ARC_R0   170      /* meter outer radius */
 #define ARC_ROT  170      /* LVGL 0deg = 3 o'clock; 170..370 spans the top */
 #define ARC_SPAN 200
+
+/* The PTT slab runs full width and all the way to the bottom edge; the round
+ * glass clips it into a chord, which is the intended shape. Making it the
+ * largest target on the face is deliberate -- with toggle PTT, stopping a
+ * transmission must never require aim. */
+#define PTT_TOP 248
 
 #define N_DIG 8
 static const int DIG_STEP[N_DIG] = {
@@ -56,7 +67,33 @@ static const int DIG_STEP[N_DIG] = {
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
-static lv_obj_t *s_dbm, *s_rit, *s_pip;
+static lv_obj_t *s_dbm, *s_rit, *s_vol;
+static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
+
+typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL } edit_t;
+static edit_t  s_edit;
+static int     s_edit_idx;
+static int32_t s_edit_rit;
+static bool    s_edit_lsb;   /* passband sits below the carrier */
+static uint8_t s_volume = 40;
+static ui_commit_t s_commit;
+static bool    s_have_commit;
+
+/* Option lists. Modes come from AetherSDR's own modulations_list; the filter
+ * widths are the common SSB/CW/digi set rather than a continuous range,
+ * because a rotary picking from a short list is far quicker than one
+ * scrubbing through hundreds of values. */
+static const char *MODES[] = { "usb","lsb","cw","cwr","am","sam","fm","nfm",
+                               "digu","digl","rtty" };
+static const int32_t FILTERS[] = { 250, 500, 700, 1000, 1500, 1800, 2100,
+                                   2400, 2700, 3000, 3600, 6000 };
+static const struct { const char *name; int64_t hz; } BANDS[] = {
+    { "160m",  1840000 }, { "80m",   3700000 }, { "60m",   5355000 },
+    { "40m",   7100000 }, { "30m",  10130000 }, { "20m",  14100000 },
+    { "17m",  18120000 }, { "15m",  21200000 }, { "12m",  24940000 },
+    { "10m",  28400000 }, { "6m",   50200000 },
+};
+#define NELEM(a) ((int)(sizeof (a) / sizeof (a)[0]))
 static int   s_dig_x[N_DIG];
 static int   s_active_dig = 5;
 static int32_t s_step_req;
@@ -70,12 +107,18 @@ static lv_display_t *s_disp;
 #define UI_ROT_DEFAULT 2               /* 2 = 180 degrees */
 static uint8_t s_rot = UI_ROT_DEFAULT;
 
+/* Green below S7, amber approaching S9, red at S9 and above.
+ *
+ * The theme's own bar gradient only reaches red at 95% of full scale, which on
+ * an S-meter is about S9+53 -- so a genuinely strong signal still showed green.
+ * An operator reads "over S9" as the meaningful threshold, so that is where the
+ * colour changes. */
 static lv_color_t meter_color(float frac)
 {
-    for (size_t i = 1; i < sizeof METER_STOPS / sizeof METER_STOPS[0]; i++) {
-        if (frac <= METER_STOPS[i].at) return lv_color_hex(METER_STOPS[i - 1].rgb);
-    }
-    return lv_color_hex(METER_STOPS[4].rgb);
+    if (frac >= 0.60f) return lv_color_hex(0xE8553C);   /* S9 and above */
+    if (frac >= 0.47f) return lv_color_hex(0xE8B94C);   /* approaching S9 */
+    if (frac >= 0.25f) return lv_color_hex(0x6CC56A);
+    return lv_color_hex(0x2F9E6A);
 }
 
 /* S0 = -127 dBm, S9 = -73, S9+60 = -13, and S9 sits at 60% of the scale --
@@ -117,6 +160,181 @@ static const char *band_of(int64_t hz)
     return "--";
 }
 
+/* --- field editors -------------------------------------------------------- */
+
+static void edit_render(void)
+{
+    if (s_edit == ED_NONE) {
+        lv_obj_add_flag(s_edit_panel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_remove_flag(s_edit_panel, LV_OBJ_FLAG_HIDDEN);
+
+    char v[16];
+    const char *title = "";
+    switch (s_edit) {
+    case ED_BAND:
+        title = "BAND";
+        snprintf(v, sizeof v, "%s", BANDS[s_edit_idx].name);
+        break;
+    case ED_MODE: {
+        title = "MODE";
+        const char *m = MODES[s_edit_idx];
+        size_t n = strlen(m); if (n > 7) n = 7;
+        for (size_t i = 0; i < n; i++)
+            v[i] = (m[i] >= 'a' && m[i] <= 'z') ? (char)(m[i] - 32) : m[i];
+        v[n] = 0;
+        break;
+    }
+    case ED_FILTER:
+        title = "FILTER";
+        snprintf(v, sizeof v, "%ld Hz", (long)FILTERS[s_edit_idx]);
+        break;
+    case ED_RIT:
+        title = "RIT";
+        snprintf(v, sizeof v, "%+ld Hz", (long)s_edit_rit);
+        break;
+    case ED_VOL:
+        title = "VOLUME";
+        snprintf(v, sizeof v, "%d", s_volume);
+        break;
+    default: return;
+    }
+    lv_label_set_text(s_edit_title, title);
+    lv_label_set_text(s_edit_value, v);
+}
+
+static int index_of_mode(const char *m)
+{
+    for (int i = 0; i < NELEM(MODES); i++)
+        if (m && strcasecmp(MODES[i], m) == 0) return i;
+    return 0;
+}
+
+static int nearest_filter(int32_t w)
+{
+    int best = 0;
+    int32_t bd = 1 << 30;
+    for (int i = 0; i < NELEM(FILTERS); i++) {
+        int32_t d = FILTERS[i] - w; if (d < 0) d = -d;
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+static int nearest_band(int64_t hz)
+{
+    int best = 0;
+    int64_t bd = (int64_t)1 << 60;
+    for (int i = 0; i < NELEM(BANDS); i++) {
+        int64_t d = BANDS[i].hz - hz; if (d < 0) d = -d;
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+static void edit_open(edit_t what, const ui_state_t *st)
+{
+    s_edit = what;
+    switch (what) {
+    case ED_BAND:   s_edit_idx = nearest_band(st->freq_hz); break;
+    case ED_MODE:   s_edit_idx = index_of_mode(st->mode);   break;
+    case ED_FILTER:
+        s_edit_idx = nearest_filter(st->filt_hi - st->filt_lo);
+        /* Remember which side of the carrier this mode uses. Applying a
+         * positive passband to LSB mutes the radio, which reads as a hardware
+         * fault rather than a filter setting. */
+        s_edit_lsb = (st->filt_hi <= 0) ||
+                     (st->mode && (strcasecmp(st->mode, "lsb") == 0 ||
+                                   strcasecmp(st->mode, "cwr") == 0 ||
+                                   strcasecmp(st->mode, "digl") == 0));
+        break;
+    case ED_RIT:    s_edit_rit = st->rit_hz; break;
+    default: break;
+    }
+    edit_render();
+}
+
+static void edit_commit(void)
+{
+    memset(&s_commit, 0, sizeof s_commit);
+    switch (s_edit) {
+    case ED_BAND:
+        s_commit.have_freq = true;
+        s_commit.freq_hz   = BANDS[s_edit_idx].hz;
+        break;
+    case ED_MODE:
+        s_commit.have_mode = true;
+        strlcpy(s_commit.mode, MODES[s_edit_idx], sizeof s_commit.mode);
+        break;
+    case ED_FILTER: {
+        s_commit.have_filter = true;
+        int32_t w = FILTERS[s_edit_idx];
+        if (s_edit_lsb) { s_commit.filt_lo = -w;  s_commit.filt_hi = -100; }
+        else            { s_commit.filt_lo = 100; s_commit.filt_hi =  w;   }
+        break;
+    }
+    case ED_RIT:
+        s_commit.have_rit = true;
+        s_commit.rit_hz   = s_edit_rit;
+        break;
+    default: break;      /* volume is local-only for now */
+    }
+    s_have_commit = (s_edit != ED_NONE && s_edit != ED_VOL);
+    s_edit = ED_NONE;
+    edit_render();
+}
+
+bool ui_edit_active(void) { return s_edit != ED_NONE; }
+
+void ui_edit_rotate(int32_t detents)
+{
+    if (s_edit == ED_NONE || !detents) return;
+    if (!lvgl_port_lock(20)) return;
+    switch (s_edit) {
+    case ED_BAND:
+        s_edit_idx += detents;
+        if (s_edit_idx < 0) s_edit_idx = 0;
+        if (s_edit_idx >= NELEM(BANDS)) s_edit_idx = NELEM(BANDS) - 1;
+        break;
+    case ED_MODE:
+        s_edit_idx += detents;
+        if (s_edit_idx < 0) s_edit_idx = 0;
+        if (s_edit_idx >= NELEM(MODES)) s_edit_idx = NELEM(MODES) - 1;
+        break;
+    case ED_FILTER:
+        s_edit_idx += detents;
+        if (s_edit_idx < 0) s_edit_idx = 0;
+        if (s_edit_idx >= NELEM(FILTERS)) s_edit_idx = NELEM(FILTERS) - 1;
+        break;
+    case ED_RIT:
+        s_edit_rit += detents * 10;
+        if (s_edit_rit >  9990) s_edit_rit =  9990;
+        if (s_edit_rit < -9990) s_edit_rit = -9990;
+        break;
+    case ED_VOL: {
+        int v = s_volume + detents * 2;
+        if (v < 0)   v = 0;
+        if (v > 100) v = 100;
+        s_volume = (uint8_t)v;
+        break;
+    }
+    default: break;
+    }
+    edit_render();
+    lvgl_port_unlock();
+}
+
+bool ui_take_commit(ui_commit_t *out)
+{
+    if (!s_have_commit || !out) return false;
+    *out = s_commit;
+    s_have_commit = false;
+    return true;
+}
+
+uint8_t ui_volume(void) { return s_volume; }
+
 /* --- touch --------------------------------------------------------------- */
 
 static int nearest_digit(int x)
@@ -130,6 +348,10 @@ static int nearest_digit(int x)
     return best;
 }
 
+/* The last state ui_update() saw, so the editors can open on the current
+ * value. The touch callback runs on the LVGL task and cannot ask the client. */
+static ui_state_t s_last;
+
 static void touch_cb(lv_event_t *e)
 {
     (void)e;
@@ -138,10 +360,30 @@ static void touch_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
 
-    if (p.y > 246) { s_ptt_tap = true; return; }   /* forgiving to hit */
-    if (p.y > 132 && p.y < 224) {
+    /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
+     * selection on the precise one. */
+    if (s_edit != ED_NONE) { edit_commit(); return; }
+
+    if (p.y >= PTT_TOP) { s_ptt_tap = true; return; }   /* the whole bottom slab */
+
+    /* band | mode | filter */
+    if (p.y >= 104 && p.y < 140) {
+        if      (p.x < CX - 38) edit_open(ED_BAND,   &s_last);
+        else if (p.x > CX + 38) edit_open(ED_FILTER, &s_last);
+        else                    edit_open(ED_MODE,   &s_last);
+        return;
+    }
+    /* frequency digits -> step decade */
+    if (p.y >= 144 && p.y < 212) {
         s_active_dig = nearest_digit(p.x);
         s_step_req   = DIG_STEP[s_active_dig];
+        return;
+    }
+    /* step | rit | volume */
+    if (p.y >= 212 && p.y < PTT_TOP) {
+        if      (p.x > CX + 40) edit_open(ED_VOL, &s_last);
+        else if (p.x > CX - 20) edit_open(ED_RIT, &s_last);
+        return;
     }
 }
 
@@ -256,33 +498,69 @@ static void build(void)
     lv_obj_set_style_border_width(s_underline, 0, 0);
     lv_obj_set_style_radius(s_underline, 2, 0);
     lv_obj_remove_flag(s_underline, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_underline, LV_OBJ_FLAG_CLICKABLE);
 
-    s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 44, 218, "1 kHz");
-    s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX + 52, 220, "");
+    s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 72, 220, "1 kHz");
+    s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX + 12, 222, "");
+    s_vol      = mklabel(&lv_font_montserrat_20, C_TEXT2,  CX + 72, 220,
+                         LV_SYMBOL_VOLUME_MID " 40");
     s_status   = mklabel(&lv_font_montserrat_14, C_LABEL,  CX,      240, "");
 
+    /* Full width, hard to the bottom edge. The circle clips it to a chord. */
     s_ptt = lv_obj_create(s_scr);
-    lv_obj_set_size(s_ptt, 186, 56);
-    lv_obj_align(s_ptt, LV_ALIGN_CENTER, 0, 100);
-    lv_obj_set_style_radius(s_ptt, 28, 0);
+    lv_obj_set_size(s_ptt, 360, 360 - PTT_TOP);
+    lv_obj_align(s_ptt, LV_ALIGN_TOP_LEFT, 0, PTT_TOP);
+    lv_obj_set_style_radius(s_ptt, 0, 0);
     lv_obj_set_style_bg_color(s_ptt, C_BG1, 0);
-    lv_obj_set_style_border_color(s_ptt, C_SUBTLE, 0);
-    lv_obj_set_style_border_width(s_ptt, 2, 0);
+    lv_obj_set_style_border_width(s_ptt, 0, 0);
+    lv_obj_set_style_pad_all(s_ptt, 0, 0);
     lv_obj_remove_flag(s_ptt, LV_OBJ_FLAG_SCROLLABLE);
-    s_ptt_lbl = lv_label_create(s_ptt);
+    /* An lv_obj is CLICKABLE by default, so the slab swallowed every tap and
+     * the screen-level handler never ran -- PTT simply did nothing. Same trap
+     * applies to the editor panel below. */
+    lv_obj_remove_flag(s_ptt, LV_OBJ_FLAG_CLICKABLE);
+    /* Parented to the SCREEN, not the slab: as a child it inherited the
+     * container's box model and would not sit centred. */
+    s_ptt_lbl = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_ptt_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_ptt_lbl, C_TEXT2, 0);
     lv_label_set_text(s_ptt_lbl, "PTT");
-    lv_obj_center(s_ptt_lbl);
+    lv_obj_set_style_text_align(s_ptt_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_ptt_lbl, LV_ALIGN_TOP_MID, 0, PTT_TOP + 12);
+    lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
 
-    /* Link pip: small, low in the face, out of the way until it matters. */
-    s_pip = lv_obj_create(s_scr);
-    lv_obj_set_size(s_pip, 10, 10);
-    lv_obj_align(s_pip, LV_ALIGN_CENTER, 0, 138);
-    lv_obj_set_style_radius(s_pip, 5, 0);
-    lv_obj_set_style_border_width(s_pip, 0, 0);
-    lv_obj_set_style_bg_color(s_pip, C_DISABLED, 0);
-    lv_obj_remove_flag(s_pip, LV_OBJ_FLAG_SCROLLABLE);
+    /* Editor overlay: hidden until a field is tapped. */
+    s_edit_panel = lv_obj_create(s_scr);
+    lv_obj_set_size(s_edit_panel, 250, 132);
+    lv_obj_align(s_edit_panel, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_radius(s_edit_panel, 18, 0);
+    lv_obj_set_style_bg_color(s_edit_panel, C_BG1, 0);
+    lv_obj_set_style_bg_opa(s_edit_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_edit_panel, C_ACCENT, 0);
+    lv_obj_set_style_border_width(s_edit_panel, 2, 0);
+    lv_obj_remove_flag(s_edit_panel, LV_OBJ_FLAG_SCROLLABLE);
+    /* Must not be clickable: "tap anywhere to accept" has to include tapping
+     * the panel itself, which is the obvious place to tap. */
+    lv_obj_remove_flag(s_edit_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_edit_panel, LV_OBJ_FLAG_HIDDEN);
+
+    s_edit_title = lv_label_create(s_edit_panel);
+    lv_obj_set_style_text_font(s_edit_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_edit_title, C_LABEL, 0);
+    lv_obj_align(s_edit_title, LV_ALIGN_TOP_MID, 0, 2);
+    lv_label_set_text(s_edit_title, "");
+
+    s_edit_value = lv_label_create(s_edit_panel);
+    lv_obj_set_style_text_font(s_edit_value, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(s_edit_value, C_ACCENT_HI, 0);
+    lv_obj_align(s_edit_value, LV_ALIGN_CENTER, 0, 4);
+    lv_label_set_text(s_edit_value, "");
+
+    s_edit_hint = lv_label_create(s_edit_panel);
+    lv_obj_set_style_text_font(s_edit_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_edit_hint, C_LABEL, 0);
+    lv_obj_align(s_edit_hint, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_label_set_text(s_edit_hint, "turn to choose  -  tap to accept");
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
@@ -358,6 +636,11 @@ void ui_update(const ui_state_t *st)
 {
     if (!st || !s_scr) return;
     if (!lvgl_port_lock(20)) return;      /* never block the caller */
+    s_last = *st;                         /* editors open on the live value */
+
+    /* While an editor is open its panel owns the screen; leave the rest of the
+     * face alone so the value the operator is choosing does not jitter. */
+    if (s_edit != ED_NONE) { lvgl_port_unlock(); return; }
 
     int64_t f = st->freq_hz < 0 ? 0 : st->freq_hz;
     int mhz = (int)(f / 1000000);
@@ -397,13 +680,18 @@ void ui_update(const ui_state_t *st)
     lv_label_set_text_fmt(s_filt, "%ld", (long)(st->filt_hi - st->filt_lo));
     lv_label_set_text(s_step_lbl, step_name(st->step_hz));
 
-    /* RIT only appears when it is doing something. A chip reading "RIT 0" is
-     * just noise, but RIT silently non-zero is a classic way to lose a QSO. */
-    if (st->rit_hz) lv_label_set_text_fmt(s_rit, "RIT %+ld", (long)st->rit_hz);
-    else            lv_label_set_text(s_rit, "");
+    /* RIT is always shown so it is always tappable, but greyed at zero: RIT
+     * silently non-zero is a classic way to lose a QSO, so when it IS set it
+     * has to stand out. */
+    if (st->rit_hz) {
+        lv_label_set_text_fmt(s_rit, "RIT %+ld", (long)st->rit_hz);
+        lv_obj_set_style_text_color(s_rit, C_WARN, 0);
+    } else {
+        lv_label_set_text(s_rit, "RIT 0");
+        lv_obj_set_style_text_color(s_rit, C_DISABLED, 0);
+    }
 
-    lv_obj_set_style_bg_color(s_pip,
-        !st->link_ok ? C_DANGER : st->tx ? C_TX_BORDER : C_ACCENT, 0);
+    lv_label_set_text_fmt(s_vol, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
 
     lv_label_set_text(s_status,
         !st->link_ok     ? "NO LINK" :
@@ -429,12 +717,12 @@ void ui_update(const ui_state_t *st)
     if (st->tx != s_was_tx) {
         s_was_tx = st->tx;
         lv_obj_set_style_bg_color(s_scr, st->tx ? C_BG_TX : C_BG, 0);
-        lv_obj_set_style_arc_color(s_ring, st->tx ? C_TX_BORDER : C_BG, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(s_ptt, st->tx ? C_BG_TX : C_BG1, 0);
-        lv_obj_set_style_border_color(s_ptt,
-            st->tx ? C_TX_BORDER : C_SUBTLE, 0);
+        lv_obj_set_style_arc_color(s_ring, st->tx ? C_TX_RED : C_BG, LV_PART_MAIN);
+        /* Unmissable: the whole bottom slab goes solid red. With toggle PTT
+         * you can walk away from it, so it has to shout. */
+        lv_obj_set_style_bg_color(s_ptt, st->tx ? C_TX_RED : C_BG1, 0);
         lv_obj_set_style_text_color(s_ptt_lbl,
-            st->tx ? C_TX_TEXT : C_TEXT2, 0);
+            st->tx ? lv_color_white() : C_TEXT2, 0);
     }
     if (st->tx)
         lv_label_set_text_fmt(s_ptt_lbl, "TX  %lu",

@@ -87,4 +87,16 @@ void tci_ptt_force_abort(uint8_t reason);
 /* Configure the time-out timer, clamped to the FSM's limits. */
 void tci_set_tot_ms(uint32_t ms);
 
+/* --- setters for the on-screen editors ---------------------------------
+ * All are fire-and-forget. modulation and rx_filter_band are confirmed by the
+ * server's own change notifications; rit_offset is confirmed on NO path at
+ * all, so the caller must read it back if it wants certainty. */
+void tci_set_mode(const char *mode);
+void tci_set_filter(int32_t lo, int32_t hi);
+void tci_set_rit(int32_t hz);
+
+/* Jump to a frequency (band change). Goes through the same optimistic model
+ * and echo ring as knob tuning, so it cannot confuse the anti-echo logic. */
+void tci_goto_freq(int64_t hz);
+
 #endif /* TCI_CLIENT_H */

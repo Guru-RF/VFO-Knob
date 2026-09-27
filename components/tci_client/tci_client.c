@@ -525,6 +525,39 @@ void tci_set_step(int32_t step_hz)
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
+void tci_set_mode(const char *mode)
+{
+    if (mode && *mode) send_cmd("modulation:%u,%s;", (unsigned)S.my_trx, mode);
+}
+
+void tci_set_filter(int32_t lo, int32_t hi)
+{
+    send_cmd("rx_filter_band:%u,%ld,%ld;", (unsigned)S.my_trx, (long)lo, (long)hi);
+}
+
+void tci_set_rit(int32_t hz)
+{
+    /* Confirmed on no path whatsoever, so set the local value optimistically
+     * and let a later GET correct it if the rig disagrees. */
+    taskENTER_CRITICAL(&S_LOCK);
+    S.rit_hz = hz;
+    taskEXIT_CRITICAL(&S_LOCK);
+    send_cmd("rit_offset:%u,%ld;", (unsigned)S.my_trx, (long)hz);
+    send_cmd("rit_enable:%u,%s;", (unsigned)S.my_trx, hz ? "true" : "false");
+}
+
+void tci_goto_freq(int64_t hz)
+{
+    /* Route through the same model the knob uses, so the echo ring sees it and
+     * the jump is not mistaken for a remote change. */
+    uint32_t t = now_ms();
+    taskENTER_CRITICAL(&S_LOCK);
+    tune_assign(&S.tune, hz);
+    S.t_last_input_ms = t;
+    S.reconcile_armed = false;
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
 void tci_ptt_key(void)    { S.pending_key = 1; }
 void tci_ptt_unkey(void)  { S.pending_unkey = 1; }
 void tci_ptt_toggle(void) { S.pending_toggle = 1; }

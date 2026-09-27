@@ -180,6 +180,14 @@ static void encoder_task(void *arg)
         residue -= detents * s_counts_per_detent;
         if (detents == 0) continue;
 
+        /* While a field editor is open the knob picks a value instead of
+         * tuning. Selection on the precise rotary, commitment on the
+         * imprecise touch. */
+        if (ui_edit_active()) {
+            ui_edit_rotate(detents);
+            continue;
+        }
+
         tune.step_hz = atomic_load(&s_step_hz);
         uint8_t mult = accel_update(&accel, detents, now_ms);
         if (accel.v_detents > v_peak) v_peak = accel.v_detents;
@@ -269,6 +277,28 @@ static void ui_task(void *arg)
             ESP_LOGI(TAG, "step -> %ld Hz", (long)req);
             drv2605_fire(&s_drv, 26);      /* confirm the tap landed */
         }
+        ui_commit_t c;
+        if (ui_take_commit(&c)) {
+            if (c.have_mode) {
+                ESP_LOGI(TAG, "mode -> %s", c.mode);
+                tci_set_mode(c.mode);
+            }
+            if (c.have_filter) {
+                ESP_LOGI(TAG, "filter -> %ld..%ld",
+                         (long)c.filt_lo, (long)c.filt_hi);
+                tci_set_filter(c.filt_lo, c.filt_hi);
+            }
+            if (c.have_rit) {
+                ESP_LOGI(TAG, "rit -> %+ld", (long)c.rit_hz);
+                tci_set_rit(c.rit_hz);
+            }
+            if (c.have_freq) {
+                ESP_LOGI(TAG, "band -> %lld", (long long)c.freq_hz);
+                tci_goto_freq(c.freq_hz);
+            }
+            drv2605_fire(&s_drv, 7);        /* soft bump: value committed */
+        }
+
         if (ui_take_ptt_tap()) {
             ESP_LOGI(TAG, "PTT pill tapped");
             tci_ptt_toggle();

@@ -42,6 +42,31 @@ int32_t ui_take_step_request(void);
 /* A tap landed on the PTT pill. Consumed by the caller. */
 bool ui_take_ptt_tap(void);
 
+/* --- knob-driven field editors -------------------------------------------
+ * Tapping band, mode, filter, RIT or volume opens a large editor; the knob
+ * chooses a value and a tap anywhere accepts it. While an editor is open the
+ * knob must NOT tune, so the caller checks ui_edit_active() first.
+ *
+ * Selection happens on the precise rotary and commitment on the imprecise
+ * touch, which is what makes the whole thing usable on 45 mm of round glass. */
+bool ui_edit_active(void);
+void ui_edit_rotate(int32_t detents);
+
+typedef struct {
+    bool     have_mode;    char    mode[8];
+    bool     have_filter;  int32_t filt_lo, filt_hi;
+    bool     have_rit;     int32_t rit_hz;
+    bool     have_freq;    int64_t freq_hz;
+} ui_commit_t;
+
+/* Non-zero if the operator accepted an edit. Consumed by the caller. */
+bool ui_take_commit(ui_commit_t *out);
+
+/* Placeholder until v2 streams RX audio to the onboard DAC. The control and
+ * its icon exist now so the interaction is settled before the audio path
+ * arrives. */
+uint8_t ui_volume(void);
+
 /* Step through 0/90/180/270. Orientation is a physical property of how the
  * panel is mounted, and guessing it costs a flash cycle each time -- so make
  * it switchable from the console instead. */
