@@ -85,3 +85,9 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # objects.githubusercontent.com that release assets are actually served from.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# Mbed TLS works out of PSRAM. RSA-3072 signature verification on an OTA image
+# needs several kB of MPI scratch, and on this board internal RAM is the scarce
+# resource -- it failed with MBEDTLS_ERR_MPI_ALLOC_FAILED and rejected a valid,
+# correctly signed image as "signature bad". Nothing here is touched by DMA.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

@@ -75,7 +75,13 @@ static void done_cb(lv_timer_t *t)
     lv_timer_delete(t);
     /* Hand over with a fade. The main screen is already built and updating
      * behind this, so there is nothing to wait for. */
-    lv_screen_load_anim(s_main, LV_SCR_LOAD_ANIM_FADE_ON, 320, 0, false);
+    /* auto_del: the splash is never shown again, and it is not cheap to keep
+     * -- a decoded 120x120 logo, sixteen grid rectangles, an arc and three
+     * labels, all pinned in RAM for the life of the device. Leaving it
+     * allocated cost enough internal heap that RSA-3072 signature
+     * verification on the next OTA could not allocate its working memory and
+     * rejected a perfectly good image. */
+    lv_screen_load_anim(s_main, LV_SCR_LOAD_ANIM_FADE_ON, 320, 0, true);
     s_splash = NULL;
 }
 
