@@ -54,6 +54,13 @@ static const char *TAG = "ui";
 #define ARC_ROT  170      /* LVGL 0deg = 3 o'clock; 170..370 spans the top */
 #define ARC_SPAN 200
 
+/* In transmit the arc splits: SWR on the LEFT half, forward power on the
+ * right, with the mic level as a thin inner ring. */
+#define SWR_ROT  ARC_ROT
+#define SWR_SPAN (ARC_SPAN / 2 - 3)
+#define AUD_ROT  (ARC_ROT + ARC_SPAN / 2 + 3)
+#define AUD_SPAN (ARC_SPAN / 2 - 3)
+
 /* The PTT slab runs full width and all the way to the bottom edge; the round
  * glass clips it into a chord, which is the intended shape. Making it the
  * largest target on the face is deliberate -- with toggle PTT, stopping a
@@ -77,7 +84,48 @@ static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_mic_arc, *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
 static float s_mic_peak = -60.0f;
+static float s_mic_floor = -100.0f;
 static float s_pwr_peak;
+static int   s_pwr_range = -1;
+
+/* Four ranges, each with the pegs an operator actually reads. The bar switches
+ * between them and the printed pegs switch with it, so the scale is never
+ * ambiguous. */
+#define PWR_RANGES 4
+#define PWR_PEGS   3
+static const struct {
+    float fs;
+    float peg[PWR_PEGS];
+    const char *lbl[PWR_PEGS];
+} PWR[PWR_RANGES] = {
+    {   10.0f, {    1,    5,   10 }, { "1",   "5",   "10"  } },
+    {  100.0f, {   10,   50,  100 }, { "10",  "50",  "100" } },
+    { 1000.0f, {  100,  500, 1000 }, { ".1k", ".5k", "1k"  } },
+    { 2000.0f, { 1000, 1500, 2000 }, { "1k",  "1.5k","2k"  } },
+};
+static lv_obj_t *s_pwr_tick[PWR_PEGS];
+static lv_obj_t *s_pwr_lbl[PWR_PEGS];
+static lv_point_precise_t s_pwr_pts[PWR_PEGS][2];
+
+static void pwr_set_range(int r)
+{
+    if (r == s_pwr_range) return;
+    s_pwr_range = r;
+    for (int i = 0; i < PWR_PEGS; i++) {
+        float frac = PWR[r].peg[i] / PWR[r].fs;
+        float a = (AUD_ROT + frac * AUD_SPAN) * 3.14159265f / 180.0f;
+        float c = cosf(a), sn = sinf(a);
+        int r1 = ARC_R0 - 15, r0 = r1 - 9;
+        s_pwr_pts[i][0].x = (lv_value_precise_t)(CX + r0 * c);
+        s_pwr_pts[i][0].y = (lv_value_precise_t)(CY + r0 * sn);
+        s_pwr_pts[i][1].x = (lv_value_precise_t)(CX + r1 * c);
+        s_pwr_pts[i][1].y = (lv_value_precise_t)(CY + r1 * sn);
+        lv_line_set_points(s_pwr_tick[i], s_pwr_pts[i], 2);
+        lv_label_set_text(s_pwr_lbl[i], PWR[r].lbl[i]);
+        lv_obj_align(s_pwr_lbl[i], LV_ALIGN_CENTER,
+                     (int)(139 * c), (int)(139 * sn));
+    }
+}
 #define SWR_ZONES 3
 static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0x4DD87A },   /* green */
@@ -451,11 +499,6 @@ static lv_obj_t *mkgroup(void)
     return g;
 }
 
-/* SWR occupies the LEFT half of the arc, audio level the right. */
-#define SWR_ROT  ARC_ROT
-#define SWR_SPAN (ARC_SPAN / 2 - 3)
-#define AUD_ROT  (ARC_ROT + ARC_SPAN / 2 + 3)
-#define AUD_SPAN (ARC_SPAN / 2 - 3)
 static float swr_frac(float w)
 {
     if (w <= 1.0f) return 0.0f;
@@ -505,6 +548,21 @@ static void add_tx_ticks(void)
      * radial band as the tick marks and overlap them, and they are redundant:
      * only one half carries a numbered scale, and the centre already reads out
      * the SWR figure and the forward power in words. */
+}
+
+static void add_pwr_pegs(void)
+{
+    for (int i = 0; i < PWR_PEGS; i++) {
+        s_pwr_tick[i] = lv_line_create(s_tx_ticks);
+        lv_obj_set_style_line_width(s_pwr_tick[i], 2, 0);
+        lv_obj_set_style_line_color(s_pwr_tick[i], C_LABEL, 0);
+        lv_obj_set_style_line_rounded(s_pwr_tick[i], true, 0);
+
+        s_pwr_lbl[i] = lv_label_create(s_tx_ticks);
+        lv_obj_set_style_text_font(s_pwr_lbl[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_pwr_lbl[i], C_LABEL, 0);
+        lv_label_set_text(s_pwr_lbl[i], "");
+    }
 }
 
 static void add_ticks(void)
@@ -576,6 +634,8 @@ static void build(void)
     s_tx_ticks = mkgroup();
     add_ticks();
     add_tx_ticks();
+    add_pwr_pegs();
+    pwr_set_range(0);
     lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
 
     /* In transmit the arc changes meaning entirely: MIC level across the left
@@ -643,6 +703,8 @@ static void build(void)
 
     add_ticks();
     add_tx_ticks();
+    add_pwr_pegs();
+    pwr_set_range(0);
     lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
 
     /* In transmit the arc changes meaning entirely: MIC level across the left
@@ -986,6 +1048,7 @@ void ui_update(const ui_state_t *st)
     if (!st->tx) {
         lv_label_set_text(s_srd, sbuf);
         lv_label_set_text_fmt(s_dbm, "%d dBm", (int)s_meter_disp);
+        lv_obj_set_style_text_color(s_dbm, C_LABEL, 0);
     }
     lv_obj_set_style_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT, 0);
 
@@ -996,11 +1059,14 @@ void ui_update(const ui_state_t *st)
          * the peak, decay it slowly, and show the last 30 dB below it, so the
          * meter always uses its whole length whatever the levels are. */
         float mv = st->tx_mic_dbm;
-        if (mv > s_mic_peak) s_mic_peak = mv;            /* rise instantly */
-        else                 s_mic_peak -= 0.05f;        /* ~2.5 dB/s decay */
-        if (s_mic_peak < -90.0f) s_mic_peak = -90.0f;
-        float floor_db = s_mic_peak - 30.0f;
-        float m = (mv - floor_db) / (s_mic_peak - floor_db);
+        if (mv > s_mic_peak)  s_mic_peak  = mv;          /* rise instantly  */
+        else                  s_mic_peak -= 0.10f;       /* ~2 dB/s decay   */
+        if (mv < s_mic_floor) s_mic_floor = mv;          /* fall instantly  */
+        else                  s_mic_floor += 0.03f;      /* ~0.6 dB/s creep */
+        /* Keep a sane minimum window, or a steady tone would swing the meter
+         * end to end on a fraction of a dB. */
+        if (s_mic_peak - s_mic_floor < 12.0f) s_mic_floor = s_mic_peak - 12.0f;
+        float m = (mv - s_mic_floor) / (s_mic_peak - s_mic_floor);
         if (m < 0) m = 0;
         if (m > 1) m = 1;
         lv_arc_set_value(s_mic_arc, (int)(m * 1000));
@@ -1012,14 +1078,15 @@ void ui_update(const ui_state_t *st)
          * scale, so the full-scale figure is always a number an operator
          * recognises. Holds the highest range reached and decays out of it,
          * otherwise the scale would jump about mid-over. */
-        static const float FS[] = { 5, 10, 25, 50, 100, 250, 500, 1000, 2500 };
         float pw = st->tx_peak_w;
         if (pw > s_pwr_peak) s_pwr_peak = pw;
-        else                 s_pwr_peak *= 0.995f;
-        float fs = FS[sizeof FS / sizeof FS[0] - 1];
-        for (size_t i = 0; i < sizeof FS / sizeof FS[0]; i++) {
-            if (s_pwr_peak <= FS[i]) { fs = FS[i]; break; }
+        else                 s_pwr_peak *= 0.997f;     /* decay out of a range */
+        int r = PWR_RANGES - 1;
+        for (int i = 0; i < PWR_RANGES; i++) {
+            if (s_pwr_peak <= PWR[i].fs) { r = i; break; }
         }
+        pwr_set_range(r);
+        float fs = PWR[r].fs;
         float pf = fs > 0 ? pw / fs : 0.0f;
         if (pf < 0) pf = 0;
         if (pf > 1) pf = 1;
@@ -1047,6 +1114,9 @@ void ui_update(const ui_state_t *st)
          * so it goes here. */
         lv_label_set_text_fmt(s_dbm, "%.0f / %.0f W",
                               (double)st->tx_peak_w, (double)fs);
+        /* C_LABEL is dark grey, which all but vanishes against the amber TX
+         * background -- which is why these readouts could not be found. */
+        lv_obj_set_style_text_color(s_dbm, C_TX_TEXT, 0);
     }
 
     if (st->tx != s_was_tx) {
