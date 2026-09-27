@@ -135,6 +135,24 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 2.5f, 3.0f, 0xFF4D4D },   /* red   */
 };
 static lv_obj_t *s_swr_zone[SWR_ZONES];
+
+/* The receive meter gets the same treatment as SWR: bands laid end to end that
+ * fill independently, so a strong signal is read as "how far into the red"
+ * rather than by recognising a colour. S9 is -73 dBm and sits at 0.6 of the
+ * arc, matching AetherSDR's own scale.
+ *
+ * The bar still sweeps the whole arc -- the bands only decide what colour each
+ * part of that sweep is, so the fill is continuous and steps through the
+ * palette as the signal climbs. */
+#define RX_ZONES 5
+static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
+    { -127.0f, -97.0f, 0x2F9E6A },   /* dark green: S0 to S5      */
+    {  -97.0f, -73.0f, 0x4DD87A },   /* green:      S5 to S9      */
+    {  -73.0f, -63.0f, 0xFFD24D },   /* yellow:     S9 to S9+10   */
+    {  -63.0f, -43.0f, 0xFF9A3C },   /* orange:     S9+10 to +30  */
+    {  -43.0f, -13.0f, 0xFF4D4D },   /* red:        S9+30 and up  */
+};
+static lv_obj_t *s_rx_zone[RX_ZONES];
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
 /* Tap the meter arc to see where the knob actually is on the network. The one
@@ -199,14 +217,6 @@ static void fmt1(char *out, size_t n, const char *pre, float v, const char *suf)
     if (v < 0) v = 0;
     int t = (int)(v * 10.0f + 0.5f);
     snprintf(out, n, "%s%d.%d%s", pre, t / 10, t % 10, suf);
-}
-
-static lv_color_t meter_color(float frac)
-{
-    if (frac >= 0.60f) return lv_color_hex(0xE8553C);   /* S9 and above */
-    if (frac >= 0.47f) return lv_color_hex(0xE8B94C);   /* approaching S9 */
-    if (frac >= 0.25f) return lv_color_hex(0x6CC56A);
-    return lv_color_hex(0x2F9E6A);
 }
 
 /* S0 = -127 dBm, S9 = -73, S9+60 = -13, and S9 sits at 60% of the scale --
@@ -681,8 +691,30 @@ static void build(void)
     lv_obj_remove_flag(s_meter, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_arc_width(s_meter, 12, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_meter, C_SUBTLE, LV_PART_MAIN);
+    /* s_meter keeps the unfilled track; the coloured fill is the zone arcs
+     * below, so its own indicator must not draw or the two would overlap. */
     lv_obj_set_style_arc_width(s_meter, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_meter, C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(s_meter, LV_OPA_TRANSP, LV_PART_INDICATOR);
+
+    for (size_t z = 0; z < RX_ZONES; z++) {
+        lv_obj_t *b = lv_arc_create(s_scr);
+        lv_obj_set_size(b, ARC_R0 * 2, ARC_R0 * 2);
+        lv_obj_center(b);
+        int a0 = (int)(smeter_frac(RXZONES[z].from) * ARC_SPAN);
+        int a1 = (int)(smeter_frac(RXZONES[z].to)   * ARC_SPAN);
+        lv_arc_set_rotation(b, ARC_ROT + a0);
+        lv_arc_set_bg_angles(b, 0, a1 - a0);
+        lv_arc_set_range(b, 0, 1000);
+        lv_arc_set_value(b, 0);
+        lv_obj_remove_style(b, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        /* No background of its own: s_meter already draws the track. */
+        lv_obj_set_style_arc_opa(b, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(b, 12, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(b, lv_color_hex(RXZONES[z].rgb),
+                                   LV_PART_INDICATOR);
+        s_rx_zone[z] = b;
+    }
     s_rx_ticks = mkgroup();
     s_tx_ticks = mkgroup();
     add_ticks();
@@ -1136,8 +1168,15 @@ void ui_update(const ui_state_t *st)
 
     float frac = smeter_frac(s_meter_disp);
     lv_arc_set_value(s_meter, (int)(frac * 1000));
-    lv_obj_set_style_arc_color(s_meter,
-        st->tx ? C_TX_BORDER : meter_color(frac), LV_PART_INDICATOR);
+    /* Each band fills only across its own span: full once the signal is past
+     * its top, empty until the signal reaches its bottom. */
+    for (size_t z = 0; z < RX_ZONES; z++) {
+        float lo = RXZONES[z].from, hi = RXZONES[z].to;
+        float f = (s_meter_disp - lo) / (hi - lo);
+        if (f < 0.0f) f = 0.0f;
+        if (f > 1.0f) f = 1.0f;
+        lv_arc_set_value(s_rx_zone[z], (int)(f * 1000));
+    }
     char sbuf[10];
     smeter_text(s_meter_disp, sbuf, sizeof sbuf);
     if (!st->tx) {
@@ -1233,6 +1272,8 @@ void ui_update(const ui_state_t *st)
         /* Swap the meter set wholesale. */
         if (st->tx) {
             lv_obj_add_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
+            for (size_t z = 0; z < RX_ZONES; z++)
+                lv_obj_add_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_pwr_arc, LV_OBJ_FLAG_HIDDEN);
@@ -1242,6 +1283,8 @@ void ui_update(const ui_state_t *st)
                 lv_obj_remove_flag(s_swr_zone[z], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_remove_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
+            for (size_t z = 0; z < RX_ZONES; z++)
+                lv_obj_remove_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_pwr_arc, LV_OBJ_FLAG_HIDDEN);

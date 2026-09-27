@@ -38,6 +38,10 @@ const char *net_prov_web_pass(void);
 bool        net_prov_web_is_default(void);
 void        net_prov_save_web(const char *user, const char *pass);
 
+/* How often to check for firmware updates, in hours; 0 disables. */
+uint16_t net_prov_ota_hours(void);
+void     net_prov_save_ota_hours(uint16_t hours);
+
 /* Transmit time-out in seconds, persisted. */
 uint16_t net_prov_tot_s(void);
 void     net_prov_save_tot(uint16_t seconds);

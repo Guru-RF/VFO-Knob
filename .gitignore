@@ -23,3 +23,6 @@ build_usbdiag/
 # for devices already in the field; leaking it means anyone can sign one.
 ota_signing_key.pem
 *_signing_key.pem
+
+# Staged OTA images: large, and published on the firmware branch instead.
+firmware/*.bin

@@ -38,6 +38,11 @@ typedef struct {
 
 esp_err_t ota_init(void);
 
+/* Check every `hours` and install anything newer; 0 turns it off. Only ever
+ * useful on WiFi -- over the USB cable the device has no route out, and the
+ * configuration page does the checking instead. Never reboots by itself. */
+esp_err_t ota_set_interval(uint32_t hours);
+
 /* Confirms the running image so the bootloader stops treating it as on trial.
  * Call once the device has proved it works -- anything earlier defeats the
  * rollback. */
@@ -48,6 +53,10 @@ void ota_mark_valid(void);
 esp_err_t ota_start_check(bool install);
 
 void ota_get_status(ota_status_t *out);
+
+/* Where images are published. The configuration page needs this so it can do
+ * the download itself when the device has no route out. */
+const char *ota_base_url(void);
 
 /* Push an image in from the browser instead of pulling it from GitHub.
  *

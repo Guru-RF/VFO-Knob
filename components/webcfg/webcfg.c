@@ -151,12 +151,14 @@ static esp_err_t config_get(httpd_req_t *r)
     snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"tot\":%u,"
-             "\"user\":\"%s\",\"defaultpw\":%s}",
+             "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,"
+             "\"fwbase\":\"%s\"}",
              c->tci_host, (unsigned)c->tci_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              (unsigned)net_prov_tot_s(),
              net_prov_web_user(),
-             net_prov_web_is_default() ? "true" : "false");
+             net_prov_web_is_default() ? "true" : "false",
+             (unsigned)net_prov_ota_hours(), ota_base_url());
     return send_json(r, buf);
 }
 
@@ -228,6 +230,10 @@ static esp_err_t config_post(httpd_req_t *r)
     /* Bounded the same way the PTT FSM is: a time-out outside this range is
      * either useless or not a time-out at all. */
     if (field_num(body, "tot", &v)) net_prov_save_tot((uint16_t)clampl(v, 30, 600));
+    if (field_num(body, "otah", &v)) {
+        net_prov_save_ota_hours((uint16_t)clampl(v, 0, 720));
+        ota_set_interval(net_prov_ota_hours());
+    }
 
     uint8_t vol = net_prov_volume(), mic = net_prov_mic_gain();
     if (field_num(body, "vol", &v)) vol = (uint8_t)clampl(v, 0, 100);

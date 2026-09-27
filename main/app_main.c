@@ -634,6 +634,7 @@ void app_main(void)
      * someone needs to correct an SSID or a host address. */
     bring_up("webcfg", webcfg_start);
     ota_init();
+    ota_set_interval(net_prov_ota_hours());
     tci_set_tot_ms((uint32_t)net_prov_tot_s() * 1000u);
 
     /* Three failed boots in a row: come up with the bare minimum so the device

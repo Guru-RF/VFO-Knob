@@ -115,14 +115,17 @@ button:active{transform:translateY(1px)}
 <section>
   <h2>Firmware</h2>
   <div id="otarow"></div>
-  <button id="check" class="ghost">Check GitHub</button>
-  <button id="install" hidden>Download and install</button>
-  <p class="note">Checking GitHub needs the knob on WiFi &mdash; over the USB
-     cable it has no route to the internet. Either way you can download the
-     release yourself and upload it here.</p>
-  <label>Upload firmware (.bin)</label>
-  <input id="fw" type="file" accept=".bin">
-  <button id="upload" class="ghost">Upload and install</button>
+  <button id="install" hidden>Update now</button>
+  <button id="check" class="ghost">Check now</button>
+  <label>Check automatically every (hours, 0 = never)</label>
+  <input id="otah" inputmode="numeric">
+  <p class="note">The knob checks by itself on WiFi. Over the USB cable it has
+     no route to the internet, so this page checks and does the downloading for
+     it &mdash; same image, same signature check.</p>
+  <details><summary class="note" style="cursor:pointer">Install a file manually</summary>
+    <input id="fw" type="file" accept=".bin">
+    <button id="upload" class="ghost">Upload and install</button>
+  </details>
 </section>
 
 <button id="save">Save</button>
@@ -166,11 +169,12 @@ async function load(){
   $('host').value=c.host; $('port').value=c.port; $('ssid').value=c.ssid;
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('tot').value=c.tot;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
+  $('otah').value=c.otah; FWBASE=c.fwbase||'';
 }
 
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
-  for(const k of ['host','port','ssid','vol','mic','tot','user']) b.append(k,$(k).value);
+  for(const k of ['host','port','ssid','vol','mic','tot','user','otah']) b.append(k,$(k).value);
   if($('pass').value) b.append('pass',$('pass').value);
   if($('webpass').value) b.append('webpass',$('webpass').value);
   const r=await fetch('/api/config',{method:'POST',body:b});
@@ -197,24 +201,75 @@ $('reboot').onclick=async()=>{
 function poll(){ const t=setInterval(async()=>{
   try{ await fetch('/api/status'); clearInterval(t); location.reload() }catch(e){} },2000) }
 
+/* Where firmware is published; filled in from /api/config. */
+let FWBASE='';
+let webLatest=null;      /* manifest fetched by THIS PAGE, when it can */
+
+/* The page can reach the internet even when the knob cannot -- which over USB
+ * it never can, being the DHCP server on a link with no gateway. */
+async function webCheck(){
+  if(!FWBASE) return;
+  try{
+    const r=await fetch(FWBASE+'manifest.json',{cache:'no-store'});
+    if(!r.ok) return;
+    webLatest=await r.json();
+  }catch(e){ webLatest=null }   /* offline, or blocked -- not an error */
+}
+
+function newer(a,b){
+  const p=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n)||0);
+  const x=p(a), y=p(b);
+  for(let i=0;i<3;i++){ if((x[i]||0)>(y[i]||0)) return true;
+                        if((x[i]||0)<(y[i]||0)) return false }
+  return false;
+}
+
 async function ota(){
   let o; try{ o=await (await fetch('/api/ota')).json() }catch(e){ return }
   const busy = o.phase==='checking'||o.phase==='downloading';
+  const latest = (webLatest && webLatest.version) || o.available || '';
+  const have   = latest && newer(latest, o.running);
   $('otarow').innerHTML =
       row('Running', esc(o.running))
-    + row('Latest', esc(o.available||'\u2014'))
+    + row('Latest', esc(latest||'\u2014') + (webLatest?' <span class="pill up">via browser</span>':''))
     + row('Status', o.phase==='downloading' ? `downloading ${o.percent}%`
                                             : esc(o.message));
   $('check').disabled = busy;
-  $('install').hidden = !(o.available && o.available!==o.running &&
-                          o.phase!=='uptodate' && o.phase!=='installed');
+  $('install').hidden = !(have && o.phase!=='installed') || busy;
   if(o.phase==='installed'){
     $('install').hidden=true;
     $('msg').textContent='Update installed \u2014 reboot to run it.';
     $('msg').style.color='var(--ok)';
   }
 }
-$('check').onclick  =()=>fetch('/api/ota',{method:'POST'}).then(ota);
+$('check').onclick  =async()=>{ await webCheck();
+  await fetch('/api/ota',{method:'POST'}); ota() };
+
+/* Prefer letting the device pull it -- fewer moving parts. Fall back to
+ * downloading here and pushing it over, which is the only way on USB. */
+$('install').onclick = async()=>{
+  $('msg').style.color='var(--dim)';
+  if(!webLatest){
+    $('msg').textContent='Asking the knob to download\u2026';
+    await fetch('/api/ota?install=1',{method:'POST'}); ota(); return;
+  }
+  try{
+    $('install').disabled=true;
+    $('msg').textContent='Downloading '+webLatest.version+'\u2026';
+    const r=await fetch(FWBASE+webLatest.file,{cache:'no-store'});
+    if(!r.ok) throw new Error('download failed ('+r.status+')');
+    const blob=await r.blob();
+    $('msg').textContent=`Uploading ${(blob.size/1048576).toFixed(2)} MB to the knob\u2026`;
+    const u=await fetch('/api/ota/upload',{method:'POST',body:blob});
+    const t=await u.text();
+    $('msg').textContent = u.ok ? 'Installed \u2014 reboot to run it.' : 'Rejected: '+t;
+    $('msg').style.color = u.ok ? 'var(--ok)' : 'var(--bad)';
+  }catch(e){
+    $('msg').textContent='Could not update: '+e.message;
+    $('msg').style.color='var(--bad)';
+  }
+  $('install').disabled=false; ota();
+};
 $('upload').onclick = async()=>{
   const f=$('fw').files[0];
   if(!f){ $('msg').textContent='Choose a .bin first'; $('msg').style.color='var(--bad)'; return }
@@ -232,6 +287,7 @@ $('upload').onclick = async()=>{
 $('install').onclick=()=>{ $('msg').textContent='Downloading\u2026';
   fetch('/api/ota?install=1',{method:'POST'}).then(ota) };
 
-load(); refresh(); ota(); setInterval(refresh,2000); setInterval(ota,2000);
+load().then(webCheck).then(ota);
+refresh(); setInterval(refresh,2000); setInterval(ota,2000);
 </script>
 </body></html>

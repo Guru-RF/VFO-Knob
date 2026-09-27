@@ -12,16 +12,31 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 
 static const char *TAG = "ota";
 
 #ifndef OTA_REPO
 #define OTA_REPO "Guru-RF/VFO-Knob"
 #endif
-#define OTA_LATEST_URL "https://api.github.com/repos/" OTA_REPO "/releases/latest"
-/* The firmware asset is found by suffix rather than by an exact name, so the
- * release can carry several images without this needing to know the scheme. */
-#define OTA_ASSET_SUFFIX ".bin"
+#ifndef OTA_BRANCH
+#define OTA_BRANCH "firmware"
+#endif
+
+/* Updates are published as a small manifest plus a signed image under
+ * firmware/ in the repo, served by raw.githubusercontent.com -- NOT as GitHub
+ * release assets.
+ *
+ * The reason is CORS. The configuration page needs to fetch the image itself
+ * when the knob is on the USB cable, because there the knob is the DHCP server
+ * and has no route to the internet: the browser has to do the downloading.
+ * Release assets redirect to release-assets.githubusercontent.com, which sends
+ * no Access-Control-Allow-Origin, so a page served from 10.55.42.1 cannot read
+ * them. raw.githubusercontent.com sends "*", so one source works for both the
+ * device (over WiFi) and the browser (over USB). Measured, not assumed. */
+#define OTA_BASE_URL "https://raw.githubusercontent.com/" OTA_REPO \
+                     "/" OTA_BRANCH "/firmware/"
+#define OTA_MANIFEST_URL OTA_BASE_URL "manifest.json"
 
 static ota_status_t    s_st = { .phase = OTA_IDLE };
 static portMUX_TYPE    s_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -91,38 +106,20 @@ static bool json_string_field(const char *json, const char *key,
     return i > 0;
 }
 
-static bool find_asset_url(const char *json, char *out, size_t len)
-{
-    const char *p = json;
-    while ((p = strstr(p, "\"browser_download_url\"")) != NULL) {
-        char url[256];
-        if (!json_string_field(p, "browser_download_url", url, sizeof url)) return false;
-        size_t n = strlen(url), s = strlen(OTA_ASSET_SUFFIX);
-        if (n > s && strcmp(url + n - s, OTA_ASSET_SUFFIX) == 0) {
-            strlcpy(out, url, len);
-            return true;
-        }
-        p += 22;
-    }
-    return false;
-}
-
 /* ------------------------------------------------------------- the worker */
 
 static esp_err_t fetch_latest(char *body, size_t cap, int *out_len)
 {
     esp_http_client_config_t c = {
-        .url               = OTA_LATEST_URL,
+        .url               = OTA_MANIFEST_URL,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms        = 15000,
         .keep_alive_enable = false,
     };
     esp_http_client_handle_t h = esp_http_client_init(&c);
     if (!h) return ESP_ERR_NO_MEM;
-    /* GitHub rejects requests without one, and the API version header keeps
-     * the response shape stable. */
+    /* raw.githubusercontent.com rejects requests with no User-Agent. */
     esp_http_client_set_header(h, "User-Agent", "VFO-Knob");
-    esp_http_client_set_header(h, "Accept", "application/vnd.github+json");
 
     esp_err_t err = esp_http_client_open(h, 0);
     if (err != ESP_OK) goto out;
@@ -145,23 +142,23 @@ static void ota_task(void *arg)
 {
     const bool install = (bool)(intptr_t)arg;
 
-    /* The feed is tens of kB and only two fields are wanted, so it is read
-     * into PSRAM rather than competing for internal RAM with the TLS session. */
-    const size_t cap = 24 * 1024;
-    char *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
-    if (!body) body = malloc(cap);
+    /* The manifest is a few hundred bytes; 2 kB is generous. */
+    const size_t cap = 2048;
+    char *body = malloc(cap);
     if (!body) { set_phase(OTA_FAILED, "out of memory"); goto done; }
 
-    set_phase(OTA_CHECKING, "checking GitHub for a newer release");
+    set_phase(OTA_CHECKING, "checking for a newer release");
     int len = 0;
     if (fetch_latest(body, cap, &len) != ESP_OK) {
-        set_phase(OTA_FAILED, "could not reach the release feed");
+        /* Over the USB cable this is expected and not a fault: the knob has no
+         * gateway. The configuration page does the checking in that case. */
+        set_phase(OTA_FAILED, "no route to the update server");
         goto done;
     }
 
     char tag[32] = { 0 };
-    if (!json_string_field(body, "tag_name", tag, sizeof tag)) {
-        set_phase(OTA_FAILED, "no tag_name in the release feed");
+    if (!json_string_field(body, "version", tag, sizeof tag)) {
+        set_phase(OTA_FAILED, "manifest has no version");
         goto done;
     }
     portENTER_CRITICAL(&s_lock);
@@ -181,11 +178,12 @@ static void ota_task(void *arg)
         goto done;
     }
 
-    char url[256];
-    if (!find_asset_url(body, url, sizeof url)) {
-        set_phase(OTA_FAILED, "release has no " OTA_ASSET_SUFFIX " asset");
+    char file[96], url[256];
+    if (!json_string_field(body, "file", file, sizeof file)) {
+        set_phase(OTA_FAILED, "manifest names no image");
         goto done;
     }
+    snprintf(url, sizeof url, "%s%s", OTA_BASE_URL, file);
     free(body);
     body = NULL;                      /* the TLS session wants the room back */
 
@@ -298,6 +296,39 @@ void ota_upload_abort(void)
 }
 
 /* ------------------------------------------------------------------ public */
+
+/* Periodic check, WiFi only in practice.
+ *
+ * It installs but never reboots. Rebooting a transmitter's control head
+ * unattended is not something an update mechanism gets to decide: the image is
+ * staged in the spare slot and takes effect the next time the operator
+ * restarts it, or never, and nothing is interrupted either way. */
+static esp_timer_handle_t s_periodic;
+
+static void periodic_cb(void *arg)
+{
+    (void)arg;
+    if (s_busy) return;
+    ota_start_check(true);
+}
+
+esp_err_t ota_set_interval(uint32_t hours)
+{
+    if (s_periodic) {
+        esp_timer_stop(s_periodic);
+        esp_timer_delete(s_periodic);
+        s_periodic = NULL;
+    }
+    if (!hours) return ESP_OK;          /* 0 disables it */
+    const esp_timer_create_args_t a = { .callback = periodic_cb,
+                                        .name = "otachk" };
+    esp_err_t err = esp_timer_create(&a, &s_periodic);
+    if (err != ESP_OK) return err;
+    return esp_timer_start_periodic(s_periodic,
+                                    (uint64_t)hours * 3600ULL * 1000000ULL);
+}
+
+const char *ota_base_url(void) { return OTA_BASE_URL; }
 
 esp_err_t ota_init(void)
 {
