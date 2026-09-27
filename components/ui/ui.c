@@ -180,6 +180,17 @@ static uint8_t s_rot = UI_ROT_DEFAULT;
  * an S-meter is about S9+53 -- so a genuinely strong signal still showed green.
  * An operator reads "over S9" as the meaningful threshold, so that is where the
  * colour changes. */
+/* LVGL's built-in snprintf does NOT handle %f unless LV_SPRINTF_USE_FLOAT is
+ * enabled, and silently emits a literal "f" instead -- which is exactly how
+ * "SWR 11.5" reached the glass as "SWR f". Format fixed-point by hand rather
+ * than depend on a config flag, and keep float printf out of the binary. */
+static void fmt1(char *out, size_t n, const char *pre, float v, const char *suf)
+{
+    if (v < 0) v = 0;
+    int t = (int)(v * 10.0f + 0.5f);
+    snprintf(out, n, "%s%d.%d%s", pre, t / 10, t % 10, suf);
+}
+
 static lv_color_t meter_color(float frac)
 {
     if (frac >= 0.60f) return lv_color_hex(0xE8553C);   /* S9 and above */
@@ -674,6 +685,10 @@ static void build(void)
     lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_mic_arc, C_SUBTLE, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_INDICATOR);
+    /* Fills from the bottom end upward, opposite to the power bar above it.
+     * Two bars growing the same way on the same side invite being read as one
+     * quantity. */
+    lv_arc_set_mode(s_mic_arc, LV_ARC_MODE_REVERSE);
     lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
     lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
 
@@ -743,6 +758,10 @@ static void build(void)
     lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_mic_arc, C_SUBTLE, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_INDICATOR);
+    /* Fills from the bottom end upward, opposite to the power bar above it.
+     * Two bars growing the same way on the same side invite being read as one
+     * quantity. */
+    lv_arc_set_mode(s_mic_arc, LV_ARC_MODE_REVERSE);
     lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
     lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
 
@@ -779,7 +798,7 @@ static void build(void)
     s_mode = mklabel(&lv_font_montserrat_20, C_TEXT,   CX,      122, "USB");
     s_filt = mklabel(&lv_font_montserrat_20, C_TEXT2,  CX + 76, 122, "0");
 
-    const int PITCH = 33, SMALL = 21, SEPW = 13;
+    const int PITCH = 33, SMALL = 28, SEPW = 11;
     int total = 6 * PITCH + 2 * SMALL + 2 * SEPW;
     int x = CX - total / 2;
     int sep = 0;
@@ -787,8 +806,11 @@ static void build(void)
         bool small = (i >= 6);
         int w = small ? SMALL : PITCH;
         s_dig_x[i] = x + w / 2;
-        s_dig[i] = mklabel(small ? &lv_font_montserrat_28 : &lv_font_montserrat_48,
-                           C_TEXT, s_dig_x[i], small ? 178 : 170, "0");
+        /* The 100 Hz and 10 Hz digits were montserrat_28 AND dimmed, which
+         * together made them unreadable. Same size as the rest now; only the
+         * colour marks them as below the tuning step. */
+        s_dig[i] = mklabel(&lv_font_montserrat_48,
+                           C_TEXT, s_dig_x[i], 170, "0");
         x += w;
         if (i == 2 || i == 5) {
             s_sep[sep++] = mklabel(&lv_font_montserrat_48, C_LABEL,
@@ -986,7 +1008,7 @@ void ui_update(const ui_state_t *st)
         if (strcmp(lv_label_get_text(s_dig[i]), txt) != 0)
             lv_label_set_text(s_dig[i], txt);
         lv_color_t c = (i == s_active_dig) ? C_ACCENT_HI
-                     : (i > s_active_dig)  ? C_LABEL     /* these will roll */
+                     : (i > s_active_dig)  ? C_TEXT2     /* these will roll */
                                            : C_TEXT;
         lv_obj_set_style_text_color(s_dig[i], st->tx ? C_TX_TEXT : c, 0);
     }
@@ -1105,15 +1127,28 @@ void ui_update(const ui_state_t *st)
          * because that is where the scale ends, but 11.5 is exactly what an
          * operator needs to see -- it is the difference between a poor match
          * and nothing connected. */
-        lv_label_set_text_fmt(s_srd, "SWR %.1f", (double)w);
+        char b[20];
+        fmt1(b, sizeof b, "SWR ", w, "");
+        lv_label_set_text(s_srd, b);
         lv_obj_set_style_text_color(s_srd,
             w >= 2.5f ? C_DANGER : w >= 2.0f ? C_WARN : C_TEXT, 0);
         /* Show the full scale alongside the reading. An auto-ranging bar
          * without its scale is misleading: half-deflection could be 50 W or
          * 1250 W. Anywhere on the face is too crowded for a separate caption,
          * so it goes here. */
-        lv_label_set_text_fmt(s_dbm, "%.0f / %.0f W",
-                              (double)st->tx_peak_w, (double)fs);
+        /* PWR 1.4kW below a kilowatt boundary, PWR 850W above it -- whichever
+         * reads more naturally, with the auto-range's full scale alongside so
+         * the bar is never ambiguous. */
+        char pb[28];
+        if (st->tx_peak_w >= 1000.0f) {
+            char t[16];
+            fmt1(t, sizeof t, "", st->tx_peak_w / 1000.0f, "kW");
+            snprintf(pb, sizeof pb, "PWR %s / %dW", t, (int)fs);
+        } else {
+            snprintf(pb, sizeof pb, "PWR %dW / %dW",
+                     (int)(st->tx_peak_w + 0.5f), (int)fs);
+        }
+        lv_label_set_text(s_dbm, pb);
         /* C_LABEL is dark grey, which all but vanishes against the amber TX
          * background -- which is why these readouts could not be found. */
         lv_obj_set_style_text_color(s_dbm, C_TX_TEXT, 0);
