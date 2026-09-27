@@ -35,6 +35,7 @@ typedef struct {
     int32_t    filt_lo, filt_hi, rit_hz;
     float      smeter_dbm;
     float      tx_mic_dbm, tx_fwd_w, tx_swr;
+    uint32_t   tx_sensor_frames, tx_sensor_log_ms;
     bool       slice_locked, tx;
     uint8_t    my_trx, n_trx;
     uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
@@ -230,6 +231,19 @@ static void apply_fact(const tci_fact_t *f)
         S.tx_mic_dbm = f->f0;
         S.tx_fwd_w   = f->f1;
         S.tx_swr     = f->f3;
+        S.tx_sensor_frames++;
+        /* Rate-limited: the stream is 5 Hz and only flows while transmitting,
+         * so one line a second is enough to see whether it is arriving at all
+         * and what range the mic figure actually uses. */
+        {
+            uint32_t t = now_ms();
+            if (t - S.tx_sensor_log_ms > 1000) {
+                S.tx_sensor_log_ms = t;
+                ESP_LOGI(TAG, "tx_sensors mic=%.1f fwd=%.1f swr=%.2f alc=%.1f",
+                         (double)f->f0, (double)f->f1,
+                         (double)f->f3, (double)f->f4);
+            }
+        }
         break;
 
     case TCI_RX_CHANNEL_SENSORS:
@@ -542,6 +556,7 @@ static void tx_task(void *arg)
              * and no SWR, which are exactly what you want to see while the
              * transmitter is running. */
             send_cmd("tx_sensors_enable:true;");
+            ESP_LOGI(TAG, "sensor streams requested (rx + tx)");
         }
 
         /* Audio is declared on the SAME trx we control. effectiveTrx()

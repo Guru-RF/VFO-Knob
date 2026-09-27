@@ -40,6 +40,7 @@ static const char *TAG = "ui";
  * emphatic enough for "you are radiating", so the slab uses a saturated red
  * while the finer TX details keep the theme's amber. */
 #define C_TX_RED    lv_color_hex(0xE01010)
+#define C_GREEN     lv_color_hex(0x4DD87A)   /* accent.success */
 
 /* The theme's own meter.bar gradient runs green -> amber -> red but only
  * reaches red at 95% of full scale. On an S-meter that is roughly S9+53, so a
@@ -75,6 +76,7 @@ static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl, *s_status;
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_mic_arc, *s_swr_arc, *s_rx_ticks, *s_tx_ticks;
+static lv_obj_t *s_swr_zone[3];
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL,
@@ -587,6 +589,33 @@ static void build(void)
     lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
     lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
 
+    /* The scale itself is banded green / amber / red, rather than a single
+     * bar that changes colour. You can then see where the needle sits
+     * relative to the danger zone without reading a number -- which is the
+     * whole point of an analogue-looking meter. */
+    static const struct { float from, to; uint32_t rgb; } ZONES[] = {
+        { 1.0f, 2.0f, 0x4DD87A },   /* green  */
+        { 2.0f, 2.5f, 0xFFB84D },   /* amber  */
+        { 2.5f, 3.0f, 0xFF4D4D },   /* red    */
+    };
+    for (size_t z = 0; z < sizeof ZONES / sizeof ZONES[0]; z++) {
+        lv_obj_t *b = lv_arc_create(s_scr);
+        lv_obj_set_size(b, ARC_R0 * 2, ARC_R0 * 2);
+        lv_obj_center(b);
+        int a0 = (int)(swr_frac(ZONES[z].from) * SWR_SPAN);
+        int a1 = (int)(swr_frac(ZONES[z].to)   * SWR_SPAN);
+        lv_arc_set_rotation(b, SWR_ROT + a0);
+        lv_arc_set_bg_angles(b, 0, a1 - a0);
+        lv_obj_remove_style(b, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(b, 12, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(b, lv_color_hex(ZONES[z].rgb), LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(b, LV_OPA_40, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(b, 0, LV_PART_INDICATOR);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+        s_swr_zone[z] = b;
+    }
+
     s_swr_arc = lv_arc_create(s_scr);
     lv_obj_set_size(s_swr_arc, ARC_R0 * 2, ARC_R0 * 2);
     lv_obj_center(s_swr_arc);
@@ -596,10 +625,9 @@ static void build(void)
     lv_arc_set_value(s_swr_arc, 0);
     lv_obj_remove_style(s_swr_arc, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(s_swr_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_swr_arc, 12, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_swr_arc, C_SUBTLE, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_swr_arc, 0, LV_PART_MAIN);   /* bands show through */
     lv_obj_set_style_arc_width(s_swr_arc, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_swr_arc, C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_swr_arc, C_PEAK, LV_PART_INDICATOR);
     lv_obj_add_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
 
     /* Signal, as a number as well as an arc: an arc shows trend, a number
@@ -884,13 +912,16 @@ void ui_update(const ui_state_t *st)
     lv_obj_set_style_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT, 0);
 
     if (st->tx) {
-        /* MIC: -40..0 dBm is the useful span of AetherSDR's mic meter. */
-        float m = (st->tx_mic_dbm + 40.0f) / 40.0f;
+        /* MIC span measured from a live rig: AetherSDR reports roughly -95 dBm
+         * at rest and rises from there, so the original -40..0 mapping clamped
+         * to zero and the meter never moved. -100..-20 puts speech across the
+         * useful part of the arc. */
+        float m = (st->tx_mic_dbm + 100.0f) / 80.0f;
         if (m < 0) m = 0;
         if (m > 1) m = 1;
         lv_arc_set_value(s_mic_arc, (int)(m * 1000));
         lv_obj_set_style_arc_color(s_mic_arc,
-            m > 0.92f ? C_DANGER : m > 0.7f ? C_WARN : C_ACCENT,
+            m > 0.92f ? C_DANGER : m > 0.7f ? C_WARN : C_GREEN,
             LV_PART_INDICATOR);
 
         /* SWR: 1.0 at the left, 3.0 at full scale. Treat exactly 1.00 as
@@ -899,8 +930,10 @@ void ui_update(const ui_state_t *st)
         lv_arc_set_value(s_swr_arc, (int)(swr_frac(w) * 1000));
         /* Yellow from 2.0, red from 2.5 -- matching the printed scale, so the
          * colour and the tick the needle sits on always agree. */
+        /* The value arc is bright and opaque over the banded scale, so the
+         * reading is legible whichever zone it lands in. */
         lv_obj_set_style_arc_color(s_swr_arc,
-            w >= 2.5f ? C_DANGER : w >= 2.0f ? C_WARN : C_ACCENT,
+            w >= 2.5f ? C_DANGER : w >= 2.0f ? C_WARN : C_GREEN,
             LV_PART_INDICATOR);
 
         lv_label_set_text_fmt(s_srd, "%.0f W", (double)st->tx_fwd_w);
@@ -917,12 +950,16 @@ void ui_update(const ui_state_t *st)
             lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
+            for (int z = 0; z < 3; z++)
+                lv_obj_remove_flag(s_swr_zone[z], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_remove_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_swr_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
+            for (int z = 0; z < 3; z++)
+                lv_obj_add_flag(s_swr_zone[z], LV_OBJ_FLAG_HIDDEN);
         }
         lv_obj_set_style_arc_color(s_ring, st->tx ? C_TX_RED : C_BG, LV_PART_MAIN);
         /* Unmissable: the whole bottom slab goes solid red. With toggle PTT
