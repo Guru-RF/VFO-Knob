@@ -42,10 +42,11 @@ void        net_prov_save_web(const char *user, const char *pass);
 uint16_t net_prov_ota_hours(void);
 void     net_prov_save_ota_hours(uint16_t hours);
 
-/* Minutes of no knob, no touch and no transmit before the screen dims;
- * 0 never dims. */
+/* Minutes of no knob, no touch and no transmit before the screen dims, and
+ * before it goes dark altogether. Either 0 disables that stage. */
 uint16_t net_prov_dim_min(void);
-void     net_prov_save_dim(uint16_t minutes);
+uint16_t net_prov_blank_min(void);
+void     net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes);
 
 /* Transmit time-out in seconds, persisted. */
 uint16_t net_prov_tot_s(void);

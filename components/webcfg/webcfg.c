@@ -153,7 +153,7 @@ static esp_err_t config_get(httpd_req_t *r)
     snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"tot\":%u,"
-             "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,"
+             "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
              "\"fwbase\":\"%s\"}",
              c->tci_host, (unsigned)c->tci_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
@@ -161,7 +161,7 @@ static esp_err_t config_get(httpd_req_t *r)
              net_prov_web_user(),
              net_prov_web_is_default() ? "true" : "false",
              (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
-             ota_base_url());
+             (unsigned)net_prov_blank_min(), ota_base_url());
     return send_json(r, buf);
 }
 
@@ -233,9 +233,16 @@ static esp_err_t config_post(httpd_req_t *r)
     /* Bounded the same way the PTT FSM is: a time-out outside this range is
      * either useless or not a time-out at all. */
     if (field_num(body, "tot", &v)) net_prov_save_tot((uint16_t)clampl(v, 30, 600));
-    if (field_num(body, "dim", &v)) {
-        net_prov_save_dim((uint16_t)clampl(v, 0, 1440));
-        ui_dim_set_minutes(net_prov_dim_min());
+    {   /* Both stages are written together so one cannot be validated against
+         * a stale copy of the other. */
+        long dim = net_prov_dim_min(), blank = net_prov_blank_min();
+        bool touched = field_num(body, "dim", &dim);
+        touched |= field_num(body, "blank", &blank);
+        if (touched) {
+            net_prov_save_dim((uint16_t)clampl(dim, 0, 1440),
+                              (uint16_t)clampl(blank, 0, 1440));
+            ui_dim_set_minutes(net_prov_dim_min(), net_prov_blank_min());
+        }
     }
     if (field_num(body, "otah", &v)) {
         net_prov_save_ota_hours((uint16_t)clampl(v, 0, 720));

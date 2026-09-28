@@ -82,10 +82,12 @@ void ui_set_netinfo(const char *text);
 /* Firmware-update screen. Takes over the display for the duration of an
  * upload: it frees the device for the transfer, tells the operator not to
  * unplug, and -- being a separate screen -- puts PTT out of reach. */
-/* Idle dimming. Any knob movement, touch or transmit is "use"; after the
- * configured idle the backlight drops, and the first use restores it. */
+/* Idle blanking, in two stages. Any knob movement, touch or transmit is
+ * "use": after dim_minutes the backlight drops but the dial stays readable,
+ * after blank_minutes it goes dark, and the next use restores it. Either
+ * value at 0 disables that stage. */
 void ui_note_activity(void);
-void ui_dim_set_minutes(uint16_t minutes);
+void ui_dim_set_minutes(uint16_t dim_minutes, uint16_t blank_minutes);
 void ui_dim_tick(bool transmitting);
 
 void ui_updating_show(void);

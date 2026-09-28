@@ -1432,12 +1432,29 @@ bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false;
  * transmit. Dimming rather than blanking: the frequency stays readable across
  * the room, which is the whole point of the thing, while an OLED-ish panel
  * left at full brightness for days is asking for trouble. */
-#define DIM_FULL 200
-#define DIM_LOW   18
+#define DIM_FULL  200
+#define DIM_LOW    18
+#define DIM_BLANK   0
 
-static uint32_t s_dim_after_ms = 30u * 60u * 1000u;
+/* Two stages, because they answer different questions. Dimming says "nobody is
+ * using this" and still leaves the frequency readable from across the room,
+ * which is most of what a dial is for. Blanking says "nobody is in the room",
+ * and is what actually spares the panel overnight. */
+enum { LVL_FULL = 0, LVL_DIM, LVL_BLANK };
+
+static uint32_t s_dim_after_ms   =  5u * 60u * 1000u;
+static uint32_t s_blank_after_ms = 10u * 60u * 1000u;
 static uint32_t s_last_use_ms;
-static bool     s_dimmed;
+static uint8_t  s_level = LVL_FULL;
+
+static void set_level(uint8_t level)
+{
+    if (level == s_level) return;
+    s_level = level;
+    panel_set_brightness(level == LVL_BLANK ? DIM_BLANK
+                       : level == LVL_DIM   ? DIM_LOW
+                                            : DIM_FULL);
+}
 
 void ui_note_activity(void)
 {
@@ -1445,25 +1462,24 @@ void ui_note_activity(void)
      * display exists. lv_tick_get() before lv_init() is not survivable. */
     if (!s_scr) return;
     s_last_use_ms = lv_tick_get();
-    if (s_dimmed) {
-        s_dimmed = false;
-        panel_set_brightness(DIM_FULL);
-    }
+    set_level(LVL_FULL);
 }
 
-void ui_dim_set_minutes(uint16_t minutes)
+void ui_dim_set_minutes(uint16_t dim_minutes, uint16_t blank_minutes)
 {
-    s_dim_after_ms = (uint32_t)minutes * 60u * 1000u;
+    s_dim_after_ms   = (uint32_t)dim_minutes   * 60u * 1000u;
+    s_blank_after_ms = (uint32_t)blank_minutes * 60u * 1000u;
     ui_note_activity();        /* no-op until the display is up */
 }
 
 void ui_dim_tick(bool transmitting)
 {
-    if (!s_scr) { return; }
-    if (!s_dim_after_ms) { return; }          /* 0 = never dim */
+    if (!s_scr) return;
     if (transmitting) { ui_note_activity(); return; }
-    if (s_dimmed) { return; }
-    if (lv_tick_elaps(s_last_use_ms) < s_dim_after_ms) { return; }
-    s_dimmed = true;
-    panel_set_brightness(DIM_LOW);
+
+    const uint32_t idle = lv_tick_elaps(s_last_use_ms);
+    /* Checked darkest-first so the stages cannot fight when blank <= dim. */
+    if (s_blank_after_ms && idle >= s_blank_after_ms)    set_level(LVL_BLANK);
+    else if (s_dim_after_ms && idle >= s_dim_after_ms)   set_level(LVL_DIM);
+    else                                                 set_level(LVL_FULL);
 }

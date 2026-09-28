@@ -22,7 +22,8 @@ static const char *NVS_NS = "vfo";
  * so it is configurable and persisted rather than compiled in. */
 static uint16_t s_tot_s = PTT_TOT_DEFAULT_MS / 1000;
 static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
-static uint16_t s_dim_min = 30;     /* idle before the screen dims; 0 = never */
+static uint16_t s_dim_min = 5;      /* idle before the screen dims;  0 = never */
+static uint16_t s_blank_min = 10;   /* idle before it goes dark;     0 = never */
 
 /* Credentials for the configuration page. Shipped as admin/admin so a new
  * owner can get in, and the page nags until they are changed -- this device
@@ -76,6 +77,7 @@ static void load_or_seed(void)
         nvs_get_u16(h, "tot", &s_tot_s);
         nvs_get_u16(h, "otah", &s_ota_hours);
         nvs_get_u16(h, "dim", &s_dim_min);
+        nvs_get_u16(h, "blank", &s_blank_min);
         len = sizeof s_web_user; nvs_get_str(h, "wuser", s_web_user, &len);
         len = sizeof s_web_pass; nvs_get_str(h, "wpass", s_web_pass, &len);
         nvs_close(h);
@@ -206,15 +208,23 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
 
 uint16_t net_prov_tot_s(void) { return s_tot_s; }
 uint16_t net_prov_ota_hours(void) { return s_ota_hours; }
-uint16_t net_prov_dim_min(void) { return s_dim_min; }
+uint16_t net_prov_dim_min(void)   { return s_dim_min; }
+uint16_t net_prov_blank_min(void) { return s_blank_min; }
 
-void net_prov_save_dim(uint16_t minutes)
+void net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes)
 {
-    if (minutes == s_dim_min) return;
-    s_dim_min = minutes;
+    /* Blanking before dimming is not a setting, it is a typo. Anything
+     * non-zero below the dim time is pulled up to it so the two stages stay
+     * in the order the operator meant. */
+    if (blank_minutes && dim_minutes && blank_minutes < dim_minutes)
+        blank_minutes = dim_minutes;
+    if (dim_minutes == s_dim_min && blank_minutes == s_blank_min) return;
+    s_dim_min   = dim_minutes;
+    s_blank_min = blank_minutes;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u16(h, "dim", minutes);
+    nvs_set_u16(h, "dim", s_dim_min);
+    nvs_set_u16(h, "blank", s_blank_min);
     nvs_commit(h);
     nvs_close(h);
 }

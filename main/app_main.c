@@ -700,7 +700,7 @@ void app_main(void)
     /* After ui_init, not before: this reaches into LVGL, and the version that
      * called it up beside ota_init() crashed on boot -- caught by the OTA
      * rollback, which put the previous image back. */
-    if (have_ui) ui_dim_set_minutes(net_prov_dim_min());
+    if (have_ui) ui_dim_set_minutes(net_prov_dim_min(), net_prov_blank_min());
 
     bring_up("knob", hal_encoder_init);
 
