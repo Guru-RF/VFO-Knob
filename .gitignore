@@ -27,3 +27,7 @@ ota_signing_key.pem
 # Staged OTA artefacts. Published on the orphan firmware branch, never on
 # main -- 1.7 MB per release has no business in this history.
 firmware/
+
+# tools/mkrender.py output: regenerated at will, and --photo composites
+# contain other people's photographs.
+docs/marketing/

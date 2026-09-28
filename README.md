@@ -47,72 +47,78 @@ runs AetherSDR is a computer with a USB port.
   any charger.
 
 The cable wins whenever a computer is on the other end of it — the knob then
-waits for AetherSDR there rather than switching networks. WiFi is for when it
-is on a charger. When the cable is chosen, WiFi is shut down — that frees about
-40 kB of internal RAM, which this board genuinely needs.
+waits for AetherSDR there rather than switching networks. With no computer on
+its side of the cable — a charger, or the plug the wrong way round — it goes to
+WiFi straight away. When the cable is chosen, WiFi is shut down — that frees
+about 40 kB of internal RAM, which this board genuinely needs.
 
 ## First run
 
-1. Plug the knob into the computer running AetherSDR.
-2. Open **`http://10.55.42.1`** — user `admin`, password `admin`.
-3. Change the password. The page will nag until you do; it can key a
+1. Plug the knob into the computer running AetherSDR. Windows 10 (version 1903
+   or later), Windows 11, macOS and Linux all bring it up as a network adapter
+   by themselves — there is nothing to install. **The USB-C socket only works
+   one way round:** the other way it reaches the board's second chip, the knob
+   finds no computer, and it says **FLIP USB-C**. Turn the plug over.
+2. In AetherSDR, enable the TCI server — the `TCI` panel in the button bar —
+   and set it to start automatically in Settings, so the knob finds it every
+   time. That is the only setup on the computer.
+3. Open **`http://10.55.42.1`** — user `admin`, password `admin`.
+4. Change the password. The page will nag until you do; it can key a
    transmitter.
-4. If you want WiFi, set an SSID and the AetherSDR host. The host is only used
+5. If you want WiFi, set an SSID and the AetherSDR host. The host is only used
    on WiFi: over the cable the knob always talks to the computer it is plugged
    into.
 
-Enable AetherSDR's TCI server first — it is the `TCI` panel in the button bar.
+## If the page does not open
 
-## Windows
+Give the knob about ten seconds after plugging in: for the first six it is a
+serial port, which keeps it flashable, and only then a network adapter.
 
-Linux binds the knob without help. Windows 10 (version 1903 or later) has the
-driver built in but, with the current firmware, does not pick it by itself —
-it has to be chosen once, by hand. Give the knob about ten seconds after
-plugging in: for the first six it is a serial port, which keeps it flashable,
-and only then a network adapter.
-
-1. **Find it in Device Manager** (Win+X → Device Manager). Whatever it is
-   called, the knob's network function has *Hardware Ids* (Properties →
-   Details) starting with `USB\VID_303A&PID_4000`. Anything else is not it
-   (`USB\VID_303A&PID_1001` is its serial port during the first six seconds,
-   and goes away by itself).
-   - Only a **USB-SERIAL CH340** or **USB2.0-Serial** port
-     (`USB\VID_1A86…`): the USB-C plug is the wrong way round — that
-     orientation reaches the board's second chip. Turn it over.
-   - An unknown device with a yellow **!** under *Other devices* (Code 28),
-     the usual case on Windows 10: right-click → *Update driver* →
-     *Browse my computer for drivers* → *Let me pick from a list of available
-     drivers on my computer* → *Network adapters* → Manufacturer
-     **Microsoft**, Model **UsbNcm Host Device** → *Next* → *Yes*.
-   - Under *Network adapters* with a yellow **!** and *Code 10*: most likely
-     Windows 11 24H2/25H2 with the September 2026 security update (KB5124008,
-     OS build 26100.9445 / 26200.9445 or later), which no longer accepts the
-     way firmware 1.3.2 describes itself over USB. No driver choice fixes it;
-     use WiFi, below, until a firmware with the fix is out.
-   - Windows 10 older than 1903 has no such driver. Update Windows, or use
-     WiFi.
-2. **Check the address.** `ipconfig` should show the adapter with `10.55.42.2`.
-   If it shows `169.254.x.x`, run `ipconfig /renew`; failing that, give it
-   `10.55.42.2`, mask `255.255.255.0`, no gateway and no DNS by hand.
-   `ping 10.55.42.1` should then answer.
-3. **Open the page** with the scheme typed out, `http://10.55.42.1/`. If ping
+1. **FLIP USB-C on the knob**, or the computer finds a *USB Serial* (CH340)
+   port instead — `USB\VID_1A86…` in Windows' Device Manager: the plug is the
+   wrong way round. Turn it over. With WiFi set up the knob only says so for a
+   few seconds after the splash before carrying on over WiFi, so watch it
+   start, or look for that CH340 port.
+2. **Windows.** The knob is under *Network adapters* in Device Manager —
+   Windows 10 names it after its driver, *UsbNcm Host Device* — with
+   *Hardware Ids* (Properties → Details) starting `USB\VID_303A&PID_4000`.
+   Windows 10 before version 1903 has no driver for it: update Windows, or set
+   WiFi up once over the cable from a computer where it works and run the knob
+   from a charger. Firmware 1.3.2 and older is the exception to "nothing to
+   install": update it. Until then, on Windows 10 it shows as an unknown device
+   (Code 28) and needs its driver chosen by hand — right-click → *Update driver* →
+   *Browse my computer for drivers* → *Let me pick from a list of available
+   drivers on my computer* → *Network adapters* → **Microsoft**,
+   **UsbNcm Host Device** — and on an up-to-date Windows 11 it fails with
+   Code 10, which no driver choice fixes.
+3. **Check the address.** The computer's side of the link should be
+   `10.55.42.2` (`ipconfig` on Windows). A `169.254.x.x` address means it got
+   no lease: renew it, or set `10.55.42.2`, mask `255.255.255.0`, no gateway
+   and no DNS by hand. `ping 10.55.42.1` should then answer.
+4. **Open the page** with the scheme typed out, `http://10.55.42.1/`. If ping
    answers but the browser does not, a VPN or a proxy is taking the request —
    disconnect it, or add `10.55.42.*` to the proxy exceptions.
 
-**WiFi instead of the cable.** Plugged into a computer the knob stays on the
-cable, even when that computer could not load a driver for it — it never
-tries WiFi by itself. So set the SSID and the AetherSDR host on the
-configuration page from a computer where the cable works, then either power
-the knob from a charger, or keep a finger on the screen from plugging it in
-until the dial appears, which skips USB networking for that boot.
+**WiFi instead of the cable.** With no computer on its side of the cable the
+knob goes to WiFi by itself, a few seconds after powering up — so a charger is
+all it needs, once an SSID and the AetherSDR host have been set over the cable
+from a computer where it works. Plugged into a computer it stays on the cable
+even if that computer could not set the adapter up; keep a finger on the screen
+from plugging it in until the dial appears to skip USB networking for that
+boot.
 
-**The firewall.** The link has no internet access, which is correct: nothing
-lies behind the knob. Windows files a new network like this as *Public* — it
-may be listed as *Network 2* or similar — so if AetherSDR's firewall prompt
-was answered for private networks only, the knob cannot reach AetherSDR's TCI
-port over the cable.
-Allow it once, from an administrator PowerShell — 50001 is AetherSDR's default;
-use the port set on the configuration page:
+## If the knob says NO LINK
+
+The page opens but the knob stays on **NO LINK**: either AetherSDR's TCI server
+is not running — see *First run* — or the computer's firewall is turning the
+knob away. The knob connects *to* AetherSDR, so the computer has to let it in.
+
+Over the cable the link has no internet access, which is correct: nothing lies
+behind the knob. With no gateway on it, Windows lists it as *Unidentified
+network* and treats it as *Public*, so if AetherSDR's firewall prompt was
+answered for private networks only, the knob cannot reach AetherSDR's TCI port
+over the cable. Allow it once, from an administrator PowerShell — 50001 is
+AetherSDR's default; use the port set on the configuration page:
 
 ```powershell
 New-NetFirewallRule -DisplayName "VFO-Knob TCI (USB)" -Direction Inbound `
@@ -128,14 +134,23 @@ unscoped, that opens AetherSDR's TCI port — which can key the transmitter —
 to everyone on every public network the computer joins.
 
 A Linux firewall that drops inbound connections by default (ufw, or
-firewalld's *public* zone) stops the knob the same way. Let it in once, e.g.
-`sudo ufw allow proto tcp from 10.55.42.1 to any port 50001`.
+firewalld's *public* zone) stops the knob the same way — on the cable, and on
+WiFi from wherever your network puts it. Let both in once, e.g.
+`sudo ufw allow proto tcp from 10.55.42.1 to any port 50001` for the cable and
+`sudo ufw allow proto tcp from 192.168.1.0/24 to any port 50001` with your own
+LAN's range for WiFi.
 
 ## Configuration page
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
 WiFi credentials, audio levels, transmit time-out, access credentials, and
 firmware updates.
+
+Opened over WiFi, the host field offers a green **my IP** — the address of the
+computer you are browsing from, one tap to fill in when that is where
+AetherSDR runs. Over the cable it is not offered: there the knob finds
+AetherSDR by itself, and the cable's `10.55.42.2` would mean nothing on WiFi,
+the only place the host setting is used.
 
 > **It is HTTP Basic over plain HTTP.** A lock on the door, not a safe — treat
 > the knob as something that belongs on a network you trust.
