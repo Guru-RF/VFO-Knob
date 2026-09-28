@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Draw the knob's face as animated SVG, for the README.
+"""Draw the knob as animated SVG, for the README.
 
-The geometry and the palette are copied from components/ui/ui.c rather than
+The face's geometry and palette are copied from components/ui/ui.c rather than
 eyeballed, so these stay honest when the firmware changes: 360x360 round glass,
 meter arc from 170 to 370 degrees at radius 170 with a 12 px band, and the same
-colour blocks and background-coloured notches the device actually draws.
+colour blocks and background-coloured notches the device actually draws. The
+readouts step through the same values as the bars, formatted the way the
+firmware formats them.
+
+Around the face is the body, to scale: Waveshare's drawing gives 66 mm across,
+and the cover glass (~55 mm) and the 1.8" panel (45.7 mm, the 360 px) are
+measured off the same drawing. Everything outside the body is annotation --
+the scale the firmware draws as bare ticks, and the dimensions -- in a neutral
+grey that reads on light and dark pages alike. Nothing is added to the glass
+that the device does not show.
 """
 import math, os
 
@@ -22,15 +31,31 @@ BG, BG1, BG_TX = "#0F0F1A", "#1A2A3A", "#3A2A0E"
 ACCENT, ACCENT_HI = "#00B4D8", "#00C8F0"
 TEXT, TEXT2, LABEL, SUBTLE = "#C8D8E8", "#8EA8C0", "#506070", "#1A2330"
 WARN, DANGER, TX_RED, TX_TEXT = "#FFB84D", "#FF4D4D", "#E01010", "#F0C890"
+GREEN, DISABLED = "#4DD87A", "#3A4A5A"
+FONT = "DejaVu Sans,Verdana,sans-serif"
 
 RXZONES = [(-127, -121, "#1A6B47"), (-121, -109, "#1F7A52"),
            (-109,  -97, "#2F9E6A"), (-97,   -85, "#4DD87A"),
            (-85,   -73, "#9BD94A"), (-73,   -53, "#FFD24D"),
            (-53,   -33, "#FF9A3C"), (-33,   -13, "#FF4D4D")]
 RXNOTCH = [-121, -109, -97, -85, -73, -53, -33]
-RXTICKS = [(-121, 6), (-109, 6), (-97, 6), (-85, 6),
-           (-73, 11), (-53, 6), (-33, 6), (-13, 9)]
+RXTICKS = [(-121, 6, "S1"), (-109, 6, "S3"), (-97, 6, "S5"), (-85, 6, "S7"),
+           (-73, 11, "S9"), (-53, 6, "+20"), (-33, 6, "+40"), (-13, 9, "+60")]
 SWRZONES = [(1.0, 2.0, "#4DD87A"), (2.0, 2.5, "#FFB84D"), (2.5, 3.0, "#FF4D4D")]
+# ui.c add_tx_ticks(): value, on-screen label, 0 grey / 1 amber / 2 red.
+SWRTICKS = [(1.0, "1", 0), (1.5, None, 0), (2.0, "2", 1), (2.5, None, 2), (3.0, "3", 2)]
+PWR_FS, PWR_PEGS = 100, [(10, "10"), (50, "50"), (100, "100")]   # the 100 W range
+
+# --- the body, in face pixels ---------------------------------------------
+MM = 360 / 45.72                # the panel: 1.8 inches across is 360 px
+BODY_R = 33.0 * MM              # 66 mm
+GLASS_R = 27.5 * MM             # cover glass, off Waveshare's drawing
+MARGIN = 46                     # room for the scale around the body
+DIM_H = 58                      # room for the dimension line underneath
+SIZE = 2 * (BODY_R + MARGIN)
+OX = OY = SIZE / 2              # the face's centre on the canvas
+ANNOT = "#8A94A6"               # annotation: legible on white and on #0d1117
+ANNOT_HOT = "#E0902A"
 
 
 def smeter_frac(dbm):
@@ -38,13 +63,20 @@ def smeter_frac(dbm):
     return (0.6 * (dbm + 127) / 54) if dbm <= -73 else (0.6 + 0.4 * (dbm + 73) / 60)
 
 
+def smeter_text(dbm):
+    """ui.c smeter_text(), to the letter."""
+    if dbm >= -73:
+        return f"S9+{int((dbm + 73) / 10) * 10}"
+    return f"S{max(0, min(9, int((dbm + 127) / 6)))}"
+
+
 def swr_frac(s):
     return max(0.0, min(1.0, (s - 1.0) / 2.0))
 
 
-def pt(deg, r):
+def pt(deg, r, cx=CX, cy=CY):
     a = math.radians(deg)
-    return CX + r * math.cos(a), CY + r * math.sin(a)
+    return cx + r * math.cos(a), cy + r * math.sin(a)
 
 
 def arc_path(a0, a1, r):
@@ -59,9 +91,9 @@ def arc_len(a0, a1, r):
     return abs(math.radians(a1 - a0)) * r
 
 
-def block(a0, a1, colour):
+def block(a0, a1, colour, inner=""):
     return (f'<path d="{arc_path(a0, a1, RC)}" fill="none" stroke="{colour}" '
-            f'stroke-width="{BAND}"/>')
+            f'stroke-width="{BAND}">{inner}</path>')
 
 
 def notch(deg):
@@ -76,7 +108,13 @@ def tick(deg, length, colour, width=2):
     x0, y0 = pt(deg, r1 - length)
     x1, y1 = pt(deg, r1)
     return (f'<line x1="{x0:.2f}" y1="{y0:.2f}" x2="{x1:.2f}" y2="{y1:.2f}" '
-            f'stroke="{colour}" stroke-width="{width}"/>')
+            f'stroke="{colour}" stroke-width="{width}" stroke-linecap="round"/>')
+
+
+def text(x, y, s, size, colour, weight=400, anchor="middle", extra="", inner=""):
+    return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" fill="{colour}" '
+            f'font-family="{FONT}" font-weight="{weight}" text-anchor="{anchor}"'
+            f'{extra}>{s}{inner}</text>')
 
 
 def sweep_cover(a0, a1, values, dur, colour=SUBTLE):
@@ -93,6 +131,48 @@ def sweep_cover(a0, a1, values, dur, colour=SUBTLE):
             f'repeatCount="indefinite" values="{lens}"/></path>')
 
 
+def step_keys(n):
+    """Key times for something that follows an n-keyframe bar: each step takes
+    over halfway between two keyframes, so it names the one the bar is
+    nearest to."""
+    t = [k / (n - 1) for k in range(n)]
+    return ";".join(f"{v:.4f}" for v in [0.0] + [(t[k] + t[k + 1]) / 2
+                                                  for k in range(n - 1)])
+
+
+def stepped_stroke(colours, dur):
+    """A bar whose colour depends on its level, as ui.c recolours it."""
+    return (f'<animate attributeName="stroke" dur="{dur}" repeatCount="indefinite" '
+            f'calcMode="discrete" keyTimes="{step_keys(len(colours))}" '
+            f'values="{";".join(colours)}"/>')
+
+
+def stepped(x, y, labels, dur, size, colour, weight=400, colours=None):
+    """A readout that follows an animated bar.
+
+    SMIL cannot animate text content, so every distinct string is stacked and
+    shown in turn. The bar moves linearly between keyframes at k/(n-1); each
+    label takes over halfway between two of them, so the text always names the
+    keyframe the bar is nearest to."""
+    n = len(labels)
+    keys = step_keys(n)
+    out = []
+    seen = []
+    for i, lab in enumerate(labels):
+        key = (lab, colours[i] if colours else colour)
+        if key in seen:
+            continue
+        seen.append(key)
+        vals = ";".join("1" if (labels[j], colours[j] if colours else colour) == key
+                        else "0" for j in range(n))
+        out.append(text(x, y, lab, size, key[1], weight,
+                        extra=f' opacity="{1 if i == 0 else 0}"',
+                        inner=f'<animate attributeName="opacity" dur="{dur}" '
+                              f'repeatCount="indefinite" calcMode="discrete" '
+                              f'keyTimes="{keys}" values="{vals}"/>'))
+    return "".join(out)
+
+
 def cycling_digit(x, y, size, colour, digits, dur, weight=700):
     """SMIL cannot animate text content, so stack the glyphs and cross-fade."""
     n = len(digits)
@@ -104,7 +184,7 @@ def cycling_digit(x, y, size, colour, digits, dur, weight=700):
             keys.append(f"{k / n:.4f}")
         out.append(
             f'<text x="{x}" y="{y}" font-size="{size}" fill="{colour}" '
-            f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="{weight}" '
+            f'font-family="{FONT}" font-weight="{weight}" '
             f'text-anchor="middle" opacity="{1 if i == 0 else 0}">{d}'
             f'<animate attributeName="opacity" dur="{dur}" repeatCount="indefinite" '
             f'calcMode="discrete" values="{";".join(vals)}" '
@@ -113,9 +193,10 @@ def cycling_digit(x, y, size, colour, digits, dur, weight=700):
 
 
 def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
-            colour=TEXT, sep_colour=LABEL, underline=None):
+            colour=TEXT, sep_colour=LABEL, underline=None, after_colour=None):
     """Eight digits: three MHz with leading blanks, three kHz, two Hz.
-    PITCH 33 for the first six, 28 for the Hz pair, separators 11 wide."""
+    PITCH 33 for the first six, 28 for the Hz pair, separators 11 wide.
+    Digits after the active one "will roll" and are drawn in after_colour."""
     PITCH, SMALL, SEPW, FS = 33, 28, 11, 44
     total = 6 * PITCH + 2 * SMALL + 2 * SEPW
     x = CX - total / 2
@@ -128,14 +209,11 @@ def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
         if i == cycle_idx and cycle_vals:
             out.append(cycling_digit(cx, 186, FS, ACCENT_HI, cycle_vals, dur))
         elif ch != " ":
-            out.append(f'<text x="{cx:.1f}" y="186" font-size="{FS}" fill="{colour}" '
-                       f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700" '
-                       f'text-anchor="middle">{ch}</text>')
+            late = after_colour and underline is not None and i > underline
+            out.append(text(cx, 186, ch, FS, after_colour if late else colour, 700))
         x += w
         if i in (2, 5):
-            out.append(f'<text x="{x + SEPW / 2:.1f}" y="186" font-size="{FS}" '
-                       f'fill="{sep_colour}" font-family="DejaVu Sans,Verdana,sans-serif" '
-                       f'text-anchor="middle">.</text>')
+            out.append(text(x + SEPW / 2, 186, ".", FS, sep_colour))
             x += SEPW
     if underline is not None:
         out.append(f'<rect x="{xs[underline] - (PITCH - 9) / 2:.1f}" y="196" '
@@ -143,77 +221,179 @@ def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
     return "".join(out)
 
 
-def ptt_slab(fill, text, text_colour, pulse=False):
-    """The slab carries a 2 px accent border along its top edge only."""
-    anim = ('<animate attributeName="opacity" dur="2s" repeatCount="indefinite" '
-            'values="1;0.78;1"/>') if pulse else ""
+def speaker(x, y, colour):
+    """Font Awesome's volume-down, which is what LV_SYMBOL_VOLUME_MID draws;
+    (x, y) is the left end of the baseline, 14 px type."""
+    return (f'<g transform="translate({x:.1f},{y - 11:.1f})" fill="{colour}">'
+            f'<path d="M0,3.5 h3 l4,-3.5 v11 l-4,-3.5 h-3 z"/>'
+            f'<path d="M9,3 a3.2,3.2 0 0 1 0,5" fill="none" stroke="{colour}" '
+            f'stroke-width="1.6" stroke-linecap="round"/></g>')
+
+
+def microphone(x, y, colour):
+    """Font Awesome's microphone, the glyph in components/ui/font_mic_14.c."""
+    return (f'<g transform="translate({x:.1f},{y - 12:.1f})" fill="{colour}">'
+            f'<rect x="2.5" y="0" width="5" height="8" rx="2.5"/>'
+            f'<path d="M0.8,5.5 a4.2,4.2 0 0 0 8.4,0" fill="none" stroke="{colour}" '
+            f'stroke-width="1.5" stroke-linecap="round"/>'
+            f'<rect x="4.3" y="9.6" width="1.4" height="2.4"/>'
+            f'<rect x="2.2" y="11.6" width="5.6" height="1.4" rx="0.7"/></g>')
+
+
+def icon_readout(cx, y, icon, value, colour):
+    """An LVGL label "<icon> 40" centred on cx: a 10-11 px glyph, a space, the
+    digits."""
+    w = 11 + 4 + 8.4 * len(value)
+    x0 = cx - w / 2
+    return icon(x0, y, colour) + text(x0 + 15, y, value, 14, colour, anchor="start")
+
+
+def ptt_slab(fill, label, text_colour):
+    """The slab carries a 2 px accent border along its top edge only. The
+    label is Montserrat 28 in a box whose top is PTT_TOP + 14; that font's
+    baseline sits 25 px down. "TX  102" has two spaces on the device."""
     return (f'<rect x="0" y="{PTT_TOP}" width="360" height="{360 - PTT_TOP}" '
-            f'fill="{fill}">{anim}</rect>'
+            f'fill="{fill}"/>'
             f'<line x1="0" y1="{PTT_TOP + 1}" x2="360" y2="{PTT_TOP + 1}" '
             f'stroke="{ACCENT}" stroke-width="2"/>'
-            f'<text x="180" y="{PTT_TOP + 44}" font-size="30" fill="{text_colour}" '
-            f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif" '
-            f'font-weight="700" letter-spacing="4">{text}</text>')
+            + text(180, PTT_TOP + 14 + 25, label, 28, text_colour, 500,
+                   extra=' xml:space="preserve"'))
 
 
-def head(title):
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 360" '
-            f'width="360" height="360" role="img" aria-label="{title}">'
-            f'<title>{title}</title>'
-            f'<defs><clipPath id="glass"><circle cx="180" cy="180" r="180"/>'
-            f'</clipPath></defs><g clip-path="url(#glass)">')
+# --- the body and the annotation around it ---------------------------------
+
+def body_head(title):
+    """Canvas, then the anodised bezel and the black cover glass. The face is
+    drawn in its own 360 px coordinates, shifted onto the glass."""
+    W, H = SIZE, SIZE + DIM_H
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.0f} {H:.0f}" '
+        f'width="{W:.0f}" height="{H:.0f}" role="img" aria-label="{title}">'
+        f'<title>{title}</title><defs>'
+        f'<clipPath id="glass"><circle cx="180" cy="180" r="180"/></clipPath>'
+        # Anodised aluminium: lit from the top left, the way the product
+        # photographs are.
+        f'<linearGradient id="alu" x1="0.15" y1="0.05" x2="0.85" y2="0.95">'
+        f'<stop offset="0" stop-color="#4F8BF5"/><stop offset="0.45" stop-color="#2A5FDB"/>'
+        f'<stop offset="1" stop-color="#16389A"/></linearGradient>'
+        f'<linearGradient id="chamfer" x1="0.2" y1="0" x2="0.8" y2="1">'
+        f'<stop offset="0" stop-color="#9CC0FF"/><stop offset="1" stop-color="#1B3F9E"/>'
+        f'</linearGradient>'
+        f'<linearGradient id="gloss" x1="0" y1="0" x2="0.6" y2="0.7">'
+        f'<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>'
+        f'<stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>'
+        f'<marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" '
+        f'markerHeight="8" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" '
+        f'fill="{ANNOT}"/></marker>'
+        f'</defs>'
+        f'<circle cx="{OX:.1f}" cy="{OY:.1f}" r="{BODY_R:.1f}" fill="url(#alu)"/>'
+        f'<circle cx="{OX:.1f}" cy="{OY:.1f}" r="{BODY_R - 1:.1f}" fill="none" '
+        f'stroke="#0E2A74" stroke-width="2"/>'
+        f'<circle cx="{OX:.1f}" cy="{OY:.1f}" r="{GLASS_R + 2.5:.1f}" fill="none" '
+        f'stroke="url(#chamfer)" stroke-width="3" opacity="0.8"/>'
+        f'<circle cx="{OX:.1f}" cy="{OY:.1f}" r="{GLASS_R:.1f}" fill="#060709"/>'
+        f'<g transform="translate({OX - CX:.1f},{OY - CY:.1f})">'
+        f'<g clip-path="url(#glass)">')
 
 
-def tail():
-    return '</g></svg>'
+def face_end():
+    """Closes the glass clip and the shift that body_head() opened."""
+    return '</g></g>'
 
+
+def body_tail():
+    return (f'<circle cx="{OX:.1f}" cy="{OY:.1f}" r="{GLASS_R:.1f}" '
+            f'fill="url(#gloss)"/>' + dimension() + '</svg>')
+
+
+def outside(deg, lab, colour=ANNOT):
+    """A scale mark carried out past the body: a short leader in line with the
+    tick on the glass, and its value beyond it."""
+    x0, y0 = pt(deg, BODY_R + 4, OX, OY)
+    x1, y1 = pt(deg, BODY_R + 12, OX, OY)
+    xt, yt = pt(deg, BODY_R + 26, OX, OY)
+    return (f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" '
+            f'stroke="{colour}" stroke-width="1.5" stroke-linecap="round"/>'
+            + text(xt, yt + 5, lab, 14, colour, 600))
+
+
+def caption(deg, lab):
+    """A word for a whole arc, set clear of the body. Anchored on the side
+    away from it, or a centred caption leans back over the bezel."""
+    c = math.cos(math.radians(deg))
+    anchor = "start" if c > 0.3 else "end" if c < -0.3 else "middle"
+    x, y = pt(deg, BODY_R + (26 if anchor == "middle" else 14), OX, OY)
+    return text(x, y + 5, lab, 13, ANNOT, 400, anchor,
+                extra=' font-style="italic"')
+
+
+def dimension():
+    """66 mm across, drawn the way Waveshare's outline drawing does it; the
+    height rides along in the label because a top view cannot show it."""
+    y = OY + BODY_R + 30
+    xl, xr = OX - BODY_R, OX + BODY_R
+    label = "Ø 66 mm · 22 mm high"
+    half_gap = 86
+    return (f'<g stroke="{ANNOT}" stroke-width="1.2">'
+            # Started clear of the scale labels that sit just below the
+            # horizontal on either side.
+            f'<line x1="{xl:.1f}" y1="{OY + 70:.1f}" x2="{xl:.1f}" y2="{y + 7:.1f}"/>'
+            f'<line x1="{xr:.1f}" y1="{OY + 70:.1f}" x2="{xr:.1f}" y2="{y + 7:.1f}"/>'
+            f'<line x1="{OX - half_gap:.1f}" y1="{y:.1f}" x2="{xl:.1f}" y2="{y:.1f}" '
+            f'marker-end="url(#arrow)"/>'
+            f'<line x1="{OX + half_gap:.1f}" y1="{y:.1f}" x2="{xr:.1f}" y2="{y:.1f}" '
+            f'marker-end="url(#arrow)"/></g>'
+            + text(OX, y + 5, label, 14, ANNOT, 600))
+
+
+# --- the two faces --------------------------------------------------------
 
 def rx_face():
-    s = [head("VFO-Knob receiving")]
+    s = [body_head("VFO-Knob receiving")]
     s.append(f'<circle cx="180" cy="180" r="180" fill="{BG}"/>')
     s.append(f'<path d="{arc_path(ARC_ROT, ARC_ROT + ARC_SPAN, RC)}" fill="none" '
              f'stroke="{SUBTLE}" stroke-width="{BAND}"/>')
     for lo, hi, col in RXZONES:
         s.append(block(ARC_ROT + smeter_frac(lo) * ARC_SPAN,
                        ARC_ROT + smeter_frac(hi) * ARC_SPAN, col))
-    # A signal that rises, peaks over S9 and decays, the way a real one does.
-    lvl = [-86, -78, -70, -61, -55, -63, -74, -88, -101, -112, -107, -99, -92, -86]
+    # A signal that rises through S9, peaks at S9+20 and fades back down to the
+    # noise, the way a real one does. Starts and ends on the same value so the
+    # loop has no seam.
+    lvl = [-86, -80, -71, -61, -52, -58, -66, -79, -94, -108, -116, -104, -95, -86]
     s.append(sweep_cover(ARC_ROT, ARC_ROT + ARC_SPAN,
                          [smeter_frac(d) for d in lvl], "6s"))
     for d in RXNOTCH:
         s.append(notch(ARC_ROT + smeter_frac(d) * ARC_SPAN))
-    for d, ln in RXTICKS:
+    for d, ln, _ in RXTICKS:
         col = TEXT2 if d == -73 else (WARN if d > -73 else LABEL)
         s.append(tick(ARC_ROT + smeter_frac(d) * ARC_SPAN, ln, col,
                       3 if d == -73 else 2))
-    s.append(f'<text x="180" y="83" font-size="20" fill="{TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700">S7</text>')
-    s.append(f'<text x="180" y="103" font-size="14" fill="{LABEL}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif">-86 dBm</text>')
-    s.append(f'<text x="{CX - 76}" y="129" font-size="20" fill="{ACCENT}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">40m</text>')
-    s.append(f'<text x="{CX}" y="129" font-size="20" fill="{TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif">LSB</text>')
-    s.append(f'<text x="{CX + 76}" y="129" font-size="20" fill="{TEXT2}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">2.8k</text>')
+    s.append(stepped(180, 83, [smeter_text(d) for d in lvl], "6s", 20, TEXT, 700))
+    s.append(stepped(180, 103, [f"{d} dBm" for d in lvl], "6s", 14, LABEL))
+    s.append(text(CX - 76, 129, "40m", 20, ACCENT))
+    s.append(text(CX, 129, "LSB", 20, TEXT))
+    s.append(text(CX + 76, 129, "2800", 20, TEXT2))
     # 7.161.73 -- three MHz digits with two blanked, three kHz, two Hz.
     s.append(readout("  7161" "73", cycle_idx=6,
-                     cycle_vals=list("7890123456"), underline=6))
-    s.append(f'<text x="{CX - 98}" y="227" font-size="20" fill="{ACCENT}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">100 Hz</text>')
-    s.append(f'<text x="{CX - 24}" y="227" font-size="14" fill="{WARN}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">RIT 0</text>')
-    s.append(f'<text x="{CX + 42}" y="227" font-size="14" fill="{TEXT2}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">VOL 40</text>')
-    s.append(f'<text x="{CX + 104}" y="227" font-size="14" fill="{TEXT2}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">MIC 100</text>')
+                     cycle_vals=list("7890123456"), underline=6, after_colour=TEXT2))
+    s.append(text(CX - 98, 227, "100 Hz", 20, ACCENT))
+    # RIT is amber only when it is set; at zero it is greyed out.
+    s.append(text(CX - 24, 227, "RIT 0", 14, DISABLED))
+    s.append(icon_readout(CX + 42, 227, speaker, "40", TEXT2))
+    s.append(icon_readout(CX + 104, 227, microphone, "100", TEXT2))
     s.append(ptt_slab(BG1, "PTT", TEXT2))
-    s.append(tail())
+    s.append(face_end())
+    # The device draws the S-meter scale as bare ticks -- labels at this
+    # diameter collided with the band row -- so the values live out here.
+    for d, _, lab in RXTICKS:
+        s.append(outside(ARC_ROT + smeter_frac(d) * ARC_SPAN, lab,
+                         ANNOT_HOT if d > -73 else ANNOT))
+    s.append(body_tail())
     return "".join(s)
 
 
 def tx_face():
-    s = [head("VFO-Knob transmitting")]
+    s = [body_head("VFO-Knob transmitting")]
     s.append(f'<circle cx="180" cy="180" r="180" fill="{BG_TX}"/>')
     s.append(f'<circle cx="180" cy="180" r="178" fill="none" stroke="{TX_RED}" '
              f'stroke-width="4"/>')
@@ -223,19 +403,36 @@ def tx_face():
     for lo, hi, col in SWRZONES:
         s.append(block(SWR_ROT + swr_frac(lo) * SWR_SPAN,
                        SWR_ROT + swr_frac(hi) * SWR_SPAN, col))
-    s.append(sweep_cover(SWR_ROT, SWR_ROT + SWR_SPAN,
-                         [swr_frac(v) for v in
-                          (1.3, 1.2, 1.4, 1.3, 1.2, 1.5, 1.3, 1.3)], "5s"))
+    swr = [1.3, 1.2, 1.4, 1.3, 1.2, 1.5, 1.3, 1.3]
+    s.append(sweep_cover(SWR_ROT, SWR_ROT + SWR_SPAN, [swr_frac(v) for v in swr], "5s"))
     for v in (1.5, 2.0, 2.5):
         s.append(notch(SWR_ROT + swr_frac(v) * SWR_SPAN))
-    # Forward power across the right half, auto-ranged to 100 W.
+    # ui.c add_tx_ticks(): the SWR scale is numbered on the glass.
+    for v, lab, kind in SWRTICKS:
+        a = SWR_ROT + swr_frac(v) * SWR_SPAN
+        col = DANGER if kind == 2 else WARN if kind == 1 else LABEL
+        s.append(tick(a, 10 if lab else 6, col, 3 if lab else 2))
+        if lab:
+            x, y = pt(a, 128)
+            s.append(text(x, y + 5, lab, 14, col))
+    # Forward power across the right half, auto-ranged to 100 W, with the
+    # range's pegs numbered on the glass the way pwr_set_range() does.
     s.append(f'<path d="{arc_path(AUD_ROT, AUD_ROT + AUD_SPAN, RC)}" fill="none" '
              f'stroke="{SUBTLE}" stroke-width="{BAND}"/>')
-    s.append(block(AUD_ROT, AUD_ROT + AUD_SPAN, WARN))
-    s.append(sweep_cover(AUD_ROT, AUD_ROT + AUD_SPAN,
-                         [.87, .62, .88, .70, .95, .81, .55, .70, .87], "5s"))
-    for f in (0.10, 0.50):
-        s.append(notch(AUD_ROT + f * AUD_SPAN))
+    pwr = [.87, .62, .88, .70, .95, .81, .55, .70, .87]
+    # Accent until the bar passes 90% of its range, then amber: time to range
+    # up. (ui.c: pf > 0.9f ? C_WARN : C_ACCENT)
+    s.append(block(AUD_ROT, AUD_ROT + AUD_SPAN, ACCENT,
+                   stepped_stroke([WARN if f > 0.9 else ACCENT for f in pwr], "5s")))
+    s.append(sweep_cover(AUD_ROT, AUD_ROT + AUD_SPAN, pwr, "5s"))
+    for w, _ in PWR_PEGS:
+        if w < PWR_FS:
+            s.append(notch(AUD_ROT + w / PWR_FS * AUD_SPAN))
+    for w, lab in PWR_PEGS:
+        a = AUD_ROT + w / PWR_FS * AUD_SPAN
+        s.append(tick(a, 9, LABEL))
+        x, y = pt(a, 128)
+        s.append(text(x, y + 5, lab, 14, LABEL))
     # The mic level is a thin inner ring under the power bar, filling the
     # other way so two bars on the same side are not read as one quantity.
     rc_mic = MIC_R - MIC_BAND / 2
@@ -244,28 +441,43 @@ def tx_face():
     Lm = arc_len(AUD_ROT, AUD_ROT + AUD_SPAN, rc_mic)
     mic = [.55, .72, .41, .83, .60, .35, .77, .50, .55]
     lens = " ; ".join(f"{Lm * v:.2f} {Lm + 10:.2f}" for v in mic)
+    # Green, amber past 70%, red past 92%. (ui.c: the mic arc's indicator)
+    mic_col = [DANGER if v > 0.92 else WARN if v > 0.7 else GREEN for v in mic]
     s.append(f'<path d="{arc_path(AUD_ROT + AUD_SPAN, AUD_ROT, rc_mic)}" fill="none" '
-             f'stroke="{ACCENT}" stroke-width="{MIC_BAND}" '
+             f'stroke="{mic_col[0]}" stroke-width="{MIC_BAND}" '
              f'stroke-dasharray="{Lm * mic[0]:.2f} {Lm + 10:.2f}">'
              f'<animate attributeName="stroke-dasharray" dur="5s" '
-             f'repeatCount="indefinite" values="{lens}"/></path>')
-    # Both readouts are centred and stacked, the same two labels the receive
-    # face uses for S-units and dBm.
-    s.append(f'<text x="180" y="83" font-size="20" fill="{TX_TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif" font-weight="700">SWR 1.3</text>')
-    s.append(f'<text x="180" y="103" font-size="14" fill="{TX_TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif">PWR 87 W</text>')
-    s.append(f'<text x="{CX - 76}" y="129" font-size="20" fill="{ACCENT}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">40m</text>')
-    s.append(f'<text x="{CX}" y="129" font-size="20" fill="{TX_TEXT}" text-anchor="middle" '
-             f'font-family="DejaVu Sans,Verdana,sans-serif">LSB</text>')
-    s.append(f'<text x="{CX + 76}" y="129" font-size="20" fill="{TEXT2}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">2.8k</text>')
+             f'repeatCount="indefinite" values="{lens}"/>'
+             + stepped_stroke(mic_col, "5s") + '</path>')
+    # Both readouts follow their bars. SWR is coloured by its zone, power in
+    # the transmit text colour with the auto-range's full scale beside it.
+    s.append(stepped(180, 83, [f"SWR {v:.1f}" for v in swr], "5s", 20, TEXT, 700,
+                     colours=[DANGER if v >= 2.5 else WARN if v >= 2.0 else TEXT
+                              for v in swr]))
+    s.append(stepped(180, 103, [f"PWR {round(f * PWR_FS)}W / {PWR_FS}W" for f in pwr],
+                     "5s", 14, TX_TEXT))
+    s.append(text(CX - 76, 129, "40m", 20, ACCENT))
+    s.append(text(CX, 129, "LSB", 20, TEXT))
+    s.append(text(CX + 76, 129, "2800", 20, TEXT2))
     s.append(readout("  7161" "73", colour=TX_TEXT, underline=6))
-    s.append(f'<text x="{CX - 98}" y="227" font-size="20" fill="{ACCENT}" '
-             f'text-anchor="middle" font-family="DejaVu Sans,Verdana,sans-serif">100 Hz</text>')
-    s.append(ptt_slab(TX_RED, "TX 102s", "#FFFFFF", pulse=True))
-    s.append(tail())
+    s.append(text(CX - 98, 227, "100 Hz", 20, ACCENT))
+    s.append(text(CX - 24, 227, "RIT 0", 14, DISABLED))
+    s.append(icon_readout(CX + 42, 227, speaker, "40", TEXT2))
+    s.append(icon_readout(CX + 104, 227, microphone, "100", TEXT2))
+    # The time-out countdown, solid red: "TX  %lu" in ui.c.
+    s.append(ptt_slab(TX_RED, "TX  102", "#FFFFFF"))
+    s.append(face_end())
+    # The glass numbers the whole watts and SWR; the half-steps it leaves as
+    # bare ticks are named out here, and so is each arc.
+    for v, lab, kind in SWRTICKS:
+        if not lab:
+            s.append(outside(SWR_ROT + swr_frac(v) * SWR_SPAN, f"{v:.1f}",
+                             ANNOT_HOT))
+    # Up where the canvas has room: beside the body there are only ~46 px.
+    s.append(caption(SWR_ROT + SWR_SPAN * 0.50, "SWR"))
+    s.append(caption(AUD_ROT + AUD_SPAN * 0.12, "power"))
+    s.append(caption(AUD_ROT + AUD_SPAN * 0.47, "mic, inner ring"))
+    s.append(body_tail())
     return "".join(s)
 
 

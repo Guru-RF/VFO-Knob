@@ -5,14 +5,16 @@ built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune, change step, key the
 transmitter, watch the S-meter — over a USB-C cable or over WiFi.
 
 <p align="center">
-  <img src="docs/display-rx.svg" width="300" alt="Receiving: S-meter filling through its colour blocks while the 100 Hz digit ticks">
-  &nbsp;&nbsp;
-  <img src="docs/display-tx.svg" width="300" alt="Transmitting: SWR on the left, forward power on the right, red PTT slab">
+  <img src="docs/display-rx.svg" width="400" alt="Receiving: the S-meter rises to S9+20 and falls back while its readout follows and the 100 Hz digit ticks; S-units marked around the blue 66 mm body">
+  &nbsp;
+  <img src="docs/display-tx.svg" width="400" alt="Transmitting: SWR on the left, forward power on the right with the mic level inside it, both readouts following their bars; red PTT slab">
 </p>
 
-*Receiving, and transmitting. The meter blocks are notched in the background
-colour, so the separators appear where the bar has reached and vanish where it
-has not.*
+*Receiving, and transmitting, to scale in the 66 mm body. The readouts follow
+the bars. The meter blocks are notched in the background colour, so the
+separators appear where the bar has reached and vanish where it has not.
+Everything outside the body is annotation: the knob draws the S-meter scale as
+bare ticks, so its values are marked around the rim.*
 
 It speaks **TCI v2.0** over a WebSocket, which is AetherSDR's own control
 protocol — so the knob is not polling, it is told. Tune at the desktop and the
@@ -44,9 +46,10 @@ runs AetherSDR is a computer with a USB port.
 - **WiFi.** Configure an SSID on the configuration page and power the knob from
   any charger.
 
-The cable wins when something answers on it; WiFi is the fallback. When the
-cable is chosen, WiFi is shut down — that frees about 40 kB of internal RAM,
-which this board genuinely needs.
+The cable wins whenever a computer is on the other end of it — the knob then
+waits for AetherSDR there rather than switching networks. WiFi is for when it
+is on a charger. When the cable is chosen, WiFi is shut down — that frees about
+40 kB of internal RAM, which this board genuinely needs.
 
 ## First run
 
@@ -54,10 +57,79 @@ which this board genuinely needs.
 2. Open **`http://10.55.42.1`** — user `admin`, password `admin`.
 3. Change the password. The page will nag until you do; it can key a
    transmitter.
-4. Set the AetherSDR host if it is not on the same machine, and an SSID if you
-   want WiFi.
+4. If you want WiFi, set an SSID and the AetherSDR host. The host is only used
+   on WiFi: over the cable the knob always talks to the computer it is plugged
+   into.
 
 Enable AetherSDR's TCI server first — it is the `TCI` panel in the button bar.
+
+## Windows
+
+Linux binds the knob without help. Windows 10 (version 1903 or later) has the
+driver built in but, with the current firmware, does not pick it by itself —
+it has to be chosen once, by hand. Give the knob about ten seconds after
+plugging in: for the first six it is a serial port, which keeps it flashable,
+and only then a network adapter.
+
+1. **Find it in Device Manager** (Win+X → Device Manager). Whatever it is
+   called, the knob's network function has *Hardware Ids* (Properties →
+   Details) starting with `USB\VID_303A&PID_4000`. Anything else is not it
+   (`USB\VID_303A&PID_1001` is its serial port during the first six seconds,
+   and goes away by itself).
+   - Only a **USB-SERIAL CH340** or **USB2.0-Serial** port
+     (`USB\VID_1A86…`): the USB-C plug is the wrong way round — that
+     orientation reaches the board's second chip. Turn it over.
+   - An unknown device with a yellow **!** under *Other devices* (Code 28),
+     the usual case on Windows 10: right-click → *Update driver* →
+     *Browse my computer for drivers* → *Let me pick from a list of available
+     drivers on my computer* → *Network adapters* → Manufacturer
+     **Microsoft**, Model **UsbNcm Host Device** → *Next* → *Yes*.
+   - Under *Network adapters* with a yellow **!** and *Code 10*: most likely
+     Windows 11 24H2/25H2 with the September 2026 security update (KB5124008,
+     OS build 26100.9445 / 26200.9445 or later), which no longer accepts the
+     way firmware 1.3.2 describes itself over USB. No driver choice fixes it;
+     use WiFi, below, until a firmware with the fix is out.
+   - Windows 10 older than 1903 has no such driver. Update Windows, or use
+     WiFi.
+2. **Check the address.** `ipconfig` should show the adapter with `10.55.42.2`.
+   If it shows `169.254.x.x`, run `ipconfig /renew`; failing that, give it
+   `10.55.42.2`, mask `255.255.255.0`, no gateway and no DNS by hand.
+   `ping 10.55.42.1` should then answer.
+3. **Open the page** with the scheme typed out, `http://10.55.42.1/`. If ping
+   answers but the browser does not, a VPN or a proxy is taking the request —
+   disconnect it, or add `10.55.42.*` to the proxy exceptions.
+
+**WiFi instead of the cable.** Plugged into a computer the knob stays on the
+cable, even when that computer could not load a driver for it — it never
+tries WiFi by itself. So set the SSID and the AetherSDR host on the
+configuration page from a computer where the cable works, then either power
+the knob from a charger, or keep a finger on the screen from plugging it in
+until the dial appears, which skips USB networking for that boot.
+
+**The firewall.** The link has no internet access, which is correct: nothing
+lies behind the knob. Windows files a new network like this as *Public* — it
+may be listed as *Network 2* or similar — so if AetherSDR's firewall prompt
+was answered for private networks only, the knob cannot reach AetherSDR's TCI
+port over the cable.
+Allow it once, from an administrator PowerShell — 50001 is AetherSDR's default;
+use the port set on the configuration page:
+
+```powershell
+New-NetFirewallRule -DisplayName "VFO-Knob TCI (USB)" -Direction Inbound `
+  -Protocol TCP -LocalPort 50001 -RemoteAddress 10.55.42.1 -Action Allow -Profile Any
+```
+
+A *Block* rule always beats an *Allow*, and that prompt may have left one for
+AetherSDR on public networks. If the rule above changes nothing, open
+*Windows Defender Firewall with Advanced Security* (`wf.msc`), find
+AetherSDR's *Public* TCP rule under *Inbound Rules*, switch it from Block to
+Allow, and on its *Scope* tab set *Remote IP address* to `10.55.42.1`. Left
+unscoped, that opens AetherSDR's TCI port — which can key the transmitter —
+to everyone on every public network the computer joins.
+
+A Linux firewall that drops inbound connections by default (ufw, or
+firewalld's *public* zone) stops the knob the same way. Let it in once, e.g.
+`sudo ufw allow proto tcp from 10.55.42.1 to any port 50001`.
 
 ## Configuration page
 
