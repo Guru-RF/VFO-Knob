@@ -582,8 +582,9 @@ static void boot_update_check(void)
             return;
         }
         /* Never drop an operator's yes without a word. */
-        ui_updating_result(false, done ? "No update found" : "Update server "
-                                                             "unreachable");
+        ui_updating_result(false, done && o.phase == OTA_UP_TO_DATE
+                                      ? "No update found"
+                                      : "Update server unreachable");
         vTaskDelay(pdMS_TO_TICKS(2500));
         ui_updating_hide();
         return;

@@ -81,7 +81,15 @@ static void done_cb(lv_timer_t *t)
      * allocated cost enough internal heap that RSA-3072 signature
      * verification on the next OTA could not allocate its working memory and
      * rejected a perfectly good image. */
-    lv_screen_load_anim(s_main, LV_SCR_LOAD_ANIM_FADE_ON, 320, 0, true);
+    /* Only if the splash is still what is on screen, though. auto_del deletes
+     * whichever screen is active when the fade starts, and if the update
+     * screen took over during the splash -- an accepted update installs
+     * straight after a quick WiFi boot -- that would be the update screen,
+     * freed under splash.c's feet. Then the splash just deletes itself. */
+    if (lv_screen_active() == s_splash)
+        lv_screen_load_anim(s_main, LV_SCR_LOAD_ANIM_FADE_ON, 320, 0, true);
+    else
+        lv_obj_delete(s_splash);
     s_splash = NULL;
 }
 
