@@ -332,6 +332,29 @@ static void ui_task(void *arg)
             drv2605_fire(&s_drv, 7);        /* soft bump: value committed */
         }
 
+        /* Volume and mic gain live in the UI -- the dial's editors and the
+         * configuration page both set them there -- and nothing passed them
+         * on: the audio stayed at its defaults, 40 and 100, whatever the dial
+         * showed, and a level turned on the dial was never saved. Apply them
+         * as they change, and save them once they have settled; the save is
+         * debounced because NVS wear is real and the knob turns fast. */
+        {
+            static uint8_t applied_vol = 0xFF, applied_mic = 0xFF;
+            static int64_t changed_at;
+            const uint8_t vol = ui_volume(), mic = ui_mic_gain();
+            if (vol != applied_vol || mic != applied_mic) {
+                audio_out_set_volume(vol);
+                audio_in_set_gain(mic);
+                applied_vol = vol;
+                applied_mic = mic;
+                changed_at  = esp_timer_get_time();
+            }
+            if (changed_at && esp_timer_get_time() - changed_at > 2000000) {
+                net_prov_save_audio(vol, mic);  /* no-op when unchanged */
+                changed_at = 0;
+            }
+        }
+
         if (ui_take_ptt_tap()) {
             ESP_LOGI(TAG, "PTT tapped");
             tci_ptt_toggle();
@@ -942,6 +965,9 @@ void app_main(void)
     if (!safe) {
         bring_up("audio-out", audio_out_init);
         bring_up("mic", audio_in_init);
+        /* The saved levels, even with no display to carry them. */
+        audio_out_set_volume(net_prov_volume());
+        audio_in_set_gain(net_prov_mic_gain());
     }
 
     /* Declare the boot healthy once we have been up a while. Anything that

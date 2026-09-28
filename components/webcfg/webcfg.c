@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
 
+#include "audio_in.h"
 #include "audio_out.h"
 #include "net_prov.h"
 #include "ota.h"
@@ -293,7 +294,9 @@ static esp_err_t config_post(httpd_req_t *r)
 
     uint8_t vol = net_prov_volume(), mic = net_prov_mic_gain();
     if (field_num(body, "vol", &v)) vol = (uint8_t)clampl(v, 0, 100);
-    if (field_num(body, "mic", &v)) mic = (uint8_t)clampl(v, 0, 100);
+    /* Up to 200%, as on the dial: the PDM element is quiet. Clamping to 100
+     * here used to halve a gain set on the dial whenever the page was saved. */
+    if (field_num(body, "mic", &v)) mic = (uint8_t)clampl(v, 0, 200);
     /* Credentials last: changing them invalidates the browser's cached
      * Authorization for the NEXT request, so everything else must already be
      * committed by the time that happens. */
@@ -305,6 +308,8 @@ static esp_err_t config_post(httpd_req_t *r)
 
     net_prov_save_audio(vol, mic);
     ui_set_levels(vol, mic);      /* audio is the one thing that applies live */
+    audio_out_set_volume(vol);    /* directly too: with no display, no UI task */
+    audio_in_set_gain(mic);
 
     ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u tot=%u",
              cfg.tci_host, (unsigned)cfg.tci_port, cfg.ssid,
