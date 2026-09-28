@@ -9,8 +9,8 @@
  *
  * The release feed is public and the images are signed, so no account, token
  * or server of our own is involved: the device asks GitHub for the latest
- * release, compares the tag with its own version, and installs the asset if it
- * is newer. Images are RSA-3072 signed and the signature is checked before the
+ * release and compares it with its own version. Whether to install a newer
+ * one is asked on the dial (main/app_main.c), never decided here. Images are RSA-3072 signed and the signature is checked before the
  * update is accepted (CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT), which is
  * what makes it safe to point a transceiver's control head at the internet.
  *
@@ -34,14 +34,21 @@ typedef struct {
     char        running[32];    /* version now in flash */
     char        available[32];  /* latest release tag seen, "" if unknown */
     char        message[96];    /* human-readable result or error */
+    bool        newer;          /* `available` is newer than `running` */
+    uint32_t    checks;         /* completed checks, so each is acted on once */
 } ota_status_t;
 
 esp_err_t ota_init(void);
 
-/* Check every `hours` and install anything newer; 0 turns it off. Only ever
- * useful on WiFi -- over the USB cable the device has no route out, and the
- * configuration page does the checking instead. Never reboots by itself. */
+/* Every `hours` a check falls due; 0 turns it off. The timer only marks it:
+ * the caller starts it with ota_start_check(false) when the radio is idle and
+ * RAM has room, then ota_clear_due(). Only looks -- whether to install is
+ * asked on the dial, not decided here. Only ever useful on WiFi: over the USB
+ * cable the device has no route out, and the configuration page does the
+ * checking instead. */
 esp_err_t ota_set_interval(uint32_t hours);
+bool      ota_check_due(void);
+void      ota_clear_due(void);
 
 /* Confirms the running image so the bootloader stops treating it as on trial.
  * Call once the device has proved it works -- anything earlier defeats the
@@ -49,7 +56,9 @@ esp_err_t ota_set_interval(uint32_t hours);
 void ota_mark_valid(void);
 
 /* Kicks off a check (and install, if one is newer) on a worker task. Returns
- * immediately; poll ota_get_status(). */
+ * immediately; poll ota_get_status() -- `checks` counts each finished run. A
+ * check that only looks runs on a PSRAM stack and keeps its buffers there; an
+ * install writes flash and needs an internal stack. */
 esp_err_t ota_start_check(bool install);
 
 void ota_get_status(ota_status_t *out);

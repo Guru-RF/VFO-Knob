@@ -9,6 +9,7 @@
 #include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -113,7 +114,7 @@ static esp_err_t fetch_latest(char *body, size_t cap, int *out_len)
     esp_http_client_config_t c = {
         .url               = OTA_MANIFEST_URL,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms        = 15000,
+        .timeout_ms        = 8000,        /* a few hundred bytes; do not linger */
         .keep_alive_enable = false,
     };
     esp_http_client_handle_t h = esp_http_client_init(&c);
@@ -138,13 +139,14 @@ out:
     return err;
 }
 
-static void ota_task(void *arg)
+static void ota_run(bool install)
 {
-    const bool install = (bool)(intptr_t)arg;
-
-    /* The manifest is a few hundred bytes; 2 kB is generous. */
+    /* The manifest is a few hundred bytes; 2 kB is generous. PSRAM: a check
+     * may run beside a live TCI session, and anything under 16 kB would
+     * otherwise be taken from internal RAM first. */
     const size_t cap = 2048;
-    char *body = malloc(cap);
+    char *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!body) body = malloc(cap);
     if (!body) { set_phase(OTA_FAILED, "out of memory"); goto done; }
 
     set_phase(OTA_CHECKING, "checking for a newer release");
@@ -161,11 +163,13 @@ static void ota_task(void *arg)
         set_phase(OTA_FAILED, "manifest has no version");
         goto done;
     }
+    const bool newer = is_newer(tag, s_st.running);
     portENTER_CRITICAL(&s_lock);
     strlcpy(s_st.available, tag, sizeof s_st.available);
+    s_st.newer = newer;
     portEXIT_CRITICAL(&s_lock);
 
-    if (!is_newer(tag, s_st.running)) {
+    if (!newer) {
         char m[96];
         snprintf(m, sizeof m, "%s is the latest release", tag);
         set_phase(OTA_UP_TO_DATE, m);
@@ -225,8 +229,36 @@ static void ota_task(void *arg)
 
 done:
     free(body);
+    portENTER_CRITICAL(&s_lock);
+    s_st.checks++;
+    portEXIT_CRITICAL(&s_lock);
     s_busy = false;
+}
+
+/* Installing writes flash, and a task whose stack is in PSRAM must not, so an
+ * install gets its own internal-stack task for the one run. */
+static void ota_install_task(void *arg)
+{
+    (void)arg;
+    ota_run(true);
     vTaskDelete(NULL);
+}
+
+/* Looking only runs on one worker, made once and never deleted: its stack in
+ * PSRAM, its control block static and internal. Never deleted, because
+ * deleting a task with a PSRAM stack makes IDF allocate a helper task in
+ * internal RAM -- and abort() if it cannot, which is exactly the resource a
+ * check beside a live TCI session is short of. */
+static StaticTask_t s_chk_tcb;
+static TaskHandle_t s_chk;
+
+static void ota_check_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        ota_run(false);
+    }
 }
 
 /* --------------------------------------------------------------- upload */
@@ -299,18 +331,23 @@ void ota_upload_abort(void)
 
 /* Periodic check, WiFi only in practice.
  *
- * It installs but never reboots. Rebooting a transmitter's control head
- * unattended is not something an update mechanism gets to decide: the image is
- * staged in the spare slot and takes effect the next time the operator
- * restarts it, or never, and nothing is interrupted either way. */
+ * It only looks. Whether to install is the operator's call, asked on the dial
+ * -- updating a transmitter's control head unattended is not something an
+ * update mechanism gets to decide, and neither is staging an image that then
+ * takes over at the next power cycle without anyone having said yes. */
 static esp_timer_handle_t s_periodic;
+static volatile bool      s_due;
 
+/* Only marks the check as due: the caller starts it when the radio is idle
+ * and internal RAM has room, which this timer cannot know. */
 static void periodic_cb(void *arg)
 {
     (void)arg;
-    if (s_busy) return;
-    ota_start_check(true);
+    s_due = true;
 }
+
+bool ota_check_due(void)  { return s_due; }
+void ota_clear_due(void)  { s_due = false; }
 
 esp_err_t ota_set_interval(uint32_t hours)
 {
@@ -355,11 +392,27 @@ esp_err_t ota_start_check(bool install)
     s_st.percent = 0;
     /* TLS needs a lot of stack, and this runs on core 0 with the rest of the
      * networking so it cannot disturb the knob or the display. */
-    if (xTaskCreatePinnedToCore(ota_task, "ota", 8192,
-                                (void *)(intptr_t)install, 4, NULL, 0)
-        != pdPASS) {
-        s_busy = false;
-        return ESP_ERR_NO_MEM;
+    if (install) {
+        if (xTaskCreatePinnedToCore(ota_install_task, "ota", 8192, NULL, 4,
+                                    NULL, 0) != pdPASS) {
+            s_busy = false;
+            return ESP_ERR_NO_MEM;
+        }
+        return ESP_OK;
     }
+    if (!s_chk) {
+        /* IDF's StackType_t is a byte, so the depth is in bytes. */
+        StackType_t *stack = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
+        if (stack)
+            s_chk = xTaskCreateStaticPinnedToCore(ota_check_task, "otachk",
+                                                  8192, NULL, 4, stack,
+                                                  &s_chk_tcb, 0);
+        if (!s_chk) {
+            heap_caps_free(stack);
+            s_busy = false;
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    xTaskNotifyGive(s_chk);
     return ESP_OK;
 }

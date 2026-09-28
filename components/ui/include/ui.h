@@ -95,6 +95,20 @@ void ui_updating_progress(int percent);
 void ui_updating_result(bool ok, const char *message);
 void ui_updating_hide(void);
 
+/* Ask on the dial whether to install a newer release. A tap on the question
+ * says yes. Turning the knob, a tap anywhere else, the radio going into
+ * transmit, or ten seconds of nothing all say no -- with no countdown: it
+ * simply goes away and the dial carries on. While it is up it takes the tap,
+ * so nothing behind it -- PTT least of all -- is touched by answering it; a
+ * tap on it in its first 0.8 s is ignored, being aimed at what was there
+ * before; and a yes puts the update screen up at once, taking PTT away. */
+bool ui_ask_update(const char *version, const char *running);   /* false: not shown */
+/* 1 = install, -1 = no, 0 = still asking or nothing asked. Each answer is
+ * returned once. */
+int  ui_take_update_answer(void);
+/* From the knob task: the knob turned, so an open question is answered no. */
+void ui_ask_knob_moved(void);
+
 /* Step through 0/90/180/270. Orientation is a physical property of how the
  * panel is mounted, and guessing it costs a flash cycle each time -- so make
  * it switchable from the console instead. */

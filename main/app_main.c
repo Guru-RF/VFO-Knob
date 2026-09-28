@@ -41,7 +41,8 @@
 #include "esp_netif.h"
 #include "esp_psram.h"
 #include "esp_system.h"
-#include "esp_timer.h"
+#include "esp_attr.h"
+#include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
 #include "ptt_fsm.h"
@@ -195,6 +196,7 @@ static void encoder_task(void *arg)
         }
 
         ui_note_activity();
+        ui_ask_knob_moved();         /* turning the knob answers "update?" no */
         if (!moving) { moving = true; run_counts = 0; }
         idle_since  = now_us;
         run_counts += delta;
@@ -477,6 +479,118 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     return ip;
 }
 
+/* --- updates, asked on the dial ------------------------------------------
+ *
+ * On WiFi the knob can reach the release server itself, so it asks: once at
+ * boot, before TCI starts, and again whenever the periodic check finds
+ * something newer. A tap on the question installs; anything else -- ten
+ * seconds, the knob, a tap elsewhere -- lets the dial carry on.
+ *
+ * Installing needs internal RAM that a live TCI session on WiFi does not
+ * leave (the image is verified with RSA and written with an internal stack),
+ * so a yes given mid-session restarts the knob and installs at boot, before
+ * TCI is started. The flag lives in RTC memory: it survives that restart, and
+ * a power cut clears it rather than leaving an update pending. */
+#define UPDATE_ON_BOOT 0x55504454u               /* "UPDT" */
+RTC_NOINIT_ATTR static uint32_t s_update_on_boot;
+/* Taken from the RTC flag once, first thing in app_main(): a yes covers the
+ * very next boot and no later one, however that boot turns out. */
+static bool     s_update_accepted;
+static uint32_t s_ota_seen;                     /* last check acted upon */
+
+/* Waits up to `ms` for a check started now; false if it is not back yet. A
+ * check still out keeps going, and net_task asks about its result later. */
+static bool check_now(ota_status_t *o, int ms)
+{
+    ota_get_status(o);
+    const uint32_t before = o->checks;
+    if (ota_start_check(false) != ESP_OK) return false;
+    for (int t = 0; t < ms; t += 200) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        ota_get_status(o);
+        if (o->checks != before) return true;
+    }
+    return false;
+}
+
+static bool ask_update(const ota_status_t *o)
+{
+    if (!ui_ask_update(o->available, o->running)) return false;   /* no dial */
+    /* The dial answers no by itself after ten seconds; this bound only
+     * matters if there is no dial to ask on. */
+    for (int i = 0; i < 120; i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        const int a = ui_take_update_answer();
+        if (a) return a > 0;
+    }
+    return false;
+}
+
+/* Downloads, verifies and installs, then restarts into it. Returns only if
+ * that failed, with the dial back as it was. */
+static void install_update(void)
+{
+    ESP_LOGW(TAG, "installing the update the operator accepted");
+    ui_updating_show();
+    /* An image still on trial cannot start another update -- esp_ota_begin()
+     * refuses until boot_ok_cb confirms it, 20 s into the boot -- so a yes
+     * given that early waits for it rather than failing. */
+    esp_ota_img_states_t trial;
+    for (int i = 0; i < 120 &&
+         esp_ota_get_state_partition(esp_ota_get_running_partition(),
+                                     &trial) == ESP_OK &&
+         trial == ESP_OTA_IMG_PENDING_VERIFY; i++)
+        vTaskDelay(pdMS_TO_TICKS(250));
+    ota_status_t o;
+    ota_get_status(&o);
+    const uint32_t before = o.checks;
+    if (ota_start_check(true) == ESP_OK) {
+        /* Finished when the worker has counted its run -- not when the phase
+         * looks settled, which it also does before the worker has started. */
+        do {
+            vTaskDelay(pdMS_TO_TICKS(250));
+            ota_get_status(&o);
+            ui_updating_progress(o.percent);
+        } while (o.checks == before);
+        if (o.phase == OTA_DONE_REBOOT_NEEDED) {
+            ui_updating_result(true, "Restarting");
+            vTaskDelay(pdMS_TO_TICKS(1500));
+            esp_restart();
+        }
+    }
+    ui_updating_result(false, "Update failed");
+    vTaskDelay(pdMS_TO_TICKS(2500));
+    ui_updating_hide();
+}
+
+/* At boot on WiFi, before TCI starts: the one moment there is RAM to spare.
+ * A plain look is bounded to a few seconds, so a LAN with no way out costs
+ * TCI little; an install already accepted gets as long as it needs. */
+static void boot_update_check(void)
+{
+    const bool accepted = s_update_accepted;
+    s_update_accepted = false;
+    if (!accepted && !net_prov_ota_hours()) return;   /* checking is off */
+    if (accepted) ui_updating_show();
+    ota_status_t o;
+    const bool done = check_now(&o, accepted ? 60000 : 6000);
+    if (done) s_ota_seen = o.checks;                /* dealt with here */
+    const bool avail = done && o.newer && o.phase == OTA_IDLE;
+    if (accepted) {
+        if (avail) {
+            install_update();
+            return;
+        }
+        /* Never drop an operator's yes without a word. */
+        ui_updating_result(false, done ? "No update found" : "Update server "
+                                                             "unreachable");
+        vTaskDelay(pdMS_TO_TICKS(2500));
+        ui_updating_hide();
+        return;
+    }
+    if (avail && ask_update(&o)) install_update();
+}
+
 static void net_task(void *arg)
 {
     (void)arg;
@@ -494,6 +608,14 @@ static void net_task(void *arg)
              * stayed up long enough to dim. */
             bool via_usb = false;
             const char *host = pick_transport(cfg, ip, sizeof ip, &via_usb);
+            /* On WiFi the release server is in reach: see if there is
+             * anything newer, once, before TCI takes the RAM an install
+             * would need. */
+            static bool update_checked;
+            if (host && !via_usb && !update_checked) {
+                update_checked = true;
+                boot_update_check();
+            }
             if (host && via_usb) {
                 /* Hand the radio's internal RAM back before asking for the
                  * client's transmit stack. Both transports up leaves too
@@ -577,6 +699,61 @@ static void net_task(void *arg)
         if (started) {
             tci_status_t st;
             tci_get_status(&st);
+
+            /* A periodic check falls due: start it only while the radio is
+             * idle and internal RAM has room, or it would compete with the
+             * very session it is running beside. Until then it stays due. */
+            const bool idle = !st.tx && st.ptt_state == PTT_IDLE;
+            if (ota_check_due() && idle &&
+                heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= 16 * 1024 &&
+                heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= 6 * 1024 &&
+                ota_start_check(false) == ESP_OK)
+                ota_clear_due();
+
+            /* A check -- periodic, a slow one from boot, or the configuration
+             * page's "Check now" -- found something newer: ask, but never
+             * while transmitting or with an editor open. A yes restarts the
+             * knob, which then installs at boot; see boot_update_check(). */
+            static bool asking;
+            ota_status_t o;
+            ota_get_status(&o);
+            if (!asking && o.checks != s_ota_seen) {
+                if (!(o.newer && o.phase == OTA_IDLE)) {
+                    s_ota_seen = o.checks;          /* nothing to ask */
+                } else if (idle && !ui_edit_active()) {
+                    s_ota_seen = o.checks;
+                    asking = ui_ask_update(o.available, o.running);
+                }
+            }
+            if (asking) {
+                const int a = ui_take_update_answer();
+                if (a) asking = false;
+                if (a > 0) {
+                    /* The dial has already swapped to the update screen, so
+                     * PTT is out of reach. Make sure ours is idle before the
+                     * restart: a reset while keyed would leave the radio
+                     * transmitting until AetherSDR noticed the socket gone. */
+                    tci_status_t now;
+                    tci_get_status(&now);
+                    if (now.ptt_state != PTT_IDLE) {
+                        tci_ptt_unkey();
+                        for (int i = 0; i < 50 && now.ptt_state != PTT_IDLE; i++) {
+                            vTaskDelay(pdMS_TO_TICKS(100));
+                            tci_get_status(&now);
+                        }
+                    }
+                    if (now.ptt_state != PTT_IDLE) {
+                        ESP_LOGE(TAG, "update not started: PTT would not go idle");
+                        ui_updating_hide();
+                    } else {
+                        ESP_LOGW(TAG, "update accepted -- restarting to install "
+                                      "it before TCI starts");
+                        s_update_on_boot = UPDATE_ON_BOOT;
+                        vTaskDelay(pdMS_TO_TICKS(300));
+                        esp_restart();
+                    }
+                }
+            }
 
             /* No restart when the link drops, either. The client reconnects on
              * its own, backing off to 8 s, and the radio is already safe:
@@ -708,6 +885,13 @@ void app_main(void)
      * the USB PHY on the OTG controller, and that choice survives a reset. */
     usb_net_release_phy();
 #endif
+
+    /* A yes to "update?" restarts the knob with this flag set; it counts for
+     * this boot only, and only after that deliberate restart -- power-on
+     * leaves RTC memory as garbage that merely might match. */
+    s_update_accepted = s_update_on_boot == UPDATE_ON_BOOT &&
+                        esp_reset_reason() == ESP_RST_SW;
+    s_update_on_boot = 0;
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);

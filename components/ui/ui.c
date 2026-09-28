@@ -90,6 +90,15 @@ static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl;
 static lv_obj_t *s_warn_panel, *s_warn_net;
+
+/* "Update?" -- see ui_ask_update(). */
+#define ASK_MS     10000
+#define ASK_ARM_MS 800     /* a tap sooner than this was aimed at what is under it */
+static lv_obj_t     *s_ask_panel, *s_ask_title, *s_ask_hint;
+static bool          s_asking;
+static uint32_t      s_ask_since;
+static volatile int  s_ask_answer;       /* 1 yes, -1 no, 0 none */
+static volatile bool s_ask_knob;         /* the knob turned while asking */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_mic_arc, *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
 static float s_mic_peak = -60.0f;
@@ -534,6 +543,27 @@ static void touch_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     ui_note_activity();
+
+    /* A question is up: this tap answers it and goes nowhere else. On the
+     * panel is yes; anywhere else is no -- the operator was reaching for
+     * something, and PTT above all must not be keyed by answering. */
+    if (s_asking) {
+        lv_area_t a;
+        lv_obj_get_coords(s_ask_panel, &a);
+        const bool on = p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2;
+        /* The question appears over the most-touched part of the face, so a
+         * tap already on its way when it popped up was not an answer. */
+        if (on && lv_tick_elaps(s_ask_since) < ASK_ARM_MS) return;
+        lv_obj_add_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
+        s_asking = false;
+        s_ptt_tap = false;
+        /* Yes: the update screen at once. It is a separate screen, so PTT is
+         * out of reach from this moment until the restart -- not whenever the
+         * network task next looks. (The port lock is recursive.) */
+        if (on) ui_updating_show();
+        s_ask_answer = on ? 1 : -1;
+        return;
+    }
 
     /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
      * selection on the precise one. */
@@ -1084,8 +1114,70 @@ static void build(void)
     lv_label_set_text(s_warn_net, "");
     lv_obj_align(s_warn_net, LV_ALIGN_BOTTOM_MID, 0, -8);
 
+    /* The update question: the same panel as the warning, in the accent
+     * colour -- it is an offer, not a fault. */
+    s_ask_panel = lv_obj_create(s_scr);
+    lv_obj_set_size(s_ask_panel, 268, 116);
+    lv_obj_align(s_ask_panel, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_radius(s_ask_panel, 18, 0);
+    lv_obj_set_style_bg_color(s_ask_panel, C_BG1, 0);
+    lv_obj_set_style_bg_opa(s_ask_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_ask_panel, C_ACCENT, 0);
+    lv_obj_set_style_border_width(s_ask_panel, 2, 0);
+    lv_obj_set_style_pad_all(s_ask_panel, 0, 0);
+    lv_obj_remove_flag(s_ask_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_ask_panel, LV_OBJ_FLAG_CLICKABLE);   /* screen handler */
+    lv_obj_add_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
+
+    s_ask_title = lv_label_create(s_ask_panel);
+    lv_obj_set_style_text_font(s_ask_title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_ask_title, C_ACCENT_HI, 0);
+    lv_label_set_text(s_ask_title, "");
+
+    s_ask_hint = lv_label_create(s_ask_panel);
+    lv_obj_set_style_text_font(s_ask_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_ask_hint, C_TEXT2, 0);
+    lv_obj_set_style_text_align(s_ask_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_ask_hint, "");
+
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
+}
+
+bool ui_ask_update(const char *version, const char *running)
+{
+    if (!s_scr || !version) return false;
+    if (!lvgl_port_lock(200)) return false;
+    /* Tags may or may not carry a "v"; the dial shows the number. */
+    if (*version == 'v') version++;
+    if (running && *running == 'v') running++;
+    lv_label_set_text_fmt(s_ask_title, "UPDATE %s", version);
+    lv_obj_align(s_ask_title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_label_set_text_fmt(s_ask_hint, "tap here to install\nnow running %s",
+                          running ? running : "?");
+    lv_obj_align(s_ask_hint, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_ask_panel);
+    s_ask_knob   = false;
+    s_ask_answer = 0;
+    s_ask_since  = lv_tick_get();
+    s_asking     = true;
+    lvgl_port_unlock();
+    ui_note_activity();              /* a dimmed dial would hide the question */
+    return true;
+}
+
+int ui_take_update_answer(void)
+{
+    const int a = s_ask_answer;
+    if (a) s_ask_answer = 0;
+    return a;
+}
+
+void ui_ask_knob_moved(void)
+{
+    if (s_asking) s_ask_knob = true;
 }
 
 esp_err_t ui_init(void)
@@ -1172,6 +1264,15 @@ void ui_update(const ui_state_t *st)
     if (!lvgl_port_lock(20)) return;      /* never block the caller */
     s_last = *st;                         /* editors open on the live value */
 
+    /* No countdown: after ten seconds, a turn of the knob, or the radio
+     * keying up, the question simply goes away and the answer is no. */
+    if (s_asking && (s_ask_knob || st->tx ||
+                     lv_tick_elaps(s_ask_since) >= ASK_MS)) {
+        lv_obj_add_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
+        s_asking = false;
+        s_ask_answer = -1;
+    }
+
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter. */
     if (s_edit != ED_NONE) { lvgl_port_unlock(); return; }
@@ -1235,7 +1336,7 @@ void ui_update(const ui_state_t *st)
     lv_label_set_text_fmt(s_vol, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
     lv_label_set_text_fmt(s_mic, SYM_MIC " %u", (unsigned)s_micgain);
 
-    if (st->warn && st->warn[0]) {
+    if (st->warn && st->warn[0] && !s_asking) {
         if (strcmp(lv_label_get_text(s_warn), st->warn) != 0) {
             lv_label_set_text(s_warn, st->warn);
             lv_obj_align(s_warn, LV_ALIGN_TOP_MID, 0, 8);

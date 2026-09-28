@@ -162,9 +162,14 @@ accepted. Nothing is burned into eFuse and Secure Boot is not enabled, so the
 board always stays ordinarily flashable — this protects the update path, not
 the hardware.
 
-- **On WiFi** the knob checks by itself (every 24 h by default) and installs
-  anything newer. It never reboots to apply it; the image waits in the spare
-  slot until you restart it.
+- **On WiFi** the knob checks by itself — at boot, and every 24 h by default —
+  and asks on the dial: **UPDATE x.y.z**, *tap here to install*. A tap on the
+  question installs it and restarts into it; anything else — ten seconds, a
+  turn of the knob, a tap elsewhere — and the question goes away and the dial
+  carries on. It never asks while transmitting, and never installs unasked. A
+  yes given mid-session restarts the knob first and installs at boot, where
+  there is room for it. Set the interval to 0 on the configuration page to
+  stop checking.
 - **Over USB** the knob has no route to the internet — it is the DHCP *server*
   on that link. The configuration page does the checking and the downloading
   instead, then pushes the image over. Same image, same signature check.
