@@ -33,6 +33,7 @@ button:active{transform:translateY(1px)}
 .note{color:var(--dim);font-size:12px;margin-top:10px}
 .pill{padding:1px 8px;border-radius:99px;font-size:12px}
 .up{background:#4caf7d22;color:var(--ok)} .down{background:#e5534b22;color:var(--bad)}
+button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
 #msg{margin-top:10px;font-size:13px;min-height:18px}
 .warn{background:#e5534b1f;border:1px solid #e5534b66;color:#f0b3ae;
       border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
@@ -55,9 +56,14 @@ button:active{transform:translateY(1px)}
 <section>
   <h2>AetherSDR</h2>
   <div class="grid">
-    <div><label>Host (IP, or a name ending .local)</label><input id="host"></div>
+    <div><label for="host">Host (IP, or a name ending .local)<button id="myip" type="button"
+         class="pill up" title="Use this computer's address" hidden></button></label>
+         <input id="host"></div>
     <div><label>Port</label><input id="port" inputmode="numeric"></div>
   </div>
+  <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
+     finds AetherSDR on this computer by itself; this host is what it uses on
+     WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
   <label>Transmit time-out (seconds, 30&ndash;600)</label>
   <input id="tot" inputmode="numeric">
   <p class="note">The time-out is the main guard against a toggle-PTT left keyed.
@@ -71,8 +77,8 @@ button:active{transform:translateY(1px)}
     <div><label>Password</label><input id="pass" type="password"
          placeholder="unchanged"></div>
   </div>
-  <p class="note">Used when no host answers over the USB cable. Applies on the
-     next boot.</p>
+  <p class="note">Used when the knob is powered from a charger rather than a
+     computer. Applies on the next boot.</p>
 </section>
 
 <section>
@@ -162,7 +168,16 @@ async function load(){
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('tot').value=c.tot;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
   $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||'';
+  /* The address this browser reaches the knob from. Over the cable that is the
+     USB link's own 10.55.42.2 -- found automatically there, and unreachable
+     from WiFi -- so it is only offered when it can be the right answer. */
+  myIp = c.client && !c.client_usb ? c.client : '';
+  $('myip').hidden = !myIp;
+  $('myip').textContent = 'my IP ' + myIp;
+  $('hostusb').hidden = !(c.client && c.client_usb);
 }
+let myIp='';
+$('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 
 $('save').onclick=async()=>{
   const b=new URLSearchParams();

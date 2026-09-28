@@ -10,6 +10,7 @@
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -89,6 +90,41 @@ static void netif_addr(const char *key, char *out, size_t len)
         snprintf(out, len, IPSTR, IP2STR(&ip.ip));
 }
 
+/* The address the browser is talking to us from, and whether that is the far
+ * end of the USB cable. The server listens on an IPv6 socket, so an IPv4
+ * client arrives as ::ffff:a.b.c.d.
+ *
+ * The cable case matters because the address is then 10.55.42.2 -- where the
+ * knob already finds AetherSDR by itself over USB, and which is unreachable
+ * from WiFi, the only transport the configured host is used for. */
+static void client_addr(httpd_req_t *r, char *out, size_t len, bool *on_usb)
+{
+    out[0]  = 0;
+    *on_usb = false;
+
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    if (getpeername(httpd_req_to_sockfd(r), (struct sockaddr *)&ss, &sl) != 0)
+        return;
+
+    struct in_addr a;
+    if (ss.ss_family == AF_INET) {
+        a = ((struct sockaddr_in *)&ss)->sin_addr;
+    } else if (ss.ss_family == AF_INET6) {
+        const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)&ss;
+        if (!IN6_IS_ADDR_V4MAPPED(&s6->sin6_addr)) return;
+        memcpy(&a.s_addr, &s6->sin6_addr.s6_addr[12], 4);
+    } else {
+        return;
+    }
+    inet_ntoa_r(a, out, len);
+
+    esp_netif_t *n = esp_netif_get_handle_from_ifkey("ETH_DEF");   /* USB */
+    esp_netif_ip_info_t ip;
+    if (n && esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr)
+        *on_usb = (a.s_addr & ip.netmask.addr) == (ip.ip.addr & ip.netmask.addr);
+}
+
 /* ---------------------------------------------------------------- status */
 
 static esp_err_t status_get(httpd_req_t *r)
@@ -147,21 +183,27 @@ static esp_err_t config_get(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     const vfo_cfg_t *c = net_prov_cfg();
-    char buf[320];
+    char client[16];
+    bool client_usb;
+    client_addr(r, client, sizeof client, &client_usb);
+
+    char buf[448];
     /* The password is deliberately not returned. The page sends one only when
      * the field is non-empty, so a save does not have to round-trip it. */
-    snprintf(buf, sizeof buf,
+    int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"tot\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
-             "\"fwbase\":\"%s\"}",
+             "\"fwbase\":\"%s\",\"client\":\"%s\",\"client_usb\":%s}",
              c->tci_host, (unsigned)c->tci_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              (unsigned)net_prov_tot_s(),
              net_prov_web_user(),
              net_prov_web_is_default() ? "true" : "false",
              (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
-             (unsigned)net_prov_blank_min(), ota_base_url());
+             (unsigned)net_prov_blank_min(), ota_base_url(),
+             client, client_usb ? "true" : "false");
+    if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
 }
 
