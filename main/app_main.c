@@ -136,6 +136,21 @@ static int s_counts_per_detent = ENC_COUNTS_PER_DETENT_DEFAULT;
  * knob reads it, the UI writes it. */
 static _Atomic int32_t s_step_hz = 1000;
 
+/* Set by net_task when there is no computer on the cable, and shown by
+ * ui_task in the warning panel; see net_task for when and why. */
+static atomic_bool s_flip_hint;
+
+#if CONFIG_VFO_USB_NET
+/* How long a cable with a computer on it gets, from boot, to come up as a
+ * network before WiFi is tried: until a little after it is due. */
+#define USB_GRACE_US (((int64_t)CONFIG_VFO_USB_NET_DELAY_MS + 5000) * 1000)
+
+/* What is on the S3's side of the USB-C cable, decided by usb_net_task
+ * during the flash window. */
+enum { CABLE_UNKNOWN = 0, CABLE_COMPUTER, CABLE_NONE };
+static atomic_int s_cable;
+#endif
+
 static void encoder_task(void *arg)
 {
     (void)arg;
@@ -339,6 +354,7 @@ static void ui_task(void *arg)
             s_warn_until    = nowms + 3000;
         }
         if (nowms < s_warn_until)                    warn = "TX REFUSED";
+        else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
         else if (!(st.link == TCI_LINK_READY ||
                    st.link == TCI_LINK_DEGRADED))    warn = "NO LINK";
         else if (st.slice_locked)                    warn = "VFO LOCKED";
@@ -434,10 +450,14 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
         return NULL;
     }
     /* Give the cable until a little after it is due before settling for WiFi. */
-    static const int64_t usb_grace_us =
-        ((int64_t)CONFIG_VFO_USB_NET_DELAY_MS + 5000) * 1000;
-    if (esp_timer_get_time() < usb_grace_us) return NULL;
+    /* With no computer on the S3's side there is nothing to wait for. */
+    if (atomic_load(&s_cable) != CABLE_NONE &&
+        esp_timer_get_time() < USB_GRACE_US) return NULL;
 #endif
+    /* No network configured, nothing to join: the radio would only retry an
+     * empty SSID every five seconds, on memory the board is short of. The
+     * screen says what to do instead. */
+    if (!cfg->ssid[0]) return NULL;
     /* Only now is WiFi worth its memory. */
     static bool wifi_started;
     if (!wifi_started) {
@@ -506,6 +526,26 @@ static void net_task(void *arg)
             }
         }
 
+#if CONFIG_VFO_USB_NET
+        /* No computer on the S3's side of the cable: the plug is the wrong way
+         * round, or it is a charger -- the knob cannot tell which, only that
+         * nobody is there, so it says what would fix it. With WiFi configured
+         * that is a few seconds' hint while WiFi takes over; without, there is
+         * nothing else the knob can do, so the hint stays up. A computer that
+         * is there but slow to set the adapter up never sees it: it sends
+         * frames, and usb_net_task counts those, not the adapter. */
+        {
+            static int64_t flip_since;
+            const int64_t now = esp_timer_get_time();
+            const bool nobody = !started && atomic_load(&s_cable) == CABLE_NONE;
+            if (!nobody)          flip_since = 0;
+            else if (!flip_since) flip_since = now;
+            atomic_store(&s_flip_hint,
+                         nobody && (!cfg->ssid[0] ||
+                                    now - flip_since < 8 * 1000 * 1000));
+        }
+#endif
+
         {   /* Keep the tap-to-show address card current. */
             char usb[20] = { 0 }, wifi[20] = { 0 }, info[128];
             esp_netif_ip_info_t a;
@@ -515,10 +555,16 @@ static void net_task(void *arg)
             n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
             if (n && esp_netif_get_ip_info(n, &a) == ESP_OK && a.ip.addr)
                 snprintf(wifi, sizeof wifi, IPSTR, IP2STR(&a.ip));
-            snprintf(info, sizeof info, "USB   %s\nWiFi  %s\nsetup  http://%s",
-                     usb[0]  ? usb  : "-",
-                     wifi[0] ? wifi : "-",
-                     usb[0] ? usb : (wifi[0] ? wifi : "-"));
+            if (atomic_load(&s_flip_hint))
+                snprintf(info, sizeof info, "No computer on this side of\n"
+                                            "the cable. Turn the USB-C\n"
+                                            "plug over%s",
+                         cfg->ssid[0] ? ", or wait for WiFi." : ".");
+            else
+                snprintf(info, sizeof info, "USB   %s\nWiFi  %s\nsetup  http://%s",
+                         usb[0]  ? usb  : "-",
+                         wifi[0] ? wifi : "-",
+                         usb[0] ? usb : (wifi[0] ? wifi : "-"));
             ui_set_netinfo(info);
         }
 
@@ -618,7 +664,24 @@ static bool bring_up(const char *what, esp_err_t (*fn)(void))
 static void usb_net_task(void *arg)
 {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_VFO_USB_NET_DELAY_MS));
+    /* Is there a computer on this side of the cable at all? The ROM's serial
+     * port has been on the lines since reset, so a computer has long been
+     * sending it frames by now; two seconds of silence means nobody is there.
+     * Then TinyUSB is not started at all: its task, its netif and the holes
+     * they leave in internal RAM are exactly what WiFi cannot spare -- with
+     * them, the WebSocket client could not even create its task. */
+    const int64_t t0 = esp_timer_get_time();
+    if (!usb_net_probe_host(2000)) {
+        ESP_LOGW(TAG, "no computer on the USB cable (plug the wrong way round, "
+                      "or a charger) -- USB networking not started");
+        atomic_store(&s_cable, CABLE_NONE);
+        vTaskDelete(NULL);
+    }
+    atomic_store(&s_cable, CABLE_COMPUTER);
+    /* A computer is there, so the flash window matters: keep all of it. */
+    const int64_t left_ms = CONFIG_VFO_USB_NET_DELAY_MS -
+                            (esp_timer_get_time() - t0) / 1000;
+    if (left_ms > 0) vTaskDelay(pdMS_TO_TICKS(left_ms));
     if (bring_up("usb-net", usb_net_init))
         netlog_on_reboot(usb_net_prepare_reboot);
     vTaskDelete(NULL);

@@ -25,6 +25,16 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # and made things WORSE (10.7 kB internal free at TCI start, against 38 kB
 # without it), and it cannot relocate the static RX descriptors anyway --
 # which is the allocation that actually competes with the draw buffers.
+#
+# WiFi driver code stays OUT of IRAM. On the S3 that IRAM comes out of the same
+# internal SRAM the heap does (IDF: >10 kB for IRAM_OPT, >17 kB for
+# RX_IRAM_OPT), and the USB build cannot spare it: TinyUSB's NCM transfer
+# buffers are static and internal, so even with USB networking not started, the
+# knob on WiFi had 15 kB free with a 6.6 kB largest block -- enough for the
+# WebSocket client's task, not for TCI's transmit task after it. The cost is
+# WiFi throughput, of which TCI and one audio stream use a sliver.
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
 # --- partitions -----------------------------------------------------------
