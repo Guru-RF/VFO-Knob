@@ -25,3 +25,7 @@ CONFIG_ESP_CONSOLE_NONE=y
 # unit" and no network interface ever appears. Both consoles must be off.
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
+# The USB link has nothing behind it, so its DHCP server must not name a DNS
+# server either. With this on, every lease offered the knob itself as DNS, and
+# a PC then sent name lookups down the cable that nothing would ever answer.
+# CONFIG_LWIP_DHCPS_ADD_DNS is not set

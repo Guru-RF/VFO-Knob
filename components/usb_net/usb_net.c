@@ -4,10 +4,12 @@
 /* Not built in. Stubs keep the call sites free of #ifdef. */
 esp_err_t   usb_net_init(void)  { return ESP_ERR_NOT_SUPPORTED; }
 bool        usb_net_is_up(void) { return false; }
+bool        usb_net_probe_host(uint32_t ms) { (void)ms; return false; }
 const char *usb_net_host(void)  { return NULL; }
 #else
 
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -22,12 +24,119 @@ const char *usb_net_host(void)  { return NULL; }
 #include "tinyusb_net.h"
 #include "tusb.h"
 #include "soc/rtc_cntl_reg.h"
+#include "soc/usb_serial_jtag_reg.h"
 #include "soc/soc.h"
 
 static const char *TAG = "usbnet";
 
 static esp_netif_t *s_netif;
 static volatile bool s_host_seen;
+
+/* What the computer calls us. The defaults said "Espressif Systems / Espressif
+ * Device" with serial "123456" -- the same serial on every unit, so a host
+ * could not tell two knobs apart, and Windows files per-device settings under
+ * it. The IDs stay Espressif's (303A:4000); only the names are ours.
+ *
+ * Same slots as esp_tinyusb's own table for an NCM-only build, because
+ * tinyusb_net_init() writes the MAC into slot 5 at runtime. Enabling another
+ * class (CDC, MSC, vendor) shifts those slots, and this table with them. */
+#if CFG_TUD_CDC || CFG_TUD_MSC || CFG_TUD_VENDOR || !CFG_TUD_NCM
+/* So does the NCM interface number, which the MS OS 2.0 function subset below
+ * names as 0 -- Windows would then load its NCM driver on the wrong function. */
+#error "usb_net descriptors assume NCM is the only USB class (ITF 0, strings 4 and 5)"
+#endif
+static char s_serial[13];
+static const char *s_usb_strings[] = {
+    (const char[]){ 0x09, 0x04 },   /* 0: English (0x0409)                   */
+    "RF.Guru",                      /* 1: manufacturer                       */
+    "VFO-Knob",                     /* 2: product                            */
+    s_serial,                       /* 3: serial -- the chip's own MAC       */
+    "VFO-Knob network",             /* 4: the NCM interface                  */
+    "",                             /* 5: MAC, filled by tinyusb_net_init()  */
+};
+
+/* --- what Windows needs ---------------------------------------------------
+ *
+ * Linux binds cdc_ncm to the interface class and is happy with anything here.
+ * Windows is not, in two separate ways.
+ *
+ * The device class. esp_tinyusb only announces an interface association
+ * (EF/02/01) when CDC-ACM is enabled, so an NCM-only build said 00/00/00 while
+ * its configuration carries an IAD. Windows 11 binds UsbNcm by class code, but
+ * since the September 2026 update (KB5124008) it no longer groups an IAD on a
+ * class-00 device: the two NCM interfaces land in separate device nodes and
+ * UsbNcm fails with Code 10. Espressif fixed this upstream (esp-usb #591) in
+ * no release this project can use, so the descriptor is ours.
+ *
+ * The driver match. Windows 10 (1903 and later) has UsbNcm but does not pick
+ * it by class code; without help the knob is an unknown device (Code 28) until
+ * someone chooses the driver by hand. A Microsoft OS 2.0 descriptor naming the
+ * compatible ID "WINNCM" on the NCM function makes it load by itself. Windows
+ * only asks for one when bcdUSB is 2.01 or higher, through the BOS descriptor.
+ *
+ * bcdDevice moves to 1.01 so Windows files this as a new device revision rather
+ * than reusing what it cached for the old descriptors. */
+static const tusb_desc_device_t s_device = {
+    .bLength            = sizeof(tusb_desc_device_t),
+    .bDescriptorType    = TUSB_DESC_DEVICE,
+    .bcdUSB             = 0x0210,
+    .bDeviceClass       = TUSB_CLASS_MISC,         /* 0xEF */
+    .bDeviceSubClass    = MISC_SUBCLASS_COMMON,    /* 0x02 */
+    .bDeviceProtocol    = MISC_PROTOCOL_IAD,       /* 0x01 */
+    .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor           = 0x303A,                  /* unchanged: Espressif */
+    .idProduct          = 0x4000,                  /* unchanged: esp_tinyusb */
+    .bcdDevice          = 0x0101,
+    .iManufacturer      = 1,
+    .iProduct           = 2,
+    .iSerialNumber      = 3,
+    .bNumConfigurations = 1,
+};
+
+#define MS_OS_20_VENDOR_CODE 0x01     /* any non-zero byte; echoed in the BOS */
+#define MS_OS_20_SET_LEN     (0x0A + 0x08 + 0x08 + 0x14)
+
+/* Set header, configuration subset, function subset starting at interface 0
+ * (the NCM control interface), and the compatible ID. */
+static const uint8_t s_ms_os_20[] = {
+    U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR),
+    U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(MS_OS_20_SET_LEN),
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION),
+    0, 0, U16_TO_U8S_LE(MS_OS_20_SET_LEN - 0x0A),
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
+    0, 0, U16_TO_U8S_LE(MS_OS_20_SET_LEN - 0x0A - 0x08),
+    U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
+    'W', 'I', 'N', 'N', 'C', 'M', 0, 0,       /* compatible ID     */
+    0, 0, 0, 0, 0, 0, 0, 0,                   /* sub-compatible ID */
+};
+TU_VERIFY_STATIC(sizeof s_ms_os_20 == MS_OS_20_SET_LEN, "MS OS 2.0 set length");
+
+#define BOS_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
+static const uint8_t s_bos[] = {
+    TUD_BOS_DESCRIPTOR(BOS_LEN, 1),
+    TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_SET_LEN, MS_OS_20_VENDOR_CODE),
+};
+TU_VERIFY_STATIC(sizeof s_bos == BOS_LEN, "BOS length");
+
+/* Both override weak stubs in TinyUSB's usbd.c. They have to exist together:
+ * with bcdUSB 2.10 and the stub, the host's BOS request would stall. */
+uint8_t const *tud_descriptor_bos_cb(void) { return s_bos; }
+
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
+                                tusb_control_request_t const *req)
+{
+    if (stage != CONTROL_STAGE_SETUP) return true;
+    /* IN only. An OUT request with the same code would have TinyUSB copy the
+     * host's data stage into s_ms_os_20 -- which is const, in flash-mapped
+     * memory, and the write is a cache-error panic. */
+    if (req->bmRequestType_bit.type == TUSB_REQ_TYPE_VENDOR &&
+        req->bmRequestType_bit.direction == TUSB_DIR_IN &&
+        req->bRequest == MS_OS_20_VENDOR_CODE &&
+        req->wIndex == 7)                      /* MS_OS_20_DESCRIPTOR_INDEX */
+        return tud_control_xfer(rhport, req, (void *)(uintptr_t)s_ms_os_20,
+                                sizeof s_ms_os_20);
+    return false;                              /* stall anything else */
+}
 
 /* --- esp_netif <-> tinyusb glue ------------------------------------------ */
 
@@ -93,10 +202,25 @@ esp_err_t usb_net_init(void)
      * one host do not collide. */
     uint8_t mac[6];
     ESP_RETURN_ON_ERROR(esp_read_mac(mac, ESP_MAC_ETH), TAG, "mac");
+    /* The chip's own address, unmodified, is the knob's end of the link. It
+     * was left unset, so every ARP reply went out from 00:00:00:00:00:00. */
+    uint8_t own[6];
+    memcpy(own, mac, sizeof own);
     mac[0] |= 0x02;
     mac[0] &= 0xFE;
 
-    const tinyusb_config_t usb = { .external_phy = false };
+    uint8_t chip[6];
+    ESP_RETURN_ON_ERROR(esp_efuse_mac_get_default(chip), TAG, "chip mac");
+    snprintf(s_serial, sizeof s_serial, "%02X%02X%02X%02X%02X%02X",
+             chip[0], chip[1], chip[2], chip[3], chip[4], chip[5]);
+
+    const tinyusb_config_t usb = {
+        .external_phy            = false,
+        .device_descriptor       = &s_device,
+        /* configuration_descriptor stays NULL: esp_tinyusb's NCM one is right. */
+        .string_descriptor       = s_usb_strings,
+        .string_descriptor_count = sizeof s_usb_strings / sizeof s_usb_strings[0],
+    };
     ESP_RETURN_ON_ERROR(tinyusb_driver_install(&usb), TAG, "tinyusb");
 
     tinyusb_net_config_t ncfg = { .on_recv_callback = usb_recv };
@@ -127,9 +251,13 @@ esp_err_t usb_net_init(void)
     base.route_prio = 10;              /* below WiFi's default 50 by design */
     base.flags = (esp_netif_flags_t)(ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP);
 
+    /* No gateway. The DHCP server offers a router only when the interface has
+     * one, and it used to be our own address -- which told the computer to
+     * send its internet traffic down the cable. A 12 Mbit/s link can outrank
+     * slow Wi-Fi in Windows' metrics, and the page's own firmware download
+     * then went nowhere. Nothing on this link lies beyond it. */
     esp_netif_ip_info_t ip = { 0 };
     ip.ip.addr      = esp_ip4addr_aton(USB_NET_DEVICE_IP);
-    ip.gw.addr      = esp_ip4addr_aton(USB_NET_DEVICE_IP);
     ip.netmask.addr = esp_ip4addr_aton(USB_NET_NETMASK);
     base.ip_info    = &ip;
 
@@ -145,6 +273,9 @@ esp_err_t usb_net_init(void)
     };
     s_netif = esp_netif_new(&cfg);
     ESP_RETURN_ON_FALSE(s_netif, ESP_FAIL, TAG, "netif");
+    /* Only this reaches lwIP's hardware address. base.mac in the config above
+     * stops at esp_netif's own copy, for a driver like this one. */
+    ESP_RETURN_ON_ERROR(esp_netif_set_mac(s_netif, own), TAG, "netif mac");
 
     esp_netif_action_start(s_netif, NULL, 0, NULL);
     /* Never ESP_ERROR_CHECK during init: an abort here is a reboot loop. */
@@ -208,6 +339,20 @@ bool usb_net_host_present(void)
      * the knob onto WiFi, where the driver's memory left too little for the
      * WebSocket client to start at all. */
     return tud_mounted();
+}
+
+bool usb_net_probe_host(uint32_t ms)
+{
+    /* Read-only, so it disturbs nothing the ROM's serial port is doing. */
+    const uint32_t first = REG_READ(USB_SERIAL_JTAG_FRAM_NUM_REG) &
+                           USB_SERIAL_JTAG_SOF_FRAME_INDEX;
+    for (uint32_t t = 0; t < ms; t += 10) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        if ((REG_READ(USB_SERIAL_JTAG_FRAM_NUM_REG) &
+             USB_SERIAL_JTAG_SOF_FRAME_INDEX) != first)
+            return true;
+    }
+    return false;
 }
 
 bool usb_net_is_up(void)

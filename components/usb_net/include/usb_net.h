@@ -46,6 +46,17 @@ void usb_net_prepare_reboot(void);
  * opposed to the cable merely having power on it. */
 bool usb_net_host_present(void);
 
+/* Is a computer on the S3's own USB data lines? Watches for up to `ms` and
+ * returns as soon as one shows itself. Call before usb_net_init(), while the
+ * ROM's USB-Serial-JTAG still owns the PHY.
+ *
+ * The USB-C socket is wired one way round: plugged in the other way the data
+ * lines reach the board's second chip, and on the S3's side there is nobody --
+ * just as on a charger. A host sends a start-of-frame packet every
+ * millisecond, and USB-Serial-JTAG latches each one's frame number, so a
+ * frame counter that moves means a computer is there. */
+bool usb_net_probe_host(uint32_t ms);
+
 bool usb_net_is_up(void);
 
 /* The host's address, or NULL when the link is down. */
