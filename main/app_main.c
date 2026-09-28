@@ -466,15 +466,12 @@ static void net_task(void *arg)
 
     for (;;) {
         if (!started) {
-            /* Never chose a transport at all. Something is wrong that waiting
-             * will not fix -- a cable with no server behind it, or a WiFi that
-             * will not associate -- and a knob showing NO LINK forever is no
-             * use to anyone. Restarting re-runs the whole choice. */
-            static uint32_t idle_ticks;
-            if (++idle_ticks > 90) {          /* ~3 min at the 2 s period */
-                ESP_LOGE(TAG, "no transport after 3 minutes -- restarting");
-                esp_restart();
-            }
+            /* No restart here, however long this takes. Nothing has been lost
+             * yet, and pick_transport() already re-runs the whole choice on
+             * every pass, so a reboot only arrives back at this same question.
+             * It used to reboot after three minutes anyway: with AetherSDR not
+             * running the knob restarted every 3 min 12 s, all day, and never
+             * stayed up long enough to dim. */
             bool via_usb = false;
             const char *host = pick_transport(cfg, ip, sizeof ip, &via_usb);
             if (host && via_usb) {
@@ -499,7 +496,6 @@ static void net_task(void *arg)
                              MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
                 if (tci_client_start(host, cfg->tci_port) == ESP_OK) {
                     started = true;
-                    idle_ticks = 0;
                 } else {
                     /* Usually means internal RAM was too tight to spawn the
                      * WebSocket task. Retrying is right: memory pressure is
@@ -536,21 +532,12 @@ static void net_task(void *arg)
             tci_status_t st;
             tci_get_status(&st);
 
-            /* Choosing USB means WiFi has been shut down, so an unplugged
-             * cable leaves no way back -- and the transport is only chosen at
-             * startup. Reboot rather than sit there deaf: the boot path picks
-             * a transport again, and dropping the TCI socket is the safe
-             * direction (AetherSDR unkeys a client that disconnects). */
-            static uint32_t down_ticks;
-            if (st.link == TCI_LINK_DOWN) {
-                if (++down_ticks > 30) {      /* ~60 s at the 2 s loop period */
-                    ESP_LOGE(TAG, "link down 60 s -- restarting to re-choose "
-                                  "a transport");
-                    esp_restart();
-                }
-            } else {
-                down_ticks = 0;
-            }
+            /* No restart when the link drops, either. The client reconnects on
+             * its own, backing off to 8 s, and the radio is already safe:
+             * AetherSDR unkeys a client that disconnects. A reboot after 60 s
+             * down bought nothing but a knob that restarted every time
+             * AetherSDR was closed. Unplugging the cable to move it is a power
+             * cycle anyway, so the transport still gets chosen afresh then. */
             static const char *L[] = { "down", "connecting", "greeting",
                                        "READY", "degraded" };
             ESP_LOGI(TAG,
