@@ -16,6 +16,7 @@ permissive terms, with one exception noted at the end.
 | `espressif/esp_lvgl_port` | Apache-2.0 |
 | `espressif/esp_websocket_client` | Apache-2.0 |
 | `espressif/mdns` | Apache-2.0 |
+| Font Awesome 5 Free, microphone glyph (`components/ui/font_mic_14.c`) | SIL OFL 1.1 |
 
 MIT and BSD-3-Clause both require their copyright notice and licence text to
 accompany binary distributions. Shipping a device means shipping those notices

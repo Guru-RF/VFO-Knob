@@ -18,6 +18,12 @@
 
 static const char *TAG = "ui";
 
+/* LVGL's symbol set has no microphone, so the mic-gain readout used the music
+ * note. font_mic_14 carries the one glyph and falls back to Montserrat 14 for
+ * everything else. U+F130 in UTF-8. */
+LV_FONT_DECLARE(font_mic_14);
+#define SYM_MIC "\xEF\x84\xB0"
+
 /* --- AetherSDR "Default Dark" palette ------------------------------------
  * Taken from resources/themes/default-dark.json so the knob reads as an
  * extension of the desktop rather than a separate device. Note TX is AMBER
@@ -953,8 +959,8 @@ static void build(void)
     s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX - 24, 222, "RIT 0");
     s_vol      = mklabel(&lv_font_montserrat_14, C_TEXT2,  CX + 42, 222,
                          LV_SYMBOL_VOLUME_MID " 40");
-    s_mic      = mklabel(&lv_font_montserrat_14, C_TEXT2,  CX + 104, 222,
-                         LV_SYMBOL_AUDIO " 100");
+    s_mic      = mklabel(&font_mic_14,           C_TEXT2,  CX + 104, 222,
+                         SYM_MIC " 100");
 
     /* Full width, hard to the bottom edge. The circle clips it to a chord.
      */
@@ -1227,7 +1233,7 @@ void ui_update(const ui_state_t *st)
     }
 
     lv_label_set_text_fmt(s_vol, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
-    lv_label_set_text_fmt(s_mic, LV_SYMBOL_AUDIO " %u", (unsigned)s_micgain);
+    lv_label_set_text_fmt(s_mic, SYM_MIC " %u", (unsigned)s_micgain);
 
     if (st->warn && st->warn[0]) {
         if (strcmp(lv_label_get_text(s_warn), st->warn) != 0) {
