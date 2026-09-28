@@ -36,8 +36,6 @@ button:active{transform:translateY(1px)}
 #msg{margin-top:10px;font-size:13px;min-height:18px}
 .warn{background:#e5534b1f;border:1px solid #e5534b66;color:#f0b3ae;
       border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
-.warn{background:#e5534b1f;border:1px solid #e5534b66;color:#f0b3ae;
-      border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
 @media(max-width:520px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -47,10 +45,6 @@ button:active{transform:translateY(1px)}
 <div id="warn" class="warn" hidden>
   This knob still uses the shipped password (<b>admin/admin</b>). Anyone on this
   network can key your transmitter with it &mdash; set your own below.
-</div>
-<div id="warn" class="warn" hidden>
-  This knob still uses the shipped password (<b>admin/admin</b>) and anyone on
-  this network can key your transmitter with it. Set your own below.
 </div>
 
 <section>
@@ -108,17 +102,6 @@ button:active{transform:translateY(1px)}
   </div>
   <p class="note">Guards this page only. It is sent unencrypted, so treat it as
      a lock on the door rather than a safe.</p>
-</section>
-
-<section>
-  <h2>Access</h2>
-  <div class="grid">
-    <div><label>Username</label><input id="user"></div>
-    <div><label>New password</label><input id="webpass" type="password"
-         placeholder="unchanged"></div>
-  </div>
-  <p class="note">Guards this page only, and it is sent unencrypted &mdash; a
-     lock on the door, not a safe.</p>
 </section>
 
 <section>
@@ -195,11 +178,6 @@ $('save').onclick=async()=>{
     $('msg').textContent += ' Password changed \u2014 the browser will ask again.';
   }
   if(r.ok) load();
-  if(r.ok && $('webpass').value){
-    $('webpass').value='';
-    $('msg').textContent+=' Password changed \u2014 the browser will ask again.';
-  }
-  if(r.ok) load();
 };
 
 $('reboot').onclick=async()=>{
@@ -264,8 +242,17 @@ async function ota(){
 $('check').onclick  =async()=>{ await webCheck();
   await fetch('/api/ota',{method:'POST'}); ota() };
 
-/* Prefer letting the device pull it -- fewer moving parts. Fall back to
- * downloading here and pushing it over, which is the only way on USB. */
+/* An uploaded image is installed and the knob restarts into it by itself, a
+ * second and a half later -- unlike the knob's own download, which waits. */
+const restarting='Installed — the knob is restarting into it…';
+
+/* When this page could read the manifest, download here and push the image
+ * over: the only way on USB, and it works on WiFi too. Only when it could not
+ * is the knob asked to fetch it itself.
+ *
+ * Assigned exactly once. A second, older handler further down used to replace
+ * this one and always asked the knob to download -- which over USB it cannot,
+ * so "Update now" did nothing at all on the cable. */
 $('install').onclick = async()=>{
   $('msg').style.color='var(--dim)';
   if(!webLatest){
@@ -281,8 +268,9 @@ $('install').onclick = async()=>{
     $('msg').textContent=`Uploading ${(blob.size/1048576).toFixed(2)} MB to the knob\u2026`;
     const u=await fetch('/api/ota/upload',{method:'POST',body:blob});
     const t=await u.text();
-    $('msg').textContent = u.ok ? 'Installed \u2014 reboot to run it.' : 'Rejected: '+t;
+    $('msg').textContent = u.ok ? restarting : 'Rejected: '+t;
     $('msg').style.color = u.ok ? 'var(--ok)' : 'var(--bad)';
+    if(u.ok) setTimeout(poll,4000);
   }catch(e){
     $('msg').textContent='Could not update: '+e.message;
     $('msg').style.color='var(--bad)';
@@ -298,13 +286,12 @@ $('upload').onclick = async()=>{
   try{
     const r=await fetch('/api/ota/upload',{method:'POST',body:f});
     const t=await r.text();
-    $('msg').textContent = r.ok ? 'Installed \u2014 reboot to run it.' : 'Rejected: '+t;
+    $('msg').textContent = r.ok ? restarting : 'Rejected: '+t;
     $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+    if(r.ok) setTimeout(poll,4000);
   }catch(e){ $('msg').textContent='Upload failed: '+e; $('msg').style.color='var(--bad)' }
   $('upload').disabled=false; ota();
 };
-$('install').onclick=()=>{ $('msg').textContent='Downloading\u2026';
-  fetch('/api/ota?install=1',{method:'POST'}).then(ota) };
 
 load().then(webCheck).then(ota);
 refresh(); setInterval(refresh,2000); setInterval(ota,2000);
