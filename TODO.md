@@ -85,13 +85,38 @@ so an extra field is backward compatible by construction.
 - [ ] **On-screen provisioning.** WiFi and host currently come from Kconfig via
       NVS seeding. A SoftAP captive portal plus an on-screen host editor would
       remove the reflash-to-change-networks step.
-- [ ] **Persist settings to NVS** — volume, mic gain, TOT, brightness, rotation.
-      All are currently lost on reboot.
+- [x] **Persist settings to NVS** — volume, mic gain, TOT, the dim and dark
+      timings, the update interval, WiFi, host and page credentials. Not
+      rotation, which only the serial console can change, and the USB build
+      has no console.
 - [ ] **Slice following.** The knob can only *follow* focus: AetherSDR ignores
       `active_slice` SETs and `set_in_focus` is a stub, so a slice *selector*
       is not implementable against today's server.
-- [ ] **OTA.** The partition table already has two app slots and `otadata`;
-      only `esp_https_ota` and a trigger are missing.
+- [x] **OTA.** Signed images from the `firmware` branch: on WiFi the knob
+      checks and asks on the dial; over USB the configuration page downloads
+      and pushes the image.
+- [ ] **PTT slab as an antenna selector.** A setting on the configuration
+      page for what the bottom slab is: *PTT* (as now), *RX antenna* or
+      *TX antenna*. As an antenna selector it works like the mode and filter
+      editors — tap it, turn the knob to scroll through the radio's antennas,
+      tap to accept — and the slab shows the selected antenna in place of the
+      "PTT" text. First check what AetherSDR's TCI exposes for RX/TX antenna
+      selection; if nothing, it is an upstream request like the ones above.
+      With the slab repurposed the knob has no PTT at all, so the red TX
+      screen and TOT display must still follow the radio when it is keyed
+      from elsewhere.
+- [ ] **Icom IC-705 / IC-7300 MK2.** When an IC-705 is at hand. Same repo,
+      the radio chosen at build time: everything but the TCI client is
+      shared. Both ways in are worth having — over WiFi straight to the radio,
+      which is what makes it useful on the go, and through a computer, as with
+      AetherSDR. Before the first release of it:
+      - two update channels (e.g. `firmware/aethersdr/`, `firmware/icom/`), so
+        a knob is only ever offered its own releases;
+      - refuse an upload or OTA image whose project name differs from the
+        running one — today any image with a valid signature installs;
+      - keep the same signing key and `partitions.csv`, so either firmware can
+        be swapped for the other through the configuration page's file
+        upload (the knob verifies against the key of the image it is running).
 
 ## Known hardware quirks
 
