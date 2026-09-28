@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+"""Product renders of the knob, for marketing: the real dial on the real body.
+
+    tools/mkrender.py            -> docs/marketing/*.svg and *.png
+
+The dial is the device's own face, drawn by tools/mkdisplay.py (the firmware's
+geometry and palette), frozen at one reading: S9+40 on 80 m, 3.630.00 LSB.
+
+The body is a 66 mm cylinder, 22 mm deep: a blue anodised ring with diagonal
+knurling over a black base, the cover glass, and the 1.8" panel inside it --
+the same proportions tools/mkdisplay.py uses. Product shots are close to an
+orthographic view, and under that projection a flat circle seen at an angle is
+an exact affine image of itself. So the whole face goes onto the glass with a
+single SVG matrix, and the sides are faceted strips shaded for a light from
+the upper left. No 3D package needed.
+
+Three views, each on a transparent background:
+
+  knob-angled-text-left   standing on its rim and facing left, the body
+                          running off to the right: text goes on the left
+  knob-angled-text-right  the same facing right. Not a mirrored bitmap: the
+                          camera moves, so the dial still reads correctly
+  knob-upright       sitting on its base, seen from the front and above
+"""
+import math, os, subprocess, sys
+
+sys.dont_write_bytecode = True             # no __pycache__ left in tools/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mkdisplay as D                       # noqa: E402
+
+# --- the reading -------------------------------------------------------------
+DBM, BAND, MODE, FILT = -33, "80m", "LSB", "2800"
+DIGITS = "  3630" "00"                      # 3.630.00, the 100 Hz digit active
+ACTIVE = 6
+
+# --- the body, in face pixels (360 px = the 1.8" panel) ---------------------
+R_BODY, R_GLASS = D.BODY_R, D.GLASS_R
+DEPTH_BLUE = 13.5 * D.MM                    # knurled ring
+DEPTH_ALL = 22.0 * D.MM                     # ring and black base
+KNURLS = 28                                 # ridges around the ring
+KNURL_TWIST = math.radians(34)              # how far a ridge leans
+
+BLUE = (46, 104, 232)
+BLACK = (26, 28, 33)
+
+# The two finishes the knob ships in. The black one is sampled off Waveshare's
+# own photograph of it: the knurled ring's faces sit around 25 grey with
+# highlights to about 120, the top of the ring about 42, the base about 23 --
+# all neutral. Shading brings a side face down to roughly 60% of its albedo,
+# so a ring of 40 lands where the photograph does, and the key light's
+# highlight supplies the bright diagonal bands.
+FINISHES = {
+    "": dict(ring=BLUE, base=BLACK, top_gain=0.72, glass_edge="#0B1F5C",
+             knurl_spec=0.45, knurl_gloss=18, knurl_dark=0.74, knurl_sheen=0),
+    # Black anodising shows its knurl by reflection, not by colour: in the
+    # photograph alternate faces carry the studio's softboxes as bright
+    # diagonal bands (to ~120) between faces near 20. A point light's highlight
+    # cannot do that, so every other face gets that reflected sheen outright,
+    # fading towards the silhouette as a reflection does.
+    "-black": dict(ring=(40, 40, 41), base=(30, 30, 30), top_gain=0.32,
+                   glass_edge="#000000",
+                   knurl_spec=0.3, knurl_gloss=8, knurl_dark=0.7, knurl_sheen=110),
+}
+
+
+def norm(v):
+    m = math.sqrt(sum(c * c for c in v))
+    return tuple(c / m for c in v)
+
+
+# A small studio, the way the product photographs are lit: a key light from
+# the upper left, a broad fill from the front so the side is never black, and
+# a light from the right to pick out the knurl on the far side.
+LIGHTS = [(norm((-0.45, -0.62, 0.64)), 0.70),
+          (norm((0.05, 0.25, 1.00)), 0.45),
+          (norm((0.85, -0.20, 0.45)), 0.35)]
+KEY = LIGHTS[0][0]
+HALF = norm((KEY[0], KEY[1], KEY[2] + 1.0))  # Blinn half-vector, key light
+
+
+def shade(albedo, n, spec=0.35, gloss=18, ambient=0.22, gain=1.0, lift=0.0):
+    """Lambert from each light plus a broad highlight from the key: anodised
+    metal, not chrome. gain darkens one face of a knurl ridge; lift adds grey
+    reflected off the studio, for finishes that show their shape that way."""
+    d = sum(i * max(0.0, sum(a * b for a, b in zip(n, l))) for l, i in LIGHTS)
+    s = max(0.0, sum(a * b for a, b in zip(n, HALF))) ** gloss
+    return "#%02X%02X%02X" % tuple(
+        max(0, min(255, int(c * (ambient + d) * gain + 255 * spec * s + lift)))
+        for c in albedo)
+
+
+def rot_x(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((1, 0, 0), (0, c, -s), (0, s, c))
+
+
+def rot_y(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, 0, s), (0, 1, 0), (-s, 0, c))
+
+
+def mul(m, v):
+    return tuple(sum(m[i][k] * v[k] for k in range(3)) for i in range(3))
+
+
+def mmul(a, b):
+    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+                 for i in range(3))
+
+
+# --- the dial, frozen ---------------------------------------------------------
+
+def dial():
+    """The receive face at one reading, in its own 360 px coordinates."""
+    s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
+         f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '
+         f'fill="none" stroke="{D.SUBTLE}" stroke-width="{D.BAND}"/>']
+    for lo, hi, col in D.RXZONES:
+        s.append(D.block(D.ARC_ROT + D.smeter_frac(lo) * D.ARC_SPAN,
+                         D.ARC_ROT + D.smeter_frac(hi) * D.ARC_SPAN, col))
+    # The unreached part of the scale, covered in the track colour.
+    a0, a1 = D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN
+    L = D.arc_len(a0, a1, D.RC)
+    s.append(f'<path d="{D.arc_path(a1, a0, D.RC)}" fill="none" stroke="{D.SUBTLE}" '
+             f'stroke-width="{D.BAND + 0.5}" '
+             f'stroke-dasharray="{L * (1 - D.smeter_frac(DBM)):.2f} {L + 10:.2f}"/>')
+    for d in D.RXNOTCH:
+        s.append(D.notch(D.ARC_ROT + D.smeter_frac(d) * D.ARC_SPAN))
+    for d, ln, _ in D.RXTICKS:
+        col = D.TEXT2 if d == -73 else (D.WARN if d > -73 else D.LABEL)
+        s.append(D.tick(D.ARC_ROT + D.smeter_frac(d) * D.ARC_SPAN, ln, col,
+                        3 if d == -73 else 2))
+    s.append(D.text(180, 83, D.smeter_text(DBM), 20, D.TEXT, 700))
+    s.append(D.text(180, 103, f"{DBM} dBm", 14, D.LABEL))
+    s.append(D.text(D.CX - 76, 129, BAND, 20, D.ACCENT))
+    s.append(D.text(D.CX, 129, MODE, 20, D.TEXT))
+    s.append(D.text(D.CX + 76, 129, FILT, 20, D.TEXT2))
+    s.append(D.readout(DIGITS, underline=ACTIVE, after_colour=D.TEXT2,
+                       active_colour=D.ACCENT_HI))
+    s.append(D.text(D.CX - 98, 227, "100 Hz", 20, D.ACCENT))
+    s.append(D.text(D.CX - 24, 227, "RIT 0", 14, D.DISABLED))
+    s.append(D.icon_readout(D.CX + 42, 227, D.speaker, "40", D.TEXT2))
+    s.append(D.icon_readout(D.CX + 104, 227, D.microphone, "100", D.TEXT2))
+    s.append(D.ptt_slab(D.BG1, "PTT", D.TEXT2))
+    return "".join(s)
+
+
+# --- the body -----------------------------------------------------------------
+
+class View:
+    """An orientation of the knob: where its face axes and normal point."""
+
+    def __init__(self, rot):
+        self.u = mul(rot, (1, 0, 0))        # face right
+        self.v = mul(rot, (0, 1, 0))        # face down
+        self.n = mul(rot, (0, 0, 1))        # out of the glass
+
+    def p(self, phi, r, w=0.0):
+        """A point on the body: angle phi on the face, radius r, depth w."""
+        c, s = math.cos(phi), math.sin(phi)
+        return (r * (c * self.u[0] + s * self.v[0]) - w * self.n[0],
+                r * (c * self.u[1] + s * self.v[1]) - w * self.n[1])
+
+    def side_normal(self, phi):
+        c, s = math.cos(phi), math.sin(phi)
+        return tuple(c * a + s * b for a, b in zip(self.u, self.v))
+
+
+def poly(pts, fill, extra=""):
+    d = "M" + " L".join(f"{x:.2f},{y:.2f}" for x, y in pts) + " Z"
+    return f'<path d="{d}" fill="{fill}" stroke="{fill}" stroke-width="0.6"{extra}/>'
+
+
+def band(view, w0, w1, albedo, knurled, finish=None):
+    """One ring of the side, as strips between (possibly helical) lines.
+
+    Knurled: KNURLS ridges, each two flat faces leaning either way of the
+    radius, following a helix so the ridges run diagonally across the ring.
+    Plain: many narrow strips, for a smooth cylinder."""
+    out = []
+    steps = 8                                   # along the depth
+    if knurled:
+        faces = 2 * KNURLS
+        tilt = math.radians(17)                 # each ridge face off the radius
+    else:
+        faces, tilt = 144, 0.0
+    # A ridge leaning at KNURL_TWIST advances depth * tan(lean) around the
+    # rim, i.e. tan(lean) / R radians per pixel of depth.
+    twist = math.tan(KNURL_TWIST) / R_BODY if knurled else 0.0
+    for f in range(faces):
+        p0 = 2 * math.pi * f / faces
+        p1 = 2 * math.pi * (f + 1) / faces
+        lean = tilt if f % 2 == 0 else -tilt
+        for k in range(steps):
+            wa = w0 + (w1 - w0) * k / steps
+            wb = w0 + (w1 - w0) * (k + 1) / steps
+            sa = twist * (wa - w0)
+            sb = twist * (wb - w0)
+            mid = (p0 + p1) / 2 + (sa + sb) / 2
+            n = view.side_normal(mid + lean)
+            if view.side_normal(mid)[2] <= 0:
+                continue                         # facing away
+            pts = [view.p(p0 + sa, R_BODY, wa), view.p(p1 + sa, R_BODY, wa),
+                   view.p(p1 + sb, R_BODY, wb), view.p(p0 + sb, R_BODY, wb)]
+            if knurled:
+                lit = f % 2 == 0
+                # Strongest where the ring faces the camera and near its top
+                # edge, falling away round the side and down the ring.
+                face = max(0.0, view.side_normal(mid)[2]) ** 2.5
+                down = ((wa + wb) / 2 - w0) / (w1 - w0)
+                sheen = finish["knurl_sheen"] * face * (1 - 0.6 * down) if lit else 0
+                col = shade(albedo, n, spec=finish["knurl_spec"],
+                            gloss=finish["knurl_gloss"],
+                            gain=1.0 if lit else finish["knurl_dark"], lift=sheen)
+            else:
+                col = shade(albedo, n, spec=0.2)
+            out.append(poly(pts, col))
+    return "".join(out)
+
+
+def affine(view, cx, cy):
+    """SVG matrix taking the 360 px face (centre 180,180) onto the glass."""
+    a, b = view.u[0], view.u[1]
+    c, d = view.v[0], view.v[1]
+    return (f"matrix({a:.5f},{b:.5f},{c:.5f},{d:.5f},"
+            f"{cx - 180 * (a + c):.3f},{cy - 180 * (b + d):.3f})")
+
+
+def render(view, title, shadow=False, finish=FINISHES[""]):
+    # Extent: the front and back rims.
+    pts = [view.p(2 * math.pi * i / 180, R_BODY, w)
+           for i in range(180) for w in (0, DEPTH_ALL)]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    pad = 40
+    x0, y0 = min(xs) - pad, min(ys) - pad
+    W, H = max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad + (60 if shadow else 0)
+    cx, cy = -x0, -y0                           # the face centre on the canvas
+    ring = finish["ring"]
+    # The ring's top faces the camera and would take every light at once;
+    # held down to the deeper colour it has in photographs.
+    top = shade(ring, view.n, spec=0.15, gain=finish["top_gain"])
+    rim = shade(ring, view.n, spec=0.9, gloss=6, ambient=0.6)
+    s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.0f} {H:.0f}" '
+         f'width="{W:.0f}" height="{H:.0f}" role="img" aria-label="{title}">'
+         f'<title>{title}</title><defs>'
+         f'<clipPath id="panel"><circle cx="180" cy="180" r="180"/></clipPath>'
+         f'<linearGradient id="sheen" gradientUnits="userSpaceOnUse" '
+         f'x1="{-R_BODY:.0f}" y1="{-R_BODY:.0f}" x2="{R_BODY:.0f}" y2="{R_BODY:.0f}">'
+         f'<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>'
+         f'<stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>'
+         f'<stop offset="1" stop-color="#000000" stop-opacity="0.25"/></linearGradient>'
+         f'<linearGradient id="gloss" gradientUnits="userSpaceOnUse" '
+         f'x1="{-R_GLASS:.0f}" y1="{-R_GLASS:.0f}" x2="{R_GLASS * 0.4:.0f}" '
+         f'y2="{R_GLASS * 0.6:.0f}">'
+         f'<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>'
+         f'<stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.03"/>'
+         f'<stop offset="0.56" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>'
+         f'<filter id="soft" x="-50%" y="-50%" width="200%" height="200%">'
+         f'<feGaussianBlur stdDeviation="18"/></filter>'
+         f'</defs>']
+    if shadow:
+        # Resting on a surface: a soft contact shadow the shape of the base's
+        # footprint, a little larger and nudged towards the viewer.
+        bx, by = view.p(0, 0, DEPTH_ALL)
+        ry = R_BODY * abs(view.v[1])
+        s.append(f'<ellipse cx="{cx + bx:.1f}" cy="{cy + by + 14:.1f}" '
+                 f'rx="{R_BODY * 1.04:.1f}" ry="{ry * 1.06:.1f}" fill="#000" '
+                 f'opacity="0.45" filter="url(#soft)"/>')
+    s.append(f'<g transform="translate({cx:.2f},{cy:.2f})">')
+    s.append(band(view, DEPTH_BLUE, DEPTH_ALL, finish["base"], knurled=False))
+    s.append(band(view, 0, DEPTH_BLUE, ring, knurled=True, finish=finish))
+    s.append('</g>')
+    # The front: bezel, glass and panel, all in face coordinates.
+    s.append(f'<g transform="translate({cx:.2f},{cy:.2f}) {affine(view, 0, 0)}">'
+             f'<g transform="translate(180,180)">'
+             f'<circle r="{R_BODY:.1f}" fill="{top}"/>'
+             f'<circle r="{R_BODY:.1f}" fill="url(#sheen)"/>'
+             f'<circle r="{R_BODY - 1.5:.1f}" fill="none" stroke="{rim}" '
+             f'stroke-width="3" opacity="0.7"/>'
+             f'<circle r="{R_GLASS + 2.5:.1f}" fill="none" stroke="{finish["glass_edge"]}" '
+             f'stroke-width="4" opacity="0.6"/>'
+             f'<circle r="{R_GLASS:.1f}" fill="#050608"/></g>'
+             f'<g clip-path="url(#panel)">{dial()}</g>'
+             f'<g transform="translate(180,180)">'
+             f'<circle r="{R_GLASS:.1f}" fill="url(#gloss)"/></g></g>')
+    s.append('</svg>')
+    return "".join(s)
+
+
+VIEWS = {
+    # Standing on its rim, face turned 32 degrees, camera a little high.
+    "knob-angled-text-left": (View(mmul(rot_x(math.radians(-7)), rot_y(math.radians(-32)))),
+                         "VFO-Knob, angled, body to the right", False),
+    "knob-angled-text-right": (View(mmul(rot_x(math.radians(-7)), rot_y(math.radians(32)))),
+                          "VFO-Knob, angled, body to the left", False),
+    # On its base, seen from 50 degrees above the table.
+    "knob-upright": (View(rot_x(math.radians(90 - 50))),
+                     "VFO-Knob on a desk", True),
+}
+
+
+# --- onto a photograph ----------------------------------------------------------
+#
+#   tools/mkrender.py --photo product.png [--seed X,Y] [--scale 2]
+#
+# Puts the dial on the cover glass of an existing product photograph. The glass
+# is found by growing a region from a seed pixel inside it: neighbours join
+# while the colour changes only gradually (the glass carries soft studio
+# reflections) and stays a dark neutral, so the growth stops at the sharp edge
+# where the bezel starts. An ellipse fitted to that region's second moments
+# gives the glass outline; the dial goes onto it with one affine distort --
+# the same orthographic model as the renders above.
+
+def fit_glass(path, seed, step_tol=8, max_lum=140):
+    from collections import deque
+    w, h = map(int, subprocess.check_output(
+        ["magick", "identify", "-format", "%w %h", path]).split())
+    raw = subprocess.check_output(["magick", path, "-depth", "8", "rgb:-"])
+    px = lambda x, y: raw[3 * (y * w + x):3 * (y * w + x) + 3]
+    seen = bytearray(w * h)
+    seen[seed[1] * w + seed[0]] = 1
+    q, pts = deque([seed]), []
+    while q:
+        x, y = q.popleft()
+        c = px(x, y)
+        pts.append((x, y))
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if 0 <= nx < w and 0 <= ny < h and not seen[ny * w + nx]:
+                d = px(nx, ny)
+                if (max(abs(d[i] - c[i]) for i in range(3)) <= step_tol
+                        and max(d) <= max_lum and max(d) - min(d) <= 30):
+                    seen[ny * w + nx] = 1
+                    q.append((nx, ny))
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    sxx = sum((p[0] - mx) ** 2 for p in pts) / n
+    syy = sum((p[1] - my) ** 2 for p in pts) / n
+    sxy = sum((p[0] - mx) * (p[1] - my) for p in pts) / n
+    half, det = (sxx + syy) / 2, sxx * syy - sxy * sxy
+    root = math.sqrt(max(0.0, half * half - det))
+    # A filled ellipse's semi-axis is twice the square root of its moment.
+    return dict(w=w, h=h, cx=mx, cy=my, a=2 * math.sqrt(half + root),
+                b=2 * math.sqrt(half - root),
+                angle=0.5 * math.atan2(2 * sxy, sxx - syy))
+
+
+def glass_svg():
+    """The cover glass, face-on: black glass, the dial, a touch of gloss."""
+    g = R_GLASS
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{-g:.1f} {-g:.1f} '
+            f'{2 * g:.1f} {2 * g:.1f}" width="{2 * g:.0f}" height="{2 * g:.0f}">'
+            f'<defs><clipPath id="panel"><circle cx="180" cy="180" r="180"/></clipPath>'
+            f'<linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">'
+            f'<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>'
+            f'<stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.02"/>'
+            f'<stop offset="0.46" stop-color="#FFFFFF" stop-opacity="0"/>'
+            f'</linearGradient></defs>'
+            f'<circle r="{g:.1f}" fill="#07080B"/>'
+            f'<g transform="translate(-180,-180)"><g clip-path="url(#panel)">'
+            f'{dial()}</g></g>'
+            f'<circle r="{g:.1f}" fill="url(#gloss)"/></svg>')
+
+
+def cutout(photo, out):
+    """The photograph with its white studio background made transparent.
+
+    The background is everything light and neutral that connects to the
+    border. It becomes black at the opacity its darkness implies, so a soft
+    grey shadow under the knob survives as a see-through shadow and the grey
+    anti-aliased rim of the black base un-mixes itself. Coloured edge pixels
+    -- blue fading into white -- are un-mixed against the colour just inside
+    the edge, so no pale fringe is left on a dark page."""
+    from collections import deque
+    w, h = map(int, subprocess.check_output(
+        ["magick", "identify", "-format", "%w %h", photo]).split())
+    raw = subprocess.check_output(["magick", photo, "-depth", "8", "rgb:-"])
+    N = w * h
+    px = [tuple(raw[3 * i:3 * i + 3]) for i in range(N)]
+    light = lambda p: min(p) >= 150 and max(p) - min(p) <= 24
+    bg = bytearray(N)
+    q = deque()
+    for x in range(w):
+        for y in (0, h - 1):
+            if light(px[y * w + x]) and not bg[y * w + x]:
+                bg[y * w + x] = 1
+                q.append(y * w + x)
+    for y in range(h):
+        for x in (0, w - 1):
+            if light(px[y * w + x]) and not bg[y * w + x]:
+                bg[y * w + x] = 1
+                q.append(y * w + x)
+    while q:
+        i = q.popleft()
+        x, y = i % w, i // w
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            j = ny * w + nx
+            if 0 <= nx < w and 0 <= ny < h and not bg[j] and light(px[j]):
+                bg[j] = 1
+                q.append(j)
+    # How far each foreground pixel is from the background, up to 3.
+    dist = bytearray([0 if bg[i] else 9 for i in range(N)])
+    ring = [i for i in range(N) if bg[i]]
+    for d in (1, 2, 3):
+        nxt = []
+        for i in ring:
+            x, y = i % w, i // w
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                j = ny * w + nx
+                if 0 <= nx < w and 0 <= ny < h and dist[j] > d:
+                    dist[j] = d
+                    nxt.append(j)
+        ring = nxt
+    WHITE = (255, 255, 255)
+    rgba = bytearray(4 * N)
+    for i in range(N):
+        c = px[i]
+        if bg[i]:
+            a = max(0, min(255, int((252 - sum(c) / 3) / 252 * 255)))
+            rgba[4 * i:4 * i + 4] = bytes((0, 0, 0, a if a > 3 else 0))
+            continue
+        if dist[i] <= 2:
+            x, y = i % w, i // w
+            ref = [px[j] for j in (yy * w + xx for yy in range(max(0, y - 3), min(h, y + 4))
+                                   for xx in range(max(0, x - 3), min(w, x + 4)))
+                   if dist[j] >= 3]
+            if ref:
+                f = tuple(sum(p[k] for p in ref) / len(ref) for k in range(3))
+                wf = [WHITE[k] - f[k] for k in range(3)]
+                den = sum(v * v for v in wf)
+                if den > 900:
+                    wc = [WHITE[k] - c[k] for k in range(3)]
+                    a = max(0.0, min(1.0, sum(wc[k] * wf[k] for k in range(3)) / den))
+                    if a < 0.04:
+                        rgba[4 * i:4 * i + 4] = bytes(4)
+                        continue
+                    col = tuple(max(0, min(255, int((c[k] - (1 - a) * 255) / a)))
+                                for k in range(3))
+                    rgba[4 * i:4 * i + 4] = bytes(col + (int(a * 255),))
+                    continue
+        rgba[4 * i:4 * i + 4] = bytes(c + (255,))
+    subprocess.run(["magick", "-size", f"{w}x{h}", "-depth", "8", "rgba:-", out],
+                   input=bytes(rgba), check=True)
+
+
+def on_photo(photo, seed, scale, out):
+    fit = fit_glass(photo, seed)
+    W, H = int(fit["w"] * scale), int(fit["h"] * scale)
+    cx, cy = fit["cx"] * scale, fit["cy"] * scale
+    a, b, t = fit["a"] * scale, fit["b"] * scale, fit["angle"]
+    # Render the glass well above the size it lands at, then distort down.
+    S = int(max(2 * a, 1200))
+    tmp = out + ".glass.png"
+    svg = out + ".glass.svg"
+    with open(svg, "w") as f:
+        f.write(glass_svg())
+    subprocess.run(["rsvg-convert", "-w", str(S), "-h", str(S), svg, "-o", tmp],
+                   check=True)
+    c, s = math.cos(t), math.sin(t)
+    pairs = (f"{S / 2},{S / 2} {cx:.2f},{cy:.2f} "
+             f"{S},{S / 2} {cx + a * c:.2f},{cy + a * s:.2f} "
+             f"{S / 2},{S} {cx - b * s:.2f},{cy + b * c:.2f}")
+    clear = out + ".cutout.png"
+    cutout(photo, clear)
+    subprocess.run(["magick", clear, "-resize", f"{W}x{H}!", "(", tmp,
+                    "-virtual-pixel", "transparent", "-define",
+                    f"distort:viewport={W}x{H}+0+0", "-distort", "Affine", pairs,
+                    ")", "-composite", out], check=True)
+    os.remove(tmp)
+    os.remove(svg)
+    os.remove(clear)
+    print(f"{os.path.basename(out)}: glass at ({fit['cx']:.0f},{fit['cy']:.0f}) "
+          f"{2 * fit['a']:.0f}x{2 * fit['b']:.0f} px, x{scale}")
+
+
+def main():
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = os.path.join(here, "docs", "marketing")
+    os.makedirs(out, exist_ok=True)
+    if "--photo" in sys.argv:
+        photo = sys.argv[sys.argv.index("--photo") + 1]
+        w, h = map(int, subprocess.check_output(
+            ["magick", "identify", "-format", "%w %h", photo]).split())
+        seed = (w // 2, h // 3)
+        if "--seed" in sys.argv:
+            seed = tuple(int(v) for v in sys.argv[sys.argv.index("--seed") + 1].split(","))
+        scale = float(sys.argv[sys.argv.index("--scale") + 1]) if "--scale" in sys.argv else 1
+        name = os.path.splitext(os.path.basename(photo))[0]
+        on_photo(photo, seed, scale,
+                 os.path.join(out, f"{name}-dial{'' if scale == 1 else f'@{scale:g}x'}.png"))
+        return
+    for name, (view, title, shadow) in VIEWS.items():
+        for suffix, finish in FINISHES.items():
+            svg = render(view, title + (", black" if suffix else ""), shadow, finish)
+            path = os.path.join(out, name + suffix + ".svg")
+            with open(path, "w") as f:
+                f.write(svg)
+            subprocess.run(["rsvg-convert", "-z", "4", path, "-o",
+                            os.path.join(out, name + suffix + ".png")], check=True)
+            print(f"{name}{suffix}: {len(svg)} bytes")
+
+
+if __name__ == "__main__":
+    main()

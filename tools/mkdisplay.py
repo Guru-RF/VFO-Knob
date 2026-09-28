@@ -193,10 +193,12 @@ def cycling_digit(x, y, size, colour, digits, dur, weight=700):
 
 
 def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
-            colour=TEXT, sep_colour=LABEL, underline=None, after_colour=None):
+            colour=TEXT, sep_colour=LABEL, underline=None, after_colour=None,
+            active_colour=None):
     """Eight digits: three MHz with leading blanks, three kHz, two Hz.
     PITCH 33 for the first six, 28 for the Hz pair, separators 11 wide.
-    Digits after the active one "will roll" and are drawn in after_colour."""
+    Digits after the active one "will roll" and are drawn in after_colour;
+    the active one itself, when it is not animated, in active_colour."""
     PITCH, SMALL, SEPW, FS = 33, 28, 11, 44
     total = 6 * PITCH + 2 * SMALL + 2 * SEPW
     x = CX - total / 2
@@ -210,7 +212,9 @@ def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
             out.append(cycling_digit(cx, 186, FS, ACCENT_HI, cycle_vals, dur))
         elif ch != " ":
             late = after_colour and underline is not None and i > underline
-            out.append(text(cx, 186, ch, FS, after_colour if late else colour, 700))
+            c = (active_colour if active_colour and i == underline
+                 else after_colour if late else colour)
+            out.append(text(cx, 186, ch, FS, c, 700))
         x += w
         if i in (2, 5):
             out.append(text(x + SEPW / 2, 186, ".", FS, sep_colour))
