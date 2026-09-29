@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Product renders of the knob, for marketing: the real dial on the real body.
 
-    tools/mkrender.py            -> docs/marketing/*.svg and *.png
+    tools/mkrender.py [--out DIR]   -> DIR/<radio>/*.svg and *.png
+                                       (DIR defaults to docs/marketing)
 
 The dial is the device's own face, drawn by tools/mkdisplay.py (the firmware's
-geometry and palette), frozen at one reading: S9+40 on 80 m, 3.630.00 LSB.
+geometry and palette), frozen at one reading -- one for each radio's firmware,
+in that firmware's colours, so the two sets tell apart at a glance:
+
+  aethersdr   AetherSDR's dark theme: S9+40 on 80 m, 3.630.00 LSB
+  icom        the IC-705's screen: S9+20 on 2 m, 145.500.00 FM, P.AMP on
 
 The body is a 66 mm cylinder, 22 mm deep: a blue anodised ring with diagonal
 knurling over a black base, the cover glass, and the 1.8" panel inside it --
@@ -28,10 +33,17 @@ sys.dont_write_bytecode = True             # no __pycache__ left in tools/
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mkdisplay as D                       # noqa: E402
 
-# --- the reading -------------------------------------------------------------
-DBM, BAND, MODE, FILT = -33, "80m", "LSB", "2800"
-DIGITS = "  3630" "00"                      # 3.630.00, the 100 Hz digit active
-ACTIVE = 6
+# --- the readings -------------------------------------------------------------
+# Each as that firmware draws it. AetherSDR's TCI carries no RF gain, so its
+# RF.G is greyed out, as on the device.
+RADIOS = {
+    "aethersdr": dict(name="AetherSDR", dbm=-33, band="80m", mode="LSB", filt="2800",
+                      digits="  3630" "00", active=6, step="100 Hz",
+                      agc="MED", gain_caption="RF.G", gain="", gain_known=False),
+    "icom":      dict(name="the IC-705", dbm=-53, band="2m", mode="FM", filt="FIL1",
+                      digits="145500" "00", active=4, step="10 kHz",
+                      agc="FAST", gain_caption="P.AMP", gain="ON", gain_known=True),
+}
 
 # --- the body, in face pixels (360 px = the 1.8" panel) ---------------------
 R_BODY, R_GLASS = D.BODY_R, D.GLASS_R
@@ -110,8 +122,11 @@ def mmul(a, b):
 
 # --- the dial, frozen ---------------------------------------------------------
 
-def dial():
-    """The receive face at one reading, in its own 360 px coordinates."""
+def dial(radio):
+    """A radio's receive face at its reading, in its own 360 px coordinates.
+    The palette is the module's: see mkdisplay.use_palette()."""
+    R = RADIOS[radio]
+    DBM = R["dbm"]
     s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
          f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '
          f'fill="none" stroke="{D.SUBTLE}" stroke-width="{D.BAND}"/>']
@@ -132,12 +147,16 @@ def dial():
                         3 if d == -73 else 2))
     s.append(D.text(180, 83, D.smeter_text(DBM), 20, D.TEXT, 700))
     s.append(D.text(180, 103, f"{DBM} dBm", 14, D.LABEL))
-    s.append(D.text(D.CX - 76, 129, BAND, 20, D.ACCENT))
-    s.append(D.text(D.CX, 129, MODE, 20, D.TEXT))
-    s.append(D.text(D.CX + 76, 129, FILT, 20, D.TEXT2))
-    s.append(D.readout(DIGITS, underline=ACTIVE, after_colour=D.TEXT2,
+    s.append(D.aux(R["agc"], R["gain_caption"], R["gain"], R["gain_known"]))
+    s.append(D.text(D.CX - 76, 129, R["band"], 20, D.ACCENT))
+    s.append(D.text(D.CX, 129, R["mode"], 20, D.TEXT))
+    s.append(D.text(D.CX + 76, 129, R["filt"], 20, D.TEXT2))
+    # The colours passed, not left to readout()'s defaults: those were bound
+    # when mkdisplay was imported, to the AetherSDR palette.
+    s.append(D.readout(R["digits"], colour=D.TEXT, sep_colour=D.LABEL,
+                       underline=R["active"], after_colour=D.TEXT2,
                        active_colour=D.ACCENT_HI))
-    s.append(D.text(D.CX - 98, 227, "100 Hz", 20, D.ACCENT))
+    s.append(D.text(D.CX - 98, 227, R["step"], 20, D.ACCENT))
     s.append(D.text(D.CX - 24, 227, "RIT 0", 14, D.DISABLED))
     s.append(D.icon_readout(D.CX + 42, 227, D.speaker, "40", D.TEXT2))
     s.append(D.icon_readout(D.CX + 104, 227, D.microphone, "100", D.TEXT2))
@@ -226,7 +245,7 @@ def affine(view, cx, cy):
             f"{cx - 180 * (a + c):.3f},{cy - 180 * (b + d):.3f})")
 
 
-def render(view, title, shadow=False, finish=FINISHES[""]):
+def render(view, title, radio, shadow=False, finish=FINISHES[""]):
     # Extent: the front and back rims.
     pts = [view.p(2 * math.pi * i / 180, R_BODY, w)
            for i in range(180) for w in (0, DEPTH_ALL)]
@@ -280,7 +299,7 @@ def render(view, title, shadow=False, finish=FINISHES[""]):
              f'<circle r="{R_GLASS + 2.5:.1f}" fill="none" stroke="{finish["glass_edge"]}" '
              f'stroke-width="4" opacity="0.6"/>'
              f'<circle r="{R_GLASS:.1f}" fill="#050608"/></g>'
-             f'<g clip-path="url(#panel)">{dial()}</g>'
+             f'<g clip-path="url(#panel)">{dial(radio)}</g>'
              f'<g transform="translate(180,180)">'
              f'<circle r="{R_GLASS:.1f}" fill="url(#gloss)"/></g></g>')
     s.append('</svg>')
@@ -290,18 +309,18 @@ def render(view, title, shadow=False, finish=FINISHES[""]):
 VIEWS = {
     # Standing on its rim, face turned 32 degrees, camera a little high.
     "knob-angled-text-left": (View(mmul(rot_x(math.radians(-7)), rot_y(math.radians(-32)))),
-                         "VFO-Knob, angled, body to the right", False),
+                         "angled, body to the right", False),
     "knob-angled-text-right": (View(mmul(rot_x(math.radians(-7)), rot_y(math.radians(32)))),
-                          "VFO-Knob, angled, body to the left", False),
+                          "angled, body to the left", False),
     # On its base, seen from 50 degrees above the table.
     "knob-upright": (View(rot_x(math.radians(90 - 50))),
-                     "VFO-Knob on a desk", True),
+                     "on a desk", True),
 }
 
 
 # --- onto a photograph ----------------------------------------------------------
 #
-#   tools/mkrender.py --photo product.png [--seed X,Y] [--scale 2]
+#   tools/mkrender.py --photo product.png [--radio icom] [--seed X,Y] [--scale 2]
 #
 # Puts the dial on the cover glass of an existing product photograph. The glass
 # is found by growing a region from a seed pixel inside it: neighbours join
@@ -345,7 +364,7 @@ def fit_glass(path, seed, step_tol=8, max_lum=140):
                 angle=0.5 * math.atan2(2 * sxy, sxx - syy))
 
 
-def glass_svg():
+def glass_svg(radio):
     """The cover glass, face-on: black glass, the dial, a touch of gloss."""
     g = R_GLASS
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{-g:.1f} {-g:.1f} '
@@ -358,7 +377,7 @@ def glass_svg():
             f'</linearGradient></defs>'
             f'<circle r="{g:.1f}" fill="#07080B"/>'
             f'<g transform="translate(-180,-180)"><g clip-path="url(#panel)">'
-            f'{dial()}</g></g>'
+            f'{dial(radio)}</g></g>'
             f'<circle r="{g:.1f}" fill="url(#gloss)"/></svg>')
 
 
@@ -443,7 +462,7 @@ def cutout(photo, out):
                    input=bytes(rgba), check=True)
 
 
-def on_photo(photo, seed, scale, out):
+def on_photo(photo, seed, scale, out, radio):
     fit = fit_glass(photo, seed)
     W, H = int(fit["w"] * scale), int(fit["h"] * scale)
     cx, cy = fit["cx"] * scale, fit["cy"] * scale
@@ -453,7 +472,7 @@ def on_photo(photo, seed, scale, out):
     tmp = out + ".glass.png"
     svg = out + ".glass.svg"
     with open(svg, "w") as f:
-        f.write(glass_svg())
+        f.write(glass_svg(radio))
     subprocess.run(["rsvg-convert", "-w", str(S), "-h", str(S), svg, "-o", tmp],
                    check=True)
     c, s = math.cos(t), math.sin(t)
@@ -473,11 +492,20 @@ def on_photo(photo, seed, scale, out):
           f"{2 * fit['a']:.0f}x{2 * fit['b']:.0f} px, x{scale}")
 
 
+def arg(flag, default=None):
+    return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else default
+
+
 def main():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out = os.path.join(here, "docs", "marketing")
-    os.makedirs(out, exist_ok=True)
+    root = arg("--out", os.path.join(here, "docs", "marketing"))
+    radios = [arg("--radio")] if "--radio" in sys.argv else list(RADIOS)
     if "--photo" in sys.argv:
+        # One radio's dial onto a photograph: --radio names it (aethersdr).
+        radio = radios[0] if "--radio" in sys.argv else "aethersdr"
+        D.use_palette(radio)
+        out = os.path.join(root, radio)
+        os.makedirs(out, exist_ok=True)
         photo = sys.argv[sys.argv.index("--photo") + 1]
         w, h = map(int, subprocess.check_output(
             ["magick", "identify", "-format", "%w %h", photo]).split())
@@ -487,17 +515,24 @@ def main():
         scale = float(sys.argv[sys.argv.index("--scale") + 1]) if "--scale" in sys.argv else 1
         name = os.path.splitext(os.path.basename(photo))[0]
         on_photo(photo, seed, scale,
-                 os.path.join(out, f"{name}-dial{'' if scale == 1 else f'@{scale:g}x'}.png"))
+                 os.path.join(out, f"{name}-dial{'' if scale == 1 else f'@{scale:g}x'}.png"),
+                 radio)
         return
-    for name, (view, title, shadow) in VIEWS.items():
-        for suffix, finish in FINISHES.items():
-            svg = render(view, title + (", black" if suffix else ""), shadow, finish)
-            path = os.path.join(out, name + suffix + ".svg")
-            with open(path, "w") as f:
-                f.write(svg)
-            subprocess.run(["rsvg-convert", "-z", "4", path, "-o",
-                            os.path.join(out, name + suffix + ".png")], check=True)
-            print(f"{name}{suffix}: {len(svg)} bytes")
+    for radio in radios:
+        D.use_palette(radio)
+        out = os.path.join(root, radio)
+        os.makedirs(out, exist_ok=True)
+        for name, (view, what, shadow) in VIEWS.items():
+            for suffix, finish in FINISHES.items():
+                title = (f"VFO-Knob for {RADIOS[radio]['name']}"
+                         f"{', black' if suffix else ''}, {what}")
+                svg = render(view, title, radio, shadow, finish)
+                path = os.path.join(out, name + suffix + ".svg")
+                with open(path, "w") as f:
+                    f.write(svg)
+                subprocess.run(["rsvg-convert", "-z", "4", path, "-o",
+                                os.path.join(out, name + suffix + ".png")], check=True)
+                print(f"{radio}/{name}{suffix}: {len(svg)} bytes")
 
 
 if __name__ == "__main__":

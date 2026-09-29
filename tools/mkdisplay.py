@@ -33,6 +33,7 @@ TEXT, TEXT2, LABEL, SUBTLE = "#C8D8E8", "#8EA8C0", "#506070", "#1A2330"
 WARN, DANGER, TX_RED, TX_TEXT = "#FFB84D", "#FF4D4D", "#E01010", "#F0C890"
 GREEN, DISABLED = "#4DD87A", "#3A4A5A"
 RFG_GOLD = "#E9B61D"           # splash.h RFG_GOLD_HEX, the logo's gold
+PWR = RFG_GOLD                 # the power bar wears it
 FONT = "DejaVu Sans,Verdana,sans-serif"
 
 RXZONES = [(-127, -121, "#1A6B47"), (-121, -109, "#1F7A52"),
@@ -45,6 +46,36 @@ RXTICKS = [(-121, 6, "S1"), (-109, 6, "S3"), (-97, 6, "S5"), (-85, 6, "S7"),
 SWRZONES = [(1.0, 2.0, "#4DD87A"), (2.0, 2.5, "#FFB84D"), (2.5, 3.0, "#FF4D4D")]
 # ui.c MIC_ZONE: AetherSDR's mic Level gauge, -40 to +10 dB.
 MICZONES = [(-40, -10, "#4DD87A"), (-10, 0, "#FFB84D"), (0, 10, "#FF4D4D")]
+# The Icom firmware's face (ui.c under VFO_RADIO_ICOM): the IC-705's own
+# screen -- black, white digits, Icom blue, the S-meter blue up to S9 and red
+# above it. use_palette() swaps a set in for the colours above; the drawing
+# functions look them up when they are called.
+PALETTES = {
+    "aethersdr": dict(BG=BG, BG1=BG1, BG_TX=BG_TX, ACCENT=ACCENT, ACCENT_HI=ACCENT_HI,
+                      TEXT=TEXT, TEXT2=TEXT2, LABEL=LABEL, SUBTLE=SUBTLE, WARN=WARN,
+                      DANGER=DANGER, TX_RED=TX_RED, TX_TEXT=TX_TEXT, GREEN=GREEN,
+                      DISABLED=DISABLED, PWR=PWR, RXZONES=RXZONES,
+                      SWRZONES=SWRZONES, MICZONES=MICZONES),
+    "icom": dict(BG="#000000", BG1="#141A24", BG_TX="#2A0508", ACCENT="#2F7BFF",
+                 ACCENT_HI="#5A9BFF", TEXT="#FFFFFF", TEXT2="#C0C8D4",
+                 LABEL="#707884", SUBTLE="#181C24", WARN="#FFB000", DANGER="#FF3030",
+                 TX_RED="#E60012", TX_TEXT="#FFFFFF", GREEN="#3FA9FF",
+                 DISABLED="#3A4048", PWR="#3FA9FF",
+                 RXZONES=[(-127, -121, "#0D3B8C"), (-121, -109, "#1350B0"),
+                          (-109,  -97, "#1A68D4"), (-97,   -85, "#2A86F2"),
+                          (-85,   -73, "#46A8FF"), (-73,   -53, "#FF6A5A"),
+                          (-53,   -33, "#FF4040"), (-33,   -13, "#E60012")],
+                 SWRZONES=[(1.0, 2.0, "#3FA9FF"), (2.0, 2.5, "#FFB000"),
+                           (2.5, 3.0, "#FF3030")],
+                 MICZONES=[(-40, -10, "#3FA9FF"), (-10, 0, "#FFB000"),
+                           (0, 10, "#FF3030")]),
+}
+
+
+def use_palette(name):
+    globals().update(PALETTES[name])
+
+
 # ui.c add_tx_ticks(): value, on-screen label, 0 grey / 1 amber / 2 red.
 SWRTICKS = [(1.0, "1", 0), (1.5, None, 0), (2.0, "2", 1), (2.5, None, 2), (3.0, "3", 2)]
 PWR_FS, PWR_PEGS = 100, [(10, "10"), (50, "50"), (100, "100")]   # the 100 W range
@@ -253,6 +284,17 @@ def icon_readout(cx, y, icon, value, colour):
     return icon(x0, y, colour) + text(x0 + 15, y, value, 14, colour, anchor="start")
 
 
+def aux(agc, gain_caption, gain, gain_known=True):
+    """AGC left of the S-unit readout and the front end's gain right of it,
+    each a caption over its setting (ui.c AUX_DX); the gain greyed, with
+    "--", while the radio does not report one."""
+    dx = 72
+    g_cap, g_val = (LABEL, TEXT2) if gain_known else (DISABLED, DISABLED)
+    return (text(CX - dx, 83, "AGC", 14, LABEL) + text(CX - dx, 102, agc, 14, TEXT2)
+            + text(CX + dx, 83, gain_caption, 14, g_cap)
+            + text(CX + dx, 102, gain if gain_known else "--", 14, g_val))
+
+
 def ptt_slab(fill, label, text_colour):
     """The slab carries a 2 px accent border along its top edge only. The
     label is Montserrat 28 in a box whose top is PTT_TOP + 14; that font's
@@ -426,7 +468,7 @@ def tx_face():
              f'stroke="{SUBTLE}" stroke-width="{BAND}"/>')
     pwr = [.87, .62, .88, .70, .95, .81, .55, .70, .87]
     # One colour all the way up, the RF.Guru logo's gold. (ui.c: C_BRAND)
-    s.append(block(AUD_ROT, AUD_ROT + AUD_SPAN, RFG_GOLD))
+    s.append(block(AUD_ROT, AUD_ROT + AUD_SPAN, PWR))
     s.append(sweep_cover(AUD_ROT, AUD_ROT + AUD_SPAN, pwr, "5s"))
     for w, _ in PWR_PEGS:
         if w < PWR_FS:
