@@ -48,6 +48,28 @@ LV_FONT_DECLARE(font_mic_14);
 #define C_TX_RED    lv_color_hex(0xE60012)
 #define C_GREEN     lv_color_hex(0x3FA9FF)   /* Icom's meters are blue  */
 #define PWR_HEX     0x3FA9FF                 /* ...its Po meter too     */
+#elif VFO_RADIO_SVXCONNECT
+/* --- SvxConnect palette -----------------------------------------------------
+ * svxconnect.app's ink and gold, with the status colours the SvxConnect
+ * clients use: green connected, amber (re)connecting, red transmitting. */
+#define C_BG        lv_color_hex(0x08090C)   /* ink-950                 */
+#define C_BG1       lv_color_hex(0x13161D)   /* ink-800: the PTT slab   */
+#define C_BG_TX     lv_color_hex(0x2A0C0C)   /* a red tint on the air   */
+#define C_ACCENT    lv_color_hex(0xE5A823)   /* gold-400                */
+#define C_ACCENT_HI lv_color_hex(0xECC34A)   /* gold-300                */
+#define C_TEXT      lv_color_hex(0xFFFFFF)
+#define C_TEXT2     lv_color_hex(0xE2E8F0)   /* slate-200               */
+#define C_LABEL     lv_color_hex(0x94A3B8)   /* slate-400               */
+#define C_DISABLED  lv_color_hex(0x475569)   /* slate-600               */
+#define C_SUBTLE    lv_color_hex(0x1B1F29)   /* ink-700                 */
+#define C_WARN      lv_color_hex(0xD29922)   /* busy, reconnecting      */
+#define C_DANGER    lv_color_hex(0xD13B3B)   /* transmit                */
+#define C_TX_BORDER lv_color_hex(0xD13B3B)
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xFFFFFF)
+#define C_TX_RED    lv_color_hex(0xD13B3B)
+#define C_GREEN     lv_color_hex(0x2EA043)   /* connected               */
+#define PWR_HEX     0xE5A823
 #else
 /* --- AetherSDR "Default Dark" palette ------------------------------------
  * Taken from resources/themes/default-dark.json so the knob reads as an
@@ -78,6 +100,21 @@ LV_FONT_DECLARE(font_mic_14);
 #define PWR_HEX     RFG_GOLD_HEX
 #endif
 #define C_BRAND     lv_color_hex(PWR_HEX)
+
+/* The svxconnect firmware's face: a reflector's talkgroup where a radio's
+ * frequency is, and the audio level on the arc. */
+#if VFO_RADIO_SVXCONNECT
+#define REFLECTOR_FACE 1
+LV_FONT_DECLARE(font_svx_icons_24);
+#define SYM_LOCK    "\xEF\x80\xA3"                  /* U+F023 */
+#define SYM_UNLOCK  "\xEF\x8F\x81"                  /* U+F3C1 */
+#define SYM_MUTED   "\xEF\x9A\xA9"                  /* U+F6A9 */
+#define SYM_SOUND   "\xEF\x80\xA8"                  /* U+F028 */
+#else
+#define REFLECTOR_FACE 0
+#endif
+/* A radio's readouts the reflector face has no use for. */
+#define RADIO_ONLY __attribute__((unused))
 
 /* The theme's own meter.bar gradient runs green -> amber -> red but only
  * reaches red at 95% of full scale. On an S-meter that is roughly S9+53, so a
@@ -130,6 +167,11 @@ static volatile int  s_ask_answer;       /* 1 yes, -1 no, 0 none */
 static volatile bool s_ask_knob;         /* the knob turned while asking */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_agc_cap, *s_agc_val, *s_gain_cap, *s_gain_val;
+#if REFLECTOR_FACE
+/* The reflector face's lock and mute, in the talkgroup's row. */
+static lv_obj_t *s_lock_icon, *s_mute_icon;
+#endif
+static volatile bool s_lock_tap, s_mute_tap;
 
 /* Memory mode: the channel in the frequency readout's place -- its name large,
  * and under it the channel number, frequency, shift and tone. */
@@ -157,6 +199,10 @@ static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
     { -40.0f, -10.0f, 0x3FA9FF },   /* blue  */
     { -10.0f,   0.0f, 0xFFB000 },   /* amber */
     {   0.0f,  10.0f, 0xFF3030 },   /* red   */
+#elif VFO_RADIO_SVXCONNECT
+    { -40.0f, -10.0f, 0x35B35A },   /* SvxConnect's meter: green  */
+    { -10.0f,   0.0f, 0xD8C43A },   /* yellow */
+    {   0.0f,  10.0f, 0xD13B3B },   /* red    */
 #else
     { -40.0f, -10.0f, 0x4DD87A },   /* green */
     { -10.0f,   0.0f, 0xFFB84D },   /* amber */
@@ -338,6 +384,10 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0x3FA9FF },   /* blue  */
     { 2.0f, 2.5f, 0xFFB000 },   /* amber */
     { 2.5f, 3.0f, 0xFF3030 },   /* red   */
+#elif VFO_RADIO_SVXCONNECT
+    { 1.0f, 2.0f, 0x35B35A },
+    { 2.0f, 2.5f, 0xD8C43A },
+    { 2.5f, 3.0f, 0xD13B3B },
 #else
     { 1.0f, 2.0f, 0x4DD87A },   /* green */
     { 2.0f, 2.5f, 0xFFB84D },   /* amber */
@@ -371,6 +421,17 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0xFF6A5A },   /* S9 to +20: red over S9, as on the radio */
     {  -53.0f,  -33.0f, 0xFF4040 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0xE60012 },   /* +40 to +60 */
+#elif VFO_RADIO_SVXCONNECT
+    /* Not an S-meter: the audio level, -60 to 0 dBFS, in SvxConnect's meter
+     * colours -- green, then yellow from -12 dB, red in the last 3. */
+    {  -60.0f,  -48.0f, 0x1B5E2E },
+    {  -48.0f,  -36.0f, 0x237A3B },
+    {  -36.0f,  -24.0f, 0x2EA043 },
+    {  -24.0f,  -18.0f, 0x35B35A },
+    {  -18.0f,  -12.0f, 0x9DBD3B },
+    {  -12.0f,   -6.0f, 0xD8C43A },
+    {   -6.0f,   -3.0f, 0xE08C33 },
+    {   -3.0f,    0.0f, 0xD13B3B },
 #else
     { -127.0f, -121.0f, 0x1A6B47 },   /* S0 to S1   */
     { -121.0f, -109.0f, 0x1F7A52 },   /* S1 to S3   */
@@ -385,8 +446,13 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
 
 /* Every boundary gets a notch, which means every printed tick gets one -- the
  * ends excepted, since they are the ends. */
+#if VFO_RADIO_SVXCONNECT
+static const float RXNOTCH[] = { -48.0f, -36.0f, -24.0f, -18.0f, -12.0f,
+                                  -6.0f, -3.0f };
+#else
 static const float RXNOTCH[] = { -121.0f, -109.0f, -97.0f, -85.0f, -73.0f,
                                   -53.0f, -33.0f };
+#endif
 
 
 static lv_obj_t *s_rx_zone[RX_ZONES];
@@ -425,6 +491,12 @@ static const char *MODES[] = { "usb","lsb","cw","cwr","am","fm","rtty",
                                "digu","digl" };
 static const char *AGCS[]  = { "fast","mid","slow" };
 #define GAIN_CAPTION "P.AMP"
+#elif VFO_RADIO_SVXCONNECT
+/* A reflector has no modes, AGC or gain; the tables stay for the editors'
+ * sake, which the reflector face never opens. */
+static const char *MODES[] = { "fm" };
+static const char *AGCS[]  = { "fast" };
+#define GAIN_CAPTION ""
 #else
 /* AetherSDR passes FlexRadio's AGC settings through by name, and the gain
  * beside the S-meter is the panadapter's RF gain. */
@@ -488,13 +560,20 @@ static void fmt1(char *out, size_t n, const char *pre, float v, const char *suf)
  * next to the desktop. */
 static float smeter_frac(float dbm)
 {
+#if VFO_RADIO_SVXCONNECT
+    /* The reflector face's arc is the audio level: -60 to 0 dBFS, evenly. */
+    if (dbm < -60.0f) dbm = -60.0f;
+    if (dbm > 0.0f)   dbm = 0.0f;
+    return (dbm + 60.0f) / 60.0f;
+#else
     if (dbm < -127.0f) dbm = -127.0f;
     if (dbm > -13.0f)  dbm = -13.0f;
     return (dbm <= -73.0f) ? 0.6f * (dbm + 127.0f) / 54.0f
                            : 0.6f + 0.4f * (dbm + 73.0f) / 60.0f;
+#endif
 }
 
-static void smeter_text(float dbm, char *out, size_t n)
+RADIO_ONLY static void smeter_text(float dbm, char *out, size_t n)
 {
     if (dbm >= -73.0f) snprintf(out, n, "S9+%d", (int)((dbm + 73.0f) / 10.0f) * 10);
     else {
@@ -505,7 +584,7 @@ static void smeter_text(float dbm, char *out, size_t n)
     }
 }
 
-static const char *band_of(int64_t hz)
+RADIO_ONLY static const char *band_of(int64_t hz)
 {
     const int64_t m = hz / 1000;
     if (m >= 1810   && m <= 2000)   return "160m";
@@ -571,7 +650,7 @@ static void shift_text(int8_t dup, int32_t hz, char *out, size_t n)
 }
 
 /* What the memory face says: a channel, or why there is none yet. */
-static void mem_texts(const ui_state_t *st, char *big, size_t nb, char *small, size_t ns)
+RADIO_ONLY static void mem_texts(const ui_state_t *st, char *big, size_t nb, char *small, size_t ns)
 {
     if (st->mem_state == UI_MEM_READING) {
         snprintf(big, nb, "MEMORIES");
@@ -940,9 +1019,17 @@ static void tap(lv_point_t p, uint32_t held)
         }
     }
 
+#if REFLECTOR_FACE
+    /* The lock left of the talkgroup, the mute right of it: toggles, with or
+     * without a link. */
+    if (p.y >= 104 && p.y < 140) {
+        if (p.x < CX - 38) { s_lock_tap = true; return; }
+        if (p.x > CX + 38) { s_mute_tap = true; return; }
+    }
+#endif
     /* AGC left of the S-unit readout, the gain right of it. Receive settings,
      * shown only in receive, and like every editor only with a link. */
-    if (p.y >= AUX_TOP && p.y < 104 && s_last.link_ok && !s_last.tx) {
+    if (!REFLECTOR_FACE && p.y >= AUX_TOP && p.y < 104 && s_last.link_ok && !s_last.tx) {
         const int dx = p.x - CX;
         if (dx <= -AUX_IN && dx >= -AUX_OUT) {
             edit_open(ED_AGC, &s_last);
@@ -968,8 +1055,10 @@ static void tap(lv_point_t p, uint32_t held)
     if (!s_last.link_ok) return;
 
     const bool mem = s_last.mem_state != UI_MEM_OFF;
-    /* band | mode | filter -- in memory mode the band's place holds the group */
+    /* band | mode | filter -- in memory mode the band's place holds the group.
+     * A reflector's talkgroup is chosen with the dial, not an editor. */
     if (p.y >= 104 && p.y < 140) {
+        if (REFLECTOR_FACE) return;
         if      (p.x < CX - 38) edit_open(mem ? ED_GROUP : ED_BAND, &s_last);
         else if (p.x > CX + 38) edit_open(ED_FILTER, &s_last);
         else                    edit_open(ED_MODE,   &s_last);
@@ -977,7 +1066,7 @@ static void tap(lv_point_t p, uint32_t held)
     }
     /* frequency digits -> step decade; a channel has no digits to pick */
     if (p.y >= 144 && p.y < 212) {
-        if (mem) return;
+        if (mem || REFLECTOR_FACE) return;
         s_active_dig = nearest_digit(p.x);
         s_step_req   = DIG_STEP[s_active_dig];
         return;
@@ -986,7 +1075,7 @@ static void tap(lv_point_t p, uint32_t held)
     if (p.y >= 208 && p.y < PTT_TOP) {
         if      (p.x > CX + 74) edit_open(ED_MIC, &s_last);
         else if (p.x > CX + 12) edit_open(ED_VOL, &s_last);
-        else if (p.x > CX - 56) edit_open(ED_RIT, &s_last);
+        else if (p.x > CX - 56 && !REFLECTOR_FACE) edit_open(ED_RIT, &s_last);
         return;
     }
 }
@@ -1223,9 +1312,15 @@ static void add_rx_notches(void)
 static void add_ticks(void)
 {
     static const struct { float dbm; uint8_t len; uint8_t kind; } TICKS[] = {
+#if VFO_RADIO_SVXCONNECT
+        { -48, 6, 0 }, { -36, 6, 0 }, { -24, 6, 0 }, { -18, 6, 0 },
+        { -12, 11, 1 },                        /* -12 dBFS -- where yellow starts */
+        { -6, 6, 2 }, { -3, 6, 2 }, { 0, 9, 2 },
+#else
         { -121, 6, 0 }, { -109, 6, 0 }, { -97, 6, 0 }, { -85, 6, 0 },
         { -73, 11, 1 },                                  /* S9 -- the landmark */
         { -53, 6, 2 }, { -33, 6, 2 }, { -13, 9, 2 },
+#endif
     };
     static lv_point_precise_t pts[sizeof TICKS / sizeof TICKS[0]][2];
 
@@ -1450,6 +1545,18 @@ static void build(void)
     s_agc_val  = mklabel(&lv_font_montserrat_14, C_DISABLED, CX - AUX_DX, 97, "--");
     s_gain_cap = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 78, GAIN_CAPTION);
     s_gain_val = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 97, "--");
+#if REFLECTOR_FACE
+    /* A reflector has no AGC or gain: a lock for the talkgroup and a mute for
+     * its audio take their places, each toggled by a tap. */
+    lv_obj_add_flag(s_agc_cap, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_agc_val, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_gain_cap, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_gain_val, LV_OBJ_FLAG_HIDDEN);
+    /* In the talkgroup's row, where a radio's band and filter are: the line
+     * above belongs to the talker, whose callsign needs all of its width. */
+    s_lock_icon = mklabel(&font_svx_icons_24, C_LABEL, CX - 76, 122, SYM_UNLOCK);
+    s_mute_icon = mklabel(&font_svx_icons_24, C_LABEL, CX + 76, 122, SYM_SOUND);
+#endif
 
     s_band = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 76, 122, "--");
     s_mode = mklabel(&lv_font_montserrat_20, C_TEXT,   CX,      122, "USB");
@@ -1488,7 +1595,11 @@ static void build(void)
      * character name ends in dots rather than off the glass. */
     s_mem_big = mklabel(&lv_font_montserrat_28, C_TEXT, CX, 160, "");
     lv_obj_set_width(s_mem_big, 300);
-    lv_label_set_long_mode(s_mem_big, LV_LABEL_LONG_DOT);
+    /* Portals name talkgroups like "145.450 ON0ORA-S Simplex Club Opwijk":
+     * on the reflector face a name too long for the line goes round in a
+     * loop. A memory's name is at most 16 characters, and fits. */
+    lv_label_set_long_mode(s_mem_big, REFLECTOR_FACE ? LV_LABEL_LONG_SCROLL_CIRCULAR
+                                                     : LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_mem_big, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_mem_big, LV_ALIGN_CENTER, 0, 160 - CY);
     s_mem_small = mklabel(&lv_font_montserrat_20, C_TEXT2, CX, 196, "");
@@ -1497,6 +1608,12 @@ static void build(void)
 
     s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 98, 220, "1 kHz");
     s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX - 24, 222, "RIT 0");
+    if (REFLECTOR_FACE) {
+        lv_obj_add_flag(s_rit, LV_OBJ_FLAG_HIDDEN);         /* no RIT on a reflector */
+        /* The link's state, where the step is: moved in towards the middle,
+         * into the room the RIT leaves, so it does not hang off the edge. */
+        lv_obj_align(s_step_lbl, LV_ALIGN_CENTER, -56, 220 - CY);
+    }
     s_vol      = mklabel(&lv_font_montserrat_14, C_TEXT2,  CX + 42, 222,
                          LV_SYMBOL_VOLUME_MID " 40");
     s_mic      = mklabel(&font_mic_14,           C_TEXT2,  CX + 104, 222,
@@ -1778,7 +1895,7 @@ esp_err_t ui_init(void)
     return ESP_OK;
 }
 
-static const char *step_name(int32_t hz)
+RADIO_ONLY static const char *step_name(int32_t hz)
 {
     switch (hz) {
     case 10:      return "10 Hz";
@@ -1857,8 +1974,9 @@ void ui_update(const ui_state_t *st)
 
     int64_t f = st->freq_hz < 0 ? 0 : st->freq_hz;
 
-    /* Memory mode swaps the frequency readout for the channel. */
-    const bool mem = st->mem_state != UI_MEM_OFF;
+    /* Memory mode swaps the frequency readout for the channel -- and a
+     * reflector never has one. */
+    const bool mem = REFLECTOR_FACE || st->mem_state != UI_MEM_OFF;
     if (mem != s_mem_face) {
         s_mem_face = mem;
         lv_obj_t *vfo[N_DIG + 3];
@@ -1877,8 +1995,17 @@ void ui_update(const ui_state_t *st)
         }
     }
     if (mem) {
-        char big[24], small[80];
+        char big[40], small[80];
+#if REFLECTOR_FACE
+        /* The talkgroup's name, as the reflector's portal gives it, and the
+         * reflector under it. */
+        if (st->tg_name[0])  snprintf(big, sizeof big, "%s", st->tg_name);
+        else if (st->tg)     snprintf(big, sizeof big, "TG %lu", (unsigned long)st->tg);
+        else                 snprintf(big, sizeof big, "MONITOR");
+        snprintf(small, sizeof small, "%s", st->server);
+#else
         mem_texts(st, big, sizeof big, small, sizeof small);
+#endif
         set_text(s_mem_big, big);
         set_text(s_mem_small, small);
         set_text_color(s_mem_big, st->tx ? C_TX_TEXT : C_TEXT);
@@ -1911,6 +2038,24 @@ void ui_update(const ui_state_t *st)
                      s_dig_x[s_active_dig] - CX, 204 - CY);
     }
 
+    char tb[24];
+#if REFLECTOR_FACE
+    /* The talkgroup where band, mode and filter are, and the link where the
+     * step is. */
+    set_text(s_band, "");
+    set_text(s_filt, "");
+    if (st->tg) snprintf(tb, sizeof tb, "TG %lu", (unsigned long)st->tg);
+    else        snprintf(tb, sizeof tb, "TG --");
+    set_text(s_mode, tb);
+    set_text_color(s_mode, C_ACCENT);
+    set_text(s_step_lbl, st->link_ok ? "connected" : st->connecting ? "connecting"
+                                                                  : "disconnected");
+    set_text_color(s_step_lbl, st->link_ok ? C_GREEN : st->connecting ? C_WARN : C_DANGER);
+    set_text(s_lock_icon, st->tg_locked ? SYM_LOCK : SYM_UNLOCK);
+    set_text_color(s_lock_icon, st->tg_locked ? C_WARN : C_LABEL);
+    set_text(s_mute_icon, st->muted ? SYM_MUTED : SYM_SOUND);
+    set_text_color(s_mute_icon, st->muted ? C_DANGER : C_LABEL);
+#else
     if (mem) {
         char g[8];
         snprintf(g, sizeof g, "G%02u", (unsigned)st->mem_group);
@@ -1923,11 +2068,11 @@ void ui_update(const ui_state_t *st)
         upcase(st->mode, up, sizeof up);
         set_text(s_mode, up);
     }
-    char tb[24];
     if (st->filter_no) snprintf(tb, sizeof tb, "FIL%u", (unsigned)st->filter_no);
     else               snprintf(tb, sizeof tb, "%ld", (long)(st->filt_hi - st->filt_lo));
     set_text(s_filt, tb);
     set_text(s_step_lbl, mem ? "MEM" : step_name(st->step_hz));
+#endif
 
     /* Greyed out while the radio has not said -- which for AetherSDR's RF
      * gain is always: its TCI carries none. */
@@ -1942,7 +2087,9 @@ void ui_update(const ui_state_t *st)
     /* RIT is always shown so it is always tappable, but greyed at zero: RIT
      * silently non-zero is a classic way to lose a QSO, so when it IS set it
      * has to stand out. */
-    if (st->rit_hz) {
+    if (REFLECTOR_FACE) {
+        /* no RIT */
+    } else if (st->rit_hz) {
         snprintf(tb, sizeof tb, "RIT %+ld", (long)st->rit_hz);
         set_text(s_rit, tb);
         set_text_color(s_rit, C_WARN);
@@ -1978,9 +2125,16 @@ void ui_update(const ui_state_t *st)
     /* The bar follows the signal; the peak LED hangs a second above it and
      * then falls away at 30 dB/s -- about five S-units a second. The readouts
      * give the peak: in SSB that is the figure worth reading. */
+#if REFLECTOR_FACE
+    /* The whole arc is the audio: what is heard in receive, the microphone in
+     * transmit. */
+    release(&s_meter_disp, st->tx ? st->tx_mic_dbm : st->rx_level_db);
+#else
     release(&s_meter_disp, st->smeter_dbm);
+#endif
     const float sig_pk = peak_hold(&s_sig_pk, s_meter_disp, 30.0f);
-    if (!st->tx) led_set(&s_sig_led, smeter_frac(sig_pk), rx_zone_of(sig_pk));
+    if (!st->tx || REFLECTOR_FACE)
+        led_set(&s_sig_led, smeter_frac(sig_pk), rx_zone_of(sig_pk));
 
     float frac = smeter_frac(s_meter_disp);
     lv_arc_set_value(s_meter, (int)(frac * 1000));
@@ -1999,6 +2153,38 @@ void ui_update(const ui_state_t *st)
         s_rx_val[z] = v;
         lv_arc_set_value(s_rx_zone[z], v);
     }
+#if REFLECTOR_FACE
+    /* Who is talking, where the S-units are: now, or dimmed, the last one. */
+    {
+        char who[40];
+        const unsigned secs = (unsigned)(st->talker_ms / 1000u);
+        if (st->tx) {
+            snprintf(who, sizeof who, "%d dB", (int)sig_pk);
+            set_text(s_srd, who);
+            set_text(s_dbm, "microphone");
+            set_text_color(s_srd, C_TX_TEXT);
+            set_text_color(s_dbm, C_TX_TEXT);
+        } else if (st->talker[0]) {
+            set_text(s_srd, st->talker);
+            if (st->talker_info[0]) snprintf(who, sizeof who, "%s", st->talker_info);
+            else                    snprintf(who, sizeof who, "%us", secs);
+            set_text(s_dbm, who);
+            set_text_color(s_srd, C_TEXT);
+            set_text_color(s_dbm, C_GREEN);
+        } else if (st->last_talker[0]) {
+            set_text(s_srd, st->last_talker);
+            if (secs < 60) snprintf(who, sizeof who, "%us ago", secs);
+            else           snprintf(who, sizeof who, "%um ago", secs / 60u);
+            set_text(s_dbm, who);
+            set_text_color(s_srd, C_LABEL);
+            set_text_color(s_dbm, C_LABEL);
+        } else {
+            set_text(s_srd, "--");
+            set_text(s_dbm, "");
+            set_text_color(s_srd, C_LABEL);
+        }
+    }
+#else
     char sbuf[10];
     smeter_text(sig_pk, sbuf, sizeof sbuf);
     if (!st->tx) {
@@ -2008,8 +2194,9 @@ void ui_update(const ui_state_t *st)
         set_text_color(s_dbm, C_LABEL);
     }
     set_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT);
+#endif
 
-    if (st->tx) {
+    if (st->tx && !REFLECTOR_FACE) {
         /* Each over starts from nothing rather than from the last one's
          * held peaks. */
         if (!s_was_tx) {
@@ -2110,13 +2297,16 @@ void ui_update(const ui_state_t *st)
         s_was_tx = st->tx;
         lv_obj_set_style_bg_color(s_scr, st->tx ? C_BG_TX : C_BG, 0);
         /* Swap the meter set wholesale. AGC and gain are receive settings
-         * and make way for the transmit readouts, which are wider. */
+         * and make way for the transmit readouts, which are wider. A
+         * reflector's arc stays the arc: only the colours change. */
         lv_obj_t *aux[] = { s_agc_cap, s_agc_val, s_gain_cap, s_gain_val };
-        for (size_t i = 0; i < sizeof aux / sizeof aux[0]; i++) {
+        for (size_t i = 0; i < sizeof aux / sizeof aux[0] && !REFLECTOR_FACE; i++) {
             if (st->tx) lv_obj_add_flag(aux[i], LV_OBJ_FLAG_HIDDEN);
             else        lv_obj_remove_flag(aux[i], LV_OBJ_FLAG_HIDDEN);
         }
-        if (st->tx) {
+        if (REFLECTOR_FACE) {
+            /* the arc, the notches and the peak LED stay as they are */
+        } else if (st->tx) {
             lv_obj_add_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
             for (size_t z = 0; z < RX_ZONES; z++)
                 lv_obj_add_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
@@ -2188,6 +2378,8 @@ uint8_t ui_rotation(void) { return s_rot; }
 int32_t ui_take_step_request(void) { int32_t v = s_step_req; s_step_req = 0; return v; }
 bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false; return v; }
 bool    ui_take_swipe(void)        { bool v = s_swipe;       s_swipe    = false; return v; }
+bool    ui_take_lock_tap(void)     { bool v = s_lock_tap;    s_lock_tap = false; return v; }
+bool    ui_take_mute_tap(void)     { bool v = s_mute_tap;    s_mute_tap = false; return v; }
 
 
 /* ------------------------------------------------------------------- dim */

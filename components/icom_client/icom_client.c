@@ -1822,6 +1822,9 @@ void radio_memory_group(uint8_t group)
     if (s_mem && group < 100) S.pending_group = group;
 }
 
+void radio_tg_lock(bool locked) { (void)locked; }
+void radio_mute(bool muted)     { (void)muted; }
+
 void radio_ptt_key(void)    { S.pending_key = 1; }
 void radio_ptt_unkey(void)  { S.pending_unkey = 1; }
 void radio_ptt_toggle(void) { S.pending_toggle = 1; }

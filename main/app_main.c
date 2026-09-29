@@ -401,6 +401,24 @@ static void ui_task(void *arg)
             radio_ptt_toggle();
         }
 
+        /* The reflector face's lock and mute: toggles of what the reflector
+         * client holds (svxconnect; no-ops on a radio). */
+        {
+            const bool lock = ui_take_lock_tap(), mute = ui_take_mute_tap();
+            if (lock || mute) {
+                radio_status_t m;
+                radio_get_status(&m);
+                if (lock) {
+                    ESP_LOGI(TAG, "talkgroup %s", m.tg_locked ? "unlocked" : "locked");
+                    radio_tg_lock(!m.tg_locked);
+                }
+                if (mute) {
+                    ESP_LOGI(TAG, "%s", m.muted ? "unmuted" : "muted");
+                    radio_mute(!m.muted);
+                }
+                haptic(26);                 /* confirm the tap landed */
+            }
+        }
         /* A swipe down: into memory mode, or back to the VFO. */
         if (ui_take_swipe()) {
             radio_status_t m;
@@ -476,6 +494,14 @@ static void ui_task(void *arg)
             .mem_duplex    = st.mem_duplex,
             .mem_offset_hz = st.mem_offset_hz,
             .mem_tone_dhz  = st.mem_tone_dhz,
+            .reflector     = st.reflector,
+            .connecting    = (st.link == RADIO_LINK_CONNECTING ||
+                              st.link == RADIO_LINK_GREETING),
+            .tg            = st.tg,
+            .talker_ms     = st.talker_ms,
+            .tg_locked     = st.tg_locked,
+            .muted         = st.muted,
+            .rx_level_db   = st.rx_level_db,
             .rit_hz        = st.rit_hz,
             .smeter_dbm    = st.smeter_dbm,
             .tx_mic_dbm    = st.tx_mic_dbm,
@@ -507,6 +533,11 @@ static void ui_task(void *arg)
         };
         strlcpy(u.agc, st.agc, sizeof u.agc);
         strlcpy(u.mem_name, st.mem_name, sizeof u.mem_name);
+        strlcpy(u.tg_name, st.tg_name, sizeof u.tg_name);
+        strlcpy(u.talker, st.talker, sizeof u.talker);
+        strlcpy(u.talker_info, st.talker_info, sizeof u.talker_info);
+        strlcpy(u.last_talker, st.last_talker, sizeof u.last_talker);
+        strlcpy(u.server, st.server, sizeof u.server);
         ui_update(&u);
     }
 }
@@ -582,11 +613,18 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
         return NULL;                       /* give it a moment to associate */
     }
     if (!net_prov_is_connected()) return NULL;
+#if VFO_RADIO_SVXCONNECT
+    /* A reflector is named, and its name is looked up by the client itself:
+     * an SRV record comes first, and says which host and port to use. */
+    strlcpy(ip, cfg->radio_host, iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (reflector %s) ---", cfg->radio_host);
+#else
     if (net_prov_resolve(ip, iplen) != ESP_OK) {
         ESP_LOGE(TAG, "  cannot resolve %s", cfg->radio_host);
         return NULL;
     }
     ESP_LOGI(TAG, "--- transport: WiFi (%s -> %s) ---", cfg->radio_host, ip);
+#endif
     return ip;
 }
 
@@ -742,9 +780,9 @@ static void net_task(void *arg)
                              MALLOC_CAP_INTERNAL));
             }
             if (host) {
-                ESP_LOGI(TAG, "--- M13 TCI client --- ws://%s:%u "
+                ESP_LOGI(TAG, "--- %s client --- %s:%u "
                               "(free internal %u, largest DMA %u)",
-                         host, (unsigned)cfg->radio_port,
+                         radio_link_name(), host, (unsigned)cfg->radio_port,
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_largest_free_block(
                              MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
@@ -877,11 +915,22 @@ static void net_task(void *arg)
             static const char *L[] = { "down", "connecting", "greeting",
                                        "READY", "degraded" };
             char memtag[40] = "";
-            if (st.mem_state != RADIO_MEM_OFF)
+            if (st.reflector) {
+                /* A reflector has a talkgroup and a talker, not a frequency. */
+                ESP_LOGI(TAG,
+                    "[%s] %-10s TG %lu%s%s%s%s rx=%.0fdBFS ptt=%s | "
+                    "conn=%u close=%u send=%u%s%s",
+                    radio_link_name(), L[st.link], (unsigned long)st.tg,
+                    st.tg_name[0] ? " " : "", st.tg_name,
+                    st.talker[0] ? " talking: " : "", st.talker,
+                    (double)st.rx_level_db, ptt_state_name((ptt_state_t)st.ptt_state),
+                    (unsigned)st.connects, (unsigned)st.closes, (unsigned)st.sends,
+                    st.last_close[0] ? " last_close=" : "", st.last_close);
+            } else if (st.mem_state != RADIO_MEM_OFF)
                 snprintf(memtag, sizeof memtag, " MEM %02u/%02u%s%s",
                          (unsigned)st.mem_group, (unsigned)st.mem_ch,
                          st.mem_name[0] ? " " : "", st.mem_name);
-            ESP_LOGI(TAG,
+            if (!st.reflector) ESP_LOGI(TAG,
                 "[%s] %-10s f=%lld srv=%lld %s %ld..%ld s=%.0fdBm%s%s ptt=%s | "
                 "conn=%u close=%u send=%u echo=%u recon=%u rej=%u unk=%u%s%s",
                 radio_link_name(), L[st.link],
@@ -1065,6 +1114,25 @@ static void log_cpu(void)
         d[best] = 0;
     }
     ESP_LOGI(TAG, "[CPU]%s", line);
+
+    /* And the tasks nearest the end of their stacks, in bytes never used:
+     * an overflow is otherwise only ever found by the crash. In `line`
+     * again, with a bitmask: this runs on the supervisor's own small stack. */
+    uint32_t shown = 0;
+    line[0] = 0;
+    o = 0;
+    for (int k = 0; k < 4 && o < sizeof line; k++) {
+        int low = -1;
+        for (UBaseType_t i = 0; i < n; i++)
+            if (!(shown & (1u << i)) &&
+                (low < 0 || ts[i].usStackHighWaterMark < ts[low].usStackHighWaterMark))
+                low = (int)i;
+        if (low < 0) break;
+        shown |= 1u << low;
+        o += snprintf(line + o, sizeof line - o, " %s=%u", ts[low].pcTaskName,
+                      (unsigned)ts[low].usStackHighWaterMark);
+    }
+    ESP_LOGI(TAG, "[STK]%s", line);
 }
 
 /* The USB build has no console, so a panic's backtrace is printed to nobody.
@@ -1254,7 +1322,13 @@ void app_main(void)
          * needs, so a knob that fell back to WiFi could not open a socket at
          * all -- and could not be updated out of that state either, because
          * the OTA path needs the same memory. The bug blocked its own fix. */
+        /* The svxconnect firmware's supervisor ran with 204 bytes to spare in
+         * 4 kB ([STK] in the log) and overflowed once at boot: it gets 5. */
+#if VFO_RADIO_SVXCONNECT
+        xTaskCreatePinnedToCore(net_task, "net_sup", 5120, NULL, 3, NULL, 0);
+#else
         xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
+#endif
     }
 
     /* The console and USB networking cannot coexist: both want the USB pads.

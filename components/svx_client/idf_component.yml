@@ -1,0 +1,6 @@
+## Opus for the reflector's audio: libopus's own API, its scratch memory in
+## PSRAM. The WebSocket client follows an enhanced reflector's feed, for where
+## each talker is. Only the svxconnect firmware builds this component.
+dependencies:
+  esphome/micro-opus: "^0.4.1"
+  espressif/esp_websocket_client: "^1.8.0"

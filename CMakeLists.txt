@@ -31,20 +31,27 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom)
+set(_vfo_radios aethersdr icom svxconnect)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
 
 # Each radio's client implements components/radio/include/radio.h, so exactly
 # one may be built: two would be two definitions of everything in it.
-if(VFO_RADIO STREQUAL "icom")
-    set(_vfo_client icom_client)
-    list(APPEND EXCLUDE_COMPONENTS tci_client)
-else()
+# svxconnect is not a radio but an SvxLink reflector: its client speaks the
+# reflector protocol, and the dial picks talkgroups instead of frequencies.
+if(VFO_RADIO STREQUAL "aethersdr")
     set(_vfo_client tci_client)
-    list(APPEND EXCLUDE_COMPONENTS icom_client)
+elseif(VFO_RADIO STREQUAL "svxconnect")
+    set(_vfo_client svx_client)
+else()
+    set(_vfo_client icom_client)
 endif()
+foreach(_c tci_client icom_client svx_client)
+    if(NOT _c STREQUAL _vfo_client)
+        list(APPEND EXCLUDE_COMPONENTS ${_c})
+    endif()
+endforeach()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # The component manager records what it resolved in a lock file, and the two
@@ -56,7 +63,8 @@ if(NOT VFO_RADIO STREQUAL "aethersdr")
     idf_build_set_property(DEPENDENCIES_LOCK dependencies.${VFO_RADIO}.lock)
 endif()
 # For components that call the client (main, webcfg), and for code that looks
-# different per radio: VFO_RADIO_AETHERSDR or VFO_RADIO_ICOM is defined as 1.
+# different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM or
+# VFO_RADIO_SVXCONNECT is defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
 idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND)

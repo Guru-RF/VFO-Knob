@@ -38,6 +38,8 @@ button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
 #msg{margin-top:10px;font-size:13px;min-height:18px}
 .warn{background:#e5534b1f;border:1px solid #e5534b66;color:#f0b3ae;
       border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
+label.chk{display:flex;align-items:center;gap:8px;color:var(--fg);font-size:14px;margin:12px 0 0}
+label.chk input{width:auto;margin:0}
 @media(max-width:520px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -57,7 +59,7 @@ button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
 <section>
   <h2 id="rtitle">Radio</h2>
   <div class="grid">
-    <div><label for="host">Host (IP, or a name ending .local)<button id="myip" type="button"
+    <div><label for="host"><span id="hostlbl">Host (IP, or a name ending .local)</span><button id="myip" type="button"
          class="pill up" title="Use this computer's address" hidden></button></label>
          <input id="host"></div>
     <div><label>Port</label><input id="port" inputmode="numeric"></div>
@@ -75,6 +77,73 @@ button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
+  <p class="note" id="svxnote" hidden>The reflector's name, as SvxLink knows it:
+     its SRV record says which host and port to use (<b>be.svx.link</b> is
+     <b>reflector.be.svx.link:5300</b>). The port counts only for a name
+     without one. Changes here apply on the knob's next boot.</p>
+</section>
+
+<section id="svxstation" hidden>
+  <h2>Station</h2>
+  <div class="grid">
+    <div><label>Callsign</label><input id="scall" autocomplete="off"
+         placeholder="ON6URE-KNOB"></div>
+    <div><label>Email address, for the certificate</label><input id="semail"
+         type="email" autocomplete="off"></div>
+  </div>
+  <label>Location, for the reflector's map and node list</label><input id="sloc">
+  <div class="grid">
+    <div><label>Latitude (decimal degrees)</label><input id="slat" inputmode="decimal"></div>
+    <div><label>Longitude</label><input id="slon" inputmode="decimal"></div>
+  </div>
+  <p class="note">Leave both coordinates empty to publish no position.</p>
+</section>
+
+<section id="svxtg" hidden>
+  <h2>Talkgroups</h2>
+  <label>Switchable: the dial steps through these</label>
+  <input id="ssw" placeholder="9990, 8, 1745+">
+  <label>Monitored: followed when there is traffic, not on the dial</label>
+  <input id="smon" placeholder="8, 2000">
+  <p class="note">A <b>+</b> after a number raises its priority, up to <b>+++</b>:
+     traffic there takes the knob off a quieter talkgroup. With both lists
+     empty the dial steps through every talkgroup the reflector's portal
+     names. The lock on the knob's face stops all switching.</p>
+  <div class="grid">
+    <div><label>Start on talkgroup (0 = the first switchable)</label>
+         <input id="sdeftg" inputmode="numeric"></div>
+    <div><label>Transmit timeout (seconds, 0 = none)</label>
+         <input id="stxto" inputmode="numeric"></div>
+    <div><label>Stay after an over (seconds)</label>
+         <input id="slinger" inputmode="numeric"></div>
+    <div><label>Back to monitoring after (seconds, 0 = never)</label>
+         <input id="sidle" inputmode="numeric"></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="slock"> Locked when the knob starts</label>
+  <label class="chk"><input type="checkbox" id="sroger"> Roger beep when an over ends</label>
+  <label class="chk"><input type="checkbox" id="sagc"> Level the microphone (AGC)</label>
+  <label class="chk"><input type="checkbox" id="sfeed"> Where talkers are, from the
+     reflector's live feed (an enhanced reflector's)</label>
+  <p class="note">Station and talkgroup changes apply when saved: the knob logs
+     in again.</p>
+</section>
+
+<section id="svxcert" hidden>
+  <h2>Certificate</h2>
+  <div id="certrows"></div>
+  <button id="enroll">Request certificate</button>
+  <button id="unenroll" class="ghost" hidden>Stop asking</button>
+  <button id="csrdl" class="ghost" hidden>Download the request</button>
+  <p class="note">The reflector knows a station by a certificate it signs. The
+     request goes with the callsign and email above; the knob makes its key
+     first, which takes up to a minute. Some reflectors sign at once, others
+     wait for their sysop, and the knob keeps asking until the certificate
+     arrives. It renews by itself.</p>
+  <details><summary class="note" style="cursor:pointer">Delete the key</summary>
+    <p class="note">The reflector ties the callsign to this key. With a new key
+       the sysop has to remove the old certificate before signing again.</p>
+    <button id="forget" class="ghost">Delete key and certificate</button>
+  </details>
 </section>
 
 <section>
@@ -158,9 +227,12 @@ async function refresh(){
                                 : `<span class="pill down">${esc(s.link)}</span>`;
   $('status').innerHTML =
       row(LINKNAME+' link', pill)
-    + row('Frequency', mhz(s.freq))
-    + row('Mode / filter', `${esc(s.mode)} ${s.filt_lo}..${s.filt_hi}`)
-    + row('S-meter', s.smeter.toFixed(0)+' dBm')
+    + (s.reflector
+       ? row('Talkgroup', s.tg ? `${s.tg}${s.tgname?' · '+esc(s.tgname):''}` : 'monitoring')
+         + row(s.talking?'Talking':'Last heard', esc(s.talker||'\u2014'))
+       : row('Frequency', mhz(s.freq))
+         + row('Mode / filter', `${esc(s.mode)} ${s.filt_lo}..${s.filt_hi}`)
+         + row('S-meter', s.smeter.toFixed(0)+' dBm'))
     + row('PTT', esc(s.ptt))
     + row('Transport', esc(s.transport))
     + row('USB address', esc(s.usb_ip||'—'))
@@ -187,17 +259,80 @@ async function load(){
   /* The endpoint is the radio's own on the Icom firmware, with its login; on
      AetherSDR's it is a computer, which the cable finds by itself. */
   const icom = c.radio === 'icom';
+  const lan = icom;                       /* the radio itself, with a login */
+  SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   LINKNAME = c.link || 'Radio';
-  $('rtitle').textContent = icom ? 'IC-705' : 'AetherSDR';
-  $('rlogin').hidden = $('icomnote').hidden = !icom;
+  $('rtitle').textContent = icom ? 'IC-705' : SVX ? 'SvxLink reflector' : 'AetherSDR';
+  $('hostlbl').textContent = SVX ? 'Reflector' : 'Host (IP, or a name ending .local)';
+  $('svxnote').hidden = !SVX;
+  for (const id of ['svxstation','svxtg','svxcert']) $(id).hidden = !SVX;
+  if (SVX) { document.documentElement.style.setProperty('--accent','#e5a823'); svxLoad(); }
+  $('rlogin').hidden = !lan;
+  $('icomnote').hidden = !icom;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
-  myIp = c.client && !c.client_usb && !icom ? c.client : '';
+  myIp = c.client && !c.client_usb && !lan && !SVX ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = icom || !(c.client && c.client_usb);
+  $('hostusb').hidden = lan || SVX || !(c.client && c.client_usb);
 }
-let myIp='', LINKNAME='Radio';
+let myIp='', LINKNAME='Radio', SVX=false;
+
+/* ---- the svxconnect firmware: the station and its certificate ---- */
+const SVXF={call:'scall',email:'semail',loc:'sloc',lat:'slat',lon:'slon',sw:'ssw',
+            mon:'smon',deftg:'sdeftg',linger:'slinger',idle:'sidle',txto:'stxto'};
+const SVXB={lock:'slock',roger:'sroger',agc:'sagc',feed:'sfeed'};
+async function svxLoad(){
+  let s; try{ s=await (await fetch('/api/svx')).json() }catch(e){ return }
+  for(const k in SVXF) $(SVXF[k]).value=s[k];
+  for(const k in SVXB) $(SVXB[k]).checked=!!s[k];
+  svxShow(s);
+}
+function svxShow(s){
+  const c=s.cert, day=t=>t?new Date(t*1000).toISOString().slice(0,10):'\u2014';
+  const good=['valid','valid, renewal due','expiring','not yet valid'].includes(c.state);
+  $('certrows').innerHTML =
+      row('Now', esc(s.phase||'\u2014'))
+    + (s.why ? row('Last problem', esc(s.why)) : '')
+    + (s.server ? row('Reflector', esc(s.server)+(s.up&&s.nodes?` \u00b7 ${s.nodes} nodes`:'')) : '')
+    + row('Certificate', esc(c.state)+(c.cn?' \u00b7 '+esc(c.cn):''))
+    + (c.until ? row('Valid', `${day(c.from)} to ${day(c.until)}`) : '')
+    + (c.pending ? row('Request', 'with the reflector'+(c.requested?' since '+day(c.requested):'')
+                   +' \u2014 the knob keeps asking') : '')
+    + (s.clock ? '' : row('Clock', 'not set yet'));
+  $('enroll').hidden = c.pending || good;
+  $('unenroll').hidden = !c.pending;
+  $('csrdl').hidden = !c.csr;
+}
+async function svxPoll(){
+  if(!SVX) return;
+  try{ svxShow(await (await fetch('/api/svx')).json()) }catch(e){}
+}
+async function svxSave(){
+  const b=new URLSearchParams();
+  for(const k in SVXF) b.append(k,$(SVXF[k]).value.trim());
+  b.set('call',$('scall').value.trim().toUpperCase());
+  for(const k in SVXB) b.append(k,$(SVXB[k]).checked?'1':'0');
+  const r=await fetch('/api/svx',{method:'POST',body:b});
+  return r.ok ? '' : await r.text();
+}
+function say(t,ok){ $('msg').textContent=t; $('msg').style.color=ok?'var(--ok)':'var(--bad)' }
+$('enroll').onclick=async()=>{
+  const e=await svxSave();
+  if(e){ say('Station: '+e,false); return }
+  const r=await fetch('/api/svx/enroll',{method:'POST'});
+  if(r.ok) say('Requesting a certificate: the knob makes its key if it has none, then asks the reflector.',true);
+  else say('Could not request: '+await r.text(),false);
+  svxPoll();
+};
+$('unenroll').onclick=async()=>{
+  await fetch('/api/svx/enroll',{method:'POST',body:'cancel=1'}); svxPoll();
+};
+$('csrdl').onclick=()=>{ location.href='/api/svx/csr' };
+$('forget').onclick=async()=>{
+  if(!confirm('Delete this knob\'s key and certificate? The reflector will not accept a new key for this callsign until its sysop removes the old certificate.')) return;
+  await fetch('/api/svx/forget',{method:'POST'}); svxPoll();
+};
 $('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 
 $('save').onclick=async()=>{
@@ -213,6 +348,11 @@ $('save').onclick=async()=>{
   $('msg').textContent = r.ok ? 'Saved. Network changes apply on reboot.'
                               : 'Save failed: '+await r.text();
   $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  if(r.ok && SVX){
+    const e=await svxSave();
+    if(e) say('Station not saved: '+e,false);
+    else  $('msg').textContent='Saved. The knob logs in to the reflector again; the reflector itself changes on reboot.';
+  }
   if(r.ok) $('rpass').value='';
   if(r.ok && $('webpass').value){
     $('webpass').value='';
@@ -338,7 +478,8 @@ $('upload').onclick = async()=>{
  * The knob says which it runs; installing another is a deliberate switch,
  * which the knob accepts only when the upload names that radio. */
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
-              {id:'icom',      name:'Icom IC-705 (LAN)'}];
+              {id:'icom',      name:'Icom IC-705 (LAN)'},
+              {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
 function radios(){
@@ -372,6 +513,6 @@ $('switch').onclick=async()=>{
 };
 
 load().then(webCheck).then(ota);
-refresh(); setInterval(refresh,2000); setInterval(ota,2000);
+refresh(); setInterval(refresh,2000); setInterval(ota,2000); setInterval(svxPoll,2000);
 </script>
 </body></html>

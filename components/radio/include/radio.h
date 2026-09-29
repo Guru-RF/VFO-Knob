@@ -73,6 +73,20 @@ typedef struct {
     int8_t     mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t    mem_offset_hz;
     uint16_t   mem_tone_dhz;   /* the tone it sends, in 0.1 Hz; 0 = none */
+    /* An SvxLink reflector (the svxconnect firmware) in place of a radio: the
+     * talkgroup takes the band's place, its name the frequency's, and who is
+     * talking the S-meter's. The dial steps through talkgroups. */
+    bool       reflector;
+    uint32_t   tg;             /* the selected talkgroup; 0 = monitoring only */
+    char       tg_name[32];    /* from the reflector's portal; "" if unnamed */
+    char       talker[16];     /* talking on it now; "" = nobody */
+    char       talker_info[32];/* where they are, when the reflector says */
+    char       last_talker[16];/* the last one heard, while nobody is */
+    uint32_t   talker_ms;      /* how long they have been talking, or since */
+    bool       tg_locked;      /* no switching, by the dial or by priority */
+    bool       muted;          /* nothing heard */
+    float      rx_level_db;    /* the received audio, dBFS */
+    char       server[40];     /* the reflector, as the face names it */
     float      smeter_dbm;
     float      tx_mic_dbm, tx_fwd_w, tx_swr, tx_alc;
     float      tx_peak_w;
@@ -158,5 +172,10 @@ void radio_memory_mode(bool on);
 
 /* Which memory group the dial steps through (0-99). Remembered. */
 void radio_memory_group(uint8_t group);
+
+/* A reflector's talkgroup lock and mute (reflector in the status); no-ops for
+ * a radio. */
+void radio_tg_lock(bool locked);
+void radio_mute(bool muted);
 
 #endif /* VFO_RADIO_H */

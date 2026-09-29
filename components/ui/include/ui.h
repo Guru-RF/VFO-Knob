@@ -40,6 +40,18 @@ typedef struct {
     int8_t   mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t  mem_offset_hz;
     uint16_t mem_tone_dhz;
+    /* A reflector (radio.h): the talkgroup and its name in place of band and
+     * frequency, the talker in place of the S-units, lock and mute either
+     * side of it, and the audio level on the arc. */
+    bool     reflector;
+    bool     connecting;     /* the link is being made, not down for good */
+    uint32_t tg;
+    char     tg_name[32];
+    char     talker[16], talker_info[32], last_talker[16];
+    uint32_t talker_ms;
+    bool     tg_locked, muted;
+    float    rx_level_db;
+    char     server[40];
     int32_t  rit_hz;
     float    smeter_dbm;
     float    tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
@@ -70,6 +82,10 @@ bool ui_take_ptt_tap(void);
  * not when it lands, so that a swipe is not first taken for a tap on
  * whatever it started on. */
 bool ui_take_swipe(void);
+
+/* A reflector's lock or mute symbol was tapped. Consumed by the caller. */
+bool ui_take_lock_tap(void);
+bool ui_take_mute_tap(void);
 
 /* --- knob-driven field editors -------------------------------------------
  * Tapping band, mode, filter, AGC, gain, RIT or volume opens a large editor;

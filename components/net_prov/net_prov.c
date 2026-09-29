@@ -14,17 +14,39 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-/* Each radio's firmware keeps its own endpoint, so switching firmware under
- * Firmware on the configuration page never points one radio's client at the
- * other radio. The AetherSDR keys are the ones every earlier firmware wrote. */
-#if VFO_RADIO_ICOM
+/* Each radio's firmware keeps its own endpoint and login, so switching
+ * firmware under Firmware on the configuration page never points one radio's
+ * client at another radio. The AetherSDR keys are the ones every earlier
+ * firmware wrote. */
+#if VFO_RADIO_SVXCONNECT
+#define KEY_HOST     "svhost"
+#define KEY_PORT     "svport"
+/* Unused: the station -- callsign, certificate and all -- is the svx
+ * client's own ("svx" namespace), and the reflector takes no password. */
+#define KEY_USER     "svuser"
+#define KEY_PASS     "svpass"
+#define DEFAULT_HOST "be.svx.link"   /* its SRV record names the host and port */
+#define DEFAULT_PORT 5300            /* SvxLink's reflector port */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
+#elif VFO_RADIO_ICOM
 #define KEY_HOST     "rhost"
 #define KEY_PORT     "rport"
+#define KEY_USER     "ruser"
+#define KEY_PASS     "rpass"
 #define DEFAULT_HOST "IC-705.local"
+#define DEFAULT_PORT 50001
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #else
 #define KEY_HOST     "host"
 #define KEY_PORT     "port"
+#define KEY_USER     "ruser"
+#define KEY_PASS     "rpass"
 #define DEFAULT_HOST "aethersdr.local"
+#define DEFAULT_PORT 50001
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #endif
 
 static const char *TAG = "net";
@@ -64,8 +86,8 @@ static void load_or_seed(void)
         }
         len = sizeof s_cfg.radio_host; nvs_get_str(h, KEY_HOST, s_cfg.radio_host, &len);
         nvs_get_u16(h, KEY_PORT, &s_cfg.radio_port);
-        len = sizeof s_cfg.radio_user; nvs_get_str(h, "ruser", s_cfg.radio_user, &len);
-        len = sizeof s_cfg.radio_pass; nvs_get_str(h, "rpass", s_cfg.radio_pass, &len);
+        len = sizeof s_cfg.radio_user; nvs_get_str(h, KEY_USER, s_cfg.radio_user, &len);
+        len = sizeof s_cfg.radio_pass; nvs_get_str(h, KEY_PASS, s_cfg.radio_pass, &len);
         nvs_close(h);
     }
 
@@ -78,7 +100,11 @@ static void load_or_seed(void)
                              "configuration page is used");
     if (!s_cfg.radio_host[0])
         strlcpy(s_cfg.radio_host, DEFAULT_HOST, sizeof s_cfg.radio_host);
-    if (!s_cfg.radio_port) s_cfg.radio_port = 50001;
+    if (!s_cfg.radio_port) s_cfg.radio_port = DEFAULT_PORT;
+    if (!s_cfg.radio_user[0])
+        strlcpy(s_cfg.radio_user, DEFAULT_USER, sizeof s_cfg.radio_user);
+    if (!s_cfg.radio_pass[0])
+        strlcpy(s_cfg.radio_pass, DEFAULT_PASS, sizeof s_cfg.radio_pass);
 
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
         uint8_t v;
@@ -211,8 +237,8 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
     nvs_set_str(h, "pass", cfg->pass);
     nvs_set_str(h, KEY_HOST, cfg->radio_host);
     nvs_set_u16(h, KEY_PORT, cfg->radio_port);
-    nvs_set_str(h, "ruser", cfg->radio_user);
-    nvs_set_str(h, "rpass", cfg->radio_pass);
+    nvs_set_str(h, KEY_USER, cfg->radio_user);
+    nvs_set_str(h, KEY_PASS, cfg->radio_pass);
     err = nvs_commit(h);
     nvs_close(h);
     if (err == ESP_OK) s_cfg = *cfg;
@@ -317,7 +343,7 @@ esp_err_t net_prov_wifi_start(void)
             { "class",       "controller"    },
             { "tci-version", "1.5"           },
         };
-#if !VFO_RADIO_ICOM
+#if VFO_RADIO_AETHERSDR
         mdns_service_add(NULL, "_tci", "_tcp", s_cfg.radio_port, txt,
                          sizeof txt / sizeof txt[0]);
 #else

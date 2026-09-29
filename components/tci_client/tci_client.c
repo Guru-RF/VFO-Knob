@@ -886,6 +886,10 @@ void radio_goto_freq(int64_t hz)
 void radio_memory_mode(bool on)        { (void)on; }
 void radio_memory_group(uint8_t group) { (void)group; }
 
+/* A radio has no talkgroup to lock or mute. */
+void radio_tg_lock(bool locked) { (void)locked; }
+void radio_mute(bool muted)     { (void)muted; }
+
 void radio_ptt_key(void)    { S.pending_key = 1; }
 void radio_ptt_unkey(void)  { S.pending_unkey = 1; }
 void radio_ptt_toggle(void) { S.pending_toggle = 1; }

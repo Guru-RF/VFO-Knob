@@ -25,7 +25,11 @@
 
 #include "esp_err.h"
 
+#if VFO_RADIO_SVXCONNECT
+#define TX_AUDIO_RATE_HZ 16000     /* SvxLink's rate: see audio_out.h */
+#else
 #define TX_AUDIO_RATE_HZ 24000
+#endif
 /* 21.33 ms at 24 kHz = 512 mono samples. */
 #define TX_CHRONO_FRAMES 512
 

@@ -128,6 +128,20 @@ static void client_addr(httpd_req_t *r, char *out, size_t len, bool *on_usb)
         *on_usb = (a.s_addr & ip.netmask.addr) == (ip.ip.addr & ip.netmask.addr);
 }
 
+/* For text from elsewhere -- a reflector's talkgroup names -- going into JSON:
+ * quotes and backslashes escaped, control characters dropped. */
+static void json_esc(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (; *in && o + 2 < cap; in++) {
+        const unsigned char c = (unsigned char)*in;
+        if (c < 0x20) continue;
+        if (c == '"' || c == '\\') out[o++] = '\\';
+        out[o++] = (char)c;
+    }
+    out[o] = 0;
+}
+
 /* ---------------------------------------------------------------- status */
 
 static esp_err_t status_get(httpd_req_t *r)
@@ -152,7 +166,13 @@ static esp_err_t status_get(httpd_req_t *r)
     /* The S-meter is a float and LVGL's snprintf cannot do %f, but this one is
      * newlib's and can -- still, keep it integral so the page never shows a
      * literal "f" the way the display once did. */
-    char buf[1100];
+    /* A reflector's talkgroup and who is on it, where a radio has a
+     * frequency: the page shows those instead. */
+    char tgname[72], talker[40];
+    json_esc(st.tg_name, tgname, sizeof tgname);
+    json_esc(st.talker[0] ? st.talker : st.last_talker, talker, sizeof talker);
+
+    char buf[1300];
     int n = snprintf(buf, sizeof buf,
         "{\"version\":\"%s\",\"uptime_s\":%lld,"
         "\"link\":\"%s\",\"freq\":%lld,\"mode\":\"%s\","
@@ -161,7 +181,9 @@ static esp_err_t status_get(httpd_req_t *r)
         "\"sends\":%u,\"echoes\":%u,\"connects\":%u,\"closes\":%u,"
         "\"rejects\":%u,\"reconciles\":%u,"
         "\"aud_frames\":%u,\"aud_dropped\":%u,"
-        "\"heap_internal\":%u,\"heap_psram\":%u,\"boots\":%u}",
+        "\"heap_internal\":%u,\"heap_psram\":%u,\"boots\":%u,"
+        "\"reflector\":%s,\"tg\":%lu,\"tgname\":\"%s\",\"talker\":\"%s\","
+        "\"talking\":%s}",
         app->version,
         (long long)(esp_timer_get_time() / 1000000),
         link, (long long)st.f_display, st.mode,
@@ -175,7 +197,9 @@ static esp_err_t status_get(httpd_req_t *r)
         (unsigned)a.frames, (unsigned)a.dropped,
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-        (unsigned)net_prov_boot_count());
+        (unsigned)net_prov_boot_count(),
+        st.reflector ? "true" : "false", (unsigned long)st.tg, tgname, talker,
+        st.talker[0] ? "true" : "false");
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
 }
@@ -320,6 +344,25 @@ static esp_err_t config_post(httpd_req_t *r)
              cfg.radio_host, (unsigned)cfg.radio_port, cfg.ssid,
              (unsigned)vol, (unsigned)mic);
     return httpd_resp_sendstr(r, "ok");
+}
+
+/* ----------------------------------------------------------- radio's own */
+
+/* A radio client with settings of its own -- the svxconnect firmware's
+ * reflector station -- brings endpoints for them. The others have none. */
+__attribute__((weak)) size_t radio_web_endpoints(const httpd_uri_t **out)
+{
+    *out = NULL;
+    return 0;
+}
+
+/* Behind the page's login, like everything else here. */
+static esp_err_t radio_endpoint(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    const httpd_uri_t *u = r->user_ctx;
+    r->user_ctx = u->user_ctx;
+    return u->handler(r);
 }
 
 /* ------------------------------------------------------------------- ota */
@@ -580,10 +623,13 @@ esp_err_t webcfg_start(void)
 {
     if (s_srv) return ESP_OK;
 
+    const httpd_uri_t *extra = NULL;
+    const size_t n_extra = radio_web_endpoints(&extra);
+
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 9;
+    c.max_uri_handlers = 9 + n_extra;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -613,6 +659,11 @@ esp_err_t webcfg_start(void)
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++)
         httpd_register_uri_handler(s_srv, &uris[i]);
+    for (size_t i = 0; i < n_extra; i++) {
+        const httpd_uri_t u = { .uri = extra[i].uri, .method = extra[i].method,
+                                .handler = radio_endpoint, .user_ctx = (void *)&extra[i] };
+        httpd_register_uri_handler(s_srv, &u);
+    }
 
     ESP_LOGI(TAG, "configuration page on http://<device>/ (port 80)");
     return ESP_OK;

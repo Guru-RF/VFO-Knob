@@ -26,12 +26,21 @@ static i2s_chan_handle_t s_tx;
 static RingbufHandle_t   s_ring;
 static volatile uint8_t  s_vol = 40;
 static volatile bool     s_playing;
+static volatile bool     s_kick, s_flush;
 static audio_stats_t     s_stats;
 static int16_t           s_conv[1024];   /* scratch, playback task only */
 
 void audio_out_set_volume(uint8_t v) { s_vol = v > 100 ? 100 : v; }
 
 void audio_out_stats(audio_stats_t *st) { if (st) *st = s_stats; }
+
+void audio_out_kick(void)  { s_kick = true; }
+void audio_out_flush(void) { s_flush = true; }
+
+size_t audio_out_queued(void)
+{
+    return s_ring ? (RING_BYTES - xRingbufferGetCurFreeSize(s_ring)) / 4 : 0;
+}
 
 static void play_task(void *arg)
 {
@@ -42,10 +51,25 @@ static void play_task(void *arg)
          * cushion first costs a few tens of milliseconds once, at the start of
          * the stream, and nothing thereafter. The previous version had this
          * check with an empty body and underran about once a second. */
+        if (s_flush) {
+            s_flush = false;
+            size_t n;
+            void  *p;
+            while ((p = xRingbufferReceiveUpTo(s_ring, &n, 0, RING_BYTES)))
+                vRingbufferReturnItem(s_ring, p);
+            s_playing = false;
+        }
         size_t buffered = RING_BYTES - xRingbufferGetCurFreeSize(s_ring);
         if (!s_playing) {
-            if (buffered < PREROLL_BYTES) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
-            s_playing = true;
+            /* A kick starts whatever is there; one that finds nothing is
+             * spent, so it cannot cut the next stream's pre-roll short. */
+            if (s_kick) { s_kick = false; s_playing = buffered > 0; }
+            if (!s_playing) {
+                if (buffered < PREROLL_BYTES) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+                s_playing = true;
+            }
+        } else {
+            s_kick = false;
         }
 
         size_t n = 0;

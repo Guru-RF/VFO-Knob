@@ -1,0 +1,30 @@
+# The svxconnect firmware: an SvxLink reflector client over WiFi
+# (VFO_RADIO=svxconnect) -- SvxConnect on the knob.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the knob reaches
+# the reflector over WiFi, and the USB link has no route to it -- the knob is the
+# DHCP server there, on a link with no gateway. Leaving TinyUSB out also frees
+# the internal RAM its buffers take, and keeps the serial console on the cable.
+
+# Opus in fixed point. Its floating-point SILK encoder does not keep up with
+# real time on the ESP32-S3; fixed point encodes 16 kHz speech at complexity 5
+# in about half of each 20 ms frame (micro-opus's own benchmarks).
+CONFIG_OPUS_FLOATING_POINT=n
+
+# The reflector's two sockets, a DNS query for its SRV record and the portal's
+# HTTPS, beside the web page's and the log's.
+CONFIG_LWIP_MAX_SOCKETS=16
+# 50 audio datagrams a second: room for a burst while Opus holds the task.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=16
+
+# AES in software. On the S3 the AES engine works by DMA, and TLS records in
+# PSRAM go through internal bounce buffers, 1600 bytes at a time: while the
+# enhanced reflector's 290 kB snapshot streamed in, they could not be had and
+# the feed's TLS failed. The reflector's own traffic is a few hundred bytes a
+# packet, so software AES costs nothing noticeable.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# SO_LINGER, so the reflector connection can be closed abortively: a stalled
+# login's queued segments are dropped at once instead of being retried for
+# minutes out of internal RAM (components/svx_client/svx_net.c).
+CONFIG_LWIP_SO_LINGER=y

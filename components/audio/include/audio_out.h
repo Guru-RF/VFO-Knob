@@ -23,7 +23,13 @@
 
 /* Requested from the server. 24 kHz is plenty for SSB/CW and halves the wire
  * load against 48 kHz; the server accepts only 8/12/24/48. */
+/* The radios stream 24 kHz. The svxconnect firmware runs at SvxLink's own
+ * 16 kHz, so the reflector's Opus needs no resampling either way. */
+#if VFO_RADIO_SVXCONNECT
+#define AUDIO_RATE_HZ   16000
+#else
 #define AUDIO_RATE_HZ   24000
+#endif
 #define AUDIO_CHANNELS  2
 
 typedef struct {
@@ -52,6 +58,17 @@ bool audio_out_feed_pcm16(const int16_t *pcm, size_t frames, uint8_t channels);
 
 /* 0..100. Applied in the playback task, not on the network path. */
 void audio_out_set_volume(uint8_t vol);
+
+/* For a stream with ends -- an SvxLink over. Kick: play what is buffered now,
+ * without waiting for the pre-roll, so the tail of a short over is heard
+ * rather than left for the start of the next. Flush: drop everything
+ * buffered, when it belongs to a channel just left. Both are carried out by
+ * the playback task, and safe from any other. */
+void audio_out_kick(void);
+void audio_out_flush(void);
+
+/* Sample frames buffered and not yet played. */
+size_t audio_out_queued(void);
 
 typedef struct {
     uint32_t frames, dropped, underruns;
