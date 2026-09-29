@@ -29,9 +29,16 @@ PUSH="${2:-}"
 RADIO="${RADIO:-aethersdr}"
 [[ "$RADIO" =~ ^[a-z0-9]+$ ]] || { echo "RADIO must be [a-z0-9]" >&2; exit 1; }
 # build_usbnet has always been the AetherSDR firmware's; any other radio's
-# gets a directory of its own, or its configuration would be the last one's.
+# gets a directory of its own, or its configuration would be the last one's,
+# and its own overlay: sdkconfig.usbnet is the USB build, which a radio reached
+# over WiFi has no use for.
 BUILD="build_usbnet"
-[ "$RADIO" = aethersdr ] || BUILD="build_$RADIO"
+OVERLAY="sdkconfig.usbnet"
+if [ "$RADIO" != aethersdr ]; then
+    BUILD="build_$RADIO"
+    OVERLAY="sdkconfig.$RADIO"
+fi
+[ -f "$OVERLAY" ] || { echo "$OVERLAY is missing" >&2; exit 1; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -60,7 +67,7 @@ echo "==> building the $RADIO firmware $VER"
 # reconfigure: CMake reads `git describe` only when it configures, and a new
 # tag on an already-built commit does not make it configure again.
 idf.py -B "$BUILD" -D VFO_RADIO="$RADIO" \
-       -D SDKCONFIG_DEFAULTS="$DEFAULTS;sdkconfig.usbnet" \
+       -D SDKCONFIG_DEFAULTS="$DEFAULTS;$OVERLAY" \
        reconfigure build >/dev/null
 
 BIN="$BUILD/vfo-knob-$RADIO.bin"
