@@ -36,6 +36,7 @@
 #include "vfo_tune.h"
 
 #include "esp_chip_info.h"
+#include "esp_core_dump.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -50,6 +51,8 @@
 #include "freertos/task.h"
 
 static const char *TAG = "vfo";
+
+static void log_cpu(void);
 
 #define DRV2605_REG_STATUS 0x00
 
@@ -282,11 +285,11 @@ static void console_task(void *arg)
                   break;
         case 's': {
             tci_status_t st; tci_get_status(&st);
-            ESP_LOGI(TAG, "ptt=%s rung=%u reason=%s tot=%ums permit=0x%03X%s "
+            ESP_LOGI(TAG, "ptt=%s rung=%u reason=%s permit=0x%03X%s "
                           "pong=%ldms refusals=%u",
                      ptt_state_name((ptt_state_t)st.ptt_state), st.ptt_rung,
                      ptt_abort_name((ptt_abort_t)st.ptt_reason),
-                     (unsigned)st.tot_remain_ms, (unsigned)st.permit,
+                     (unsigned)st.permit,
                      st.permit == PERMIT_ALL ? " (may key)" : " (BLOCKED)",
                      (long)st.pong_age_ms, (unsigned)st.ptt_refusals);
             break;
@@ -363,6 +366,34 @@ static void ui_task(void *arg)
         tci_status_t st;
         tci_get_status(&st);
 
+        /* SWR alarm: the motor runs for as long as SWR stays above 2.5 on the
+         * air. A bad match is not something to find out later from the glass.
+         * Readings count only with real forward power (in a speech pause the
+         * figure is noise), and the alarm holds a second past the last bad one
+         * so the pauses between words do not chop it up. Real-time mode, so it
+         * is one continuous buzz rather than a string of effects; a click
+         * fired meanwhile is simply not heard. */
+        {
+            static bool    s_swr_buzz;
+            static int64_t s_swr_bad_us;
+            const int64_t  now_us = esp_timer_get_time();
+            if (st.tx && st.tx_fwd_w >= 1.0f && st.tx_swr > 2.5f)
+                s_swr_bad_us = now_us;
+            const bool want = st.tx && s_swr_bad_us &&
+                              now_us - s_swr_bad_us < 1000000;
+            if (want != s_swr_buzz) {
+                s_swr_buzz = want;
+                if (want) {
+                    drv2605_rtp_begin(&s_drv);
+                    drv2605_rtp_write(&s_drv, 0x70);   /* ~88% of full drive */
+                    ESP_LOGW(TAG, "SWR alarm: %.1f", (double)st.tx_swr);
+                } else {
+                    drv2605_rtp_end(&s_drv);
+                    ESP_LOGI(TAG, "SWR alarm over");
+                }
+            }
+        }
+
         /* AetherSDR owns the band plan and every other transmit precondition.
          * The protocol gives no reason for a refusal -- only trx:false -- so
          * the banner and the refusal haptic are all the operator gets. Hold a
@@ -417,7 +448,6 @@ static void ui_task(void *arg)
             .tx_remote     = (st.tx && link_ok && st.ptt_state == PTT_IDLE),
             .link_ok       = link_ok,
             .slice_locked  = st.slice_locked,
-            .tot_remain_ms = st.tot_remain_ms,
             .may_key       = (st.permit == PERMIT_ALL),
             .warn          = warn,
         };
@@ -808,6 +838,40 @@ static void net_task(void *arg)
                          (unsigned)m.blocks, (unsigned)m.starved,
                          (unsigned)m.overruns, (double)m.peak);
 
+            static uint32_t last_chronos;
+            if (st.chronos != last_chronos) {
+                last_chronos = st.chronos;
+                /* The WebSocket task's lowest free stack so far: it answers
+                 * every TX_CHRONO from inside its receive loop. */
+                TaskHandle_t ws = xTaskGetHandle("websocket_task");
+                /* Each core's idle share since the last line. The task
+                 * watchdog once reset the knob mid-over because core 1 never
+                 * went idle for five seconds; this shows how close that is. */
+                static uint32_t idle_prev[2];
+                static int64_t  idle_t;
+                const int64_t   t_now = esp_timer_get_time();
+                unsigned        idle_pct[2] = { 0, 0 };
+                for (int c = 0; c < 2; c++) {
+                    const uint32_t v = ulTaskGetIdleRunTimeCounterForCore(c);
+                    if (idle_t && t_now > idle_t)
+                        idle_pct[c] = (unsigned)((uint64_t)(v - idle_prev[c]) * 100u /
+                                                 (uint64_t)(t_now - idle_t));
+                    idle_prev[c] = v;
+                }
+                idle_t = t_now;
+                ESP_LOGI(TAG, "[TXA] chrono=%u sent=%u failed=%u skipped=%u "
+                              "max_send=%ums ws_stack_free=%u idle=%u/%u%%",
+                         (unsigned)st.chronos, (unsigned)st.txa_sent,
+                         (unsigned)st.txa_failed, (unsigned)st.txa_skipped,
+                         (unsigned)(st.txa_max_us / 1000),
+                         ws ? (unsigned)uxTaskGetStackHighWaterMark(ws) : 0u,
+                         idle_pct[0], idle_pct[1]);
+                log_cpu();
+            } else {
+                static unsigned cpu_ticks;          /* a receive baseline */
+                if (++cpu_ticks % 15 == 0) log_cpu();
+            }
+
             audio_stats_t a;
             audio_out_stats(&a);
             if (a.frames || a.dropped)
@@ -889,6 +953,88 @@ static void usb_net_task(void *arg)
 }
 #endif
 
+/* The busiest tasks since the last call, with the core each is pinned to
+ * (@0, @1, or none). The idle figures say how close a core is to starving;
+ * this says who is eating it. */
+static void log_cpu(void)
+{
+    enum { MAX_T = 32, TOP = 6 };
+    static TaskStatus_t *ts;
+    static struct { TaskHandle_t h; uint32_t rt; } prev[MAX_T];
+    static UBaseType_t nprev;
+    static uint32_t    prev_total;
+    if (!ts) ts = heap_caps_malloc(MAX_T * sizeof *ts, MALLOC_CAP_SPIRAM);
+    if (!ts) return;
+
+    uint32_t    total = 0;
+    UBaseType_t n = uxTaskGetSystemState(ts, MAX_T, &total);
+    uint32_t    d[MAX_T];
+    for (UBaseType_t i = 0; i < n; i++) {
+        uint32_t was = 0;
+        for (UBaseType_t j = 0; j < nprev; j++)
+            if (prev[j].h == ts[i].xHandle) { was = prev[j].rt; break; }
+        d[i] = ts[i].ulRunTimeCounter - was;
+    }
+    const uint32_t dt = total - prev_total;
+    const bool     first = (prev_total == 0);
+    for (UBaseType_t i = 0; i < n; i++) {
+        prev[i].h  = ts[i].xHandle;
+        prev[i].rt = ts[i].ulRunTimeCounter;
+    }
+    nprev      = n;
+    prev_total = total;
+    if (first || !dt) return;
+
+    char   line[200] = "";
+    size_t o = 0;
+    for (int k = 0; k < TOP && o < sizeof line; k++) {
+        int best = -1;
+        for (UBaseType_t i = 0; i < n; i++)
+            if (d[i] && (best < 0 || d[i] > d[best])) best = (int)i;
+        if (best < 0) break;
+        const BaseType_t core = xTaskGetCoreID(ts[best].xHandle);
+        o += snprintf(line + o, sizeof line - o, " %s%s=%u%%",
+                      ts[best].pcTaskName,
+                      core == 0 ? "@0" : core == 1 ? "@1" : "",
+                      (unsigned)((uint64_t)d[best] * 100u / dt));
+        d[best] = 0;
+    }
+    ESP_LOGI(TAG, "[CPU]%s", line);
+}
+
+/* The USB build has no console, so a panic's backtrace is printed to nobody.
+ * The core dump in flash survives the restart, though: say what it holds, so
+ * the log port shows which task died and where. The addresses decode with
+ * addr2line against the ELF of the build that crashed. */
+static void report_stored_crash(void)
+{
+    if (esp_core_dump_image_check() != ESP_OK) return;     /* none stored */
+    /* The dump stays in flash until the next crash replaces it. Only a boot
+     * that follows a crash is reporting a new one; anything else would repeat
+     * an old crash on every start, as though it had just happened. */
+    const esp_reset_reason_t why = esp_reset_reason();
+    if (why != ESP_RST_PANIC && why != ESP_RST_TASK_WDT &&
+        why != ESP_RST_INT_WDT && why != ESP_RST_WDT) {
+        ESP_LOGI(TAG, "an older crash dump is stored: GET /api/coredump");
+        return;
+    }
+    esp_core_dump_summary_t *s = heap_caps_calloc(1, sizeof *s, MALLOC_CAP_SPIRAM);
+    if (!s) return;
+    if (esp_core_dump_get_summary(s) == ESP_OK) {
+        ESP_LOGE(TAG, "stored crash: task \"%s\" pc=0x%08" PRIx32 " cause=%" PRIu32
+                      " vaddr=0x%08" PRIx32 " elf=%.16s",
+                 s->exc_task, s->exc_pc, s->ex_info.exc_cause,
+                 s->ex_info.exc_vaddr, (const char *)s->app_elf_sha256);
+        char   bt[16 * 11 + 1] = "";
+        size_t o = 0;
+        for (uint32_t i = 0; i < s->exc_bt_info.depth && i < 16; i++)
+            o += snprintf(bt + o, sizeof bt - o, " 0x%08" PRIx32, s->exc_bt_info.bt[i]);
+        ESP_LOGE(TAG, "stored crash backtrace:%s%s", bt,
+                 s->exc_bt_info.corrupted ? " (corrupted)" : "");
+    }
+    free(s);
+}
+
 static void boot_ok_cb(void *arg)
 {
     (void)arg;
@@ -922,6 +1068,7 @@ void app_main(void)
     ESP_LOGI(TAG, "VFO-Knob | ESP32-S3 rev%d.%d, %d core(s), reset=%d",
              chip.revision / 100, chip.revision % 100, chip.cores,
              (int)esp_reset_reason());
+    report_stored_crash();
 
 #if CONFIG_VFO_GPIO_SCAN
     bring_up("nvs", net_prov_init);
@@ -938,7 +1085,6 @@ void app_main(void)
     bring_up("webcfg", webcfg_start);
     ota_init();
     ota_set_interval(net_prov_ota_hours());
-    tci_set_tot_ms((uint32_t)net_prov_tot_s() * 1000u);
 
     /* Three failed boots in a row: come up with the bare minimum so the device
      * stays usable and flashable while the cause is found. */
@@ -955,6 +1101,10 @@ void app_main(void)
 
     ui_set_levels(net_prov_volume(), net_prov_mic_gain());
     bool have_ui = have_panel && bring_up("ui", ui_init);
+    /* Building the face is the deepest thing the main task does. */
+    ESP_LOGI(TAG, "main stack after ui: %u of %u bytes never used",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL),
+             (unsigned)CONFIG_ESP_MAIN_TASK_STACK_SIZE);
     /* After ui_init, not before: this reaches into LVGL, and the version that
      * called it up beside ota_init() crashed on boot -- caught by the OTA
      * rollback, which put the previous image back. */
@@ -1028,6 +1178,10 @@ void app_main(void)
             xTaskCreatePinnedToCore(usb_net_task, "usbnet", 4096, NULL, 5, NULL, 0);
         }
 #endif
+    /* The held-finger check above was the touch sampler's only use. Stop it,
+     * so LVGL is the controller's only reader. */
+    if (have_touch) hal_touch_stop();
+
     if (!safe) {
         /* WiFi is started by net_task, and only if the cable turns out not to
          * be an option. Starting it here unconditionally was the root of a

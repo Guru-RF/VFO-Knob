@@ -13,14 +13,10 @@
 #include "mdns.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "ptt_fsm.h"
 
 static const char *TAG = "net";
 static const char *NVS_NS = "vfo";
 
-/* Transmit time-out, seconds. The primary human-error guard for toggle PTT,
- * so it is configurable and persisted rather than compiled in. */
-static uint16_t s_tot_s = PTT_TOT_DEFAULT_MS / 1000;
 static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
 static uint16_t s_dim_min = 5;      /* idle before the screen dims;  0 = never */
 static uint16_t s_blank_min = 10;   /* idle before it goes dark;     0 = never */
@@ -74,7 +70,6 @@ static void load_or_seed(void)
         if (nvs_get_u8(h, "vol",   &v) == ESP_OK) s_volume  = v;
         if (nvs_get_u8(h, "mic",   &v) == ESP_OK) s_micgain = v;
         if (nvs_get_u8(h, "boots", &v) == ESP_OK) s_boots   = v;
-        nvs_get_u16(h, "tot", &s_tot_s);
         nvs_get_u16(h, "otah", &s_ota_hours);
         nvs_get_u16(h, "dim", &s_dim_min);
         nvs_get_u16(h, "blank", &s_blank_min);
@@ -206,7 +201,6 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
     return err;
 }
 
-uint16_t net_prov_tot_s(void) { return s_tot_s; }
 uint16_t net_prov_ota_hours(void) { return s_ota_hours; }
 uint16_t net_prov_dim_min(void)   { return s_dim_min; }
 uint16_t net_prov_blank_min(void) { return s_blank_min; }
@@ -256,17 +250,6 @@ void net_prov_save_web(const char *user, const char *pass)
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_str(h, "wuser", s_web_user);
     nvs_set_str(h, "wpass", s_web_pass);
-    nvs_commit(h);
-    nvs_close(h);
-}
-
-void net_prov_save_tot(uint16_t seconds)
-{
-    if (seconds == s_tot_s) return;
-    s_tot_s = seconds;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u16(h, "tot", seconds);
     nvs_commit(h);
     nvs_close(h);
 }

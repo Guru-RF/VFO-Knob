@@ -7,9 +7,10 @@
  * stall on the server side.
  *
  * We answer at 24 kHz, which the server resamples 1:1 to the radio's native
- * DAX TX rate. The payload is float32 duplicated stereo (L = R) because that
- * is the layout WSJT-X uses and therefore the best-tested path through
- * AetherSDR's mono/stereo canonicalisation.
+ * DAX TX rate. The payload is int16 mono, which AetherSDR converts and
+ * upmixes itself. It used to be float32 duplicated stereo, as WSJT-X sends:
+ * four times the bytes, 4 kB a frame against a 5.7 kB TCP send buffer, so
+ * nearly every send waited on the computer's acknowledgement.
  *
  * Capture only runs while keyed. A microphone that is live when the operator
  * has not asked to transmit is a bug with privacy consequences, not just a
@@ -25,7 +26,7 @@
 #include "esp_err.h"
 
 #define TX_AUDIO_RATE_HZ 24000
-/* 21.33 ms at 24 kHz = 512 frames; duplicated to stereo = 1024 floats. */
+/* 21.33 ms at 24 kHz = 512 mono samples. */
 #define TX_CHRONO_FRAMES 512
 
 esp_err_t audio_in_init(void);
@@ -34,11 +35,11 @@ esp_err_t audio_in_init(void);
 void audio_in_set_active(bool on);
 bool audio_in_active(void);
 
-/* Fill `out` with TX_CHRONO_FRAMES stereo float pairs (2 * TX_CHRONO_FRAMES
- * floats), duplicating mono into both channels. Returns false if the
- * microphone has not produced enough samples yet, in which case the caller
- * should send silence rather than nothing -- a gap is worse than quiet. */
-bool audio_in_take(float *out, size_t out_floats);
+/* Fill `out` with `samples` int16 mono samples, padding a short read with
+ * silence. Returns false if the microphone has nothing to give yet -- at the
+ * start of an over it holds back until it has a cushion -- in which case the
+ * caller should send silence rather than nothing: a gap is worse than quiet. */
+bool audio_in_take(int16_t *out, size_t samples);
 
 void audio_in_set_gain(uint8_t percent);
 

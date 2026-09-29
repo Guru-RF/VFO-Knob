@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
+#include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ptt_fsm.h"
@@ -54,6 +55,7 @@ typedef struct {
     bool       audio_suspend;      /* held off while something else needs the link */
     uint32_t   pending_key, pending_unkey, pending_toggle;
     uint8_t    pending_abort;
+    uint32_t   chronos, txa_sent, txa_failed, txa_skipped, txa_max_us;
 } state_t;
 
 static state_t     S;
@@ -68,11 +70,13 @@ static int64_t     s_retry_at_us;      /* 0 = connected or connecting */
 #define AUD_CAP 12288
 static uint8_t    *s_aud;
 static size_t      s_aud_len;
-/* Outbound TX_AUDIO frame: 64-byte header + 2 * TX_CHRONO_FRAMES floats.
+/* Outbound TX_AUDIO frame: 64-byte header + TX_CHRONO_FRAMES int16 samples.
  * PSRAM, because internal RAM is the contended resource here. */
-#define TXA_FLOATS (2 * TX_CHRONO_FRAMES)
-#define TXA_BYTES  (64 + TXA_FLOATS * 4)
+#define TXA_BYTES  (64 + TX_CHRONO_FRAMES * 2)
 static uint8_t    *s_txa;
+/* The TCI connection's socket, found on connect; -1 while there is none. */
+static int         s_fd = -1;
+static uint16_t    s_port;
 static uint32_t    s_backoff_ms = 250;
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -87,6 +91,30 @@ __attribute__((weak)) void haptic_hook(uint8_t effect, uint8_t prio)
 
 static void send_cmd(const char *fmt, ...);
 
+/* Say why a key was refused. This used to print the FSM's reason field, which
+ * belongs to the last abort, not to the refusal: a link that had quietly died
+ * read "PTT REFUSED (operator)". */
+static void log_refusal(uint32_t missing)
+{
+    static const struct { uint32_t bit; const char *name; } P[] = {
+        { PERMIT_LINK, "link" },           { PERMIT_TRX, "trx" },
+        { PERMIT_TX_ENABLE, "tx-enable" }, { PERMIT_NO_OVERLAY, "overlay" },
+        { PERMIT_NO_FAULT, "fault" },      { PERMIT_PONG_FRESH, "pong" },
+        { PERMIT_NO_RECONCILE, "reconcile" },
+        { PERMIT_BAND, "band" },           { PERMIT_MODE, "mode" },
+    };
+    if (!missing) {
+        ESP_LOGW(TAG, "PTT REFUSED by AetherSDR, or not confirmed in time");
+        return;
+    }
+    char   buf[80] = "";
+    size_t n = 0;
+    for (size_t i = 0; i < sizeof P / sizeof P[0] && n < sizeof buf; i++)
+        if (missing & P[i].bit)
+            n += snprintf(buf + n, sizeof buf - n, " %s", P[i].name);
+    ESP_LOGW(TAG, "PTT REFUSED, not ready:%s", buf);
+}
+
 /* Perform whatever the FSM decided. Rungs 2-4 tear down our own socket, which
  * is a MORE reliable unkey than any command we can send: AetherSDR unkeys
  * unconditionally when a PTT-owning client disconnects, whereas a trx:false may
@@ -95,8 +123,12 @@ static void ptt_dispatch(const ptt_out_t *o)
 {
     if (o->haptic) haptic_hook(o->haptic, o->haptic_prio);
 
-    if (o->send_key)   send_cmd("trx:%u,true;",  (unsigned)S.my_trx);
-    if (o->send_unkey) send_cmd("trx:%u,false;", (unsigned)S.my_trx);
+    /* ",tci" names our TX_AUDIO as the source. Without it AetherSDR keys a
+     * voice mode like a foot switch: the radio transmits its own mic input,
+     * no TX_CHRONO ever arrives, and the knob's microphone is never sent.
+     * Only digital modes default to TCI audio. */
+    if (o->send_key)   send_cmd("trx:%u,true,tci;", (unsigned)S.my_trx);
+    if (o->send_unkey) send_cmd("trx:%u,false;",    (unsigned)S.my_trx);
 
     if (o->close_socket) {
         ESP_LOGW(TAG, "PTT ladder rung 2: closing the socket");
@@ -114,7 +146,7 @@ static void ptt_dispatch(const ptt_out_t *o)
      * not asked to transmit is a privacy bug, not just a wasted buffer. */
     if (o->entered_tx) { audio_in_set_active(true);  ESP_LOGW(TAG, "*** TX ***"); }
     if (o->left_tx)    { audio_in_set_active(false); ESP_LOGI(TAG, "*** RX ***"); }
-    if (o->refused)    ESP_LOGW(TAG, "PTT REFUSED (%s)", ptt_abort_name(S.ptt.reason));
+    if (o->refused)    log_refusal(o->missing);
 }
 
 /* --------------------------------------------------------------- inbound */
@@ -315,32 +347,128 @@ static void consume(const char *data, size_t len)
     }
 }
 
+/* The client keeps its socket to itself, so find it: the connection whose
+ * peer is the TCI port and whose own end is ephemeral. Checking our end rules
+ * out a browser on the configuration page that happens to connect from a
+ * source port equal to the TCI port. */
+static int find_tci_socket(void)
+{
+    for (int fd = LWIP_SOCKET_OFFSET;
+         fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; fd++) {
+        struct sockaddr_in peer, self;
+        socklen_t pn = sizeof peer, sn = sizeof self;
+        if (getpeername(fd, (struct sockaddr *)&peer, &pn) != 0 ||
+            peer.sin_family != AF_INET || ntohs(peer.sin_port) != s_port)
+            continue;
+        if (getsockname(fd, (struct sockaddr *)&self, &sn) != 0 ||
+            ntohs(self.sin_port) < 0xC000)      /* lwIP's ephemeral range */
+            continue;
+        return fd;
+    }
+    return -1;
+}
+
+/* True when a frame can be written without waiting. lwIP reports a TCP socket
+ * writable only while more than TCP_SNDLOWAT (2.8 kB here) of its send buffer
+ * is free, which is well over one 1 kB frame. */
+static bool socket_has_room(void)
+{
+    if (s_fd < 0) return true;              /* not found: send as before */
+    fd_set w;
+    FD_ZERO(&w);
+    FD_SET(s_fd, &w);
+    struct timeval now = { 0 };
+    return select(s_fd + 1, NULL, &w, NULL, &now) > 0;
+}
+
 /* Answer one TX_CHRONO with one TX_AUDIO frame.
  *
  * Transmit is paced by the server: it asks every 21.33 ms and we answer, which
  * is why this is driven from the receive path rather than from a timer of our
  * own. Answering late shows up as a chrono stall server-side. If the
  * microphone has not produced enough samples we still send a full frame,
- * padded with silence -- a gap in transmitted audio is worse than quiet. */
+ * padded with silence -- a gap in transmitted audio is worse than quiet.
+ *
+ * It must never make the receive path wait, though. This runs on the
+ * WebSocket task, the only reader of the socket, so a send that blocks holds
+ * up every inbound frame behind it: RX audio, and the trx:false confirming an
+ * unkey. At 4 kB a frame they did, a little more on every over, until a long
+ * over's confirmation arrived after the PTT ladder had given up on it and the
+ * knob restarted itself. A send that times out is worse again: the client
+ * drops the connection. So a frame goes out only when the socket has room for
+ * it, and is skipped otherwise -- 21 ms of silence is the cheapest thing that
+ * can go wrong here. */
 static void send_tx_audio(uint32_t receiver)
 {
+    S.chronos++;
     if (!s_txa || !s_ws) return;
+    if (!socket_has_room()) { S.txa_skipped++; return; }
 
     tci_audio_hdr_t *h = (tci_audio_hdr_t *)s_txa;
     memset(h, 0, sizeof *h);
     h->receiver    = receiver;
     h->sample_rate = TX_AUDIO_RATE_HZ;   /* server resamples 1:1 from 24 kHz */
-    h->format      = TCI_AUDIO_FMT_FLOAT32;
-    h->length      = TXA_FLOATS;
+    h->format      = TCI_AUDIO_FMT_INT16;
+    h->length      = TX_CHRONO_FRAMES;
     h->type        = TCI_AUDIO_TYPE_TX;
-    h->channels    = 2;
+    h->channels    = 1;
 
-    float *pcm = (float *)(s_txa + sizeof *h);
-    if (!audio_in_take(pcm, TXA_FLOATS))
-        memset(pcm, 0, TXA_FLOATS * sizeof(float));
+    int16_t *pcm = (int16_t *)(s_txa + sizeof *h);
+    if (!audio_in_take(pcm, TX_CHRONO_FRAMES))
+        memset(pcm, 0, TX_CHRONO_FRAMES * sizeof(int16_t));
 
-    esp_websocket_client_send_bin(s_ws, (const char *)s_txa, TXA_BYTES,
-                                  pdMS_TO_TICKS(50));
+    const int64_t t0 = esp_timer_get_time();
+    const int n = esp_websocket_client_send_bin(s_ws, (const char *)s_txa,
+                                                TXA_BYTES, pdMS_TO_TICKS(50));
+    const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+    if (us > S.txa_max_us) S.txa_max_us = us;
+    if (n == TXA_BYTES) S.txa_sent++;
+    else                S.txa_failed++;
+}
+
+/* The link is gone, however we found out. Runs on the WebSocket task. */
+static void link_lost(void)
+{
+    /* If the link keeps dying within a moment of asking for audio, then
+     * audio is what is killing it -- give up on audio rather than
+     * reconnect forever. A knob that tunes without RX audio is useful; one
+     * stuck in a reconnect loop is not. Seen on the USB-NCM transport,
+     * where the WebSocket frame parser loses sync ~40 ms after
+     * audio_start; the same code is stable over WiFi. */
+    uint32_t tnow = now_ms();
+    if (S.t_audio_start_ms && (tnow - S.t_audio_start_ms) < 2000 &&
+        !S.audio_blocked) {
+        if (++S.audio_kills >= 3) {
+            S.audio_blocked = true;
+            ESP_LOGE(TAG, "link died %u times just after audio_start -- "
+                          "disabling RX audio for this session",
+                     (unsigned)S.audio_kills);
+        }
+    }
+    S.closes++;
+    S.link = TCI_LINK_DOWN;
+    S.tx   = false;
+    s_fd   = -1;
+
+    /* AetherSDR calls abortTciPtt() when a PTT-owning client disconnects,
+     * so the radio is already unkeyed. Collapse our own state to match
+     * rather than continuing to climb a ladder against a dead socket. */
+    if (S.ptt.state != PTT_IDLE) {
+        ESP_LOGW(TAG, "link lost while %s -- server fails closed",
+                 ptt_state_name(S.ptt.state));
+        ptt_fsm_init(&S.ptt);
+        audio_in_set_active(false);     /* never leave the mic live */
+    }
+    /* Schedule our own reconnect. We own this rather than the component,
+     * because a safety abort deliberately CLOSES the socket, and an
+     * explicit close disables the component's auto-reconnect -- which
+     * would leave the knob permanently offline after the one event where
+     * it most needs to come back. */
+    if (!s_retry_at_us) {
+        s_retry_at_us = esp_timer_get_time() + (int64_t)s_backoff_ms * 1000;
+        ESP_LOGI(TAG, "reconnect in %u ms", (unsigned)s_backoff_ms);
+    }
+    ESP_LOGW(TAG, "link down%s%s", S.last_close[0] ? ": " : "", S.last_close);
 }
 
 static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -355,6 +483,9 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_retry_at_us = 0;
         s_rx_len = 0;
         s_greet_deadline_us = esp_timer_get_time() + GREET_TMO_MS * 1000;
+        s_fd = find_tci_socket();
+        if (s_fd < 0)
+            ESP_LOGW(TAG, "TCI socket not found; TX audio sends may block");
         ESP_LOGI(TAG, "connected, awaiting greeting");
         break;
 
@@ -399,46 +530,19 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
-    case WEBSOCKET_EVENT_CLOSED: {
-        /* If the link keeps dying within a moment of asking for audio, then
-         * audio is what is killing it -- give up on audio rather than
-         * reconnect forever. A knob that tunes without RX audio is useful; one
-         * stuck in a reconnect loop is not. Seen on the USB-NCM transport,
-         * where the WebSocket frame parser loses sync ~40 ms after
-         * audio_start; the same code is stable over WiFi. */
-        uint32_t tnow = now_ms();
-        if (S.t_audio_start_ms && (tnow - S.t_audio_start_ms) < 2000 &&
-            !S.audio_blocked) {
-            if (++S.audio_kills >= 3) {
-                S.audio_blocked = true;
-                ESP_LOGE(TAG, "link died %u times just after audio_start -- "
-                              "disabling RX audio for this session",
-                         (unsigned)S.audio_kills);
-            }
-        }
-        S.closes++;
-        S.link = TCI_LINK_DOWN;
-        S.tx   = false;
-    }
-        /* AetherSDR calls abortTciPtt() when a PTT-owning client disconnects,
-         * so the radio is already unkeyed. Collapse our own state to match
-         * rather than continuing to climb a ladder against a dead socket. */
-        if (S.ptt.state != PTT_IDLE) {
-            ESP_LOGW(TAG, "link lost while %s -- server fails closed",
-                     ptt_state_name(S.ptt.state));
-            ptt_fsm_init(&S.ptt, S.ptt.tot_ms);
-            audio_in_set_active(false);     /* never leave the mic live */
-        }
-        /* Schedule our own reconnect. We own this rather than the component,
-         * because a safety abort deliberately CLOSES the socket, and an
-         * explicit close disables the component's auto-reconnect -- which
-         * would leave the knob permanently offline after the one event where
-         * it most needs to come back. */
-        if (!s_retry_at_us) {
-            s_retry_at_us = esp_timer_get_time() + (int64_t)s_backoff_ms * 1000;
-            ESP_LOGI(TAG, "reconnect in %u ms", (unsigned)s_backoff_ms);
-        }
-        ESP_LOGW(TAG, "link down%s%s", S.last_close[0] ? ": " : "", S.last_close);
+    case WEBSOCKET_EVENT_CLOSED:
+        link_lost();
+        break;
+
+    case WEBSOCKET_EVENT_FINISH:
+        /* The client's task has ended. DISCONNECTED or CLOSED has usually said
+         * so already, but not when a close is cut short: if the handshake
+         * overruns its timeout, esp_websocket_client_close() stops the task
+         * outright and FINISH is the only event there is. Rung 2 of the PTT
+         * ladder is exactly such a close. Unhandled, the knob went on
+         * believing the link was READY -- no reconnect, no pongs, every key
+         * refused -- until it was power-cycled. */
+        if (S.link != TCI_LINK_DOWN) link_lost();
         break;
 
     case WEBSOCKET_EVENT_ERROR:
@@ -460,7 +564,6 @@ static uint32_t ptt_permit_now(uint32_t t)
     }
     if (S.n_trx > 0 || S.my_trx == 0)       p |= PERMIT_TRX;
     if (S.tx_enable_seen)                   p |= PERMIT_TX_ENABLE;
-    if (!S.ptt.tot_latched)                 p |= PERMIT_TOT_CLEAR;
     if (!S.reconcile_armed)                 p |= PERMIT_NO_RECONCILE;
 
     /* A pong within 4 s. Before the first pong arrives we allow it, otherwise
@@ -730,15 +833,6 @@ void tci_ptt_unkey(void)  { S.pending_unkey = 1; }
 void tci_ptt_toggle(void) { S.pending_toggle = 1; }
 void tci_ptt_force_abort(uint8_t reason) { S.pending_abort = reason; }
 
-void tci_set_tot_ms(uint32_t ms)
-{
-    ptt_fsm_t save = S.ptt;
-    ptt_fsm_init(&S.ptt, ms);
-    S.ptt.state = save.state;          /* keep any in-flight transmission */
-    S.ptt.t_key_ms = save.t_key_ms;
-    ESP_LOGI(TAG, "TOT set to %u ms", (unsigned)S.ptt.tot_ms);
-}
-
 bool tci_is_ready(void)
 {
     return S.link == TCI_LINK_READY || S.link == TCI_LINK_DEGRADED;
@@ -771,11 +865,15 @@ void tci_get_status(tci_status_t *o)
     o->unknown_cmds = S.unknown_cmds;
     o->sends      = S.sends;
     o->echoes     = S.echoes;
+    o->chronos    = S.chronos;
+    o->txa_sent   = S.txa_sent;
+    o->txa_failed = S.txa_failed;
+    o->txa_skipped = S.txa_skipped;
+    o->txa_max_us = S.txa_max_us;
     o->ptt_state  = (uint8_t)S.ptt.state;
     o->ptt_rung   = S.ptt.rung;
     o->ptt_reason = (uint8_t)S.ptt.reason;
     o->ptt_refusals = S.ptt.refusals;
-    o->tot_remain_ms = ptt_tot_remaining_ms(&S.ptt, now_ms());
     o->permit     = ptt_permit_now(now_ms());
     o->pong_age_ms = S.last_pong_us
         ? (int32_t)((esp_timer_get_time() - S.last_pong_us) / 1000) : -1;
@@ -797,11 +895,12 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
 {
     char uri[96];
     snprintf(uri, sizeof uri, "ws://%s:%u/", host, (unsigned)port);
+    s_port = port;
 
     memset(&S, 0, sizeof S);
     tune_init(&S.tune, 14074000, 100);
     accel_init(&S.accel);
-    ptt_fsm_init(&S.ptt, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&S.ptt);
     strlcpy(S.mode, "usb", sizeof S.mode);
 
     if (!s_aud) {
@@ -827,6 +926,11 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
         .pingpong_timeout_sec   = 8,
         .task_prio              = 6,
         .task_stack             = 6144,
+        /* Core 0, beside lwIP: the client left to itself floats, and it
+         * follows the display to core 1 -- where it takes 40% of the core
+         * receiving audio, 60% transmitting, and starves the idle task. */
+        .task_core_id_set       = true,
+        .task_core_id           = 0,
         /* Sized to what internal RAM can actually spare right now.
          *
          * 2 kB was forced by the WiFi path, where LVGL, the WiFi driver and

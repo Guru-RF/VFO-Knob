@@ -9,7 +9,6 @@
 #define EFF_KEYED         1   /* Strong Click                                */
 #define EFF_UNKEYED       4   /* Sharp Click                                 */
 #define EFF_REFUSED      12   /* Triple Click                                */
-#define EFF_ALERT_LONG   16   /* 1000 ms Alert                               */
 #define PRIO_PTT        255
 
 static inline uint32_t since(uint32_t now, uint32_t then) { return now - then; }
@@ -38,14 +37,11 @@ static void start_ladder(ptt_fsm_t *f, uint8_t rung, uint32_t now, ptt_out_t *ou
     }
 }
 
-void ptt_fsm_init(ptt_fsm_t *f, uint32_t tot_ms)
+void ptt_fsm_init(ptt_fsm_t *f)
 {
     if (!f) return;
     memset(f, 0, sizeof *f);
-    if (tot_ms < PTT_TOT_MIN_MS) tot_ms = PTT_TOT_MIN_MS;
-    if (tot_ms > PTT_TOT_MAX_MS) tot_ms = PTT_TOT_MAX_MS;
-    f->state  = PTT_IDLE;
-    f->tot_ms = tot_ms;
+    f->state = PTT_IDLE;
 }
 
 bool ptt_is_tx(const ptt_fsm_t *f)
@@ -53,13 +49,6 @@ bool ptt_is_tx(const ptt_fsm_t *f)
     /* Confirmed on air. Callers wanting "possibly radiating" -- for example to
      * suppress vfo: sends -- should test state != PTT_IDLE instead. */
     return f && f->state == PTT_ON;
-}
-
-uint32_t ptt_tot_remaining_ms(const ptt_fsm_t *f, uint32_t now_ms)
-{
-    if (!f || f->state != PTT_ON) return 0;
-    uint32_t used = since(now_ms, f->t_key_ms);
-    return used >= f->tot_ms ? 0 : f->tot_ms - used;
 }
 
 void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
@@ -73,24 +62,15 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
     case PTT_EV_TAP_KEY:
         if (f->state != PTT_IDLE) break;          /* use TAP_UNKEY to stop */
 
-        /* A time-out expiry consumes the next tap. With toggle there is no
-         * release to re-arm on, so this is what stops a resting finger or a
-         * reflex second tap from putting you straight back on the air. */
-        if (f->tot_latched) {
-            f->tot_latched = false;
-            out->haptic = EFF_REFUSED; out->haptic_prio = PRIO_PTT;
-            out->refused = true;
-            break;
-        }
         if ((permit & PERMIT_ALL) != PERMIT_ALL) {
             f->refusals++;
             out->haptic = EFF_REFUSED; out->haptic_prio = PRIO_PTT;
             out->refused = true;
+            out->missing = PERMIT_ALL & ~permit;
             break;
         }
         enter(f, PTT_REQ_ON, now_ms);
         f->reason      = PTT_AB_NONE;
-        f->tot_warned  = false;
         out->send_key  = true;
         /* A whisper, not a click: this only means "heard you". The real click
          * waits for the radio to confirm. The gap between the two is the key
@@ -109,7 +89,6 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
     case PTT_EV_CONFIRM_TRUE:
         if (f->state == PTT_REQ_ON) {
             enter(f, PTT_ON, now_ms);
-            f->t_key_ms      = now_ms;
             f->t_last_nag_ms = now_ms;
             f->rung          = 0;
             out->entered_tx  = true;
@@ -156,19 +135,7 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
                 out->haptic_prio = PRIO_PTT;
             }
         } else if (f->state == PTT_ON) {
-            uint32_t used = since(now_ms, f->t_key_ms);
-            if (used >= f->tot_ms) {
-                f->reason      = PTT_AB_TOT;
-                f->tot_latched = true;
-                start_ladder(f, 1, now_ms, out);
-                out->haptic      = EFF_ALERT_LONG;
-                out->haptic_prio = PRIO_PTT;
-            } else if (!f->tot_warned &&
-                       f->tot_ms - used <= PTT_TOT_WARN_MS) {
-                f->tot_warned    = true;
-                out->haptic      = EFF_REFUSED;
-                out->haptic_prio = PRIO_PTT;
-            } else if (since(now_ms, f->t_last_nag_ms) >= PTT_KEYED_NAG_MS) {
+            if (since(now_ms, f->t_last_nag_ms) >= PTT_KEYED_NAG_MS) {
                 /* The toggle-specific signal. With momentary PTT the finger
                  * IS the reminder; here nothing else tells you that you are
                  * still transmitting. */
@@ -204,7 +171,7 @@ void ptt_fsm_abort(ptt_fsm_t *f, ptt_abort_t reason, uint32_t now_ms,
     uint8_t rung;
     switch (reason) {
     case PTT_AB_PONG_STALE:
-        /* Do not waste 600ms asking. If any path to the server survives, the
+        /* Do not spend rung 1 asking. If any path to the server survives, the
          * close frame gets there and abortTciPtt() runs in milliseconds; if it
          * does not, rung 1 was never going to arrive either. */
         rung = 2;
@@ -239,7 +206,6 @@ const char *ptt_abort_name(ptt_abort_t r)
     switch (r) {
     case PTT_AB_NONE:        return "none";
     case PTT_AB_OPERATOR:    return "operator";
-    case PTT_AB_TOT:         return "timeout";
     case PTT_AB_PONG_STALE:  return "link stale";
     case PTT_AB_LINK_DOWN:   return "link down";
     case PTT_AB_TOUCH_FAULT: return "touch fault";

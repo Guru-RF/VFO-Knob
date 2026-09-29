@@ -48,10 +48,6 @@ uint16_t net_prov_dim_min(void);
 uint16_t net_prov_blank_min(void);
 void     net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes);
 
-/* Transmit time-out in seconds, persisted. */
-uint16_t net_prov_tot_s(void);
-void     net_prov_save_tot(uint16_t seconds);
-
 /* Boot-loop guard. net_prov_boot_count() is incremented on every boot and
  * cleared once the device has been up long enough to be considered healthy;
  * call net_prov_boot_ok() from a timer for that. Three rapid boots in a row

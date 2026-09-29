@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "esp_app_desc.h"
+#include "esp_core_dump.h"
+#include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -193,12 +195,11 @@ static esp_err_t config_get(httpd_req_t *r)
      * the field is non-empty, so a save does not have to round-trip it. */
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
-             "\"vol\":%u,\"mic\":%u,\"tot\":%u,"
+             "\"vol\":%u,\"mic\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
              "\"fwbase\":\"%s\",\"client\":\"%s\",\"client_usb\":%s}",
              c->tci_host, (unsigned)c->tci_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
-             (unsigned)net_prov_tot_s(),
              net_prov_web_user(),
              net_prov_web_is_default() ? "true" : "false",
              (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
@@ -273,9 +274,6 @@ static esp_err_t config_post(httpd_req_t *r)
         return ESP_FAIL;
     }
 
-    /* Bounded the same way the PTT FSM is: a time-out outside this range is
-     * either useless or not a time-out at all. */
-    if (field_num(body, "tot", &v)) net_prov_save_tot((uint16_t)clampl(v, 30, 600));
     {   /* Both stages are written together so one cannot be validated against
          * a stale copy of the other. */
         long dim = net_prov_dim_min(), blank = net_prov_blank_min();
@@ -311,9 +309,9 @@ static esp_err_t config_post(httpd_req_t *r)
     audio_out_set_volume(vol);    /* directly too: with no display, no UI task */
     audio_in_set_gain(mic);
 
-    ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u tot=%u",
+    ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u",
              cfg.tci_host, (unsigned)cfg.tci_port, cfg.ssid,
-             (unsigned)vol, (unsigned)mic, (unsigned)net_prov_tot_s());
+             (unsigned)vol, (unsigned)mic);
     return httpd_resp_sendstr(r, "ok");
 }
 
@@ -360,6 +358,34 @@ static esp_err_t ota_post(httpd_req_t *r)
 #define kUploadStalls 6
 
 static void reboot_cb(void *arg);
+
+/* The stored core dump, raw, for `esp-coredump info_corefile -t raw` against
+ * the ELF of the build that crashed. The USB build has no console, and flash
+ * is out of reach once TinyUSB owns the pads, so this is the only way to read
+ * one out. It holds task stacks, so it sits behind the login like the rest. */
+static esp_err_t coredump_get(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
+        httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, "no core dump stored");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(r, "application/octet-stream");
+    httpd_resp_set_hdr(r, "Content-Disposition",
+                       "attachment; filename=\"coredump.bin\"");
+    static char buf[1024];            /* the server runs one handler at a time */
+    for (size_t off = 0; off < size; ) {
+        size_t n = size - off < sizeof buf ? size - off : sizeof buf;
+        if (esp_flash_read(NULL, buf, addr + off, n) != ESP_OK ||
+            httpd_resp_send_chunk(r, buf, n) != ESP_OK) {
+            httpd_resp_send_chunk(r, NULL, 0);
+            return ESP_FAIL;
+        }
+        off += n;
+    }
+    return httpd_resp_send_chunk(r, NULL, 0);
+}
 
 static esp_err_t ota_upload_post(httpd_req_t *r)
 {
@@ -504,6 +530,7 @@ esp_err_t webcfg_start(void)
         { .uri = "/api/ota",     .method = HTTP_POST, .handler = ota_post },
         { .uri = "/api/ota/upload", .method = HTTP_POST, .handler = ota_upload_post },
         { .uri = "/api/reboot",  .method = HTTP_POST, .handler = reboot_post },
+        { .uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get },
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++)
         httpd_register_uri_handler(s_srv, &uris[i]);

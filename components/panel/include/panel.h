@@ -14,6 +14,15 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 
+/* The core that drives the display. The SPI interrupt is allocated on it, and
+ * whatever queues pixels -- the LVGL task -- must run on it too. IDF's SPI bus
+ * lock hands the bus between that interrupt and the task under a critical
+ * section, which masks the interrupt on the task's own core and does nothing
+ * about the other one. With the interrupt on core 0 and LVGL on core 1 the
+ * interrupt read back a bus owner the task had just cleared, and panicked in
+ * spi_bus_lock_bg_exit after four and a half hours of plain receive. */
+#define PANEL_CORE 1
+
 esp_err_t panel_init(void);
 
 /* Handle for LVGL to flush into. */

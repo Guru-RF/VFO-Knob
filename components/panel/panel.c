@@ -66,6 +66,10 @@ esp_err_t panel_init(void)
         .data3_io_num    = BOARD_PIN_LCD_DATA3,
         /* One full frame is the worst case a flush can ask for. */
         .max_transfer_sz = BOARD_LCD_H_RES * BOARD_LCD_V_RES * sizeof(uint16_t),
+        /* Beside the LVGL task, not wherever this happens to run: see
+         * PANEL_CORE. */
+        .isr_cpu_id      = PANEL_CORE == 0 ? ESP_INTR_CPU_AFFINITY_0
+                                           : ESP_INTR_CPU_AFFINITY_1,
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(BOARD_LCD_SPI_HOST, &bus,
                                            SPI_DMA_CH_AUTO), TAG, "spi bus");

@@ -13,6 +13,7 @@ static const char *TAG = "touch";
 static esp_lcd_touch_handle_t s_tp;
 static touch_sample_t         s_sample;
 static portMUX_TYPE           s_lock = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool          s_stop;
 
 static void touch_task(void *arg)
 {
@@ -22,6 +23,7 @@ static void touch_task(void *arg)
 
     for (;;) {
         vTaskDelayUntil(&next, pdMS_TO_TICKS(TOUCH_POLL_MS));
+        if (s_stop) break;
 
         uint16_t x = 0, y = 0;
         uint8_t  cnt = 0;
@@ -43,7 +45,10 @@ static void touch_task(void *arg)
         }
         taskEXIT_CRITICAL(&s_lock);
     }
+    vTaskDelete(NULL);
 }
+
+void hal_touch_stop(void) { s_stop = true; }
 
 esp_err_t hal_touch_init(void)
 {
@@ -67,6 +72,16 @@ esp_err_t hal_touch_init(void)
     };
     ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_cst816s(io, &cfg, &s_tp),
                         TAG, "cst816s");
+
+    /* Keep the controller out of auto-sleep: register 0xFE, non-zero disables
+     * it. After a couple of seconds untouched it drops to a slow low-power
+     * scan and wakes only on a firmer contact -- and the first touch after
+     * tuning with the knob is usually PTT. The chip has just been reset and
+     * answered its ID read, so it is awake to take this. USB-powered, so the
+     * power the sleep would save does not matter. */
+    const uint8_t no_sleep = 1;
+    if (esp_lcd_panel_io_tx_param(io, 0xFE, &no_sleep, 1) != ESP_OK)
+        ESP_LOGW(TAG, "could not disable auto-sleep");
 
     xTaskCreatePinnedToCore(touch_task, "touch", 4096, NULL, 10, NULL, 1);
     ESP_LOGI(TAG, "CST816 up at 0x%02X, polled every %d ms",

@@ -1,13 +1,14 @@
 /* PTT state machine -- TOGGLE.
  *
- * Tap to key, tap to unkey. Deliberate to enter (the tap must land on the
- * pill), forgiving to exit (a tap anywhere in the lower region unkeys) -- you
- * should never have to aim carefully to STOP transmitting.
+ * Tap to key, tap to unkey: anywhere on the slab below the blue line, both
+ * ways. You should never have to aim carefully to STOP transmitting.
  *
  * Toggle gives up the one safety property momentary PTT has for free: a finger
  * held down is a continuous assertion of intent, and a frozen touch coordinate
  * exposes a hung controller. Neither exists here, so the weight falls on the
- * time-out timer, the pong-based link watchdog, and the teardown ladder.
+ * pong-based link watchdog, the teardown ladder, and the radio's own transmit
+ * time-out (Radio Setup -> TX -> Timeout in AetherSDR). The knob had a time-out
+ * timer of its own; it duplicated the radio's and is gone.
  *
  * The ladder matters more than the commands. AetherSDR calls abortTciPtt() on
  * client disconnect (TciServer.cpp:975), so DESTROYING OUR OWN SOCKET IS A MORE
@@ -27,14 +28,16 @@
  * and it waits on a radio that is in no hurry. Anything tighter fires a
  * spurious fault on essentially every key. */
 #define PTT_CONFIRM_MS      1500u
-#define PTT_TOT_DEFAULT_MS 120000u
-#define PTT_TOT_MIN_MS      30000u
-#define PTT_TOT_MAX_MS     600000u
-#define PTT_TOT_WARN_MS     10000u   /* haptic warning before expiry      */
 #define PTT_KEYED_NAG_MS    10000u   /* "still transmitting" reminder     */
 
-/* Teardown ladder deadlines. */
-#define PTT_RUNG1_MS  600u   /* trx:false; on the existing socket */
+/* Teardown ladder deadlines. Rung 1 is how long an unkey may take to be
+ * confirmed before the socket is torn down, and it was 600 ms. Through
+ * SmartLink the confirmation is a round trip to a radio across the internet:
+ * 200-240 ms usually, but 629 ms, 1.2 s and more than 1.5 s were measured
+ * while the link was congested. Each overrun tore the socket down after a
+ * perfectly good over, although AetherSDR had passed the unkey to the radio
+ * at once; tearing down only helps if it had not. */
+#define PTT_RUNG1_MS 3000u   /* trx:false; on the existing socket */
 #define PTT_RUNG2_MS  500u   /* websocket close(1001)             */
 #define PTT_RUNG3_MS 1000u   /* destroy -> FIN/RST                */
 
@@ -48,7 +51,6 @@ typedef enum {
 typedef enum {
     PTT_AB_NONE = 0,
     PTT_AB_OPERATOR,
-    PTT_AB_TOT,
     PTT_AB_PONG_STALE,
     PTT_AB_LINK_DOWN,
     PTT_AB_TOUCH_FAULT,
@@ -72,12 +74,11 @@ typedef enum {
 #define PERMIT_TX_ENABLE     (1u << 2)
 #define PERMIT_NO_OVERLAY    (1u << 3)
 #define PERMIT_NO_FAULT      (1u << 4)
-#define PERMIT_TOT_CLEAR     (1u << 5)
-#define PERMIT_PONG_FRESH    (1u << 6)
-#define PERMIT_NO_RECONCILE  (1u << 7)
-#define PERMIT_BAND          (1u << 8)   /* v1: pinned set */
-#define PERMIT_MODE          (1u << 9)   /* v1: pinned set */
-#define PERMIT_ALL           0x3FFu
+#define PERMIT_PONG_FRESH    (1u << 5)
+#define PERMIT_NO_RECONCILE  (1u << 6)
+#define PERMIT_BAND          (1u << 7)   /* v1: pinned set */
+#define PERMIT_MODE          (1u << 8)   /* v1: pinned set */
+#define PERMIT_ALL           0x1FFu
 
 typedef struct {
     bool     send_key;
@@ -88,6 +89,8 @@ typedef struct {
     uint8_t  haptic;            /* DRV2605 ROM effect id, 0 = none */
     uint8_t  haptic_prio;
     bool     refused;           /* surface "PTT REFUSED" */
+    uint32_t missing;           /* ...for want of these PERMIT_* bits; 0 when
+                                   the server refused or never confirmed */
     bool     entered_tx;
     bool     left_tx;
 } ptt_out_t;
@@ -97,16 +100,12 @@ typedef struct {
     uint8_t     rung;           /* 0 = not in the ladder */
     ptt_abort_t reason;
     uint32_t    t_state_ms;     /* when the current state was entered */
-    uint32_t    t_key_ms;       /* when TX was confirmed              */
     uint32_t    t_rung_ms;
     uint32_t    t_last_nag_ms;
-    uint32_t    tot_ms;
-    bool        tot_latched;    /* needs a fresh press to re-arm      */
-    bool        tot_warned;
     uint32_t    refusals;
 } ptt_fsm_t;
 
-void ptt_fsm_init(ptt_fsm_t *f, uint32_t tot_ms);
+void ptt_fsm_init(ptt_fsm_t *f);
 
 /* Drive the machine. `permit` is ignored for every event except PTT_EV_TAP_KEY.
  * `out` is always fully initialised. */
@@ -121,7 +120,6 @@ void ptt_fsm_abort(ptt_fsm_t *f, ptt_abort_t reason, uint32_t now_ms,
                    ptt_out_t *out);
 
 bool ptt_is_tx(const ptt_fsm_t *f);
-uint32_t ptt_tot_remaining_ms(const ptt_fsm_t *f, uint32_t now_ms);
 const char *ptt_state_name(ptt_state_t s);
 const char *ptt_abort_name(ptt_abort_t r);
 

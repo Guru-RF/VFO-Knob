@@ -10,7 +10,7 @@ static void test_normal_cycle(void)
 {
     CASE("key and unkey");
     ptt_fsm_t f; ptt_out_t o;
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
 
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 1000, PERMIT_ALL, &o);
     CHECK(o.send_key);
@@ -39,7 +39,7 @@ static void test_refusals(void)
 {
     CASE("refused by the server");
     ptt_fsm_t f; ptt_out_t o;
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
 
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 1000, PERMIT_ALL, &o);
     /* trx:false while REQ_ON is a refusal -- and it is the ONLY signal the
@@ -49,9 +49,10 @@ static void test_refusals(void)
     CHECK(o.refused);
     CHECK_EQ(o.haptic, 12);
     CHECK_EQ(f.refusals, 1);
+    CHECK_EQ(o.missing, 0);              /* the server's no, not ours */
 
     CASE("never confirmed");
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 1000, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_TICK, 1000 + PTT_CONFIRM_MS - 1, PERMIT_ALL, &o);
     CHECK_EQ(f.state, PTT_REQ_ON);       /* must not fire early: the server's
@@ -61,49 +62,28 @@ static void test_refusals(void)
     CHECK(o.refused);
 
     CASE("blocked by permits");
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 1000, PERMIT_ALL & ~PERMIT_LINK, &o);
     CHECK(!o.send_key);
     CHECK(o.refused);
+    CHECK_EQ(o.missing, PERMIT_LINK);    /* says what was not ready */
     CHECK_EQ(f.state, PTT_IDLE);
 }
 
-static void test_tot(void)
+static void test_no_timeout(void)
 {
-    CASE("time-out timer");
+    /* The transmit time-out is the radio's (Radio Setup -> TX -> Timeout in
+     * AetherSDR). The knob no longer keeps one of its own. */
+    CASE("a long over is not cut short");
     ptt_fsm_t f; ptt_out_t o;
-    ptt_fsm_init(&f, 30000);             /* clamped minimum */
-
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 100, PERMIT_ALL, &o);
-
-    /* Warning before expiry. */
-    ptt_fsm_event(&f, PTT_EV_TICK, 100 + 30000 - PTT_TOT_WARN_MS, PERMIT_ALL, &o);
-    CHECK(f.tot_warned);
+    for (uint32_t t = 100; t <= 100 + 30u * 60 * 1000; t += 5000) {
+        ptt_fsm_event(&f, PTT_EV_TICK, t, PERMIT_ALL, &o);
+        CHECK(!o.send_unkey);
+    }
     CHECK_EQ(f.state, PTT_ON);
-
-    /* Expiry enters the ladder and latches. */
-    ptt_fsm_event(&f, PTT_EV_TICK, 100 + 30000, PERMIT_ALL, &o);
-    CHECK_EQ(f.state, PTT_RELEASING);
-    CHECK_EQ(f.reason, PTT_AB_TOT);
-    CHECK(f.tot_latched);
-    ptt_fsm_event(&f, PTT_EV_CONFIRM_FALSE, 100 + 30100, PERMIT_ALL, &o);
-    CHECK_EQ(f.state, PTT_IDLE);
-
-    /* With toggle there is no release to re-arm on, so the latch consumes the
-     * next tap. A resting finger or a reflex double-tap cannot put you
-     * straight back on the air. */
-    ptt_fsm_event(&f, PTT_EV_TAP_KEY, 100 + 30200, PERMIT_ALL, &o);
-    CHECK(!o.send_key);
-    CHECK(o.refused);
-    ptt_fsm_event(&f, PTT_EV_TAP_KEY, 100 + 30400, PERMIT_ALL, &o);
-    CHECK(o.send_key);                   /* a second, deliberate tap works */
-
-    CASE("tot remaining");
-    ptt_fsm_init(&f, 60000);
-    ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
-    ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
-    CHECK_EQ(ptt_tot_remaining_ms(&f, 20000), 40000);
 }
 
 static void test_keyed_nag(void)
@@ -111,7 +91,7 @@ static void test_keyed_nag(void)
     /* Toggle-specific: nothing else tells the operator they are still on. */
     CASE("still-keyed reminder");
     ptt_fsm_t f; ptt_out_t o;
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
 
@@ -126,7 +106,7 @@ static void test_ladder(void)
 {
     CASE("pong stale skips rung 1");
     ptt_fsm_t f; ptt_out_t o;
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
 
@@ -138,7 +118,7 @@ static void test_ladder(void)
     CHECK_EQ(f.rung, 2);
 
     CASE("link down goes straight to destroy");
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
     ptt_fsm_abort(&f, PTT_AB_LINK_DOWN, 1000, &o);
@@ -146,7 +126,7 @@ static void test_ladder(void)
     CHECK_EQ(f.rung, 3);
 
     CASE("ladder escalates to reboot");
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_TAP_UNKEY, 1000, PERMIT_ALL, &o);
@@ -165,13 +145,27 @@ static void test_ladder(void)
     CHECK(o.restart);
     /* Rebooting to unkey a transmitter is drastic and correct: it releases the
      * socket at the stack level and we come back with PTT not permitted. */
+
+    CASE("a slow unkey confirmation is not a fault");
+    /* 1226 ms, measured through a congested SmartLink. Rung 1 used to give
+     * up at 600. */
+    ptt_fsm_init(&f);
+    ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
+    ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
+    ptt_fsm_event(&f, PTT_EV_TAP_UNKEY, 1000, PERMIT_ALL, &o);
+    ptt_fsm_event(&f, PTT_EV_TICK, 1000 + 1226, PERMIT_ALL, &o);
+    CHECK(!o.close_socket);
+    CHECK_EQ(f.rung, 1);
+    ptt_fsm_event(&f, PTT_EV_CONFIRM_FALSE, 1000 + 1226, PERMIT_ALL, &o);
+    CHECK_EQ(f.state, PTT_IDLE);
+    CHECK(o.left_tx);
 }
 
 static void test_remote_and_idle(void)
 {
     CASE("server unkeys us unasked");
     ptt_fsm_t f; ptt_out_t o;
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_FALSE, 2000, PERMIT_ALL, &o);
@@ -180,7 +174,7 @@ static void test_remote_and_idle(void)
     CHECK(o.left_tx);
 
     CASE("trx:true while idle is not ours");
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 1000, PERMIT_ALL, &o);
     CHECK_EQ(f.state, PTT_IDLE);         /* caller raises the alarm; we must
                                             not try to unkey someone else */
@@ -192,7 +186,7 @@ static void test_remote_and_idle(void)
     CHECK_EQ(f.state, PTT_IDLE);
 
     CASE("cancel a pending key");
-    ptt_fsm_init(&f, PTT_TOT_DEFAULT_MS);
+    ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_TAP_UNKEY, 200, PERMIT_ALL, &o);
     CHECK_EQ(f.state, PTT_RELEASING);
@@ -202,7 +196,7 @@ static void test_remote_and_idle(void)
 T_MAIN({
     test_normal_cycle();
     test_refusals();
-    test_tot();
+    test_no_timeout();
     test_keyed_nag();
     test_ladder();
     test_remote_and_idle();

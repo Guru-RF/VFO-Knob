@@ -94,6 +94,11 @@ esp_err_t audio_out_init(void)
      * 30 ms of buffering, comfortably more than the scheduler needs. */
     cc.dma_desc_num  = 4;
     cc.dma_frame_num = 180;
+    /* Zero each DMA buffer once it has been played. Without this the DMA
+     * keeps cycling through whatever it last held whenever the stream stops
+     * -- a network stall, or the radio going quiet -- and the knob loops the
+     * last 30 ms of audio until data returns. */
+    cc.auto_clear    = true;
     ESP_RETURN_ON_ERROR(i2s_new_channel(&cc, &s_tx, NULL), TAG, "chan");
 
     i2s_std_config_t sc = {

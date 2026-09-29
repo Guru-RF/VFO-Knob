@@ -1,6 +1,7 @@
 #include "audio_in.h"
 #include "board_pins.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "driver/i2s_pdm.h"
@@ -18,10 +19,28 @@ static const char *TAG = "mic";
  * hole in the transmitted audio. */
 #define MIC_RING_BYTES (16 * 1024)
 #define MIC_READ_SAMPLES 512
+/* The PDM element is quiet: speech close to the knob peaked at 1-5% of full
+ * scale, and the S3 has no PDM gain stage of its own. This fixed boost sets
+ * where the operator's 0-200% sits. At 8x, 200% only reached -20 dB on
+ * AetherSDR's mic Level gauge; at 32x it barely reached 0 with AetherSDR's TCI
+ * TX slider at 100% (at its 50% default the radio sees the knob's full scale
+ * as -6 dBFS). So 64x: 100% is where 200% was, and 200% is the most there is
+ * -- peaks at the limiter, which is what MIC_KNEE is for. */
+#define MIC_PREGAIN 64.0f
+/* Above this the level is rounded off rather than clipped: y = k + (1-k) *
+ * u/(1+u), which leaves the slope continuous at the knee and never quite
+ * reaches full scale. -3 dBFS. At 200% loud syllables get here; hard clipping
+ * there would be harsh on the air. */
+#define MIC_KNEE (0.7f * 32767.0f)
+/* One-pole DC blocker, corner ~19 Hz at 24 kHz. Boosting the element's DC
+ * offset along with the speech would spend headroom on nothing. */
+#define MIC_DC_POLE 0.995f
 
 static i2s_chan_handle_t  s_rx;
 static RingbufHandle_t    s_ring;
 static volatile bool      s_active;
+static volatile bool      s_priming;    /* start of an over: build a cushion */
+static volatile bool      s_dc_reset;
 static volatile uint8_t   s_gain = 100;
 static audio_in_stats_t   s_stats;
 static TaskHandle_t       s_task;
@@ -41,6 +60,8 @@ void audio_in_set_active(bool on)
         void *p;
         while ((p = xRingbufferReceiveUpTo(s_ring, &n, 0, MIC_RING_BYTES)))
             vRingbufferReturnItem(s_ring, p);
+        s_priming  = true;
+        s_dc_reset = true;
         i2s_channel_enable(s_rx);
         ESP_LOGI(TAG, "capture ON");
     } else {
@@ -53,6 +74,7 @@ static void mic_task(void *arg)
 {
     (void)arg;
     static int16_t buf[MIC_READ_SAMPLES];
+    float x1 = 0.0f, y1 = 0.0f;              /* DC blocker state */
 
     for (;;) {
         if (!s_active) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
@@ -63,14 +85,26 @@ static void mic_task(void *arg)
             continue;
 
         size_t count = got / sizeof(int16_t);
-        if (s_gain != 100) {
-            int32_t g = s_gain;
-            for (size_t i = 0; i < count; i++) {
-                int32_t v = ((int32_t)buf[i] * g) / 100;
-                if (v >  32767) v =  32767;
-                if (v < -32768) v = -32768;
-                buf[i] = (int16_t)v;
+        if (s_dc_reset) {
+            /* Start from the first sample, so the offset is not a step. */
+            s_dc_reset = false;
+            x1 = buf[0];
+            y1 = 0.0f;
+        }
+        const float g = MIC_PREGAIN * (float)s_gain / 100.0f;
+        for (size_t i = 0; i < count; i++) {
+            const float x = buf[i];
+            const float y = x - x1 + MIC_DC_POLE * y1;
+            x1 = x;
+            y1 = y;
+            float v = y * g;
+            const float a = fabsf(v);
+            if (a > MIC_KNEE) {
+                const float u   = (a - MIC_KNEE) / (32767.0f - MIC_KNEE);
+                const float lim = MIC_KNEE + (32767.0f - MIC_KNEE) * u / (1.0f + u);
+                v = v < 0.0f ? -lim : lim;
             }
+            buf[i] = (int16_t)v;
         }
         /* Peak, for a mic-level indicator and for catching a dead microphone
          * before an operator discovers it mid-QSO. */
@@ -119,26 +153,37 @@ esp_err_t audio_in_init(void)
     return ESP_OK;
 }
 
-bool audio_in_take(float *out, size_t out_floats)
+bool audio_in_take(int16_t *out, size_t samples)
 {
-    if (!out || out_floats < 2) return false;
-    size_t frames = out_floats / 2;
-    size_t want   = frames * sizeof(int16_t);
+    if (!out || !samples) return false;
+    const size_t want = samples * sizeof(int16_t);
 
-    size_t got = 0;
-    int16_t *p = (int16_t *)xRingbufferReceiveUpTo(s_ring, &got, 0, want);
-    if (!p) { s_stats.starved++; return false; }
-
-    size_t have = got / sizeof(int16_t);
-    for (size_t i = 0; i < frames; i++) {
-        /* Duplicated stereo: AetherSDR detects this layout explicitly because
-         * it is what WSJT-X produces, so it is the best-tested route through
-         * its canonicalisation. Short reads pad with silence. */
-        float v = (i < have) ? (float)p[i] / 32768.0f : 0.0f;
-        out[i * 2]     = v;
-        out[i * 2 + 1] = v;
+    /* Hold back at the start of an over until two requests' worth is
+     * buffered. The microphone delivers in DMA-sized steps and the requests
+     * arrive over a network, so without a cushion the two clocks meet at the
+     * wrong moment every few frames and each meeting is a hole in the audio.
+     * Costs 43 ms of latency, once. */
+    if (s_priming) {
+        const size_t buffered = MIC_RING_BYTES - xRingbufferGetCurFreeSize(s_ring);
+        if (buffered < 2 * want) return false;
+        s_priming = false;
     }
-    vRingbufferReturnItem(s_ring, (void *)p);
-    if (have < frames) s_stats.starved++;
-    return true;
+
+    /* A byte ring hands back contiguous runs, so a read across the wrap comes
+     * back short; the second read collects the rest. Each run is returned
+     * before the next is taken, as a byte ring requires. */
+    size_t have = 0;
+    for (int pass = 0; pass < 2 && have < want; pass++) {
+        size_t   got = 0;
+        uint8_t *p   = xRingbufferReceiveUpTo(s_ring, &got, 0, want - have);
+        if (!p) break;
+        memcpy((uint8_t *)out + have, p, got);
+        vRingbufferReturnItem(s_ring, p);
+        have += got;
+    }
+    if (have < want) {
+        memset((uint8_t *)out + have, 0, want - have);
+        s_stats.starved++;
+    }
+    return have > 0;
 }

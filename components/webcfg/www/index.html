@@ -64,10 +64,6 @@ button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
-  <label>Transmit time-out (seconds, 30&ndash;600)</label>
-  <input id="tot" inputmode="numeric">
-  <p class="note">The time-out is the main guard against a toggle-PTT left keyed.
-     Applies on the next boot.</p>
 </section>
 
 <section>
@@ -165,7 +161,7 @@ async function refresh(){
 async function load(){
   const c=await (await fetch('/api/config')).json();
   $('host').value=c.host; $('port').value=c.port; $('ssid').value=c.ssid;
-  $('vol').value=c.vol;   $('mic').value=c.mic;   $('tot').value=c.tot;
+  $('vol').value=c.vol;   $('mic').value=c.mic;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
   $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||'';
   /* The address this browser reaches the knob from. Over the cable that is the
@@ -181,11 +177,11 @@ $('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
-  for(const k of ['host','port','ssid','vol','mic','tot','user','otah','dim','blank']) b.append(k,$(k).value);
+  for(const k of ['host','port','ssid','vol','mic','user','otah','dim','blank']) b.append(k,$(k).value);
   if($('pass').value) b.append('pass',$('pass').value);
   if($('webpass').value) b.append('webpass',$('webpass').value);
   const r=await fetch('/api/config',{method:'POST',body:b});
-  $('msg').textContent = r.ok ? 'Saved. Network and time-out changes apply on reboot.'
+  $('msg').textContent = r.ok ? 'Saved. Network changes apply on reboot.'
                               : 'Save failed: '+await r.text();
   $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
   if(r.ok && $('webpass').value){

@@ -32,7 +32,6 @@ typedef struct {
     bool     tx_remote;  /* ...and it was not us, so we cannot stop it */
     bool     link_ok;
     bool     slice_locked;
-    uint32_t tot_remain_ms;
     bool     may_key;
     /* Transient banner: AetherSDR's refusal reason, or ours. NULL for none. */
     const char *warn;

@@ -13,7 +13,7 @@
 #include "esp_lvgl_port.h"
 
 /* Sampled from the logo and from rfguru.app. */
-#define RFG_GOLD   lv_color_hex(0xE9B61D)
+#define RFG_GOLD   lv_color_hex(RFG_GOLD_HEX)
 #define RFG_GOLD_D lv_color_hex(0xD59417)
 #define RFG_INK    lv_color_hex(0x0C0E13)
 #define RFG_TEXT   lv_color_hex(0xECC34A)

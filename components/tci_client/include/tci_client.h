@@ -39,7 +39,6 @@ typedef struct {
     uint8_t    ptt_state;      /* ptt_state_t */
     uint8_t    ptt_rung;       /* teardown ladder position, 0 = not in it */
     uint8_t    ptt_reason;     /* ptt_abort_t */
-    uint32_t   tot_remain_ms;
     uint32_t   permit;         /* PERMIT_* bitmask; all bits = may key */
     uint32_t   ptt_refusals;
     int32_t    pong_age_ms;
@@ -63,6 +62,9 @@ typedef struct {
      * when something feels wrong but nothing is obviously broken. */
     uint32_t   connects, closes, reconciles, rejects;
     uint32_t   unknown_cmds, sends, echoes;
+    /* TX audio: chrono requests, frames the socket took, frames it refused,
+     * frames skipped because it had no room, and the slowest single send. */
+    uint32_t   chronos, txa_sent, txa_failed, txa_skipped, txa_max_us;
     char       last_close[48];
 } tci_status_t;
 
@@ -93,9 +95,6 @@ void tci_ptt_toggle(void);
 
 /* Force an abort with a specific reason, for testing the teardown ladder. */
 void tci_ptt_force_abort(uint8_t reason);
-
-/* Configure the time-out timer, clamped to the FSM's limits. */
-void tci_set_tot_ms(uint32_t ms);
 
 /* --- setters for the on-screen editors ---------------------------------
  * All are fire-and-forget. modulation and rx_filter_band are confirmed by the

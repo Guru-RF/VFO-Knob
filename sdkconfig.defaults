@@ -45,6 +45,11 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # --- scheduling -----------------------------------------------------------
+# app_main builds the whole LVGL face on the main task, and the face keeps
+# growing. The stack is freed when app_main returns, before networking starts,
+# so the headroom costs nothing later. The boot log says how much was used
+# ("main stack after ui").
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 # A 20 ms touch poll and a 5 ms encoder backstop are both meaningless at the
 # default 10 ms tick.
 CONFIG_FREERTOS_HZ=1000
@@ -53,6 +58,10 @@ CONFIG_FREERTOS_HZ=1000
 # core in IDF 5.5; it follows the lwIP affinity in practice.)
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0=y
+# Per-core idle time for the status log. The task watchdog once reset the knob
+# mid-over because core 1 never went idle; this shows how close that is. It
+# costs a timer read per context switch.
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 
 # --- watchdogs ------------------------------------------------------------
 # Panic deliberately: a reboot drops the TCI socket, and AetherSDR unkeys the

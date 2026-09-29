@@ -49,6 +49,8 @@ LV_FONT_DECLARE(font_mic_14);
  * while the finer TX details keep the theme's amber. */
 #define C_TX_RED    lv_color_hex(0xE01010)
 #define C_GREEN     lv_color_hex(0x4DD87A)   /* accent.success */
+/* Not from the theme: the power bar wears the RF.Guru logo's gold. */
+#define C_BRAND     lv_color_hex(RFG_GOLD_HEX)
 
 /* The theme's own meter.bar gradient runs green -> amber -> red but only
  * reaches red at 95% of full scale. On an S-meter that is roughly S9+53, so a
@@ -100,9 +102,128 @@ static uint32_t      s_ask_since;
 static volatile int  s_ask_answer;       /* 1 yes, -1 no, 0 none */
 static volatile bool s_ask_knob;         /* the knob turned while asking */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
-static lv_obj_t *s_mic_arc, *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
-static float s_mic_peak = -60.0f;
-static float s_mic_floor = -100.0f;
+static lv_obj_t *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
+
+/* Mic level on AetherSDR's own scale -- the P/CW applet's Level gauge: -40 to
+ * +10 dB, amber from -10 and red from 0 -- so the knob and the desktop read
+ * alike. It was auto-ranging, which always looked nearly full and so could
+ * not say whether the drive was right. */
+#define MIC_DB_MIN (-40.0f)
+#define MIC_DB_MAX  (10.0f)
+#define MIC_ZONES 3
+static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
+    { -40.0f, -10.0f, 0x4DD87A },   /* green */
+    { -10.0f,   0.0f, 0xFFB84D },   /* amber */
+    {   0.0f,  10.0f, 0xFF4D4D },   /* red   */
+};
+static lv_obj_t *s_mic_zone[MIC_ZONES];
+static float mic_frac(float db) { return (db - MIC_DB_MIN) / (MIC_DB_MAX - MIC_DB_MIN); }
+
+/* Peak hold with decay for the transmit meters. In SSB the level is speech:
+ * it jumps between syllables and pauses, and a meter that follows it sample by
+ * sample is a flicker nobody can read. Hold each peak for a second, then let
+ * it fall at a steady rate -- as the S-meter already does. */
+#define PEAK_HOLD_MS 1000
+typedef struct { float v; uint32_t t_peak, t_last; } peak_t;
+static peak_t s_mic_pk, s_pwr_pk, s_swr_pk;
+static peak_t s_sig_pk = { .v = -127.0f };       /* the S-meter, from the floor */
+
+static float peak_hold(peak_t *p, float x, float fall_per_s)
+{
+    const uint32_t now = lv_tick_get();
+    const float    dt  = (float)(now - p->t_last) / 1000.0f;
+    p->t_last = now;
+    if (x >= p->v) {
+        p->v      = x;
+        p->t_peak = now;
+    } else if (now - p->t_peak > PEAK_HOLD_MS) {
+        p->v -= fall_per_s * dt;
+        if (p->v < x) p->v = x;
+    }
+    return p->v;
+}
+
+static void peak_reset(peak_t *p, float v)
+{
+    p->v = v;
+    p->t_peak = p->t_last = lv_tick_get();
+}
+
+/* The bars themselves follow the signal: up at once, most of the way back
+ * down within a third of a second. The peak is shown separately, below. */
+static float release(float *d, float x)
+{
+    if (x > *d) *d = x;
+    else        *d += (x - *d) * 0.35f;
+    return *d;
+}
+
+/* Peak LEDs: one block per meter that hangs at the recent peak while the bar
+ * underneath goes down, then falls away to meet it, as on a VU meter.
+ *
+ * It moves only by changing its span. An arc invalidates just the span it
+ * leaves and the one it enters, whereas a rotation or a style write redraws
+ * the whole screen-sized object -- the mistake that once starved a core. So
+ * its colour comes from one arc per zone, with all but the lit one collapsed
+ * to nothing: an arc with no span draws nothing at all. */
+#define LED_DEG 3
+#define LED_MAX 8
+typedef struct {
+    lv_obj_t *arc[LED_MAX];
+    int       n, lit, at;     /* zones; the lit one (-1: none); its start angle */
+    int       span;           /* the meter's span, degrees */
+    bool      reverse;        /* fills from the far end (the mic ring) */
+} peak_led_t;
+static peak_led_t s_sig_led, s_swr_led, s_pwr_led, s_mic_led;
+
+static void led_build(peak_led_t *l, int rot, int span, int r, int width,
+                      bool reverse, const uint32_t *rgb, int n)
+{
+    l->n = n; l->lit = -1; l->at = 0; l->span = span; l->reverse = reverse;
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *a = lv_arc_create(s_scr);
+        lv_obj_set_size(a, r * 2, r * 2);
+        lv_obj_center(a);
+        lv_arc_set_rotation(a, rot);
+        lv_arc_set_bg_angles(a, 0, 0);
+        lv_obj_remove_style(a, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(a, width, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(a, lv_color_hex(rgb[i]), LV_PART_MAIN);
+        lv_obj_set_style_arc_rounded(a, false, LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(a, LV_OPA_TRANSP, LV_PART_INDICATOR);
+        l->arc[i] = a;
+    }
+}
+
+/* Light the block at fraction f of the scale, in zone z; f <= 0 puts it out. */
+static void led_set(peak_led_t *l, float f, int z)
+{
+    if (!l->n) return;                      /* never built */
+    int at = 0;
+    if (f > 0.0f && z >= 0 && z < l->n) {
+        if (f > 1.0f) f = 1.0f;
+        const int pos = (int)((l->reverse ? 1.0f - f : f) * l->span + 0.5f);
+        at = l->reverse ? pos : pos - LED_DEG;
+        if (at < 0) at = 0;
+        if (at > l->span - LED_DEG) at = l->span - LED_DEG;
+    } else {
+        z = -1;
+    }
+    if (z == l->lit && at == l->at) return;
+    if (l->lit >= 0 && l->lit != z) lv_arc_set_bg_angles(l->arc[l->lit], 0, 0);
+    if (z >= 0) lv_arc_set_bg_angles(l->arc[z], at, at + LED_DEG);
+    l->lit = z;
+    l->at  = at;
+}
+
+static void led_show(peak_led_t *l, bool on)
+{
+    for (int i = 0; i < l->n; i++) {
+        if (on) lv_obj_remove_flag(l->arc[i], LV_OBJ_FLAG_HIDDEN);
+        else    lv_obj_add_flag(l->arc[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
 static float s_pwr_peak;
 static int   s_pwr_range = -1;
 
@@ -246,6 +367,10 @@ static int   s_dig_x[N_DIG];
 static int   s_active_dig = 5;
 static int32_t s_step_req;
 static bool  s_ptt_tap, s_was_tx;
+/* A PTT press counts only once the finger has been up this long (touch_cb).
+ * A flicker is a few tens of ms; a deliberate second tap is well over this. */
+#define PTT_REARM_MS 150
+static uint32_t s_released_at;       /* lv_tick of the last release */
 static float s_meter_disp = -127.0f;
 static lv_display_t *s_disp;
 /* The panel is mounted upside down relative to the USB-C port: with the cable
@@ -535,6 +660,12 @@ static int nearest_digit(int x)
  * value. The touch callback runs on the LVGL task and cannot ask the client. */
 static ui_state_t s_last;
 
+static void release_cb(lv_event_t *e)
+{
+    (void)e;
+    s_released_at = lv_tick_get();
+}
+
 static void touch_cb(lv_event_t *e)
 {
     (void)e;
@@ -591,7 +722,21 @@ static void touch_cb(lv_event_t *e)
      * the meter tap still works, since the addresses are what you want. */
     if (!s_last.link_ok) return;
 
-    if (p.y >= PTT_TOP) { s_ptt_tap = true; return; }   /* the whole slab */
+    if (p.y >= PTT_TOP) {                               /* the whole slab */
+        /* One tap, one toggle. A light touch can flicker -- press, release,
+         * press within a single tap -- and on a toggle each extra press
+         * undoes the one before: keyed and unkeyed in one tap, which reads as
+         * "PTT needs a hard press". So a press counts only once the finger
+         * has been off the glass for a moment. Nothing else on the face
+         * toggles, so nothing else needs this. */
+        const uint32_t up = lv_tick_elaps(s_released_at);
+        if (up < PTT_REARM_MS) {
+            ESP_LOGI(TAG, "PTT press ignored: finger up only %u ms", (unsigned)up);
+            return;
+        }
+        s_ptt_tap = true;
+        return;
+    }
 
     /* band | mode | filter */
     if (p.y >= 104 && p.y < 140) {
@@ -880,29 +1025,39 @@ static void build(void)
     lv_obj_set_style_arc_rounded(s_pwr_arc, false, LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(s_pwr_arc, false, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(s_pwr_arc, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_pwr_arc, C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_pwr_arc, C_BRAND, LV_PART_INDICATOR);
     lv_obj_add_flag(s_pwr_arc, LV_OBJ_FLAG_HIDDEN);
 
     /* Mic level: a thin inner ring. Demoted deliberately -- it is a nice-to-
-     * have next to SWR and power, and it should not compete with them. */
-    s_mic_arc = lv_arc_create(s_scr);
-    lv_obj_set_size(s_mic_arc, (ARC_R0 - 22) * 2, (ARC_R0 - 22) * 2);
-    lv_obj_center(s_mic_arc);
-    lv_arc_set_rotation(s_mic_arc, AUD_ROT);
-    lv_arc_set_bg_angles(s_mic_arc, 0, AUD_SPAN);
-    lv_arc_set_range(s_mic_arc, 0, 1000);
-    lv_arc_set_value(s_mic_arc, 0);
-    lv_obj_remove_style(s_mic_arc, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_mic_arc, C_SUBTLE, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_mic_arc, 5, LV_PART_INDICATOR);
-    /* Fills from the bottom end upward, opposite to the power bar above it.
+     * have next to SWR and power, and it should not compete with them. Built
+     * like the SWR meter, from arcs laid end to end that fill independently,
+     * so the bar runs green, then amber, then red.
+     *
+     * Fills from the bottom end upward, opposite to the power bar above it.
      * Two bars growing the same way on the same side invite being read as one
-     * quantity. */
-    lv_arc_set_mode(s_mic_arc, LV_ARC_MODE_REVERSE);
-    lv_obj_set_style_arc_color(s_mic_arc, C_ACCENT, LV_PART_INDICATOR);
-    lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
+     * quantity. -40 dB is the bottom end, +10 dB the top. */
+    for (size_t z = 0; z < MIC_ZONES; z++) {
+        lv_obj_t *b = lv_arc_create(s_scr);
+        lv_obj_set_size(b, (ARC_R0 - 22) * 2, (ARC_R0 - 22) * 2);
+        lv_obj_center(b);
+        int a0 = (int)((1.0f - mic_frac(MIC_ZONE[z].to))   * AUD_SPAN + 0.5f);
+        int a1 = (int)((1.0f - mic_frac(MIC_ZONE[z].from)) * AUD_SPAN + 0.5f);
+        lv_arc_set_rotation(b, AUD_ROT + a0);
+        lv_arc_set_bg_angles(b, 0, a1 - a0);
+        lv_arc_set_range(b, 0, 1000);
+        lv_arc_set_value(b, 0);
+        lv_arc_set_mode(b, LV_ARC_MODE_REVERSE);
+        lv_obj_remove_style(b, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(b, 5, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(b, C_SUBTLE, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(b, 5, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(b, lv_color_hex(MIC_ZONE[z].rgb), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(b, false, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(b, false, LV_PART_MAIN);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+        s_mic_zone[z] = b;
+    }
 
     /* Three arcs laid end to end, each filling independently. The bar is
      * therefore green up to 2.0, continues amber to 2.5 and red beyond --
@@ -930,6 +1085,23 @@ static void build(void)
         s_swr_zone[z] = b;
     }
 
+    /* Peak LEDs: above the bars they mark, below the notches that cut every
+     * band into blocks (both tick groups are lifted after this). */
+    {
+        uint32_t rx[RX_ZONES], mic[MIC_ZONES], swr[SWR_ZONES];
+        for (size_t z = 0; z < RX_ZONES; z++)  rx[z]  = RXZONES[z].rgb;
+        for (size_t z = 0; z < MIC_ZONES; z++) mic[z] = MIC_ZONE[z].rgb;
+        for (size_t z = 0; z < SWR_ZONES; z++) swr[z] = ZONES[z].rgb;
+        static const uint32_t pwr[1] = { RFG_GOLD_HEX };        /* the bar's */
+        led_build(&s_sig_led, ARC_ROT, ARC_SPAN, ARC_R0, 12, false, rx, RX_ZONES);
+        led_build(&s_swr_led, SWR_ROT, SWR_SPAN, ARC_R0, 12, false, swr, SWR_ZONES);
+        led_build(&s_pwr_led, AUD_ROT, AUD_SPAN, ARC_R0, 12, false, pwr, 1);
+        led_build(&s_mic_led, AUD_ROT, AUD_SPAN, ARC_R0 - 22, 5, true, mic, MIC_ZONES);
+        led_show(&s_swr_led, false);
+        led_show(&s_pwr_led, false);
+        led_show(&s_mic_led, false);
+    }
+
     /* Notch the SWR band at each printed mark, exactly as the receive meter is
      * notched. 1.0 and 3.0 are the ends of the arc and are left alone.
      *
@@ -945,6 +1117,7 @@ static void build(void)
         }
     }
     add_pwr_notches();
+    lv_obj_move_foreground(s_rx_ticks);
     lv_obj_move_foreground(s_tx_ticks);
 
     /* Signal, as a number as well as an arc: an arc shows trend, a number
@@ -1141,6 +1314,7 @@ static void build(void)
     lv_label_set_text(s_ask_hint, "");
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_scr, release_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
 }
 
@@ -1182,7 +1356,14 @@ void ui_ask_knob_moved(void)
 
 esp_err_t ui_init(void)
 {
-    const lvgl_port_cfg_t pc = ESP_LVGL_PORT_INIT_CONFIG();
+    lvgl_port_cfg_t pc = ESP_LVGL_PORT_INIT_CONFIG();
+    /* Core 1, with the rest of the display and input work, as sdkconfig
+     * intends: lwIP is quarantined on core 0. Left to itself LVGL ran on core
+     * 0, beside a WebSocket task that takes 40-60% of it just receiving audio
+     * -- measured at 2-7% idle while transmitting, with core 1 90% idle.
+     * The display's SPI interrupt is on the same core, and has to be: see
+     * PANEL_CORE. */
+    pc.task_affinity = PANEL_CORE;
     ESP_RETURN_ON_ERROR(lvgl_port_init(&pc), TAG, "lvgl port");
 
     lvgl_port_display_cfg_t dc = {
@@ -1231,10 +1412,24 @@ esp_err_t ui_init(void)
     lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
     lvgl_port_unlock();
     const lvgl_port_touch_cfg_t tc = { .disp = disp, .handle = hal_touch_handle() };
-    ESP_RETURN_ON_FALSE(lvgl_port_add_touch(&tc), ESP_FAIL, TAG, "add touch");
+    lv_indev_t *touch = lvgl_port_add_touch(&tc);
+    ESP_RETURN_ON_FALSE(touch, ESP_FAIL, TAG, "add touch");
+    /* LVGL reads once per refresh period (16 ms) by default. A brisk tap can
+     * fall between slower reads, which reads as "press firmly". */
+    lvgl_port_lock(0);
+    lv_timer_set_period(lv_indev_get_read_timer(touch), TOUCH_POLL_MS);
+    lvgl_port_unlock();
 
     lvgl_port_lock(0);
     build();
+    {
+        /* LVGL's objects live in its own fixed pool, not the heap. */
+        lv_mem_monitor_t mm;
+        lv_mem_monitor(&mm);
+        ESP_LOGI(TAG, "LVGL pool %u%% used, %u bytes free, largest %u",
+                 (unsigned)mm.used_pct, (unsigned)mm.free_size,
+                 (unsigned)mm.free_biggest_size);
+    }
     /* Straight after build(), so the splash covers a screen that is already
      * finished rather than one still being assembled. */
     ui_splash_start();
@@ -1256,6 +1451,44 @@ static const char *step_name(int32_t hz)
     case 1000000: return "1 MHz";
     }
     return "-";
+}
+
+/* Which zone a value falls in, for the colour of its peak LED. */
+static int rx_zone_of(float dbm)
+{
+    for (int z = 0; z < RX_ZONES - 1; z++) if (dbm < RXZONES[z].to) return z;
+    return RX_ZONES - 1;
+}
+static int mic_zone_of(float db)
+{
+    for (int z = 0; z < MIC_ZONES - 1; z++) if (db < MIC_ZONE[z].to) return z;
+    return MIC_ZONES - 1;
+}
+static int swr_zone_of(float w)
+{
+    for (int z = 0; z < SWR_ZONES - 1; z++) if (w < ZONES[z].to) return z;
+    return SWR_ZONES - 1;
+}
+static float s_mic_bar, s_pwr_bar, s_swr_bar;       /* the transmit bars */
+
+/* Write only what changed. LVGL invalidates an object on every text or style
+ * write, even one that sets the value it already has, and then redraws
+ * everything underneath -- here, arcs the size of the screen. The power arc's
+ * colour, written every tick, redrew the whole transmit face twenty times a
+ * second. The mic ring's extra arcs made each of those redraws dearer, until
+ * LVGL no longer left the idle task on its core a moment to run, and the task
+ * watchdog reset the knob mid-over. */
+static void set_text(lv_obj_t *o, const char *s)
+{
+    const char *cur = lv_label_get_text(o);
+    if (cur && strcmp(cur, s) == 0) return;
+    lv_label_set_text(o, s);
+}
+
+static void set_text_color(lv_obj_t *o, lv_color_t c)
+{
+    if (lv_color_eq(lv_obj_get_style_text_color(o, LV_PART_MAIN), c)) return;
+    lv_obj_set_style_text_color(o, c, 0);
 }
 
 void ui_update(const ui_state_t *st)
@@ -1303,12 +1536,16 @@ void ui_update(const ui_state_t *st)
         lv_color_t c = (i == s_active_dig) ? C_ACCENT_HI
                      : (i > s_active_dig)  ? C_TEXT2     /* these will roll */
                                            : C_TEXT;
-        lv_obj_set_style_text_color(s_dig[i], st->tx ? C_TX_TEXT : c, 0);
+        set_text_color(s_dig[i], st->tx ? C_TX_TEXT : c);
     }
-    lv_obj_align(s_underline, LV_ALIGN_CENTER,
-                 s_dig_x[s_active_dig] - CX, 204 - CY);
+    static int s_underline_dig = -1;
+    if (s_underline_dig != s_active_dig) {
+        s_underline_dig = s_active_dig;
+        lv_obj_align(s_underline, LV_ALIGN_CENTER,
+                     s_dig_x[s_active_dig] - CX, 204 - CY);
+    }
 
-    lv_label_set_text(s_band, band_of(f));
+    set_text(s_band, band_of(f));
     if (st->mode) {
         char up[8];
         size_t n = strlen(st->mode); if (n > 7) n = 7;
@@ -1317,24 +1554,29 @@ void ui_update(const ui_state_t *st)
             up[i] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
         }
         up[n] = 0;
-        lv_label_set_text(s_mode, up);
+        set_text(s_mode, up);
     }
-    lv_label_set_text_fmt(s_filt, "%ld", (long)(st->filt_hi - st->filt_lo));
-    lv_label_set_text(s_step_lbl, step_name(st->step_hz));
+    char tb[24];
+    snprintf(tb, sizeof tb, "%ld", (long)(st->filt_hi - st->filt_lo));
+    set_text(s_filt, tb);
+    set_text(s_step_lbl, step_name(st->step_hz));
 
     /* RIT is always shown so it is always tappable, but greyed at zero: RIT
      * silently non-zero is a classic way to lose a QSO, so when it IS set it
      * has to stand out. */
     if (st->rit_hz) {
-        lv_label_set_text_fmt(s_rit, "RIT %+ld", (long)st->rit_hz);
-        lv_obj_set_style_text_color(s_rit, C_WARN, 0);
+        snprintf(tb, sizeof tb, "RIT %+ld", (long)st->rit_hz);
+        set_text(s_rit, tb);
+        set_text_color(s_rit, C_WARN);
     } else {
-        lv_label_set_text(s_rit, "RIT 0");
-        lv_obj_set_style_text_color(s_rit, C_DISABLED, 0);
+        set_text(s_rit, "RIT 0");
+        set_text_color(s_rit, C_DISABLED);
     }
 
-    lv_label_set_text_fmt(s_vol, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
-    lv_label_set_text_fmt(s_mic, SYM_MIC " %u", (unsigned)s_micgain);
+    snprintf(tb, sizeof tb, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
+    set_text(s_vol, tb);
+    snprintf(tb, sizeof tb, SYM_MIC " %u", (unsigned)s_micgain);
+    set_text(s_mic, tb);
 
     if (st->warn && st->warn[0] && !s_asking) {
         if (strcmp(lv_label_get_text(s_warn), st->warn) != 0) {
@@ -1345,18 +1587,22 @@ void ui_update(const ui_state_t *st)
             lv_label_set_text(s_warn_net, s_netinfo_text);
             lv_obj_align(s_warn_net, LV_ALIGN_BOTTOM_MID, 0, -8);
         }
-        lv_obj_remove_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_warn_panel);
+        if (lv_obj_has_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_remove_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_warn_panel);
+        }
         /* The address card and the warning would otherwise stack. */
         if (s_netinfo) lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* Attack instantly, decay slowly: a meter that falls as fast as it rises
-     * is unreadable, and the sample rate is only 5 Hz. */
-    if (st->smeter_dbm > s_meter_disp) s_meter_disp = st->smeter_dbm;
-    else s_meter_disp += (st->smeter_dbm - s_meter_disp) * 0.35f;
+    /* The bar follows the signal; the peak LED hangs a second above it and
+     * then falls away at 30 dB/s -- about five S-units a second. The readouts
+     * give the peak: in SSB that is the figure worth reading. */
+    release(&s_meter_disp, st->smeter_dbm);
+    const float sig_pk = peak_hold(&s_sig_pk, s_meter_disp, 30.0f);
+    if (!st->tx) led_set(&s_sig_led, smeter_frac(sig_pk), rx_zone_of(sig_pk));
 
     float frac = smeter_frac(s_meter_disp);
     lv_arc_set_value(s_meter, (int)(frac * 1000));
@@ -1376,35 +1622,38 @@ void ui_update(const ui_state_t *st)
         lv_arc_set_value(s_rx_zone[z], v);
     }
     char sbuf[10];
-    smeter_text(s_meter_disp, sbuf, sizeof sbuf);
+    smeter_text(sig_pk, sbuf, sizeof sbuf);
     if (!st->tx) {
-        lv_label_set_text(s_srd, sbuf);
-        lv_label_set_text_fmt(s_dbm, "%d dBm", (int)s_meter_disp);
-        lv_obj_set_style_text_color(s_dbm, C_LABEL, 0);
+        set_text(s_srd, sbuf);
+        snprintf(tb, sizeof tb, "%d dBm", (int)sig_pk);
+        set_text(s_dbm, tb);
+        set_text_color(s_dbm, C_LABEL);
     }
-    lv_obj_set_style_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT, 0);
+    set_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT);
 
     if (st->tx) {
-        /* MIC: auto-ranging. A fixed span was always wrong for someone --
-         * AetherSDR reports around -95 dBm at rest and the useful top end
-         * depends entirely on the interface and how hard it is driven. Track
-         * the peak, decay it slowly, and show the last 30 dB below it, so the
-         * meter always uses its whole length whatever the levels are. */
-        float mv = st->tx_mic_dbm;
-        if (mv > s_mic_peak)  s_mic_peak  = mv;          /* rise instantly  */
-        else                  s_mic_peak -= 0.10f;       /* ~2 dB/s decay   */
-        if (mv < s_mic_floor) s_mic_floor = mv;          /* fall instantly  */
-        else                  s_mic_floor += 0.03f;      /* ~0.6 dB/s creep */
-        /* Keep a sane minimum window, or a steady tone would swing the meter
-         * end to end on a fraction of a dB. */
-        if (s_mic_peak - s_mic_floor < 12.0f) s_mic_floor = s_mic_peak - 12.0f;
-        float m = (mv - s_mic_floor) / (s_mic_peak - s_mic_floor);
-        if (m < 0) m = 0;
-        if (m > 1) m = 1;
-        lv_arc_set_value(s_mic_arc, (int)(m * 1000));
-        lv_obj_set_style_arc_color(s_mic_arc,
-            m > 0.92f ? C_DANGER : m > 0.7f ? C_WARN : C_GREEN,
-            LV_PART_INDICATOR);
+        /* Each over starts from nothing rather than from the last one's
+         * held peaks. */
+        if (!s_was_tx) {
+            s_mic_bar = MIC_DB_MIN - 60.0f;
+            s_pwr_bar = 0.0f;
+            s_swr_bar = 1.0f;
+            peak_reset(&s_mic_pk, MIC_DB_MIN);
+            peak_reset(&s_pwr_pk, 0.0f);
+            peak_reset(&s_swr_pk, 1.0f);
+        }
+
+        /* MIC: the radio's mic level as AetherSDR reports it -- the value its
+         * Level gauge draws as the bar -- on that gauge's scale. At rest it
+         * sits around -95, off the bottom. Peak LED falls at 20 dB/s. */
+        const float mv     = release(&s_mic_bar, st->tx_mic_dbm);
+        const float mic_pk = peak_hold(&s_mic_pk, mv, 20.0f);
+        led_set(&s_mic_led, mic_frac(mic_pk), mic_zone_of(mic_pk));
+        for (size_t z = 0; z < MIC_ZONES; z++) {
+            float lo = MIC_ZONE[z].from, hi = MIC_ZONE[z].to;
+            float f = (mv <= lo) ? 0.0f : (mv >= hi) ? 1.0f : (mv - lo) / (hi - lo);
+            lv_arc_set_value(s_mic_zone[z], (int)(f * 1000));
+        }
 
         /* POWER: auto-ranged onto a sensible ladder rather than a continuous
          * scale, so the full-scale figure is always a number an operator
@@ -1419,17 +1668,33 @@ void ui_update(const ui_state_t *st)
         }
         pwr_set_range(r);
         float fs = PWR[r].fs;
-        float pf = fs > 0 ? pw / fs : 0.0f;
+        /* The peak LED falls at half the range per second, and the readout
+         * gives the peak: in SSB that is the power of the last words, the
+         * figure that means something. */
+        const float pw_bar  = release(&s_pwr_bar, pw);
+        const float pw_held = peak_hold(&s_pwr_pk, pw_bar, 0.5f * fs);
+        float pf = fs > 0 ? pw_bar / fs : 0.0f;
         if (pf < 0) pf = 0;
         if (pf > 1) pf = 1;
+        /* One colour, the logo's gold. It used to turn amber above 90% of the
+         * range, which beside gold would be no signal at all -- and the range
+         * steps up by itself once the power passes full scale. */
         lv_arc_set_value(s_pwr_arc, (int)(pf * 1000));
-        lv_obj_set_style_arc_color(s_pwr_arc,
-            pf > 0.9f ? C_WARN : C_ACCENT, LV_PART_INDICATOR);
+        const float pk_f = fs > 0 ? pw_held / fs : 0.0f;
+        led_set(&s_pwr_led, pk_f, 0);
 
-        float w = st->tx_swr;
+        /* SWR only counts with real forward power behind it: in a speech
+         * pause the radio's figure is noise, and the peak would latch it. The
+         * bar follows; the LED and the readout hold the peak, falling at 1.0
+         * per second. */
+        const float w_bar = release(&s_swr_bar,
+                                    st->tx_fwd_w >= 1.0f ? st->tx_swr : 1.0f);
+        const float w = peak_hold(&s_swr_pk, w_bar, 1.0f);
+        led_set(&s_swr_led, swr_frac(w), swr_zone_of(w));
         for (size_t z = 0; z < SWR_ZONES; z++) {
             float lo = ZONES[z].from, hi = ZONES[z].to;
-            float f = (w <= lo) ? 0.0f : (w >= hi) ? 1.0f : (w - lo) / (hi - lo);
+            float f = (w_bar <= lo) ? 0.0f : (w_bar >= hi) ? 1.0f
+                                    : (w_bar - lo) / (hi - lo);
             lv_arc_set_value(s_swr_zone[z], (int)(f * 1000));
         }
 
@@ -1439,9 +1704,8 @@ void ui_update(const ui_state_t *st)
          * and nothing connected. */
         char b[20];
         fmt1(b, sizeof b, "SWR ", w, "");
-        lv_label_set_text(s_srd, b);
-        lv_obj_set_style_text_color(s_srd,
-            w >= 2.5f ? C_DANGER : w >= 2.0f ? C_WARN : C_TEXT, 0);
+        set_text(s_srd, b);
+        set_text_color(s_srd, w >= 2.5f ? C_DANGER : w >= 2.0f ? C_WARN : C_TEXT);
         /* Show the full scale alongside the reading. An auto-ranging bar
          * without its scale is misleading: half-deflection could be 50 W or
          * 1250 W. Anywhere on the face is too crowded for a separate caption,
@@ -1450,18 +1714,18 @@ void ui_update(const ui_state_t *st)
          * reads more naturally, with the auto-range's full scale alongside so
          * the bar is never ambiguous. */
         char pb[28];
-        if (st->tx_peak_w >= 1000.0f) {
+        if (pw_held >= 1000.0f) {
             char t[16];
-            fmt1(t, sizeof t, "", st->tx_peak_w / 1000.0f, "kW");
+            fmt1(t, sizeof t, "", pw_held / 1000.0f, "kW");
             snprintf(pb, sizeof pb, "PWR %s / %dW", t, (int)fs);
         } else {
             snprintf(pb, sizeof pb, "PWR %dW / %dW",
-                     (int)(st->tx_peak_w + 0.5f), (int)fs);
+                     (int)(pw_held + 0.5f), (int)fs);
         }
-        lv_label_set_text(s_dbm, pb);
+        set_text(s_dbm, pb);
         /* C_LABEL is dark grey, which all but vanishes against the amber TX
          * background -- which is why these readouts could not be found. */
-        lv_obj_set_style_text_color(s_dbm, C_TX_TEXT, 0);
+        set_text_color(s_dbm, C_TX_TEXT);
     }
 
     if (st->tx != s_was_tx) {
@@ -1473,7 +1737,12 @@ void ui_update(const ui_state_t *st)
             for (size_t z = 0; z < RX_ZONES; z++)
                 lv_obj_add_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
+            led_show(&s_sig_led, false);
+            led_show(&s_mic_led, true);
+            led_show(&s_pwr_led, true);
+            led_show(&s_swr_led, true);
+            for (size_t z = 0; z < MIC_ZONES; z++)
+                lv_obj_remove_flag(s_mic_zone[z], LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_pwr_arc, LV_OBJ_FLAG_HIDDEN);
             s_pwr_peak = 0.0f;              /* re-range for each over */
             lv_obj_remove_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
@@ -1484,7 +1753,12 @@ void ui_update(const ui_state_t *st)
             for (size_t z = 0; z < RX_ZONES; z++)
                 lv_obj_remove_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_mic_arc, LV_OBJ_FLAG_HIDDEN);
+            led_show(&s_sig_led, true);
+            led_show(&s_mic_led, false);
+            led_show(&s_pwr_led, false);
+            led_show(&s_swr_led, false);
+            for (size_t z = 0; z < MIC_ZONES; z++)
+                lv_obj_add_flag(s_mic_zone[z], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_pwr_arc, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_tx_ticks, LV_OBJ_FLAG_HIDDEN);
             for (size_t z = 0; z < SWR_ZONES; z++)
@@ -1501,12 +1775,11 @@ void ui_update(const ui_state_t *st)
         /* Keyed by the desktop, a foot switch or another client. Our trx:false
          * would only touch our own producer handle, so tapping cannot stop it
          * and the caption must not imply otherwise. */
-        lv_label_set_text(s_ptt_lbl, "TX  REMOTE");
+        set_text(s_ptt_lbl, "TX  REMOTE");
     else if (st->tx)
-        lv_label_set_text_fmt(s_ptt_lbl, "TX  %lu",
-                              (unsigned long)(st->tot_remain_ms / 1000));
+        set_text(s_ptt_lbl, "TX");
     else
-        lv_label_set_text(s_ptt_lbl, st->may_key ? "PTT" : "----");
+        set_text(s_ptt_lbl, st->may_key ? "PTT" : "----");
 
     lvgl_port_unlock();
 }
