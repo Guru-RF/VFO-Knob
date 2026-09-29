@@ -47,6 +47,14 @@ else()
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+# The component manager records what it resolved in a lock file, and the two
+# firmwares resolve different sets -- the icom one has no WebSocket client --
+# so a shared file was rewritten by every build of the other radio, and a
+# release refuses a tree that has changed. The AetherSDR firmware keeps
+# dependencies.lock; any other radio's has its own.
+if(NOT VFO_RADIO STREQUAL "aethersdr")
+    idf_build_set_property(DEPENDENCIES_LOCK dependencies.${VFO_RADIO}.lock)
+endif()
 # For components that call the client (main, webcfg), and for code that looks
 # different per radio: VFO_RADIO_AETHERSDR or VFO_RADIO_ICOM is defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
