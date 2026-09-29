@@ -106,6 +106,17 @@ the range in `radio_get_status()`.
 - [ ] **On-screen provisioning.** WiFi and host currently come from Kconfig via
       NVS seeding. A SoftAP captive portal plus an on-screen host editor would
       remove the reflash-to-change-networks step.
+      - [x] the setup firmware (`VFO_RADIO=setup`): the **VFOKnob** hotspot
+        with a captive portal for the WiFi, then the firmwares listed from
+        `firmware/index.json` on the dial, one installed with the WiFi kept;
+        and from any firmware, ten seconds on the meter arc and a turn of the
+        knob to get back to that list;
+      - [ ] the hotspot and its sign-in page tried from phones, iOS and
+        Android: built, and the list and an install from it tried, but no
+        phone has joined **VFOKnob** yet;
+      - [ ] the radio's address, and an Icom's login, still come from the
+        configuration page after that (a phone will do, at the address the
+        arc shows): the sign-in page could ask for them too.
 - [x] **Persist settings to NVS** — volume, mic gain, the dim and dark
       timings, the update interval, WiFi, host and page credentials. Not
       rotation, which only the serial console can change, and the USB build

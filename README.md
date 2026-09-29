@@ -52,7 +52,7 @@ the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705, swipe down for memory mode: the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). Swipe down again for the VFO, simplex. |
-| **Network** | Hold a finger on the meter arc for the knob's addresses; tap the card to put it away. |
+| **Network** | Hold a finger on the meter arc for the knob's addresses; tap the card to put it away. Keep it there ten seconds for the [firmware picker](#without-a-computer-the-setup-firmware). |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
@@ -160,6 +160,33 @@ WiFi from wherever your network puts it. Let both in once, e.g.
 `sudo ufw allow proto tcp from 10.55.42.1 to any port 50001` for the cable and
 `sudo ufw allow proto tcp from 192.168.1.0/24 to any port 50001` with your own
 LAN's range for WiFi.
+
+## Without a computer: the setup firmware
+
+For a knob that will only ever be on WiFi, with no computer to set it up from,
+there is `vfo-knob-setup`: a firmware that does nothing but put the knob on
+your WiFi and install the firmware for your radio.
+
+1. The knob comes up as an open WiFi network, **VFOKnob**. Join it with a
+   phone, and the phone opens the knob's sign-in page by itself (if it does
+   not, browse to `http://192.168.4.1`).
+2. Choose your network, enter its password and tap **Connect**. The page says
+   whether the knob got on, and if not, why — a wrong password, a network out
+   of reach — so you can try again.
+3. The knob then lists the firmwares on its dial, with their versions: turn to
+   yours and tap the panel to install it. It downloads the image, checks its
+   signature and restarts into it, and the WiFi settings go with it.
+
+The list comes from the update server each time, so a knob set up long after
+it was made still shows every firmware there is then. A knob that already knows
+a network joins it and goes straight to the list; the list's last entry,
+**WIFI**, brings the hotspot back to set up another.
+
+**Back to the list, from any firmware:** hold a finger on the meter arc for ten
+seconds. The dial asks **FIRMWARE?** — turn the knob for yes; a tap, or ten
+seconds of nothing, says no. The knob restarts, installs the setup firmware
+over WiFi and shows the list again, keeping the WiFi settings. It needs WiFi:
+on the cable the knob says so and carries on as it was.
 
 ## FlexRadio (MultiFlex)
 
@@ -287,10 +314,13 @@ There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
-under **Firmware** on the configuration page.
+under **Firmware** on the configuration page, or on the dial through the
+[setup firmware](#without-a-computer-the-setup-firmware), `vfo-knob-setup`.
 
 Publishing a release: `tools/release.sh 1.2.3 --push` (another radio's:
-`RADIO=<radio> tools/release.sh …`).
+`RADIO=<radio> tools/release.sh …`). Each release also rewrites
+`firmware/index.json`, the list the setup firmware shows, from the channels'
+manifests.
 
 ## Building
 
@@ -315,7 +345,7 @@ idf.py -B build_icom -D VFO_RADIO=icom \
        build flash
 ```
 
-So are the multiflex and the svxconnect firmwares:
+So are the multiflex, svxconnect and setup firmwares:
 
 ```sh
 idf.py -B build_multiflex -D VFO_RADIO=multiflex \
@@ -323,6 +353,9 @@ idf.py -B build_multiflex -D VFO_RADIO=multiflex \
        build flash
 idf.py -B build_svxconnect -D VFO_RADIO=svxconnect \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.svxconnect" \
+       build flash
+idf.py -B build_setup -D VFO_RADIO=setup \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.setup" \
        build flash
 ```
 
