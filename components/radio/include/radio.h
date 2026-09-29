@@ -73,6 +73,15 @@ typedef struct {
     int8_t     mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t    mem_offset_hz;
     uint16_t   mem_tone_dhz;   /* the tone it sends, in 0.1 Hz; 0 = none */
+    /* A second receiver and a choice of antennas (the IC-7610's MAIN and SUB,
+     * ANT1 and ANT2, each with or without its RX ANT input). The dial works
+     * the receiver the radio has selected; a radio with either has the swipe
+     * choose them in place of memory mode. */
+    uint8_t    n_rx, rx;       /* receivers (0 or 1 = just the one); 0 MAIN, 1 SUB */
+    uint8_t    n_ant, ant;     /* antennas to choose from (0 = no choice); 0 = ANT1 */
+    bool       has_rx_ant;     /* ...each also with the RX ANT input */
+    bool       ant_rx;         /* receiving on the RX ANT input */
+    bool       have_ant;       /* the radio has said which */
     /* An SvxLink reflector (the svxconnect firmware) in place of a radio: the
      * talkgroup takes the band's place, its name the frequency's, and who is
      * talking the S-meter's. The dial steps through talkgroups. */
@@ -172,6 +181,12 @@ void radio_memory_mode(bool on);
 
 /* Which memory group the dial steps through (0-99). Remembered. */
 void radio_memory_group(uint8_t group);
+
+/* The receiver the dial works (0 MAIN, 1 SUB), and the antenna it uses
+ * (0 = ANT1), on the RX ANT input or not -- where the radio has them (n_rx,
+ * n_ant); no-ops without. Neither is acted on while transmitting. */
+void radio_select_rx(uint8_t rx);
+void radio_set_antenna(uint8_t ant, bool rx_ant);
 
 /* A reflector's talkgroup lock and mute (reflector in the status); no-ops for
  * a radio. */

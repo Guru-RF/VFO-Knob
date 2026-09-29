@@ -362,6 +362,14 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "memory group -> %02u", (unsigned)c.mem_group);
                 radio_memory_group(c.mem_group);
             }
+            if (c.have_rx) {
+                ESP_LOGI(TAG, "receiver -> %s", c.rx ? "SUB" : "MAIN");
+                radio_select_rx(c.rx);
+            }
+            if (c.have_ant) {
+                ESP_LOGI(TAG, "antenna -> ANT%u%s", (unsigned)c.ant + 1, c.ant_rx ? "+RX" : "");
+                radio_set_antenna(c.ant, c.ant_rx);
+            }
             if (c.have_rit) {
                 ESP_LOGI(TAG, "rit -> %+ld", (long)c.rit_hz);
                 radio_set_rit(c.rit_hz);
@@ -468,7 +476,8 @@ static void ui_task(void *arg)
             s_seen_refusals = st.ptt_refusals;
             s_warn_until    = nowms + 3000;
         }
-        if (nowms < s_warn_until)                    warn = "TX REFUSED";
+        if (nowms < s_warn_until)                    warn = st.n_rx > 1 && st.rx
+                                                            ? "SUB: RX ONLY" : "TX REFUSED";
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
         else if (!(st.link == RADIO_LINK_READY ||
                    st.link == RADIO_LINK_DEGRADED))    warn = "NO LINK";
@@ -494,6 +503,13 @@ static void ui_task(void *arg)
             .mem_duplex    = st.mem_duplex,
             .mem_offset_hz = st.mem_offset_hz,
             .mem_tone_dhz  = st.mem_tone_dhz,
+            .n_rx          = st.n_rx,
+            .rx            = st.rx,
+            .n_ant         = st.n_ant,
+            .ant           = st.ant,
+            .has_rx_ant    = st.has_rx_ant,
+            .ant_rx        = st.ant_rx,
+            .have_ant      = st.have_ant,
             .reflector     = st.reflector,
             .connecting    = (st.link == RADIO_LINK_CONNECTING ||
                               st.link == RADIO_LINK_GREETING),

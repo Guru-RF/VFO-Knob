@@ -48,7 +48,8 @@
 
 static const char *TAG = "icom";
 
-#define CIV_RADIO      0xA4          /* the IC-705's CI-V address          */
+#define CIV_RADIO      0xA4          /* the IC-705's CI-V address: until the
+                                        server names the radio's own */
 #define CIV_US         0xE0          /* a controller's                     */
 #define OUR_NAME       "VFO-Knob"    /* shown by the radio as its user     */
 
@@ -81,11 +82,6 @@ static const char *TAG = "icom";
 #define BUSY_TMO_MS    180000        /* how long the radio may hold a stale one */
 #define STREAM_DEAD_MS 5000          /* CI-V or audio silent: the session is gone */
 #define CIV_FRESH_MS   1500          /* PTT only while CI-V is answering */
-
-/* The IC-705 has two preamps on HF and 6 m, P.AMP1 and P.AMP2, and a single
- * one on 2 m and 70 cm. Should it refuse one, it answers NG and keeps the
- * setting it had, and the dial shows that. */
-#define ONE_PREAMP_HZ  100000000LL
 
 /* Memory channels: groups 00-99 of channels 00-99 (see the memories
  * section). */
@@ -147,6 +143,15 @@ typedef struct {
     int32_t    mem_steps;            /* detents in memory mode, not yet taken */
     int8_t     pending_mem;          /* -1 none, 0 leave, 1 enter */
     int16_t    pending_group;        /* -1 none */
+    /* The radio, from its capabilities; MODEL_OTHER until they come. */
+    const struct model *model;
+    /* A second receiver and a choice of antennas (the IC-7610). */
+    uint8_t    rx;                   /* 07 D2: 0 MAIN, 1 SUB */
+    bool       have_rx;
+    uint8_t    ant;                  /* 12: 0 ANT1, 1 ANT2 */
+    bool       ant_rx, have_ant;     /* ...receiving on the RX ANT input */
+    int8_t     pending_rx;           /* -1 none */
+    int8_t     pending_ant;          /* -1 none; else the antenna, | 0x10 for RX ANT */
 } state_t;
 
 static state_t      S;
@@ -162,6 +167,12 @@ static struct {
     uint8_t    guid[16], mac[6];
     uint16_t   commoncap;
     char       radio_name[32];
+    uint8_t    civ_addr;           /* the radio's CI-V address, from the server */
+    /* What the radio has refused outright, so it is not asked again: memory
+     * reads (no memories over CI-V) and the modulation inputs (no such
+     * setting). An IC-705 refuses neither; a radio behind wfview's server
+     * that is not one may. */
+    bool       no_mem, no_modin;
     uint32_t   t_token, t_civ_rx, t_civ_open, t_session, t_retry, t_aud_rx;
     bool       waiting_busy;       /* the radio still holds our last session */
     uint32_t   backoff_ms;
@@ -197,13 +208,17 @@ typedef struct {
 } mem_t;
 static mem_t *s_mem;                 /* MEM_CHANNELS of them, PSRAM */
 
-/* While one of our overs has them switched to WLAN, the operator's values
- * are kept here too. RTC_NOINIT survives a crash or a watchdog reset, so the
- * next session puts them back instead of leaving the radio deaf to its own
- * microphone. */
+/* While one of our overs has them switched to the network, the operator's
+ * values are kept here too. RTC_NOINIT survives a crash or a watchdog reset,
+ * so the next session puts them back instead of leaving the radio deaf to its
+ * own microphone -- by the commands they were read with, and only to a radio
+ * that has the same: another radio's numbers mean other settings. */
 #define MODIN_MAGIC 0x4D4F4449u
-#define MODIN_WLAN  0x03
-RTC_NOINIT_ATTR static struct { uint32_t magic; uint8_t off, d1; } s_modin_saved;
+RTC_NOINIT_ATTR static struct {
+    uint32_t magic;
+    uint8_t  off, d1;
+    uint16_t voice, data;
+} s_modin_saved;
 
 static uint8_t  s_rx[1500];
 static uint8_t *s_txa;              /* one outbound audio packet, PSRAM */
@@ -406,7 +421,7 @@ static void stream_close(stream_t *s)
  * command a refusal was for. The radio's own reports (transceive) go to 00,
  * not to us, and answer nothing. */
 #define AWAIT_N 32
-static struct { uint8_t cmd, sub; } s_await[AWAIT_N];
+static struct { uint8_t cmd, sub, len; } s_await[AWAIT_N];
 static uint8_t s_aw_head, s_aw_n;
 
 static void await_push(const uint8_t *body, size_t n)
@@ -418,12 +433,13 @@ static void await_push(const uint8_t *body, size_t n)
     const unsigned i = (s_aw_head + s_aw_n) % AWAIT_N;
     s_await[i].cmd = body[0];
     s_await[i].sub = n > 1 ? body[1] : 0xFF;
+    s_await[i].len = (uint8_t)n;
     s_aw_n++;
 }
 
 /* What an answer to `cmd` was for: the oldest outstanding command, or for a
  * data reply the oldest with that command -- any before it went unanswered. */
-static bool await_pop(uint8_t cmd, uint8_t *c, uint8_t *sub)
+static bool await_pop(uint8_t cmd, uint8_t *c, uint8_t *sub, uint8_t *len)
 {
     while (s_aw_n) {
         const unsigned i = s_aw_head;
@@ -432,6 +448,7 @@ static bool await_pop(uint8_t cmd, uint8_t *c, uint8_t *sub)
         if (cmd == 0xFA || cmd == 0xFB || s_await[i].cmd == cmd) {
             *c = s_await[i].cmd;
             *sub = s_await[i].sub;
+            *len = s_await[i].len;
             return true;
         }
     }
@@ -451,6 +468,27 @@ static void log_refused(uint8_t c, uint8_t sub)
     else             ESP_LOGW(TAG, "the radio refused %02X %02X", c, sub);
 }
 
+/* A refused READ that says a whole feature is missing, so it is not asked
+ * for again this session: an IC-705 refuses neither of these, but a radio
+ * behind wfview's server that only answers like one may lack them. A refused
+ * set is left alone -- that can be a matter of the moment. */
+static void on_refused(uint8_t c, uint8_t sub, uint8_t len)
+{
+    if (c == 0x1A && sub == 0x00 && !C.no_mem) {                /* 1A 00 g g c c */
+        C.no_mem = true;
+        C.mem_scan = -1;
+        taskENTER_CRITICAL(&S_LOCK);
+        S.mem_mode  = false;
+        S.mem_state = RADIO_MEM_OFF;
+        taskEXIT_CRITICAL(&S_LOCK);
+        ESP_LOGW(TAG, "the radio has no memories over CI-V: no memory mode");
+    } else if (c == 0x1A && sub == 0x05 && len == 4 && !C.no_modin) {  /* read */
+        C.no_modin = true;
+        ESP_LOGW(TAG, "the radio has no modulation-input setting over CI-V: "
+                      "overs go out on whatever input it is set to");
+    }
+}
+
 static void civ_send(const uint8_t *body, size_t n)
 {
     if (s_civ.fd < 0 || !C.civ_open) return;
@@ -462,7 +500,7 @@ static void civ_send(const uint8_t *body, size_t n)
     put16le(b + 0x11, (uint16_t)(len - 0x15));
     put16be(b + 0x13, C.civ_seqb++);
     uint8_t *f = b + 0x15;
-    f[0] = 0xFE; f[1] = 0xFE; f[2] = CIV_RADIO; f[3] = CIV_US;
+    f[0] = 0xFE; f[1] = 0xFE; f[2] = C.civ_addr; f[3] = CIV_US;
     memcpy(f + 4, body, n);
     f[4 + n] = 0xFD;
     tracked(&s_civ, b, len);
@@ -538,6 +576,83 @@ static float calibrate(const cal_t *c, size_t n, unsigned raw)
     return c[n - 1].val;
 }
 #define CAL(t, raw) calibrate(t, sizeof t / sizeof t[0], raw)
+#define NCAL(t) (uint8_t)(sizeof t / sizeof t[0])
+
+/* The IC-7610's S-meter is not quite the IC-705's (wfview's rig files). Its
+ * Po reads the IC-705's table ten times over: 100 W where that has 10. */
+static const cal_t CAL_S_7610[] = { {0,-54}, {11,-48}, {21,-42}, {34,-36}, {50,-30},
+                                    {59,-24}, {75,-18}, {93,-12}, {103,-6}, {124,0},
+                                    {145,10}, {160,20}, {183,30}, {204,40}, {222,50},
+                                    {246,60} };
+
+/* ---------------------------------------------------------------- models */
+
+/* What differs between the radios this client knows, found by the name in
+ * their capabilities. The LAN protocol, and the CI-V for tuning, mode,
+ * filter, AGC, preamp and meters, are the same on all of them; the rest is
+ * here.
+ *
+ * A radio not in the table gets what is safe on any of them: tuning and
+ * receive, with neither memory reads nor modulation-input switching -- its
+ * overs go out on whatever input it is set to. The IC-705's numbers for those
+ * are other settings on another radio. */
+typedef struct model {
+    const char    *name;            /* the capabilities' name starts with it */
+    int64_t        f_min, f_max;    /* where the knob may tune */
+    uint8_t        preamps;         /* P.AMP1 and P.AMP2, or a single one */
+    int64_t        one_preamp_hz;   /* from here up a single one; 0 = nowhere */
+    const cal_t   *cal_s;           /* the S-meter */
+    uint8_t        n_cal_s;
+    float          po_scale;        /* times CAL_PO, the IC-705's 10 W */
+    /* The modulation inputs, voice and data modes: 1A 05 <hi> <lo>, and the
+     * value that means the network. 0 = nothing the knob may switch. */
+    uint16_t       modin_voice, modin_data;
+    uint8_t        modin_lan;
+    const char *const *modin_names; /* by value, for the log */
+    uint8_t        n_modin_names;
+    bool           memories;        /* groups of channels over 1A 00 */
+    uint8_t        n_rx;            /* receivers: MAIN and SUB, 07 D0/D1/D2 */
+    uint8_t        n_ant;           /* antennas to choose from, 12 */
+    bool           rx_ant;          /* ...each also with the RX ANT input */
+} model_t;
+
+static const char *const MODIN_705[]  = { "MIC", "USB", "MIC+USB", "WLAN" };
+static const char *const MODIN_7610[] = { "MIC", "ACC", "MIC+ACC", "USB", "MIC+USB", "LAN" };
+
+static const model_t MODELS[] = {
+    /* 30 kHz-470 MHz; two preamps on HF and 6 m, a single one on 2 m and
+     * 70 cm -- should it refuse one it answers NG and keeps what it had, and
+     * the dial shows that. */
+    { .name = "IC-705", .f_min = 30000, .f_max = 470000000,
+      .preamps = 2, .one_preamp_hz = 100000000,
+      .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
+      .modin_voice = 0x0118, .modin_data = 0x0119, .modin_lan = 3,
+      .modin_names = MODIN_705, .n_modin_names = 4,
+      .memories = true, .n_rx = 1 },
+    /* 30 kHz-60 MHz, two receivers, ANT1 and ANT2 each with or without the
+     * RX ANT input. Its memories are not the IC-705's groups; the swipe
+     * chooses the receiver and the antenna instead. */
+    { .name = "IC-7610", .f_min = 30000, .f_max = 60000000,
+      .preamps = 2,
+      .cal_s = CAL_S_7610, .n_cal_s = NCAL(CAL_S_7610), .po_scale = 10,
+      .modin_voice = 0x0091, .modin_data = 0x0092, .modin_lan = 5,
+      .modin_names = MODIN_7610, .n_modin_names = 6,
+      .n_rx = 2, .n_ant = 2, .rx_ant = true },
+};
+
+static const model_t MODEL_OTHER = {
+    .name = "", .f_min = 30000, .f_max = 470000000,
+    .preamps = 2, .one_preamp_hz = 100000000,
+    .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
+    .n_rx = 1,
+};
+
+static const model_t *model_for(const char *name)
+{
+    for (size_t i = 0; i < sizeof MODELS / sizeof MODELS[0]; i++)
+        if (strncmp(name, MODELS[i].name, strlen(MODELS[i].name)) == 0) return &MODELS[i];
+    return &MODEL_OTHER;
+}
 
 /* ------------------------------------------------------------ modes */
 
@@ -603,33 +718,48 @@ static void session_end(bool polite, const char *why);
  * microphone still works whenever the radio is keyed at the radio. */
 static const char *modin_name(uint8_t v)
 {
-    static const char *N[] = { "MIC", "USB", "MIC+USB", "WLAN" };
-    return v < 4 ? N[v] : "?";
+    const model_t *m = S.model;
+    return v < m->n_modin_names ? m->modin_names[v] : "?";
+}
+
+/* 1A 05 <hi> <lo>: read one of the radio's modulation inputs; with a value,
+ * set it. */
+static void modin_read(uint16_t which)
+{
+    CIV(0x1A, 0x05, (uint8_t)(which >> 8), (uint8_t)which);
+}
+
+static void modin_set(uint16_t which, uint8_t v)
+{
+    CIV(0x1A, 0x05, (uint8_t)(which >> 8), (uint8_t)which, v);
 }
 
 static void modin_to_wlan(void)
 {
-    if (C.modin_switched) return;
+    const model_t *m = S.model;
+    if (C.modin_switched || C.no_modin || !m->modin_voice) return;
     if (C.modin_off == 0xFF || C.modin_d1 == 0xFF) {
         ESP_LOGW(TAG, "modulation inputs not known: this over is the radio's own microphone");
         return;
     }
-    if (C.modin_off == MODIN_WLAN && C.modin_d1 == MODIN_WLAN) return;
-    ESP_LOGI(TAG, "modulation input WLAN for this over (was %s, data %s)",
-             modin_name(C.modin_off), modin_name(C.modin_d1));
+    if (C.modin_off == m->modin_lan && C.modin_d1 == m->modin_lan) return;
+    ESP_LOGI(TAG, "modulation input %s for this over (was %s, data %s)",
+             modin_name(m->modin_lan), modin_name(C.modin_off), modin_name(C.modin_d1));
     s_modin_saved.off = C.modin_off;
     s_modin_saved.d1 = C.modin_d1;
+    s_modin_saved.voice = m->modin_voice;
+    s_modin_saved.data = m->modin_data;
     s_modin_saved.magic = MODIN_MAGIC;
-    CIV(0x1A, 0x05, 0x01, 0x18, MODIN_WLAN);
-    CIV(0x1A, 0x05, 0x01, 0x19, MODIN_WLAN);
+    modin_set(m->modin_voice, m->modin_lan);
+    modin_set(m->modin_data, m->modin_lan);
     C.modin_switched = true;
 }
 
 static void modin_restore(void)
 {
     if (!C.modin_switched) return;
-    CIV(0x1A, 0x05, 0x01, 0x18, C.modin_off);
-    CIV(0x1A, 0x05, 0x01, 0x19, C.modin_d1);
+    modin_set(S.model->modin_voice, C.modin_off);
+    modin_set(S.model->modin_data, C.modin_d1);
     C.modin_switched = false;
     s_modin_saved.magic = 0;
 }
@@ -672,7 +802,10 @@ static void ptt_dispatch(const ptt_out_t *o)
 static uint32_t ptt_permit_now(uint32_t t)
 {
     uint32_t p = PERMIT_BAND | PERMIT_MODE | PERMIT_NO_OVERLAY | PERMIT_NO_FAULT |
-                 PERMIT_TRX | PERMIT_TX_ENABLE;
+                 PERMIT_TX_ENABLE;
+    /* A second receiver only listens: an IC-7610 on its SUB transmits on the
+     * MAIN's frequency, which the dial is not showing. */
+    if (S.model->n_rx < 2 || (S.have_rx && S.rx == 0)) p |= PERMIT_TRX;
     if ((S.link == RADIO_LINK_READY || S.link == RADIO_LINK_DEGRADED) &&
         t - S.t_ready_ms >= 500) p |= PERMIT_LINK;
     /* Liveness means CI-V answering, not just control pings: a session can
@@ -718,18 +851,36 @@ static void on_freq(int64_t f, uint32_t t)
 
 static void on_memory(const uint8_t *p, size_t n);
 
+/* The radio works its other receiver now, chosen on the dial or on the radio:
+ * all the dial shows is that one's, the frequency first -- the radio's to say
+ * again, as on a new session. */
+static void rx_changed(void)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    S.have_freq = false;
+    S.have_ant = false;
+    taskEXIT_CRITICAL(&S_LOCK);
+    CIV(0x03);
+    CIV(0x26, 0x00);
+    if (!S.mem_mode) CIV(0x1A, 0x03);
+    CIV(0x16, 0x12);
+    CIV(0x16, 0x02);
+    CIV(0x21, 0x00);
+    if (S.model->n_ant) CIV(0x12);
+}
+
 static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
 {
     /* FE FE <to> <from> <cmd> [sub] <data> FD */
     if (n < 6 || f[0] != 0xFE || f[1] != 0xFE || f[n - 1] != 0xFD) return;
-    if (f[3] != CIV_RADIO) return;                   /* our own, echoed */
+    if (f[3] != C.civ_addr) return;                  /* our own, echoed */
     if (f[2] != CIV_US && f[2] != 0x00) return;      /* someone else's */
     const uint8_t  cmd = f[4];
     const uint8_t *b   = f + 5;
     const size_t   bn  = n - 6;
     C.t_civ_rx = t;
-    uint8_t asked = 0, asked_sub = 0xFF;
-    const bool answer = f[2] == CIV_US && await_pop(cmd, &asked, &asked_sub);
+    uint8_t asked = 0, asked_sub = 0xFF, asked_len = 0;
+    const bool answer = f[2] == CIV_US && await_pop(cmd, &asked, &asked_sub, &asked_len);
 
     switch (cmd) {
     case 0x00: case 0x03:                            /* frequency */
@@ -767,9 +918,10 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         if (bn >= 2 && b[0] == 0x03) {               /* filter width */
             S.width_idx = (uint8_t)unbcd(b[1]);
             set_edges();
-        } else if (bn >= 4 && b[0] == 0x05 && b[1] == 0x01 && !C.modin_switched) {
-            if (b[2] == 0x18) C.modin_off = b[3];    /* modulation inputs */
-            if (b[2] == 0x19) C.modin_d1 = b[3];
+        } else if (bn >= 4 && b[0] == 0x05 && S.model->modin_voice && !C.modin_switched) {
+            const uint16_t which = (uint16_t)(b[1] << 8 | b[2]);
+            if (which == S.model->modin_voice) C.modin_off = b[3];   /* modulation inputs */
+            if (which == S.model->modin_data)  C.modin_d1 = b[3];
             if (!C.modin_logged && C.modin_off != 0xFF && C.modin_d1 != 0xFF) {
                 C.modin_logged = true;
                 ESP_LOGI(TAG, "modulation inputs: %s, data %s",
@@ -784,8 +936,9 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         {
             unsigned raw = level_from(b + 1);
             switch (b[0]) {
-            case 0x02: S.smeter_dbm = -73.0f + CAL(CAL_S, raw); break;
-            case 0x11: S.tx_fwd_w = CAL(CAL_PO, raw);
+            case 0x02: S.smeter_dbm = -73.0f + calibrate(S.model->cal_s, S.model->n_cal_s, raw);
+                       break;
+            case 0x11: S.tx_fwd_w = CAL(CAL_PO, raw) * S.model->po_scale;
                        if (S.tx_fwd_w > S.tx_peak_w || t - C.t_poll_tx > 400)
                            S.tx_peak_w = S.tx_fwd_w;
                        break;
@@ -814,6 +967,28 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
             strlcpy(S.agc, b[1] <= 3 ? AGC[b[1]] : "", sizeof S.agc);
         }
         return;
+    case 0x07:                                       /* 07 D2: MAIN or SUB */
+        if (bn >= 2 && b[0] == 0xD2 && b[1] <= 1 && S.model->n_rx > 1) {
+            const bool first = !S.have_rx;
+            if (first || b[1] != S.rx) {
+                if (!first) ESP_LOGI(TAG, "on the %s receiver", b[1] ? "SUB" : "MAIN");
+                taskENTER_CRITICAL(&S_LOCK);
+                S.rx = b[1];
+                S.have_rx = true;
+                taskEXIT_CRITICAL(&S_LOCK);
+                if (!first) rx_changed();
+            }
+        }
+        return;
+    case 0x12:                                       /* 12 <ant> <RX ANT>: antenna */
+        if (bn >= 1 && S.model->n_ant && unbcd(b[0]) < S.model->n_ant) {
+            taskENTER_CRITICAL(&S_LOCK);
+            S.ant = (uint8_t)unbcd(b[0]);
+            S.ant_rx = S.model->rx_ant && bn >= 2 && b[1] == 0x01;
+            S.have_ant = true;
+            taskEXIT_CRITICAL(&S_LOCK);
+        }
+        return;
     case 0x21:                                       /* RIT */
         if (bn >= 4 && b[0] == 0x00) {
             int32_t hz = (int32_t)(unbcd(b[1]) + 100 * unbcd(b[2]));
@@ -824,7 +999,10 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         return;
     case 0xFA:                                       /* NG */
         S.rejects++;
-        if (answer) log_refused(asked, asked_sub);
+        if (answer) {
+            log_refused(asked, asked_sub);
+            on_refused(asked, asked_sub, asked_len);
+        }
         return;
     case 0x14:                                       /* levels: not used */
         return;
@@ -976,6 +1154,8 @@ static bool session_begin(uint32_t t)
     C.authed = C.streaming = C.civ_open = false;
     C.modin_off = C.modin_d1 = 0xFF;
     C.modin_switched = C.modin_logged = false;
+    C.civ_addr = CIV_RADIO;
+    C.no_mem = C.no_modin = false;
     C.waiting_busy = false;
     C.t_session = t;
     taskENTER_CRITICAL(&S_LOCK);
@@ -1027,7 +1207,28 @@ static void on_control(const uint8_t *d, int n, uint32_t t)
         memcpy(C.mac, c + 10, 6);
         memset(C.radio_name, 0, sizeof C.radio_name);
         memcpy(C.radio_name, c + 0x10, 31);
-        ESP_LOGI(TAG, "radio: %s, CI-V 0x%02x", C.radio_name, c[0x52]);
+        C.civ_addr = c[0x52] ? c[0x52] : CIV_RADIO;
+        const model_t *m = model_for(C.radio_name);
+        ESP_LOGI(TAG, "radio: %s, CI-V 0x%02x, audio %02x%02x rx, %02x%02x tx%s",
+                 C.radio_name, c[0x52], c[0x53], c[0x54], c[0x55], c[0x56],
+                 m->name[0] ? "" : " -- not one this knob knows: receive and "
+                                   "tuning only, overs on its own input");
+        taskENTER_CRITICAL(&S_LOCK);
+        S.model = m;
+        S.have_ant = S.have_rx = false;
+        S.pending_rx = S.pending_ant = -1;
+        if (!m->memories) {
+            /* Not in memory mode on a radio without them, whatever the dial
+             * remembers from the last one. */
+            S.mem_mode  = false;
+            S.mem_state = RADIO_MEM_OFF;
+        }
+        taskEXIT_CRITICAL(&S_LOCK);
+        if (!m->memories) {
+            C.no_mem = true;
+            C.mem_scan = -1;
+        }
+        if (!m->modin_voice) C.no_modin = true;
         return;
     }
     if (n == PKT_CONNINFO && type != 0x01) {
@@ -1109,14 +1310,20 @@ static void civ_hello(uint32_t t)
     CIV(0x16, 0x12);              /* AGC */
     CIV(0x16, 0x02);              /* preamp */
     CIV(0x1C, 0x00);              /* transmitting? */
-    if (s_modin_saved.magic == MODIN_MAGIC) {
-        ESP_LOGW(TAG, "putting back the modulation inputs a lost session left on WLAN");
-        CIV(0x1A, 0x05, 0x01, 0x18, s_modin_saved.off);
-        CIV(0x1A, 0x05, 0x01, 0x19, s_modin_saved.d1);
+    const model_t *m = S.model;
+    if (m->n_rx > 1) CIV(0x07, 0xD2);   /* MAIN or SUB */
+    if (m->n_ant) CIV(0x12);            /* the antenna */
+    if (s_modin_saved.magic == MODIN_MAGIC && m->modin_voice &&
+        s_modin_saved.voice == m->modin_voice && s_modin_saved.data == m->modin_data) {
+        ESP_LOGW(TAG, "putting back the modulation inputs a lost session left on the network");
+        modin_set(m->modin_voice, s_modin_saved.off);
+        modin_set(m->modin_data, s_modin_saved.d1);
         s_modin_saved.magic = 0;
     }
-    CIV(0x1A, 0x05, 0x01, 0x18);  /* modulation inputs, as the operator has them */
-    CIV(0x1A, 0x05, 0x01, 0x19);
+    if (m->modin_voice && !C.no_modin) {  /* as the operator has them */
+        modin_read(m->modin_voice);
+        modin_read(m->modin_data);
+    }
 }
 
 static void on_civ(const uint8_t *d, int n, uint32_t t)
@@ -1384,7 +1591,7 @@ static void mem_set_group(uint8_t g)
 
 static void mem_task(uint32_t t)
 {
-    if (!s_mem || !C.civ_open || S.link != RADIO_LINK_READY) return;
+    if (!s_mem || C.no_mem || !C.civ_open || S.link != RADIO_LINK_READY) return;
     const bool keyed = S.ptt.state != PTT_IDLE || S.tx;
 
     /* What the other tasks asked for: kept until the radio can hear it, and
@@ -1447,6 +1654,40 @@ static void mem_task(uint32_t t)
     }
 }
 
+/* ----------------------------------------------- receivers and antennas */
+
+/* The receiver and the antenna chosen on the dial: kept until the radio can
+ * hear it, and never acted on mid-over -- an antenna relay switched under
+ * power is the one thing here that could harm the radio. What the dial then
+ * shows is the radio's answer (07 D2, 12). */
+static void rx_ant_task(void)
+{
+    if (!C.civ_open || S.link != RADIO_LINK_READY) return;
+    if (S.ptt.state != PTT_IDLE || S.tx) return;
+    const model_t *m = S.model;
+    const int8_t rx = S.pending_rx;
+    if (rx >= 0) {
+        S.pending_rx = -1;
+        if (rx < m->n_rx) {
+            ESP_LOGI(TAG, "to the %s receiver", rx ? "SUB" : "MAIN");
+            CIV(0x07, rx ? 0xD1 : 0xD0);
+            CIV(0x07, 0xD2);
+        }
+    }
+    const int8_t a = S.pending_ant;
+    if (a >= 0) {
+        S.pending_ant = -1;
+        const uint8_t ant = a & 0x0F;
+        const bool    on_rx = (a & 0x10) && m->rx_ant;
+        if (ant < m->n_ant) {
+            ESP_LOGI(TAG, "to ANT%u%s", ant + 1, on_rx ? "+RX" : "");
+            if (m->rx_ant) CIV(0x12, bcd(ant), on_rx ? 0x01 : 0x00);
+            else           CIV(0x12, bcd(ant));
+            CIV(0x12);
+        }
+    }
+}
+
 /* ------------------------------------------------------------- the task */
 
 static void poll_civ(uint32_t t)
@@ -1480,8 +1721,12 @@ static void poll_civ(uint32_t t)
              * left them unknown for the whole session -- and without them no
              * over is switched to WLAN: it goes out on the radio's own
              * microphone, silent. So ask until they are known. */
-            if (C.modin_off == 0xFF) CIV(0x1A, 0x05, 0x01, 0x18);
-            if (C.modin_d1 == 0xFF)  CIV(0x1A, 0x05, 0x01, 0x19);
+            const model_t *m = S.model;
+            if (m->modin_voice && !C.no_modin && C.modin_off == 0xFF) modin_read(m->modin_voice);
+            if (m->modin_voice && !C.no_modin && C.modin_d1 == 0xFF)  modin_read(m->modin_data);
+            /* Changed on the radio itself. */
+            if (m->n_rx > 1) CIV(0x07, 0xD2);
+            if (m->n_ant) CIV(0x12);
             C.t_poll_slow = t;
         }
     }
@@ -1630,6 +1875,7 @@ static void icom_task(void *arg)
         }
         tune_out(t);
         mem_task(t);
+        rx_ant_task();
         poll_civ(t);
 
         /* TX audio, every 20 ms from the moment the key goes out. */
@@ -1681,6 +1927,8 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     S.smeter_dbm = -127.0f;
     S.pending_mem = -1;
     S.pending_group = -1;
+    S.pending_rx = S.pending_ant = -1;
+    S.model = &MODEL_OTHER;
     C.mem_scan = -1;
     C.mem_sent = -1;
     s_mem = heap_caps_calloc(MEM_CHANNELS, sizeof *s_mem, MALLOC_CAP_SPIRAM);
@@ -1722,8 +1970,7 @@ int64_t radio_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
         S.t_last_input_ms = t;
     } else if (detents) {
         if (S.tune.step_hz != step_hz) tune_set_step(&S.tune, step_hz);
-        /* 30 kHz to 470 MHz: the IC-705's receive range. */
-        tune_apply(&S.tune, detents, accel_mult, LOOP_MS, 30000LL, 470000000LL);
+        tune_apply(&S.tune, detents, accel_mult, LOOP_MS, S.model->f_min, S.model->f_max);
         S.t_last_input_ms = t;
     }
     f = S.tune.f_display;
@@ -1822,6 +2069,17 @@ void radio_memory_group(uint8_t group)
     if (s_mem && group < 100) S.pending_group = group;
 }
 
+void radio_select_rx(uint8_t rx)
+{
+    if (rx < S.model->n_rx) S.pending_rx = (int8_t)rx;
+}
+
+void radio_set_antenna(uint8_t ant, bool rx_ant)
+{
+    if (ant < S.model->n_ant) S.pending_ant = (int8_t)(ant | (rx_ant ? 0x10 : 0));
+}
+
+/* A radio has no talkgroup to lock or mute. */
 void radio_tg_lock(bool locked) { (void)locked; }
 void radio_mute(bool muted)     { (void)muted; }
 
@@ -1849,9 +2107,17 @@ void radio_get_status(radio_status_t *o)
     o->have_gain  = S.have_preamp;
     o->gain       = (int8_t)S.preamp;
     o->gain_min   = 0;
-    o->gain_max   = S.f_server >= ONE_PREAMP_HZ ? 1 : 2;
+    const model_t *m = S.model;
+    o->gain_max   = m->one_preamp_hz && S.f_server >= m->one_preamp_hz ? 1 : m->preamps;
     o->gain_step  = 1;
-    o->has_memories = s_mem != NULL;
+    o->has_memories = s_mem != NULL && !C.no_mem && m->memories;
+    o->n_rx       = m->n_rx;
+    o->rx         = S.rx;
+    o->n_ant      = m->n_ant;
+    o->has_rx_ant = m->rx_ant;
+    o->ant        = S.ant;
+    o->ant_rx     = S.ant_rx;
+    o->have_ant   = S.have_ant;
     o->mem_state  = S.mem_mode ? S.mem_state : RADIO_MEM_OFF;
     o->mem_group  = C.mem_group;
     o->mem_ch     = S.mem_ch;

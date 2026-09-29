@@ -886,6 +886,10 @@ void radio_goto_freq(int64_t hz)
 void radio_memory_mode(bool on)        { (void)on; }
 void radio_memory_group(uint8_t group) { (void)group; }
 
+/* The slice is AetherSDR's to choose, and TCI has no antenna selection. */
+void radio_select_rx(uint8_t rx)               { (void)rx; }
+void radio_set_antenna(uint8_t ant, bool rx_ant) { (void)ant; (void)rx_ant; }
+
 /* A radio has no talkgroup to lock or mute. */
 void radio_tg_lock(bool locked) { (void)locked; }
 void radio_mute(bool muted)     { (void)muted; }

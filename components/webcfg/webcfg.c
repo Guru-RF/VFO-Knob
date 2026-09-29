@@ -171,6 +171,10 @@ static esp_err_t status_get(httpd_req_t *r)
     char tgname[72], talker[40];
     json_esc(st.tg_name, tgname, sizeof tgname);
     json_esc(st.talker[0] ? st.talker : st.last_talker, talker, sizeof talker);
+    /* A second receiver and the antennas, where the radio has them. */
+    char ant[12] = "";
+    if (st.n_ant && st.have_ant)
+        snprintf(ant, sizeof ant, "ANT%u%s", st.ant + 1u, st.ant_rx ? "+RX" : "");
 
     char buf[1300];
     int n = snprintf(buf, sizeof buf,
@@ -183,7 +187,7 @@ static esp_err_t status_get(httpd_req_t *r)
         "\"aud_frames\":%u,\"aud_dropped\":%u,"
         "\"heap_internal\":%u,\"heap_psram\":%u,\"boots\":%u,"
         "\"reflector\":%s,\"tg\":%lu,\"tgname\":\"%s\",\"talker\":\"%s\","
-        "\"talking\":%s}",
+        "\"talking\":%s,\"rx\":\"%s\",\"ant\":\"%s\"}",
         app->version,
         (long long)(esp_timer_get_time() / 1000000),
         link, (long long)st.f_display, st.mode,
@@ -199,7 +203,8 @@ static esp_err_t status_get(httpd_req_t *r)
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
         (unsigned)net_prov_boot_count(),
         st.reflector ? "true" : "false", (unsigned long)st.tg, tgname, talker,
-        st.talker[0] ? "true" : "false");
+        st.talker[0] ? "true" : "false",
+        st.n_rx > 1 ? (st.rx ? "SUB" : "MAIN") : "", ant);
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
 }

@@ -40,6 +40,11 @@ typedef struct {
     int8_t   mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t  mem_offset_hz;
     uint16_t mem_tone_dhz;
+    /* A second receiver and a choice of antennas (radio.h): the swipe down
+     * chooses those instead of memory mode -- the receiver, then its antenna. */
+    uint8_t  n_rx, rx;       /* 0 MAIN, 1 SUB */
+    uint8_t  n_ant, ant;     /* 0 ANT1 */
+    bool     has_rx_ant, ant_rx, have_ant;
     /* A reflector (radio.h): the talkgroup and its name in place of band and
      * frequency, the talker in place of the S-units, lock and mute either
      * side of it, and the audio level on the arc. */
@@ -76,7 +81,9 @@ bool ui_take_ptt_tap(void);
 
 /* A swipe down the face: memory mode on, or off again. Only with a link, in
  * receive, on a radio with memories, and with nothing else asking for the
- * finger. Consumed by the caller.
+ * finger. Consumed by the caller. On a radio with a second receiver or a
+ * choice of antennas the swipe opens their editors instead, and what they
+ * choose comes as a commit.
  *
  * Everything but PTT and the update question acts when the finger lifts,
  * not when it lands, so that a swipe is not first taken for a tap on
@@ -104,6 +111,8 @@ typedef struct {
     bool     have_agc;     char    agc[6];
     bool     have_gain;    int8_t  gain;
     bool     have_mem_group; uint8_t mem_group;
+    bool     have_rx;      uint8_t rx;
+    bool     have_ant;     uint8_t ant;  bool ant_rx;
     bool     have_rit;     int32_t rit_hz;
     bool     have_freq;    int64_t freq_hz;
 } ui_commit_t;

@@ -71,9 +71,10 @@ label.chk input{width:auto;margin:0}
   </div>
   <p class="note" id="icomnote" hidden>The radio's own network user. On the
      IC-705: <b>MENU &raquo; SET &raquo; WLAN Set &raquo; Remote Settings</b> &mdash;
-     Network Control ON, and a Network User with this name and password. The
-     knob reaches the radio over WiFi, and applies changes here on its next
-     boot.</p>
+     Network Control ON, and a Network User with this name and password. On the
+     IC-7610: <b>MENU &raquo; SET &raquo; Network</b> &mdash; Network Control ON,
+     and Network User1 with this name and password. The knob reaches the radio
+     over WiFi, and applies changes here on its next boot.</p>
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
@@ -262,7 +263,7 @@ async function load(){
   const lan = icom;                       /* the radio itself, with a login */
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   LINKNAME = c.link || 'Radio';
-  $('rtitle').textContent = icom ? 'IC-705' : SVX ? 'SvxLink reflector' : 'AetherSDR';
+  $('rtitle').textContent = icom ? 'IC-705 / IC-7610' : SVX ? 'SvxLink reflector' : 'AetherSDR';
   $('hostlbl').textContent = SVX ? 'Reflector' : 'Host (IP, or a name ending .local)';
   $('svxnote').hidden = !SVX;
   for (const id of ['svxstation','svxtg','svxcert']) $(id).hidden = !SVX;
@@ -478,7 +479,7 @@ $('upload').onclick = async()=>{
  * The knob says which it runs; installing another is a deliberate switch,
  * which the knob accepts only when the upload names that radio. */
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
-              {id:'icom',      name:'Icom IC-705 (LAN)'},
+              {id:'icom',      name:'Icom IC-705 / IC-7610 (LAN)'},
               {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

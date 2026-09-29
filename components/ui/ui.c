@@ -468,9 +468,14 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 #define NETINFO_MS 10000
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
-               ED_GROUP, ED_RIT, ED_VOL, ED_MIC } edit_t;
+               ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
+static int     s_edit_from, s_edit_n;  /* where the receiver's opened; how many */
+static bool    s_edit_moved;           /* the knob has turned since it opened */
+/* The last state ui_update() saw, so the editors can open on the current
+ * value. The touch callback runs on the LVGL task and cannot ask the client. */
+static ui_state_t s_last;
 static int32_t s_edit_rit;
 static int8_t  s_edit_gain, s_edit_gmin, s_edit_gmax, s_edit_gstep;
 static bool    s_edit_lsb;   /* passband sits below the carrier */
@@ -679,6 +684,18 @@ RADIO_ONLY static void mem_texts(const ui_state_t *st, char *big, size_t nb, cha
 
 /* --- field editors -------------------------------------------------------- */
 
+/* The antenna editor's choices: each antenna, then each again with the RX ANT
+ * input -- ANT1, ANT2, ANT1+RX, ANT2+RX on an IC-7610. */
+static int ant_choices(const ui_state_t *st)
+{
+    return st->n_ant * (st->has_rx_ant ? 2 : 1);
+}
+
+static int ant_index(const ui_state_t *st)
+{
+    return st->ant + (st->ant_rx ? st->n_ant : 0);
+}
+
 static void edit_render(void)
 {
     if (s_edit == ED_NONE) {
@@ -727,6 +744,16 @@ static void edit_render(void)
         title = "MIC GAIN";
         snprintf(v, sizeof v, "%d", s_micgain);
         break;
+    case ED_RX:
+        title = "VFO";
+        snprintf(v, sizeof v, "%s", s_edit_idx ? "SUB" : "MAIN");
+        break;
+    case ED_ANT: {
+        const int n = s_last.n_ant ? s_last.n_ant : 1;
+        title = "ANTENNA";
+        snprintf(v, sizeof v, "ANT%d%s", s_edit_idx % n + 1, s_edit_idx >= n ? "+RX" : "");
+        break;
+    }
     default: return;
     }
     lv_label_set_text(s_edit_title, title);
@@ -802,8 +829,18 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_edit_gstep = st->gain_step > 0 ? st->gain_step : 1;
         break;
     case ED_RIT:    s_edit_rit = st->rit_hz; break;
+    case ED_RX:
+        s_edit_idx = st->rx;
+        s_edit_n   = st->n_rx;
+        break;
+    case ED_ANT:
+        s_edit_idx = ant_index(st);
+        s_edit_n   = ant_choices(st);
+        break;
     default: break;
     }
+    s_edit_from  = s_edit_idx;
+    s_edit_moved = false;
     edit_render();
 }
 
@@ -847,6 +884,19 @@ static void edit_commit(void)
         s_commit.have_rit = true;
         s_commit.rit_hz   = s_edit_rit;
         break;
+    case ED_RX:
+        s_commit.have_rx = s_edit_idx != s_edit_from;
+        s_commit.rx      = (uint8_t)s_edit_idx;
+        break;
+    case ED_ANT: {
+        /* Only when turned to: until then the editor follows the radio, and
+         * a tap straight through leaves the antenna alone. */
+        const int n = s_last.n_ant ? s_last.n_ant : 1;
+        s_commit.have_ant = s_edit_moved;
+        s_commit.ant      = (uint8_t)(s_edit_idx % n);
+        s_commit.ant_rx   = s_edit_idx >= n;
+        break;
+    }
     default: break;      /* volume is local-only for now */
     }
     s_have_commit = (s_edit != ED_NONE && s_edit != ED_VOL && s_edit != ED_MIC);
@@ -887,6 +937,13 @@ void ui_edit_rotate(int32_t detents)
         s_edit_idx += detents;
         if (s_edit_idx < 0)  s_edit_idx = 0;
         if (s_edit_idx > 99) s_edit_idx = 99;
+        break;
+    case ED_RX:
+    case ED_ANT:
+        s_edit_idx += detents;
+        if (s_edit_idx < 0)         s_edit_idx = 0;
+        if (s_edit_idx >= s_edit_n) s_edit_idx = s_edit_n - 1;
+        s_edit_moved = true;
         break;
     case ED_GAIN: {
         int g = s_edit_gain + detents * s_edit_gstep;
@@ -964,10 +1021,6 @@ static int nearest_digit(int x)
     return best;
 }
 
-/* The last state ui_update() saw, so the editors can open on the current
- * value. The touch callback runs on the LVGL task and cannot ask the client. */
-static ui_state_t s_last;
-
 /* The addresses come up on a long press on the meter arc, timed from press
  * to release. A tap there used to bring them up, and the arc is where a hand
  * reaching for the dial lands: they kept appearing by themselves. */
@@ -1005,7 +1058,13 @@ static void tap(lv_point_t p, uint32_t held)
 {
     /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
      * selection on the precise one. */
-    if (s_edit != ED_NONE) { edit_commit(); return; }
+    if (s_edit != ED_NONE) {
+        const edit_t was = s_edit;
+        edit_commit();
+        /* The swipe's editors come in a row: the receiver, then its antenna. */
+        if (was == ED_RX && s_last.n_ant) edit_open(ED_ANT, &s_last);
+        return;
+    }
 
     /* The address card goes away with a tap on the card itself, and that tap
      * does nothing else. Like any other control on the face it answers only
@@ -1097,8 +1156,9 @@ static void release_cb(lv_event_t *e)
     tap(s_press_pt, lv_tick_elaps(s_pressed_at));
 }
 
-/* A swipe: down is memory mode, on or off; any other way is nothing, but was
- * not a tap either. */
+/* A swipe: down is memory mode, on or off -- or, on a radio with a second
+ * receiver or a choice of antennas, their editors: the receiver, and a tap
+ * later the antenna. Any other way is nothing, but was not a tap either. */
 static void gesture_cb(lv_event_t *e)
 {
     (void)e;
@@ -1106,9 +1166,16 @@ static void gesture_cb(lv_event_t *e)
     if (!indev) return;
     s_gestured = true;
     if (lv_indev_get_gesture_dir(indev) != LV_DIR_BOTTOM) return;
-    if (s_edit != ED_NONE || s_asking || !s_last.link_ok || s_last.tx ||
-        !s_last.has_memories) return;
-    s_swipe = true;
+    if (s_edit != ED_NONE || s_asking || !s_last.link_ok || s_last.tx) return;
+    if (s_last.mem_state == UI_MEM_OFF && s_last.n_rx > 1) {
+        edit_open(ED_RX, &s_last);
+        return;
+    }
+    if (s_last.mem_state == UI_MEM_OFF && s_last.n_ant) {
+        edit_open(ED_ANT, &s_last);
+        return;
+    }
+    if (s_last.has_memories) s_swipe = true;
 }
 
 static void touch_cb(lv_event_t *e)
@@ -1961,6 +2028,13 @@ void ui_update(const ui_state_t *st)
         s_ask_answer = -1;
     }
 
+    /* The antenna editor follows the radio until the knob turns it: opened
+     * straight after a change of receiver, it shows the last one's at first. */
+    if (s_edit == ED_ANT && !s_edit_moved && st->have_ant && ant_index(st) != s_edit_idx) {
+        s_edit_idx = ant_index(st);
+        edit_render();
+    }
+
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter. */
     if (s_edit != ED_NONE) { lvgl_port_unlock(); return; }
@@ -2060,6 +2134,11 @@ void ui_update(const ui_state_t *st)
         char g[8];
         snprintf(g, sizeof g, "G%02u", (unsigned)st->mem_group);
         set_text(s_band, g);
+    } else if (st->n_rx > 1 && st->rx) {
+        /* The second receiver, which only listens: marked, since the band is
+         * where the eye goes to see what the dial is on. */
+        snprintf(tb, sizeof tb, "SUB %s", band_of(f));
+        set_text(s_band, tb);
     } else {
         set_text(s_band, band_of(f));
     }

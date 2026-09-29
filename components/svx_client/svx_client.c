@@ -1381,6 +1381,8 @@ void radio_set_gain(int8_t gain)                { (void)gain; }
 void radio_goto_freq(int64_t hz)                { (void)hz; }
 void radio_memory_mode(bool on)                 { (void)on; }
 void radio_memory_group(uint8_t group)          { (void)group; }
+void radio_select_rx(uint8_t rx)                { (void)rx; }
+void radio_set_antenna(uint8_t ant, bool rx_ant) { (void)ant; (void)rx_ant; }
 
 void radio_tg_lock(bool locked) { s_lock_req = locked ? 2 : 1; }
 void radio_mute(bool muted)     { s_mute_val = muted; s_mute_req = true; }
