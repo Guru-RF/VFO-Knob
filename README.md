@@ -1,8 +1,9 @@
 # VFO-Knob
 
-A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
-built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune, change step, key the
-transmitter, watch the S-meter — over a USB-C cable or over WiFi.
+A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR)
+and the Icom IC-705, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
+change step, key the transmitter, watch the S-meter — over a USB-C cable or
+over WiFi.
 
 <p align="center">
   <img src="docs/display-rx.svg" width="400" alt="Receiving: the S-meter rises to S9+20 and falls back while its readout follows and the 100 Hz digit ticks; S-units marked around the blue 66 mm body">
@@ -20,6 +21,11 @@ It speaks **TCI v2.0** over a WebSocket, which is AetherSDR's own control
 protocol — so the knob is not polling, it is told. Tune at the desktop and the
 knob follows; turn the knob and the desktop moves.
 
+With an **IC-705** it talks to the radio itself, over WiFi, in Icom's network
+protocol — the one RS-BA1 and wfview use — with receive and transmit audio,
+so knob and radio are a complete station with no computer in between. Its face
+wears Icom's colours, so which radio a knob is for shows at a glance.
+
 ---
 
 ## What it does
@@ -27,11 +33,13 @@ knob follows; turn the knob and the desktop moves.
 | | |
 |---|---|
 | **Tune** | Per-digit step selection: tap a digit to set the decade. Acceleration on top, so a flick crosses a band and a slow turn lands on 10 Hz. |
-| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. A haptic reminder every 10 s while keyed, and a four-rung teardown that ends in dropping the socket. The transmit time-out is the radio's own. |
-| **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 runs the haptic motor for as long as it lasts. |
-| **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. |
+| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
+| **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
+| **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
 | **Mode / filter / RIT** | Tap to open, turn to choose, tap anywhere to accept. |
-| **Network** | Tap the meter arc to see the knob's addresses. |
+| **AGC / gain** | Either side of the S-meter's reading, edited the same way: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on AetherSDR, greyed out until AetherSDR's TCI can carry it. |
+| **Memories** | On the IC-705, swipe down for memory mode: the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). Swipe down again for the VFO, simplex. |
+| **Network** | Hold a finger on the meter arc for the knob's addresses; tap the card to put it away. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
@@ -177,8 +185,8 @@ If an update fails to boot, the bootloader rolls back to the previous slot. The
 confirmation is tied to the same "this boot looks healthy" timer that clears the
 boot-loop guard.
 
-There is one firmware per radio, `vfo-knob-<radio>` — today only
-`vfo-knob-aethersdr` — and each has its own update channel, `firmware/<radio>/`,
+There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr` and
+`vfo-knob-icom` — and each has its own update channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
 under **Firmware** on the configuration page.
@@ -199,6 +207,15 @@ idf.py -B build_usbnet \
 Leave off `sdkconfig.usbnet` for a WiFi-only build that keeps the serial
 console. **No credentials are compiled in** — a unit ships with empty storage
 and is configured over the cable.
+
+The IC-705 firmware is WiFi only (the radio is reached over WiFi, and the USB
+link has no route to it):
+
+```sh
+idf.py -B build_icom -D VFO_RADIO=icom \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.icom" \
+       build flash
+```
 
 Host-side tests (no hardware, no ESP-IDF):
 
@@ -232,8 +249,9 @@ way to watch a boot.
 The knob keys a transmitter. Two things are worth knowing:
 
 - **Toggle PTT** means the radio stays keyed when you let go. That is why the
-  periodic haptic reminder and the very loud red screen exist, and why the
-  radio's transmit time-out should be set: in AetherSDR, *Radio Setup → TX →
+  very loud red screen exists (there is no haptic reminder: on the air the
+  motor would be heard through the microphone), and why the radio's transmit
+  time-out should be set: in AetherSDR, *Radio Setup → TX →
   Timeout*. The radio enforces it itself, so it holds even if the knob, the
   link or the computer does not. The knob no longer keeps a second one.
 - **A client that loses power while keyed cannot unkey itself.** No firmware on

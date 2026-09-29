@@ -75,6 +75,27 @@ the moment upstream fills it in.
 parsers ignore trailing fields — which is exactly how `alc_dbfs` was added —
 so an extra field is backward compatible by construction.
 
+## Upstream: RF gain over TCI, and AGC changes announced
+
+The dial has a place for the RF gain, right of the S-meter's reading, and on
+AetherSDR nothing to put there: its TCI has `agc_mode` and `agc_gain` (the AGC
+threshold) but no RF gain -- the panadapter's `rfgain`, -8 to +32 dB in 8 dB
+steps on a FLEX-6400/6600 -- and neither its CAT nor its rigctl server carries
+it either. So the AetherSDR firmware shows **RF.G** greyed out.
+
+A smaller gap alongside it: AetherSDR announces an `agc_mode` change only when
+another TCI client made it (`TciServer.cpp` wires `rx_nb_enable`, `rit_enable`
+and the rest to the slice's signals, but not `agcModeChanged`). An AGC changed
+on the desktop reaches no client, so the knob asks for it every 3 s.
+
+**Action:** ask for an `rf_gain:<trx>,<dB>;` command -- GET, SET, and a
+notification whenever it changes -- on the panadapter of that trx's slice,
+with its range (AetherSDR already has it, `PanadapterModel::rfGainLow/High/
+Step`) so a client need not hard-code one radio's steps; and for
+`agcModeChanged` to be broadcast like the other slice flags. The knob's side is
+then a few lines in `tci_client.c`: `radio_set_gain()`, and `have_gain` with
+the range in `radio_get_status()`.
+
 ## Firmware
 
 - [ ] **Endurance soak.** Nothing has run for 24 h. Watch free internal heap,
@@ -104,23 +125,44 @@ so an extra field is backward compatible by construction.
       selection; if nothing, it is an upstream request like the ones above.
       With the slab repurposed the knob has no PTT at all, so the red TX
       screen must still follow the radio when it is keyed from elsewhere.
-- [ ] **Icom IC-705 / IC-7300 MK2.** When an IC-705 is at hand. Same repo,
-      the radio chosen at build time: everything but the TCI client is
-      shared. Both ways in are worth having — over WiFi straight to the radio,
-      which is what makes it useful on the go, and through a computer, as with
-      AetherSDR. The ground is laid:
+- [ ] **Icom IC-705 / IC-7300 MK2.** Same repo, the radio chosen at build
+      time: everything but the radio's client is shared. Both ways in are
+      worth having — over WiFi straight to the radio, which is what makes it
+      useful on the go, and through a computer, as with AetherSDR.
       - [x] one firmware per radio, chosen at build time
-        (`idf.py -D VFO_RADIO=…`) and named for it: `vfo-knob-aethersdr`;
+        (`idf.py -D VFO_RADIO=…`) and named for it: `vfo-knob-aethersdr`,
+        `vfo-knob-icom`;
       - [x] an update channel per radio, `firmware/<radio>/`, so a knob is only
         ever offered its own releases (`RADIO=… tools/release.sh`);
       - [x] another radio's image is refused as an update, by upload and by
         OTA alike; switching is deliberate, from the radio chooser under
-        **Firmware** on the configuration page (Icom listed, not yet offered);
-      - [x] the same signing key and `partitions.csv` for all of them.
-      Still to do: put the radio behind an interface — `main/app_main.c` and
-      `components/webcfg` still call the TCI client directly — then write the
-      Icom client as the second implementation, add `icom` to `_vfo_radios`
-      in `CMakeLists.txt`, and offer it in the chooser.
+        **Firmware** on the configuration page;
+      - [x] the same signing key and `partitions.csv` for all of them;
+      - [x] the radio behind an interface, `components/radio/include/radio.h`,
+        with `tci_client` and `icom_client` as its two implementations;
+      - [x] `icom_client`: the IC-705's LAN protocol over WiFi — login, CI-V,
+        RX and TX audio at 24 kHz, FIL1-3 — and the Icom colour scheme. Other
+        LAN Icoms (IC-9700, IC-7610, IC-905) speak the same protocol but need
+        their own CI-V address, meter calibration and frequency range;
+      - [x] transmit tested into a dummy load: PTT and TX audio, the
+        modulation input switched to WLAN for each over and put back after;
+      - [ ] Po, SWR and ALC checked against the radio's own meters (SWR read
+        5.4 at 70 cm into the dummy load: the load, or the calibration?);
+      - [x] **AGC and P.AMP** either side of the S-meter's S-unit readout,
+        each with an editor like the mode's: the IC-705's AGC (CI-V `16 12`:
+        FAST, MID, SLOW) and preamp (`16 02`: OFF, P.AMP1 and P.AMP2 on HF and
+        6 m, a single one on 2 m and 70 cm). On AetherSDR the AGC is TCI's
+        `agc_mode` (off, slow, med, fast), and **RF.G** waits on the upstream
+        item above;
+      - [x] **memory mode** on a swipe down: the channel's name, number,
+        frequency, shift and tone in place of the frequency, the knob stepping
+        through the programmed channels of one group (`1A 00` reads them,
+        `08 A0`/`08` selects), and a second swipe back to the VFO, simplex
+        (`07`, `0F 10`). The radio cannot be asked which channel or mode it
+        is on, so the knob keeps its own and remembers it;
+      - [x] a first `icom` release (1.7.0), offered in the radio chooser;
+      - [ ] through a computer: wfview's server speaks the same protocol, so
+        the same client should reach a USB-connected radio behind a PC.
 
 ## Known hardware quirks
 
