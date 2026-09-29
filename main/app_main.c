@@ -19,6 +19,7 @@
 #include "audio_in.h"
 #include "audio_out.h"
 #include "board.h"
+#include "cJSON.h"
 #include "board_pins.h"
 #include "drv2605.h"
 #include "gpio_scan.h"
@@ -52,6 +53,13 @@
 #include "freertos/task.h"
 
 static const char *TAG = "vfo";
+
+/* The firmware picker, asked for with a finger held on the meter arc and a
+ * yes: installed at boot, before the radio takes the RAM, as an update is
+ * (see UPDATE_ON_BOOT). RTC memory survives the deliberate restart. */
+#define PICKER_ON_BOOT 0x50494b52u               /* "PIKR" */
+RTC_NOINIT_ATTR static uint32_t s_picker_on_boot;
+static bool     s_picker_accepted;
 
 static void log_cpu(void);
 
@@ -200,7 +208,9 @@ static void encoder_task(void *arg)
         }
 
         ui_note_activity();
-        ui_ask_knob_moved();         /* turning the knob answers "update?" no */
+        /* Turning the knob answers a question on the dial: "update?" no, and
+         * the knob tunes on; "firmware?" yes, and the turn is spent on it. */
+        if (ui_ask_knob_moved()) continue;
         if (!moving) { moving = true; run_counts = 0; }
         idle_since  = now_us;
         run_counts += delta;
@@ -323,6 +333,9 @@ _Static_assert((int)UI_MEM_OFF == (int)RADIO_MEM_OFF &&
  * An answer given is not asked again while the client has yet to take it:
  * that is one pass of this loop, and without this the question flickered
  * back up. */
+#if VFO_RADIO_SETUP
+__attribute__((unused))
+#endif
 static void ask_choice(const radio_status_t *st)
 {
     static uint32_t asked_seq, answered_seq;
@@ -454,6 +467,38 @@ static void ui_task(void *arg)
             radio_ptt_toggle();
         }
 
+#if !VFO_RADIO_SETUP
+        /* A finger held ten seconds on the meter arc: the firmware picker? A
+         * turn of the knob says yes, and restarts the knob, which installs it
+         * at boot -- before the radio takes the RAM an install needs, as an
+         * update does. */
+        {
+            static bool asking_picker;
+            if (ui_take_picker_request() && !asking_picker) {
+                ESP_LOGI(TAG, "firmware picker asked for");
+                asking_picker = ui_ask_turn("FIRMWARE?", "turn the knob for the picker\n"
+                                                         "tap to cancel; WiFi is kept");
+            }
+            if (asking_picker) {
+                const int a = ui_take_update_answer();
+                if (a) asking_picker = false;
+                if (a > 0) {
+                    if (radio_on_air()) radio_ptt_unkey();
+                    for (int i = 0; i < 50 && radio_on_air(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+                    if (radio_on_air()) {
+                        ESP_LOGE(TAG, "picker not started: still transmitting");
+                    } else {
+                        ESP_LOGW(TAG, "firmware picker accepted -- restarting to install it");
+                        ui_updating_show();
+                        s_picker_on_boot = PICKER_ON_BOOT;
+                        vTaskDelay(pdMS_TO_TICKS(300));
+                        esp_restart();
+                    }
+                }
+            }
+        }
+#endif
+
         /* The reflector face's lock and mute: toggles of what the reflector
          * client holds (svxconnect; no-ops on a radio). */
         {
@@ -487,7 +532,9 @@ static void ui_task(void *arg)
          * out of its 5 kB and crashed it. */
         static radio_status_t st;
         radio_get_status(&st);
-        ask_choice(&st);
+#if !VFO_RADIO_SETUP
+        ask_choice(&st);        /* the setup firmware asks its own, directly */
+#endif
 
         /* High SWR: on the glass and in the log, no longer on the motor. It
          * ran for as long as SWR stayed above 2.5, and on the air that buzz
@@ -797,6 +844,40 @@ static void install_update(void)
     ui_updating_hide();
 }
 
+/* Another radio's firmware, installed now: the firmware picker (the setup
+ * firmware) from a radio's, or a radio's from the picker. The settings stay,
+ * in NVS. Returns only if it failed, with the reason on the dial. */
+static void install_switch(const char *radio)
+{
+    ESP_LOGW(TAG, "installing the %s firmware", radio);
+    ui_updating_show();
+    esp_ota_img_states_t trial;
+    for (int i = 0; i < 120 &&
+         esp_ota_get_state_partition(esp_ota_get_running_partition(),
+                                     &trial) == ESP_OK &&
+         trial == ESP_OTA_IMG_PENDING_VERIFY; i++)
+        vTaskDelay(pdMS_TO_TICKS(250));
+    ota_status_t o;
+    ota_get_status(&o);
+    const uint32_t before = o.checks;
+    if (ota_start_switch(radio) == ESP_OK) {
+        do {
+            vTaskDelay(pdMS_TO_TICKS(250));
+            ota_get_status(&o);
+            ui_updating_progress(o.percent);
+        } while (o.checks == before);
+        if (o.phase == OTA_DONE_REBOOT_NEEDED) {
+            ui_updating_result(true, "Restarting");
+            vTaskDelay(pdMS_TO_TICKS(1500));
+            esp_restart();
+        }
+        ESP_LOGE(TAG, "firmware switch failed: %s", o.message);
+    }
+    ui_updating_result(false, "Download failed");
+    vTaskDelay(pdMS_TO_TICKS(2500));
+    ui_updating_hide();
+}
+
 /* At boot on WiFi, before TCI starts: the one moment there is RAM to spare.
  * A plain look is bounded to a few seconds, so a LAN with no way out costs
  * TCI little; an install already accepted gets as long as it needs. */
@@ -826,7 +907,156 @@ static void boot_update_check(void)
     if (avail && ask_update(&o)) install_update();
 }
 
-static void net_task(void *arg)
+#if VFO_RADIO_SETUP
+/* --- the setup firmware ----------------------------------------------------
+ *
+ * For a knob with no computer to set it up from: its WiFi from a phone, then
+ * the firmware for its radio, chosen on the dial and installed. The WiFi
+ * stays for the firmware installed, which finds it where every firmware keeps
+ * it, and a radio's firmware comes back here with a finger held ten seconds on
+ * its meter arc.
+ *
+ *  1. The network already stored, if there is one: 25 s to join it.
+ *  2. Otherwise the knob's own hotspot, VFOKnob, open. A phone that joins it
+ *     is sent to the WiFi page by itself (a captive portal), chooses the
+ *     network, gives the password, and sees the knob join it.
+ *  3. Online: the firmwares published for the knob, one a detent on the dial
+ *     with its version. A tap on the panel installs one and restarts into it;
+ *     the last choice, WIFI, goes back to 2 for another network.
+ */
+#define SETUP_AP_NAME "VFOKnob"
+
+/* Only for when the release server's index cannot be had: the radios this
+ * build knew of. The index is what counts -- see setup_pick(). */
+static const struct { const char *radio, *name; } FIRMWARES[] = {
+    { "aethersdr",  "AetherSDR" },
+    { "icom",       "Icom"      },
+    { "multiflex",  "FlexRadio" },
+    { "svxconnect", "SvxLink"   },
+};
+
+static void setup_wifi_page(void)
+{
+    net_prov_hold_station(true);
+    net_prov_ap_start(SETUP_AP_NAME);
+    ui_setup_show("WIFI SETUP", "Join the WiFi network\n" SETUP_AP_NAME "\nwith your phone, then\nchoose your network on\nthe page that opens.");
+    net_join_t shown = NET_JOIN_IDLE;
+    for (;;) {
+        char ssid[33], why[48], msg[160];
+        const net_join_t st = net_prov_join_state(ssid, sizeof ssid, why, sizeof why);
+        if (st != shown) {
+            shown = st;
+            if (st == NET_JOIN_TRYING) {
+                snprintf(msg, sizeof msg, "Joining\n%s", ssid);
+                ui_setup_show("WIFI SETUP", msg);
+            } else if (st == NET_JOIN_FAILED) {
+                snprintf(msg, sizeof msg, "Could not join\n%s:\n%s\nTry again on the phone.", ssid, why);
+                ui_setup_show("WIFI SETUP", msg);
+            } else if (st == NET_JOIN_OK) {
+                net_prov_join_keep();
+                snprintf(msg, sizeof msg, "Connected to\n%s", ssid);
+                ui_setup_show("WIFI SETUP", msg);
+                /* Time for the phone's page to say so before the hotspot goes. */
+                vTaskDelay(pdMS_TO_TICKS(8000));
+                net_prov_ap_stop();
+                net_prov_hold_station(false);
+                return;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+}
+
+/* The firmwares published for the knob, one a detent, each with its version;
+ * the last choice sets up the WiFi again. Returns when that one is chosen.
+ *
+ * The list is the release server's (firmware/index.json, written by
+ * tools/release.sh), not this build's: a radio whose firmware is published
+ * after this one was made is offered too. */
+static void setup_pick(void)
+{
+    static char titles[UI_CHOICES][12], names[UI_CHOICES][24], radios[UI_CHOICES][16];
+    for (;;) {
+        ui_setup_show("FIRMWARE", "Looking up\nthe firmwares...");
+        uint8_t n = 0;
+        char *idx = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
+        if (idx && ota_fetch_index(idx, 4096) == ESP_OK) {
+            cJSON *root = cJSON_Parse(idx);
+            const cJSON *f;
+            cJSON_ArrayForEach(f, cJSON_GetObjectItem(root, "firmwares")) {
+                const char *r  = cJSON_GetStringValue(cJSON_GetObjectItem(f, "radio"));
+                const char *nm = cJSON_GetStringValue(cJSON_GetObjectItem(f, "name"));
+                const char *v  = cJSON_GetStringValue(cJSON_GetObjectItem(f, "version"));
+                /* Not this one: it is what is running. */
+                if (!r || !v || strcmp(r, "setup") == 0 || n >= UI_CHOICES - 1) continue;
+                strlcpy(titles[n], "INSTALL", sizeof titles[n]);
+                snprintf(names[n], sizeof names[n], "%s %s", nm && *nm ? nm : r, v);
+                strlcpy(radios[n], r, sizeof radios[n]);
+                n++;
+            }
+            cJSON_Delete(root);
+        }
+        free(idx);
+        if (!n) {
+            ESP_LOGW(TAG, "no firmware index: the radios this build knows");
+            for (size_t i = 0; i < sizeof FIRMWARES / sizeof FIRMWARES[0] && n < UI_CHOICES - 1; i++) {
+                char ver[16];
+                if (ota_fetch_version(FIRMWARES[i].radio, ver, sizeof ver) != ESP_OK) continue;
+                strlcpy(titles[n], "INSTALL", sizeof titles[n]);
+                snprintf(names[n], sizeof names[n], "%s %s", FIRMWARES[i].name, ver);
+                strlcpy(radios[n], FIRMWARES[i].radio, sizeof radios[n]);
+                n++;
+            }
+        }
+        if (!n) {
+            ui_setup_show("FIRMWARE", "None found.\nIs the network online?\nTrying again.");
+            vTaskDelay(pdMS_TO_TICKS(15000));
+            continue;
+        }
+        strlcpy(titles[n], "WIFI", sizeof titles[n]);
+        strlcpy(names[n], "Set up again", sizeof names[n]);
+        radios[n++][0] = 0;
+        /* The chooser first: the text then goes under its panel. */
+        ui_ask_choice(titles, names, n, 0);
+        ui_setup_show("FIRMWARE", "Turn to your radio,\nthen tap to install.");
+        int a;
+        while ((a = ui_take_choice()) < 0) vTaskDelay(pdMS_TO_TICKS(100));
+        if (!radios[a][0]) return;                /* the WiFi, again */
+        install_switch(radios[a]);                /* returns only if it failed */
+    }
+}
+
+static void setup_task(void *arg)
+{
+    (void)arg;
+    const vfo_cfg_t *cfg = net_prov_cfg();
+    ui_setup_show("VFO-KNOB", "Starting");
+    if (net_prov_wifi_start() != ESP_OK) {
+        ui_setup_show("VFO-KNOB", "WiFi would not start.");
+        vTaskDelete(NULL);
+    }
+    bool online = false;
+    if (cfg->ssid[0]) {
+        char msg[80];
+        snprintf(msg, sizeof msg, "Joining\n%s", cfg->ssid);
+        ui_setup_show("WIFI", msg);
+        for (int i = 0; i < 250 && !net_prov_is_connected(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+        online = net_prov_is_connected();
+    }
+    for (;;) {
+        if (!online) setup_wifi_page();
+        setup_pick();
+        online = false;                           /* WIFI chosen: set it up again */
+    }
+}
+/* The radios' supervisor, and the question it relays, have nothing to do
+ * here: kept compiled, not run. */
+#define RADIO_ONLY_FN __attribute__((unused))
+#else
+#define RADIO_ONLY_FN
+#endif
+
+RADIO_ONLY_FN static void net_task(void *arg)
 {
     (void)arg;
     const vfo_cfg_t *cfg = net_prov_cfg();
@@ -843,6 +1073,20 @@ static void net_task(void *arg)
              * stayed up long enough to dim. */
             bool via_usb = false;
             const char *host = pick_transport(cfg, ip, sizeof ip, &via_usb);
+            /* The firmware picker, asked for and accepted before the restart
+             * this boot came from: from WiFi, which has a way out -- the
+             * cable does not. */
+            if (s_picker_accepted && (net_prov_is_connected() || via_usb)) {
+                s_picker_accepted = false;
+                if (via_usb) {
+                    ui_updating_show();
+                    ui_updating_result(false, "Needs WiFi");
+                    vTaskDelay(pdMS_TO_TICKS(3000));
+                    ui_updating_hide();
+                } else {
+                    install_switch("setup");
+                }
+            }
             /* On WiFi the release server is in reach: see if there is
              * anything newer, once, before TCI takes the RAM an install
              * would need. */
@@ -1280,6 +1524,9 @@ void app_main(void)
     s_update_accepted = s_update_on_boot == UPDATE_ON_BOOT &&
                         esp_reset_reason() == ESP_RST_SW;
     s_update_on_boot = 0;
+    s_picker_accepted = s_picker_on_boot == PICKER_ON_BOOT &&
+                        esp_reset_reason() == ESP_RST_SW;
+    s_picker_on_boot = 0;
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);
@@ -1411,7 +1658,10 @@ void app_main(void)
          * 4 kB ([STK] in the log) and overflowed once at boot: it gets 5.
          * The multiflex firmware's overflowed 4 kB too, and at 5 kB still
          * came within 84 bytes of the end: it gets 6. */
-#if VFO_RADIO_MULTIFLEX
+#if VFO_RADIO_SETUP
+        /* TLS, for the firmwares' versions, on its own stack. */
+        xTaskCreatePinnedToCore(setup_task, "setup", 10240, NULL, 3, NULL, 0);
+#elif VFO_RADIO_MULTIFLEX
         xTaskCreatePinnedToCore(net_task, "net_sup", 6144, NULL, 3, NULL, 0);
 #elif VFO_RADIO_SVXCONNECT
         xTaskCreatePinnedToCore(net_task, "net_sup", 5120, NULL, 3, NULL, 0);

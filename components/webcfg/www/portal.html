@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VFO-Knob WiFi setup</title>
+<style>
+:root{--bg:#0b0f14;--card:#141b24;--line:#233040;--text:#e8eef5;--dim:#8a99aa;--acc:#e5a823;--ok:#2ea043;--bad:#e5534b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:460px;margin:0 auto;padding:22px 16px 40px}
+h1{font-size:22px;margin:0 0 4px}
+p{margin:6px 0 14px;color:var(--dim)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:14px 0}
+.net{display:flex;justify-content:space-between;align-items:center;width:100%;padding:12px;margin:0 0 8px;
+  background:#0f151d;border:1px solid var(--line);border-radius:10px;color:var(--text);font:inherit;text-align:left}
+.net.sel{border-color:var(--acc)}
+.bars{color:var(--dim);font-size:13px;white-space:nowrap;margin-left:10px}
+label{display:block;font-size:14px;color:var(--dim);margin:10px 0 4px}
+input{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:#0f151d;color:var(--text);font:inherit}
+button.go{width:100%;margin-top:14px;padding:13px;border:0;border-radius:10px;background:var(--acc);color:#111;font:600 17px system-ui,sans-serif}
+button.go:disabled{opacity:.5}
+a{color:var(--acc)}
+#msg{margin-top:12px;min-height:1.4em}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+</style></head>
+<body><main>
+<h1>VFO-Knob</h1>
+<p>Choose the WiFi network the knob should join. Once it is on it, the knob
+shows the firmwares to choose from, on its own dial.</p>
+
+<div class="card">
+  <div id="list"><p>Looking for networks&hellip;</p></div>
+  <a href="#" id="rescan">Look again</a>
+</div>
+
+<div class="card">
+  <label for="ssid">Network</label>
+  <input id="ssid" autocomplete="off" autocapitalize="none" spellcheck="false">
+  <label for="pass">Password</label>
+  <input id="pass" type="password" autocomplete="off">
+  <button class="go" id="go">Connect</button>
+  <div id="msg"></div>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function bars(r){return r>-55?'&#9679;&#9679;&#9679;&#9679;':r>-65?'&#9679;&#9679;&#9679;':r>-75?'&#9679;&#9679;':'&#9679;';}
+async function scan(){
+  $('list').innerHTML='<p>Looking for networks&hellip;</p>';
+  try{
+    const l=await (await fetch('/api/scan')).json();
+    if(!l.length){$('list').innerHTML='<p>No networks found.</p>';return}
+    $('list').innerHTML=l.map((n,i)=>`<button class="net" data-i="${i}"><span>${esc(n.ssid)}${n.open?'':' &#128274;'}</span><span class="bars">${bars(n.rssi)}</span></button>`).join('');
+    document.querySelectorAll('.net').forEach(b=>b.onclick=()=>{
+      document.querySelectorAll('.net').forEach(x=>x.classList.remove('sel'));
+      b.classList.add('sel');
+      const n=l[b.dataset.i];
+      $('ssid').value=n.ssid; $('pass').value='';
+      if(!n.open) $('pass').focus();
+    });
+  }catch(e){$('list').innerHTML='<p>The knob did not answer. Look again.</p>'}
+}
+$('rescan').onclick=e=>{e.preventDefault();scan()};
+async function poll(){
+  for(let i=0;i<60;i++){
+    await new Promise(r=>setTimeout(r,1000));
+    let j;
+    try{ j=await (await fetch('/api/join')).json() }catch(e){ continue }
+    if(j.state==='ok'){
+      $('msg').innerHTML='<span class="ok">Connected to '+esc(j.ssid)+'.</span> Now choose the firmware on the knob\'s dial: turn to it, tap to install. You can put the phone away.';
+      return;
+    }
+    if(j.state==='failed'){
+      $('msg').innerHTML='<span class="bad">Could not join '+esc(j.ssid)+': '+esc(j.why)+'</span> Check the network and password, and try again.';
+      $('go').disabled=false; return;
+    }
+  }
+  $('msg').innerHTML='No answer yet. If the knob says it is connected, you are done; if not, try again.';
+  $('go').disabled=false;
+}
+$('go').onclick=async()=>{
+  const ssid=$('ssid').value.trim();
+  if(!ssid){$('msg').textContent='Choose a network first.';return}
+  $('go').disabled=true;
+  $('msg').textContent='Joining '+ssid+'… the phone may lose the knob\'s network for a moment.';
+  try{
+    await fetch('/api/join',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:'ssid='+encodeURIComponent(ssid)+'&pass='+encodeURIComponent($('pass').value)});
+  }catch(e){}
+  poll();
+};
+scan();
+</script>
+</body></html>

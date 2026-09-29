@@ -63,6 +63,25 @@ esp_err_t ota_start_check(bool install);
 
 void ota_get_status(ota_status_t *out);
 
+/* Install the latest release of another radio's firmware: a deliberate switch
+ * -- the firmware picker's, and the way back to it. Runs like an install from
+ * ota_start_check(true), polled the same way; only that radio's image is
+ * accepted, and it is installed whatever its version. The settings stay: they
+ * are in NVS, which no image touches. */
+esp_err_t ota_start_switch(const char *radio);
+
+/* The version a radio's channel holds ("1.9.0"), fetched now: a few seconds
+ * at most, TLS on the caller's stack, which wants 8 kB. ESP_ERR_NOT_FOUND when
+ * the channel has nothing in it. */
+esp_err_t ota_fetch_version(const char *radio, char *ver, size_t cap);
+
+/* Every firmware published, as the release script lists them in
+ * firmware/index.json: {"firmwares":[{"radio":"multiflex","name":"FlexRadio",
+ * "version":"1.9.0"},...]}. Fetched now, TLS on the caller's stack, into
+ * `buf`, NUL-terminated. So a setup firmware in the field offers the radios
+ * published after it was built. */
+esp_err_t ota_fetch_index(char *buf, size_t cap);
+
 /* The radio this firmware is for: its image is vfo-knob-<radio>, and it
  * follows the update channel of that name. */
 const char *ota_radio(void);

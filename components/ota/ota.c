@@ -43,6 +43,9 @@ static const char *TAG = "ota";
 #define OTA_PREFIX   "vfo-knob-"
 
 static char            s_base[128];       /* OTA_ROOT_URL + radio + "/" */
+/* The radio whose channel an install takes its image from: "" for this
+ * firmware's own (an update), another's for a switch (ota_start_switch). */
+static char            s_switch[16];
 static ota_status_t    s_st = { .phase = OTA_IDLE };
 static portMUX_TYPE    s_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool   s_busy;
@@ -135,10 +138,17 @@ static bool json_string_field(const char *json, const char *key,
 
 /* ------------------------------------------------------------- the worker */
 
-static esp_err_t fetch_latest(char *body, size_t cap, int *out_len)
+static esp_err_t fetch_url(const char *url, char *body, size_t cap, int *out_len);
+
+static esp_err_t fetch_latest(const char *base, char *body, size_t cap, int *out_len)
 {
     char url[160];
-    snprintf(url, sizeof url, "%smanifest.json", s_base);
+    snprintf(url, sizeof url, "%smanifest.json", base);
+    return fetch_url(url, body, cap, out_len);
+}
+
+static esp_err_t fetch_url(const char *url, char *body, size_t cap, int *out_len)
+{
     esp_http_client_config_t c = {
         .url               = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -178,9 +188,20 @@ static void ota_run(bool install)
     if (!body) body = malloc(cap);
     if (!body) { set_phase(OTA_FAILED, "out of memory"); goto done; }
 
-    set_phase(OTA_CHECKING, "checking for a newer release");
+    /* A switch takes another radio's channel, and its image whatever its
+     * version: it is a choice, not an update. */
+    const bool sw = install && s_switch[0];
+    char base[128], want[32];
+    if (sw) {
+        snprintf(base, sizeof base, "%s%s/", OTA_ROOT_URL, s_switch);
+        snprintf(want, sizeof want, OTA_PREFIX "%s", s_switch);
+    } else {
+        strlcpy(base, s_base, sizeof base);
+        strlcpy(want, esp_app_get_description()->project_name, sizeof want);
+    }
+    set_phase(OTA_CHECKING, sw ? "looking up the firmware" : "checking for a newer release");
     int len = 0;
-    const esp_err_t got = fetch_latest(body, cap, &len);
+    const esp_err_t got = fetch_latest(base, body, cap, &len);
     if (got == ESP_ERR_NOT_FOUND) {
         /* The server answered: this radio's channel has no release in it. */
         set_phase(OTA_FAILED, "no release published for this radio yet");
@@ -204,7 +225,7 @@ static void ota_run(bool install)
     s_st.newer = newer;
     portEXIT_CRITICAL(&s_lock);
 
-    if (!newer) {
+    if (!newer && !sw) {
         char m[96];
         snprintf(m, sizeof m, "%s is the latest release", tag);
         set_phase(OTA_UP_TO_DATE, m);
@@ -222,11 +243,11 @@ static void ota_run(bool install)
         set_phase(OTA_FAILED, "manifest names no image");
         goto done;
     }
-    snprintf(url, sizeof url, "%s%s", s_base, file);
+    snprintf(url, sizeof url, "%s%s", base, file);
     free(body);
     body = NULL;                      /* the TLS session wants the room back */
 
-    set_phase(OTA_DOWNLOADING, "downloading update");
+    set_phase(OTA_DOWNLOADING, sw ? "downloading the firmware" : "downloading update");
     esp_http_client_config_t hc = {
         .url               = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -247,7 +268,7 @@ static void ota_run(bool install)
      * to its radio. The header is read before the rest is downloaded. */
     esp_app_desc_t nd = { 0 };
     if (esp_https_ota_get_img_desc(oh, &nd) != ESP_OK ||
-        !same_product(nd.project_name, esp_app_get_description()->project_name)) {
+        !same_product(nd.project_name, want)) {
         esp_https_ota_abort(oh);
         set_phase(OTA_FAILED, "the channel offered another radio's firmware");
         goto done;
@@ -276,6 +297,7 @@ static void ota_run(bool install)
 
 done:
     free(body);
+    s_switch[0] = 0;
     portENTER_CRITICAL(&s_lock);
     s_st.checks++;
     portEXIT_CRITICAL(&s_lock);
@@ -458,6 +480,38 @@ esp_err_t ota_set_interval(uint32_t hours)
     if (err != ESP_OK) return err;
     return esp_timer_start_periodic(s_periodic,
                                     (uint64_t)hours * 3600ULL * 1000000ULL);
+}
+
+esp_err_t ota_start_switch(const char *radio)
+{
+    if (!radio || !*radio || strlen(radio) >= sizeof s_switch) return ESP_ERR_INVALID_ARG;
+    if (s_busy) return ESP_ERR_INVALID_STATE;
+    strlcpy(s_switch, radio, sizeof s_switch);
+    const esp_err_t e = ota_start_check(true);
+    if (e != ESP_OK) s_switch[0] = 0;
+    return e;
+}
+
+esp_err_t ota_fetch_version(const char *radio, char *ver, size_t cap)
+{
+    if (!radio || !ver || !cap) return ESP_ERR_INVALID_ARG;
+    char base[128];
+    snprintf(base, sizeof base, "%s%s/", OTA_ROOT_URL, radio);
+    const size_t bcap = 1024;
+    char *body = heap_caps_malloc(bcap, MALLOC_CAP_SPIRAM);
+    if (!body) return ESP_ERR_NO_MEM;
+    int len = 0;
+    esp_err_t e = fetch_latest(base, body, bcap, &len);
+    if (e == ESP_OK && !json_string_field(body, "version", ver, cap)) e = ESP_ERR_INVALID_RESPONSE;
+    free(body);
+    return e;
+}
+
+esp_err_t ota_fetch_index(char *buf, size_t cap)
+{
+    if (!buf || cap < 2) return ESP_ERR_INVALID_ARG;
+    int len = 0;
+    return fetch_url(OTA_ROOT_URL "index.json", buf, cap, &len);
 }
 
 const char *ota_base_url(void) { return s_base; }

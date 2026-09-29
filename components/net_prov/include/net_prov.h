@@ -9,6 +9,7 @@
 #define NET_PROV_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -72,5 +73,30 @@ bool net_prov_is_connected(void);
 /* Resolve the configured host. mDNS for *.local, getaddrinfo otherwise.
  * Writes a dotted-quad into `out`. */
 esp_err_t net_prov_resolve(char *out, size_t out_len);
+
+/* --- the setup firmware's WiFi setup (net_ap.c) ---------------------------
+ * A hotspot a phone can join, which sends it to the knob's page by itself (a
+ * captive portal: DNS answers every name with the knob, DHCP names it as the
+ * portal). The station stays up beside it. Needs net_prov_wifi_start() first. */
+esp_err_t net_prov_ap_start(const char *ssid);
+void      net_prov_ap_stop(void);
+bool      net_prov_ap_active(void);
+
+/* The networks in reach, strongest first, each once: at most `max`. Blocks
+ * for the scan, a few seconds. */
+typedef struct { char ssid[33]; int8_t rssi; bool open; } net_prov_net_t;
+int net_prov_scan(net_prov_net_t *out, int max);
+
+/* Join a network now, as given on the portal. It is tried a few times;
+ * net_prov_join_state() says how it went -- and why not, when it did not --
+ * and net_prov_join_keep() stores it once it worked. */
+typedef enum { NET_JOIN_IDLE = 0, NET_JOIN_TRYING, NET_JOIN_OK, NET_JOIN_FAILED } net_join_t;
+esp_err_t  net_prov_join(const char *ssid, const char *pass);
+net_join_t net_prov_join_state(char *ssid, size_t sn, char *why, size_t wn);
+esp_err_t  net_prov_join_keep(void);
+
+/* While the hotspot is up, stop chasing the stored network: scanning the
+ * channels for it takes the hotspot off the air, and the phone with it. */
+void net_prov_hold_station(bool hold);
 
 #endif /* NET_PROV_H */

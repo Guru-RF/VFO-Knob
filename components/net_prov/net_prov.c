@@ -81,6 +81,28 @@ static uint8_t            s_boots;
 
 #define BIT_GOT_IP BIT0
 
+/* Joining a network from the setup firmware's portal: tried a few times, then
+ * given up with the reason, so the portal can say it and ask again. */
+static volatile net_join_t s_join = NET_JOIN_IDLE;
+static char     s_join_ssid[33], s_join_pass[65], s_join_why[48];
+static uint8_t  s_join_fails;
+/* While the hotspot is up the stored network is not chased: a station
+ * scanning the channels for it takes the hotspot off the air, and the phone
+ * with it. */
+static volatile bool s_hold;
+
+static const char *reason_text(uint8_t r)
+{
+    switch (r) {
+    case WIFI_REASON_NO_AP_FOUND:              return "network not found";
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_MIC_FAILURE:              return "wrong password?";
+    default:                                   return "could not connect";
+    }
+}
+
 static void load_or_seed(void)
 {
     nvs_handle_t h;
@@ -150,8 +172,22 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *d = data;
         s_connected = false;
         xEventGroupClearBits(s_events, BIT_GOT_IP);
+        if (s_join == NET_JOIN_TRYING) {
+            if (++s_join_fails >= 4) {
+                strlcpy(s_join_why, reason_text(d->reason), sizeof s_join_why);
+                ESP_LOGW(TAG, "joining \"%s\" failed: %s (reason %u)",
+                         s_join_ssid, s_join_why, d->reason);
+                s_join = NET_JOIN_FAILED;
+                return;                           /* until the portal asks again */
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+            esp_wifi_connect();
+            return;
+        }
+        if (s_hold || s_join == NET_JOIN_FAILED) return;
         /* Reconnect forever: this is a shack appliance, not a phone. Back off a
          * little so a wrong passphrase does not spin the radio flat out. */
         int delay = s_retries < 5 ? 500 : 5000;
@@ -167,7 +203,48 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGI(TAG, "got ip " IPSTR " gw " IPSTR,
                  IP2STR(&e->ip_info.ip), IP2STR(&e->ip_info.gw));
         xEventGroupSetBits(s_events, BIT_GOT_IP);
+        if (s_join == NET_JOIN_TRYING) s_join = NET_JOIN_OK;
     }
+}
+
+esp_err_t net_prov_join(const char *ssid, const char *pass)
+{
+    if (!ssid || !ssid[0]) return ESP_ERR_INVALID_ARG;
+    strlcpy(s_join_ssid, ssid, sizeof s_join_ssid);
+    strlcpy(s_join_pass, pass ? pass : "", sizeof s_join_pass);
+    wifi_config_t wc = { 0 };
+    strlcpy((char *)wc.sta.ssid, s_join_ssid, sizeof wc.sta.ssid);
+    strlcpy((char *)wc.sta.password, s_join_pass, sizeof wc.sta.password);
+    s_join_fails = 0;
+    s_join_why[0] = 0;
+    s_join = NET_JOIN_TRYING;
+    esp_wifi_disconnect();
+    esp_wifi_set_config(WIFI_IF_STA, &wc);
+    ESP_LOGI(TAG, "joining \"%s\"", s_join_ssid);
+    return esp_wifi_connect();
+}
+
+net_join_t net_prov_join_state(char *ssid, size_t sn, char *why, size_t wn)
+{
+    if (ssid) strlcpy(ssid, s_join_ssid, sn);
+    if (why)  strlcpy(why, s_join_why, wn);
+    return s_join;
+}
+
+esp_err_t net_prov_join_keep(void)
+{
+    if (s_join != NET_JOIN_OK) return ESP_ERR_INVALID_STATE;
+    vfo_cfg_t c = s_cfg;
+    strlcpy(c.ssid, s_join_ssid, sizeof c.ssid);
+    strlcpy(c.pass, s_join_pass, sizeof c.pass);
+    s_join = NET_JOIN_IDLE;
+    return net_prov_save_cfg(&c);
+}
+
+void net_prov_hold_station(bool hold)
+{
+    s_hold = hold;
+    if (!hold && !s_connected && s_join != NET_JOIN_TRYING) esp_wifi_connect();
 }
 
 esp_err_t net_prov_init(void)

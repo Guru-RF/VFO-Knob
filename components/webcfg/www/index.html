@@ -56,7 +56,7 @@ label.chk input{width:auto;margin:0}
   <div id="status"></div>
 </section>
 
-<section>
+<section id="radiosec">
   <h2 id="rtitle">Radio</h2>
   <div class="grid">
     <div><label for="host"><span id="hostlbl">Host (IP, or a name ending .local)</span><button id="myip" type="button"
@@ -268,6 +268,8 @@ async function load(){
   const lan = icom;                       /* the radio itself, with a login */
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
+  /* The setup firmware has no radio: it installs one of the others. */
+  $('radiosec').hidden = c.radio === 'setup';
   LINKNAME = c.link || 'Radio';
   $('rtitle').textContent = icom ? 'IC-705 / IC-7610' : SVX ? 'SvxLink reflector'
                           : flex ? 'FlexRadio' : 'AetherSDR';
@@ -490,7 +492,8 @@ $('upload').onclick = async()=>{
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 (LAN)'},
               {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'},
-              {id:'multiflex', name:'FlexRadio (MultiFlex)'}];
+              {id:'multiflex', name:'FlexRadio (MultiFlex)'},
+              {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
 function radios(){

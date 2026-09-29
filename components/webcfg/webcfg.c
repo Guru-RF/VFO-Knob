@@ -616,8 +616,104 @@ static esp_err_t reboot_post(httpd_req_t *r)
 
 /* ------------------------------------------------------------------ page */
 
+#if VFO_RADIO_SETUP
+#define PORTAL_URIS 3
+/* ------------------------------------------------------------ the portal */
+
+/* The setup firmware's WiFi setup, for a phone on the knob's own hotspot:
+ * open, since the phone has nothing to log in with yet, and there only while
+ * the hotspot is up. On the network the knob then joins, it is gone and the
+ * page is the usual one, behind its login. */
+extern const char portal_html_start[] asm("_binary_portal_html_start");
+extern const char portal_html_end[]   asm("_binary_portal_html_end");
+
+static esp_err_t scan_get(httpd_req_t *r)
+{
+    if (!net_prov_ap_active()) return httpd_resp_send_404(r);
+    enum { MAXN = 20 };
+    net_prov_net_t *nets = heap_caps_calloc(MAXN, sizeof *nets, MALLOC_CAP_SPIRAM);
+    char *buf = heap_caps_malloc(3072, MALLOC_CAP_SPIRAM);
+    if (!nets || !buf) {
+        free(nets);
+        free(buf);
+        return httpd_resp_send_500(r);
+    }
+    const int n = net_prov_scan(nets, MAXN);
+    size_t o = 0;
+    buf[o++] = '[';
+    for (int i = 0; i < n && o < 2900; i++) {
+        char e[70];
+        json_esc(nets[i].ssid, e, sizeof e);
+        o += snprintf(buf + o, 3072 - o, "%s{\"ssid\":\"%s\",\"rssi\":%d,\"open\":%s}",
+                      i ? "," : "", e, nets[i].rssi, nets[i].open ? "true" : "false");
+    }
+    buf[o++] = ']';
+    buf[o] = 0;
+    const esp_err_t err = send_json(r, buf);
+    free(nets);
+    free(buf);
+    return err;
+}
+
+static esp_err_t join_post(httpd_req_t *r)
+{
+    if (!net_prov_ap_active()) return httpd_resp_send_404(r);
+    char body[256];
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) return httpd_resp_send_500(r);
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    char ssid[33] = "", pass[65] = "";
+    field(body, "ssid", ssid, sizeof ssid);
+    field(body, "pass", pass, sizeof pass);
+    if (!ssid[0]) return httpd_resp_send_500(r);
+    net_prov_join(ssid, pass);
+    return httpd_resp_sendstr(r, "joining");
+}
+
+static esp_err_t join_get(httpd_req_t *r)
+{
+    if (!net_prov_ap_active()) return httpd_resp_send_404(r);
+    static const char *ST[] = { "idle", "trying", "ok", "failed" };
+    char ssid[33], why[48], es[70], ew[100], buf[240];
+    const net_join_t s = net_prov_join_state(ssid, sizeof ssid, why, sizeof why);
+    json_esc(ssid, es, sizeof es);
+    json_esc(why, ew, sizeof ew);
+    snprintf(buf, sizeof buf, "{\"state\":\"%s\",\"ssid\":\"%s\",\"why\":\"%s\"}",
+             ST[s], es, ew);
+    return send_json(r, buf);
+}
+
+/* Anything else, while the hotspot is up, is a phone asking whether it is
+ * online (generate_204, hotspot-detect.html, connecttest.txt): sent to the
+ * portal, which is what makes it open the page by itself. */
+static esp_err_t portal_404(httpd_req_t *r, httpd_err_code_t err)
+{
+    (void)err;
+    if (!net_prov_ap_active()) return httpd_resp_send_404(r);
+    httpd_resp_set_status(r, "302 Found");
+    httpd_resp_set_hdr(r, "Location", "http://192.168.4.1/");
+    /* iOS wants a body, not only the redirect, to see a portal. */
+    return httpd_resp_sendstr(r, "The knob's WiFi setup");
+}
+#else
+#define PORTAL_URIS 0
+#endif
+
 static esp_err_t root_get(httpd_req_t *r)
 {
+#if VFO_RADIO_SETUP
+    if (net_prov_ap_active()) {
+        httpd_resp_set_type(r, "text/html");
+        httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+        return httpd_resp_send(r, portal_html_start, portal_html_end - portal_html_start - 1);
+    }
+#endif
     REQUIRE_AUTH(r);
     httpd_resp_set_type(r, "text/html");
     return httpd_resp_send(r, index_html_start,
@@ -634,7 +730,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 9 + n_extra;
+    c.max_uri_handlers = 9 + n_extra + PORTAL_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -669,6 +765,16 @@ esp_err_t webcfg_start(void)
                                 .handler = radio_endpoint, .user_ctx = (void *)&extra[i] };
         httpd_register_uri_handler(s_srv, &u);
     }
+#if VFO_RADIO_SETUP
+    static const httpd_uri_t portal[] = {
+        { .uri = "/api/scan", .method = HTTP_GET,  .handler = scan_get },
+        { .uri = "/api/join", .method = HTTP_POST, .handler = join_post },
+        { .uri = "/api/join", .method = HTTP_GET,  .handler = join_get },
+    };
+    for (size_t i = 0; i < sizeof portal / sizeof portal[0]; i++)
+        httpd_register_uri_handler(s_srv, &portal[i]);
+    httpd_register_err_handler(s_srv, HTTPD_404_NOT_FOUND, portal_404);
+#endif
 
     ESP_LOGI(TAG, "configuration page on http://<device>/ (port 80)");
     return ESP_OK;

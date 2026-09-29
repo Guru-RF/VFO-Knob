@@ -189,6 +189,9 @@ static bool          s_asking;
 static uint32_t      s_ask_since;
 static volatile int  s_ask_answer;       /* 1 yes, -1 no, 0 none */
 static volatile bool s_ask_knob;         /* the knob turned while asking */
+static volatile bool s_ask_turn;         /* ui_ask_turn(): a turn is the yes */
+static volatile uint32_t s_turned_at;    /* when a turn said that yes */
+#define TURN_SPENT_MS 2000   /* ...and the turns after it tune nothing either */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_agc_cap, *s_agc_val, *s_gain_cap, *s_gain_val;
 #if REFLECTOR_FACE
@@ -1194,6 +1197,14 @@ static int nearest_digit(int x)
 #define NETINFO_HOLD_MS 600
 static uint32_t s_pressed_at;
 
+/* Held on for ten seconds, the same press asks for the firmware picker --
+ * the setup firmware, with the WiFi kept. Two fingers would have been the
+ * obvious sign, but the CST816S reports one touch only; the arc is out of
+ * PTT's way, and ten seconds is not something a hand does by accident. */
+#define PICKER_HOLD_MS 10000
+static bool          s_press_arc;         /* this press began on the meter arc */
+static volatile bool s_picker_req;
+
 /* Taps act when the finger lifts, not when it lands -- all but PTT and the
  * update question. A swipe starts with a press too, and acting on the press
  * would first take it for a tap on whatever it started on: a swipe begun on
@@ -1336,10 +1347,23 @@ static void tap(lv_point_t p, uint32_t held)
     }
 }
 
+/* Still pressed: ten seconds on the arc asks for the firmware picker, once
+ * for the press, and that press is then no tap -- the addresses stay away. */
+static void pressing_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_press_arc || s_edit != ED_NONE || s_asking) return;
+    if (lv_tick_elaps(s_pressed_at) < PICKER_HOLD_MS) return;
+    s_press_arc  = false;
+    s_press_tap  = false;
+    s_picker_req = true;
+}
+
 static void release_cb(lv_event_t *e)
 {
     (void)e;
     s_released_at = lv_tick_get();
+    s_press_arc = false;
     const bool was_tap = s_press_tap && !s_gestured;
     s_press_tap = false;
     if (!was_tap) return;
@@ -1391,6 +1415,7 @@ static void touch_cb(lv_event_t *e)
     s_pressed_at = lv_tick_get();
     s_press_tap  = false;
     s_gestured   = false;
+    s_press_arc  = p.y < 104;             /* the meter arc, as for the addresses */
 
     /* A question is up: this tap answers it and goes nowhere else. On the
      * panel is yes; anywhere else is no -- the operator was reaching for
@@ -1402,14 +1427,20 @@ static void touch_cb(lv_event_t *e)
         /* The question appears over the most-touched part of the face, so a
          * tap already on its way when it popped up was not an answer. */
         if (on && lv_tick_elaps(s_ask_since) < ASK_ARM_MS) return;
+        /* A question the knob answers comes up under a finger held on the
+         * arc, and a finger lifting can flicker: a press straight after a
+         * release is still that finger, not a no. */
+        if (s_ask_turn && lv_tick_elaps(s_released_at) < PTT_REARM_MS) return;
         lv_obj_add_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
         s_asking = false;
         s_ptt_tap = false;
         /* Yes: the update screen at once. It is a separate screen, so PTT is
          * out of reach from this moment until the restart -- not whenever the
-         * network task next looks. (The port lock is recursive.) */
-        if (on) ui_updating_show();
-        s_ask_answer = on ? 1 : -1;
+         * network task next looks. (The port lock is recursive.) A question
+         * the knob answers takes only a no from a tap. */
+        const bool yes = on && !s_ask_turn;
+        if (yes) ui_updating_show();
+        s_ask_answer = yes ? 1 : -1;
         return;
     }
 
@@ -2036,6 +2067,7 @@ static void build(void)
     lv_label_set_text(s_ask_hint, "");
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_scr, pressing_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_scr, release_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(s_scr, gesture_cb, LV_EVENT_GESTURE, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
@@ -2056,6 +2088,7 @@ bool ui_ask_update(const char *version, const char *running)
     lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_ask_panel);
+    s_ask_turn   = false;
     s_ask_knob   = false;
     s_ask_answer = 0;
     s_ask_since  = lv_tick_get();
@@ -2065,6 +2098,78 @@ bool ui_ask_update(const char *version, const char *running)
     return true;
 }
 
+bool ui_ask_turn(const char *title, const char *hint)
+{
+    if (!s_scr || !title) return false;
+    if (!lvgl_port_lock(200)) return false;
+    lv_label_set_text(s_ask_title, title);
+    lv_obj_align(s_ask_title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_label_set_text(s_ask_hint, hint ? hint : "turn the knob for yes");
+    lv_obj_align(s_ask_hint, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_ask_panel);
+    s_ask_turn   = true;
+    s_ask_knob   = false;
+    s_ask_answer = 0;
+    s_ask_since  = lv_tick_get();
+    s_asking     = true;
+    lvgl_port_unlock();
+    ui_note_activity();
+    return true;
+}
+
+bool ui_take_picker_request(void)
+{
+    const bool r = s_picker_req;
+    s_picker_req = false;
+    return r;
+}
+
+/* --- the setup firmware's screen ------------------------------------------ */
+
+static lv_obj_t *s_setup, *s_setup_title, *s_setup_text;
+
+void ui_setup_show(const char *title, const char *text)
+{
+    if (!s_scr || !lvgl_port_lock(200)) return;
+    if (!s_setup) {
+        /* Over the whole face: the setup firmware has no radio to show. */
+        s_setup = lv_obj_create(s_scr);
+        lv_obj_set_size(s_setup, 360, 360);
+        lv_obj_center(s_setup);
+        lv_obj_set_style_bg_color(s_setup, C_BG, 0);
+        lv_obj_set_style_bg_opa(s_setup, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_setup, 0, 0);
+        lv_obj_set_style_radius(s_setup, 0, 0);
+        lv_obj_remove_flag(s_setup, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(s_setup, LV_OBJ_FLAG_CLICKABLE);
+        s_setup_title = lv_label_create(s_setup);
+        lv_obj_set_style_text_font(s_setup_title, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(s_setup_title, C_ACCENT, 0);
+        s_setup_text = lv_label_create(s_setup);
+        lv_obj_set_width(s_setup_text, 280);
+        lv_label_set_long_mode(s_setup_text, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_font(s_setup_text, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_setup_text, C_TEXT, 0);
+        lv_obj_set_style_text_align(s_setup_text, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    lv_label_set_text(s_setup_title, title ? title : "");
+    lv_label_set_text(s_setup_text, text ? text : "");
+    /* The title above where a chooser's panel comes (its top is 108 px down),
+     * and the text under that panel while one is up, or it is hidden. */
+    lv_obj_align(s_setup_title, LV_ALIGN_CENTER, 0, -110);
+    const bool panel = s_edit != ED_NONE || s_asking;
+    lv_obj_align(s_setup_text, LV_ALIGN_CENTER, 0, panel ? 96 : 20);
+    lv_obj_remove_flag(s_setup, LV_OBJ_FLAG_HIDDEN);
+    /* Under a question or an editor, if one is up. */
+    lv_obj_move_foreground(s_setup);
+    if (s_edit != ED_NONE) lv_obj_move_foreground(s_edit_panel);
+    if (s_asking) lv_obj_move_foreground(s_ask_panel);
+    lvgl_port_unlock();
+    ui_note_activity();
+}
+
 int ui_take_update_answer(void)
 {
     const int a = s_ask_answer;
@@ -2072,9 +2177,18 @@ int ui_take_update_answer(void)
     return a;
 }
 
-void ui_ask_knob_moved(void)
+bool ui_ask_knob_moved(void)
 {
+    if (s_asking && s_ask_turn) {
+        /* Not in its first moments: that turn began before it was asked. */
+        if (lv_tick_elaps(s_ask_since) >= ASK_ARM_MS) {
+            s_turned_at = lv_tick_get();
+            s_ask_knob  = true;
+        }
+        return true;
+    }
     if (s_asking) s_ask_knob = true;
+    return s_turned_at && lv_tick_elaps(s_turned_at) < TURN_SPENT_MS;
 }
 
 esp_err_t ui_init(void)
@@ -2221,12 +2335,13 @@ void ui_update(const ui_state_t *st)
     s_last = *st;                         /* editors open on the live value */
 
     /* No countdown: after ten seconds, a turn of the knob, or the radio
-     * keying up, the question simply goes away and the answer is no. */
+     * keying up, the question simply goes away and the answer is no -- but
+     * to a question the knob answers (ui_ask_turn), a turn is the yes. */
     if (s_asking && (s_ask_knob || st->tx ||
                      lv_tick_elaps(s_ask_since) >= ASK_MS)) {
         lv_obj_add_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
         s_asking = false;
-        s_ask_answer = -1;
+        s_ask_answer = s_ask_turn && s_ask_knob && !st->tx ? 1 : -1;
     }
 
     /* MEM's light follows the radio, but not for a moment after a tap: the

@@ -140,7 +140,7 @@ bool ui_take_commit(ui_commit_t *out);
  * one already on the radio). Shown like an editor -- the knob chooses, a tap
  * on its panel answers -- but a tap anywhere else leaves it up. Each option
  * is a title over a name ("DIAL FOR" / "SHACK-PC"). n = 0 takes it down. */
-#define UI_CHOICES 6
+#define UI_CHOICES 10
 void ui_ask_choice(const char titles[][12], const char names[][24], uint8_t n, uint8_t def);
 bool ui_choice_active(void);
 /* The answer, once: the option's index, or -1 while there is none. */
@@ -187,8 +187,24 @@ bool ui_ask_update(const char *version, const char *running);   /* false: not sh
 /* 1 = install, -1 = no, 0 = still asking or nothing asked. Each answer is
  * returned once. */
 int  ui_take_update_answer(void);
-/* From the knob task: the knob turned, so an open question is answered no. */
-void ui_ask_knob_moved(void);
+/* The same question panel, for a yes that must not come from a stray tap:
+ * `title` on it, `hint` under it, and a turn of the knob is the yes -- not in
+ * its first 0.8 s, and that turn, and the turns for two seconds after it,
+ * tune nothing. A tap anywhere, the radio going into transmit or ten seconds
+ * of nothing say no. Answered through ui_take_update_answer(). */
+bool ui_ask_turn(const char *title, const char *hint);
+
+/* A finger held ten seconds on the meter arc: the operator asks for the
+ * firmware picker (the setup firmware). Once per press; consumed here. */
+bool ui_take_picker_request(void);
+
+/* The setup firmware's screen: a title and a few lines over the whole face,
+ * under the dial's questions and editors. */
+void ui_setup_show(const char *title, const char *text);
+/* From the knob task: the knob turned, so an open question is answered --
+ * no, or yes to ui_ask_turn(). True when the turn is spent on that yes and
+ * must not tune. */
+bool ui_ask_knob_moved(void);
 
 /* Step through 0/90/180/270. Orientation is a physical property of how the
  * panel is mounted, and guessing it costs a flash cycle each time -- so make

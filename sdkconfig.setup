@@ -1,0 +1,7 @@
+# The setup firmware: WiFi set up from a phone on the knob's own hotspot, and
+# then the firmware for the knob's radio chosen on the dial and installed
+# (VFO_RADIO=setup). For a knob with no computer to set it up from.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the hotspot and
+# the station are the whole of its networking, and leaving TinyUSB out keeps
+# the serial console on the cable.
