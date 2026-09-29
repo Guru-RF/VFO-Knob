@@ -24,6 +24,7 @@
 #define VFO_RADIO_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -51,6 +52,8 @@ typedef struct {
     uint8_t    ptt_reason;     /* ptt_abort_t */
     uint32_t   permit;         /* PERMIT_* bitmask; all bits = may key */
     uint32_t   ptt_refusals;
+    char       tx_why[16];     /* why the radio will not transmit now, as a
+                                  refusal says it ("OUT OF BAND"); "" = none */
     int32_t    pong_age_ms;    /* since the radio last answered a ping */
     int64_t    f_display;      /* what the glass shows -- optimistic */
     int64_t    f_server;       /* newest authoritative value; never drawn */
@@ -82,6 +85,20 @@ typedef struct {
     bool       has_rx_ant;     /* ...each also with the RX ANT input */
     bool       ant_rx;         /* receiving on the RX ANT input */
     bool       have_ant;       /* the radio has said which */
+    /* A tune carrier and an antenna tuner the dial can start (the FlexRadio),
+     * as SmartSDR's TX panel has them: TUNE, ATU, and the tuner's memories
+     * (MEM). The swipe down offers them. */
+    bool       has_tune, has_atu;
+    bool       atu_mem;        /* the tuner recalls its memories */
+    /* Something to say once, for a moment ("ATU FAILED"): shown whenever
+     * note_seq moves on. */
+    char       note[16];
+    uint32_t   note_seq;
+    /* A question for the operator before the client can go on (see
+     * radio_get_choice): asked while n_choices is non-zero, the options
+     * changed whenever choices_seq moves on. */
+    uint8_t    n_choices, choice_default;
+    uint32_t   choices_seq;
     /* An SvxLink reflector (the svxconnect firmware) in place of a radio: the
      * talkgroup takes the band's place, its name the frequency's, and who is
      * talking the S-meter's. The dial steps through talkgroups. */
@@ -142,6 +159,10 @@ void radio_audio_suspend(bool suspend);
 void radio_get_status(radio_status_t *out);
 bool radio_is_ready(void);
 
+/* The radio is transmitting, or our PTT is anywhere but idle: what the
+ * haptic gate asks, from any task, without a whole status on its stack. */
+bool radio_on_air(void);
+
 /* PTT is TOGGLE: tap to key, tap to unkey. Deliberate to enter, forgiving to
  * exit -- you should never have to aim carefully to STOP transmitting. */
 void radio_ptt_key(void);
@@ -187,6 +208,24 @@ void radio_memory_group(uint8_t group);
  * n_ant); no-ops without. Neither is acted on while transmitting. */
 void radio_select_rx(uint8_t rx);
 void radio_set_antenna(uint8_t ant, bool rx_ant);
+
+/* A tune carrier at the radio's tune power (has_tune): keyed and unkeyed
+ * through the PTT machine like any over -- confirmed, laddered, dropped with
+ * the link -- and never for longer than half a minute. PTT stops it. */
+void radio_tune(void);
+/* One tune cycle of the radio's antenna tuner (has_atu). It keys the
+ * transmitter itself, briefly; PTT stops it. */
+void radio_atu_tune(void);
+/* Whether the tuner recalls a setting it has tuned before (has_atu). */
+void radio_atu_memories(bool on);
+
+/* A question the client puts to the operator before it can go on -- the
+ * multiflex firmware's at boot: be a station of its own, or the dial for one
+ * already on the radio. radio_get_choice() gives option i as a title and a
+ * name ("DIAL FOR", "SHACK-PC"); radio_choose() answers. */
+#define RADIO_CHOICES 6
+bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn);
+void radio_choose(uint8_t i);
 
 /* A reflector's talkgroup lock and mute (reflector in the status); no-ops for
  * a radio. */

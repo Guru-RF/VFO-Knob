@@ -48,6 +48,30 @@ LV_FONT_DECLARE(font_mic_14);
 #define C_TX_RED    lv_color_hex(0xE60012)
 #define C_GREEN     lv_color_hex(0x3FA9FF)   /* Icom's meters are blue  */
 #define PWR_HEX     0x3FA9FF                 /* ...its Po meter too     */
+#elif VFO_RADIO_MULTIFLEX
+/* --- Maestro palette -------------------------------------------------------
+ * FlexRadio's Maestro: black, white digits, the slice in Flex blue, meter
+ * scales in blue that turn red over the top, power in green, and TX a red
+ * badge. The layout is the other faces'; the colours say which radio this
+ * knob is for. */
+#define C_BG        lv_color_hex(0x000000)
+#define C_BG1       lv_color_hex(0x0C1622)   /* panels, the PTT slab    */
+#define C_BG_TX     lv_color_hex(0x2A0608)   /* a red tint on the air   */
+#define C_ACCENT    lv_color_hex(0x2A9DF4)   /* the slice's blue        */
+#define C_ACCENT_HI lv_color_hex(0x62BBFF)
+#define C_TEXT      lv_color_hex(0xFFFFFF)   /* white digits            */
+#define C_TEXT2     lv_color_hex(0xC9D2DC)
+#define C_LABEL     lv_color_hex(0x7D8792)
+#define C_DISABLED  lv_color_hex(0x3A424C)
+#define C_SUBTLE    lv_color_hex(0x141C26)
+#define C_WARN      lv_color_hex(0xFFB000)
+#define C_DANGER    lv_color_hex(0xF0302C)
+#define C_TX_BORDER lv_color_hex(0xE8262B)   /* the TX badge            */
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xFFFFFF)
+#define C_TX_RED    lv_color_hex(0xE8262B)
+#define C_GREEN     lv_color_hex(0x43B649)   /* multiFLEX green         */
+#define PWR_HEX     0x43B649                 /* Po in green, as on the Maestro */
 #elif VFO_RADIO_SVXCONNECT
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
@@ -199,6 +223,10 @@ static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
     { -40.0f, -10.0f, 0x3FA9FF },   /* blue  */
     { -10.0f,   0.0f, 0xFFB000 },   /* amber */
     {   0.0f,  10.0f, 0xFF3030 },   /* red   */
+#elif VFO_RADIO_MULTIFLEX
+    { -40.0f, -10.0f, 0x2A9DF4 },   /* blue  */
+    { -10.0f,   0.0f, 0xFFB000 },   /* amber */
+    {   0.0f,  10.0f, 0xF0302C },   /* red   */
 #elif VFO_RADIO_SVXCONNECT
     { -40.0f, -10.0f, 0x35B35A },   /* SvxConnect's meter: green  */
     { -10.0f,   0.0f, 0xD8C43A },   /* yellow */
@@ -384,6 +412,10 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0x3FA9FF },   /* blue  */
     { 2.0f, 2.5f, 0xFFB000 },   /* amber */
     { 2.5f, 3.0f, 0xFF3030 },   /* red   */
+#elif VFO_RADIO_MULTIFLEX
+    { 1.0f, 2.0f, 0x2A9DF4 },   /* blue  */
+    { 2.0f, 2.5f, 0xFFB000 },   /* amber */
+    { 2.5f, 3.0f, 0xF0302C },   /* red   */
 #elif VFO_RADIO_SVXCONNECT
     { 1.0f, 2.0f, 0x35B35A },
     { 2.0f, 2.5f, 0xD8C43A },
@@ -421,6 +453,15 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0xFF6A5A },   /* S9 to +20: red over S9, as on the radio */
     {  -53.0f,  -33.0f, 0xFF4040 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0xE60012 },   /* +40 to +60 */
+#elif VFO_RADIO_MULTIFLEX
+    { -127.0f, -121.0f, 0x0A3563 },   /* S0 to S1: Flex blue, brightening */
+    { -121.0f, -109.0f, 0x0F4C8A },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0x1666B3 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0x1F82D9 },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0x2A9DF4 },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0xF26A6A },   /* S9 to +20: red over S9, as on the Maestro */
+    {  -53.0f,  -33.0f, 0xEE4444 },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0xE8262B },   /* +40 to +60 */
 #elif VFO_RADIO_SVXCONNECT
     /* Not an S-meter: the audio level, -60 to 0 dBFS, in SvxConnect's meter
      * colours -- green, then yellow from -12 dB, red in the last 3. */
@@ -468,11 +509,21 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 #define NETINFO_MS 10000
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
-               ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT } edit_t;
+               ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
+               ED_CHOICE } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int     s_edit_from, s_edit_n;  /* where the receiver's opened; how many */
 static bool    s_edit_moved;           /* the knob has turned since it opened */
+/* The swipe menu (ED_MENU): its items, UI_ACT_*, as the radio offers them;
+ * MEM's light, and when it was last tapped -- until the radio agrees, the
+ * light is the tap's. */
+static uint8_t  s_menu[3], s_menu_n;
+static bool     s_mem_lit;
+static uint32_t s_mem_tapped;
+/* The client's question (ED_CHOICE), and its answer until taken. */
+static char     s_ch_title[UI_CHOICES][12], s_ch_name[UI_CHOICES][24];
+static volatile int s_ch_answer = -1;
 /* The last state ui_update() saw, so the editors can open on the current
  * value. The touch callback runs on the LVGL task and cannot ask the client. */
 static ui_state_t s_last;
@@ -496,6 +547,14 @@ static const char *MODES[] = { "usb","lsb","cw","cwr","am","fm","rtty",
                                "digu","digl" };
 static const char *AGCS[]  = { "fast","mid","slow" };
 #define GAIN_CAPTION "P.AMP"
+#elif VFO_RADIO_MULTIFLEX
+/* The FLEX-6000's own modes and AGC, as its API names them. The gain beside
+ * the S-meter is the panadapter's RF gain, which the API carries (TCI does
+ * not: the AetherSDR firmware shows it greyed). */
+static const char *MODES[] = { "usb","lsb","cw","am","sam","fm","nfm",
+                               "digu","digl","rtty" };
+static const char *AGCS[]  = { "fast","med","slow","off" };
+#define GAIN_CAPTION "RF.G"
 #elif VFO_RADIO_SVXCONNECT
 /* A reflector has no modes, AGC or gain; the tables stay for the editors'
  * sake, which the reflector face never opens. */
@@ -704,8 +763,9 @@ static void edit_render(void)
     }
     lv_obj_remove_flag(s_edit_panel, LV_OBJ_FLAG_HIDDEN);
 
-    char v[16];
+    char v[24];
     const char *title = "";
+    lv_color_t vcolor = C_ACCENT_HI;
     switch (s_edit) {
     case ED_BAND:
         title = "BAND";
@@ -748,6 +808,21 @@ static void edit_render(void)
         title = "VFO";
         snprintf(v, sizeof v, "%s", s_edit_idx ? "SUB" : "MAIN");
         break;
+    case ED_MENU: {
+        static const char *NAME[] = { "", "TUNE", "ATU", "MEM" };
+        const uint8_t a = s_menu[s_edit_idx];
+        title = "MENU";
+        /* The tuner's memories light when they are on, as the button on
+         * SmartSDR's TX panel does, and are dimmed when off; a tap turns
+         * them the other way. */
+        snprintf(v, sizeof v, "%s", NAME[a]);
+        vcolor = a == UI_ACT_MEM && !s_mem_lit ? C_DISABLED : C_ACCENT_HI;
+        break;
+    }
+    case ED_CHOICE:
+        title = s_ch_title[s_edit_idx];
+        snprintf(v, sizeof v, "%s", s_ch_name[s_edit_idx]);
+        break;
     case ED_ANT: {
         const int n = s_last.n_ant ? s_last.n_ant : 1;
         title = "ANTENNA";
@@ -757,7 +832,11 @@ static void edit_render(void)
     default: return;
     }
     lv_label_set_text(s_edit_title, title);
+    /* A station's name wants more room than a mode or a width. */
+    lv_obj_set_style_text_font(s_edit_value, s_edit == ED_CHOICE ? &lv_font_montserrat_28
+                                                                 : &lv_font_montserrat_48, 0);
     lv_label_set_text(s_edit_value, v);
+    lv_obj_set_style_text_color(s_edit_value, vcolor, 0);
 }
 
 static int index_of_mode(const char *m)
@@ -837,6 +916,18 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_edit_idx = ant_index(st);
         s_edit_n   = ant_choices(st);
         break;
+    case ED_MENU:
+        s_menu_n = 0;
+        if (st->has_tune) s_menu[s_menu_n++] = UI_ACT_TUNE;
+        if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_ATU;
+        if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_MEM;
+        s_edit_n   = s_menu_n;
+        /* Opened on MEM, the one item that does not transmit: TUNE and the
+         * tuner are a turn away, and then a tap on the panel. */
+        s_edit_idx   = s_menu_n - 1;
+        s_mem_lit    = st->atu_mem;
+        s_mem_tapped = 0;
+        break;
     default: break;
     }
     s_edit_from  = s_edit_idx;
@@ -844,7 +935,18 @@ static void edit_open(edit_t what, const ui_state_t *st)
     edit_render();
 }
 
-static void edit_commit(void)
+/* Filter, AGC, gain and RIT go to the radio as the knob turns them, and a
+ * tap only closes them; volume and mic gain are the knob's own and apply as
+ * they change. The rest -- band, mode, group, VFO, antenna, the menu -- act
+ * on a tap on their panel, and a tap anywhere else closes them untouched. */
+static bool edit_live(edit_t e)
+{
+    return e == ED_FILTER || e == ED_AGC || e == ED_GAIN || e == ED_RIT ||
+           e == ED_VOL || e == ED_MIC;
+}
+
+/* What the open editor's value asks of the radio, into s_commit. */
+static void edit_fill(void)
 {
     memset(&s_commit, 0, sizeof s_commit);
     switch (s_edit) {
@@ -888,6 +990,9 @@ static void edit_commit(void)
         s_commit.have_rx = s_edit_idx != s_edit_from;
         s_commit.rx      = (uint8_t)s_edit_idx;
         break;
+    case ED_MENU:
+        s_commit.action = s_menu[s_edit_idx];
+        break;
     case ED_ANT: {
         /* Only when turned to: until then the editor follows the radio, and
          * a tap straight through leaves the antenna alone. */
@@ -897,11 +1002,31 @@ static void edit_commit(void)
         s_commit.ant_rx   = s_edit_idx >= n;
         break;
     }
-    default: break;      /* volume is local-only for now */
+    default: break;      /* volume and mic gain are the knob's own */
     }
-    s_have_commit = (s_edit != ED_NONE && s_edit != ED_VOL && s_edit != ED_MIC);
+}
+
+static void edit_close(void)
+{
     s_edit = ED_NONE;
     edit_render();
+}
+
+static void edit_commit(void)
+{
+    edit_fill();
+    s_have_commit = s_edit != ED_NONE && s_edit != ED_VOL && s_edit != ED_MIC;
+    edit_close();
+}
+
+/* A live editor's value, to the radio now. The ui task takes the newest
+ * every 50 ms, so a fast turn is not a flood of commands. */
+static void edit_publish(void)
+{
+    if (s_edit == ED_VOL || s_edit == ED_MIC) return;
+    edit_fill();
+    s_commit.live = true;
+    s_have_commit = true;
 }
 
 bool ui_edit_active(void) { return s_edit != ED_NONE; }
@@ -940,6 +1065,8 @@ void ui_edit_rotate(int32_t detents)
         break;
     case ED_RX:
     case ED_ANT:
+    case ED_MENU:
+    case ED_CHOICE:
         s_edit_idx += detents;
         if (s_edit_idx < 0)         s_edit_idx = 0;
         if (s_edit_idx >= s_edit_n) s_edit_idx = s_edit_n - 1;
@@ -975,16 +1102,56 @@ void ui_edit_rotate(int32_t detents)
     }
     default: break;
     }
+    if (edit_live(s_edit)) edit_publish();
     edit_render();
     lvgl_port_unlock();
+}
+
+void ui_ask_choice(const char titles[][12], const char names[][24], uint8_t n, uint8_t def)
+{
+    if (!lvgl_port_lock(50)) return;
+    if (!n || !titles || !names) {
+        if (s_edit == ED_CHOICE) edit_close();
+    } else {
+        if (n > UI_CHOICES) n = UI_CHOICES;
+        for (uint8_t i = 0; i < n; i++) {
+            strlcpy(s_ch_title[i], titles[i], sizeof s_ch_title[i]);
+            strlcpy(s_ch_name[i], names[i], sizeof s_ch_name[i]);
+        }
+        /* The question comes first: over any editor, and over a warning
+         * that would otherwise sit on top of it. */
+        s_edit       = ED_CHOICE;
+        s_edit_n     = n;
+        s_edit_idx   = def < n ? def : 0;
+        s_edit_moved = false;
+        s_ch_answer  = -1;
+        if (s_warn_panel) lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+        netinfo_show(false);
+        edit_render();
+        lv_obj_move_foreground(s_edit_panel);
+    }
+    lvgl_port_unlock();
+}
+
+bool ui_choice_active(void) { return s_edit == ED_CHOICE; }
+
+int ui_take_choice(void)
+{
+    const int a = s_ch_answer;
+    s_ch_answer = -1;
+    return a;
 }
 
 bool ui_take_commit(ui_commit_t *out)
 {
     if (!s_have_commit || !out) return false;
-    *out = s_commit;
+    /* A live editor writes these from the knob task, under the port lock. */
+    if (!lvgl_port_lock(20)) return false;
+    const bool have = s_have_commit;
+    if (have) *out = s_commit;
     s_have_commit = false;
-    return true;
+    lvgl_port_unlock();
+    return have;
 }
 
 uint8_t ui_volume(void)  { return s_volume; }
@@ -1058,8 +1225,38 @@ static void tap(lv_point_t p, uint32_t held)
 {
     /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
      * selection on the precise one. */
+    if (s_edit == ED_CHOICE) {
+        /* A question that needs an answer: a tap on the panel gives it, a
+         * tap anywhere else is ignored. */
+        lv_area_t a;
+        lv_obj_get_coords(s_edit_panel, &a);
+        if (p.x < a.x1 || p.x > a.x2 || p.y < a.y1 || p.y > a.y2) return;
+        s_ch_answer = s_edit_idx;
+        edit_close();
+        return;
+    }
     if (s_edit != ED_NONE) {
         const edit_t was = s_edit;
+        /* A live editor has done its work as it turned: any tap closes it. */
+        if (edit_live(was)) { edit_close(); return; }
+        /* The panel is the button: a tap on it accepts, anywhere else closes
+         * it untouched. */
+        lv_area_t a;
+        lv_obj_get_coords(s_edit_panel, &a);
+        if (p.x < a.x1 || p.x > a.x2 || p.y < a.y1 || p.y > a.y2) { edit_close(); return; }
+        /* The tuner's memories toggle in place: the menu stays, MEM lit or
+         * dimmed as they now are. Each tap says which, not "the other way",
+         * so two quick ones cannot leave the radio out of step. */
+        if (was == ED_MENU && s_menu[s_edit_idx] == UI_ACT_MEM) {
+            s_mem_lit    = !s_mem_lit;
+            s_mem_tapped = lv_tick_get() | 1;
+            memset(&s_commit, 0, sizeof s_commit);
+            s_commit.action  = UI_ACT_MEM;
+            s_commit.atu_mem = s_mem_lit;
+            s_have_commit = true;
+            edit_render();
+            return;
+        }
         edit_commit();
         /* The swipe's editors come in a row: the receiver, then its antenna. */
         if (was == ED_RX && s_last.n_ant) edit_open(ED_ANT, &s_last);
@@ -1167,6 +1364,10 @@ static void gesture_cb(lv_event_t *e)
     s_gestured = true;
     if (lv_indev_get_gesture_dir(indev) != LV_DIR_BOTTOM) return;
     if (s_edit != ED_NONE || s_asking || !s_last.link_ok || s_last.tx) return;
+    if (s_last.has_tune || s_last.has_atu) {
+        edit_open(ED_MENU, &s_last);
+        return;
+    }
     if (s_last.mem_state == UI_MEM_OFF && s_last.n_rx > 1) {
         edit_open(ED_RX, &s_last);
         return;
@@ -2026,6 +2227,14 @@ void ui_update(const ui_state_t *st)
         lv_obj_add_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
         s_asking = false;
         s_ask_answer = -1;
+    }
+
+    /* MEM's light follows the radio, but not for a moment after a tap: the
+     * radio has not heard it yet. */
+    if (s_edit == ED_MENU && st->atu_mem != s_mem_lit &&
+        (!s_mem_tapped || lv_tick_elaps(s_mem_tapped) > 1500)) {
+        s_mem_lit = st->atu_mem;
+        edit_render();
     }
 
     /* The antenna editor follows the radio until the knob turns it: opened

@@ -890,6 +890,19 @@ void radio_memory_group(uint8_t group) { (void)group; }
 void radio_select_rx(uint8_t rx)               { (void)rx; }
 void radio_set_antenna(uint8_t ant, bool rx_ant) { (void)ant; (void)rx_ant; }
 
+/* TCI has no tune carrier or tuner to start from here. */
+void radio_tune(void)     {}
+void radio_atu_tune(void) {}
+void radio_atu_memories(bool on) { (void)on; }
+
+/* Nothing to ask. */
+bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
+{
+    (void)i; (void)title; (void)tn; (void)name; (void)nn;
+    return false;
+}
+void radio_choose(uint8_t i) { (void)i; }
+
 /* A radio has no talkgroup to lock or mute. */
 void radio_tg_lock(bool locked) { (void)locked; }
 void radio_mute(bool muted)     { (void)muted; }
@@ -903,6 +916,8 @@ bool radio_is_ready(void)
 {
     return S.link == RADIO_LINK_READY || S.link == RADIO_LINK_DEGRADED;
 }
+
+bool radio_on_air(void) { return S.tx || S.ptt.state != PTT_IDLE; }
 
 void radio_get_status(radio_status_t *o)
 {

@@ -2079,6 +2079,19 @@ void radio_set_antenna(uint8_t ant, bool rx_ant)
     if (ant < S.model->n_ant) S.pending_ant = (int8_t)(ant | (rx_ant ? 0x10 : 0));
 }
 
+/* Not yet on the Icoms: their TUNE and tuner over CI-V. */
+void radio_tune(void)     {}
+void radio_atu_tune(void) {}
+void radio_atu_memories(bool on) { (void)on; }
+
+/* Nothing to ask. */
+bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
+{
+    (void)i; (void)title; (void)tn; (void)name; (void)nn;
+    return false;
+}
+void radio_choose(uint8_t i) { (void)i; }
+
 /* A radio has no talkgroup to lock or mute. */
 void radio_tg_lock(bool locked) { (void)locked; }
 void radio_mute(bool muted)     { (void)muted; }
@@ -2092,6 +2105,8 @@ bool radio_is_ready(void)
 {
     return S.link == RADIO_LINK_READY || S.link == RADIO_LINK_DEGRADED;
 }
+
+bool radio_on_air(void) { return S.tx || S.ptt.state != PTT_IDLE; }
 
 void radio_get_status(radio_status_t *o)
 {
@@ -2113,6 +2128,7 @@ void radio_get_status(radio_status_t *o)
     o->has_memories = s_mem != NULL && !C.no_mem && m->memories;
     o->n_rx       = m->n_rx;
     o->rx         = S.rx;
+    if (m->n_rx > 1 && S.rx) strlcpy(o->tx_why, "SUB: RX ONLY", sizeof o->tx_why);
     o->n_ant      = m->n_ant;
     o->has_rx_ant = m->rx_ant;
     o->ant        = S.ant;

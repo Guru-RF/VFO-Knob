@@ -1,0 +1,5 @@
+## Opus both ways: the radio's remote audio is Opus, and the microphone must
+## be too. libopus's own API, its scratch memory in PSRAM. Only the multiflex
+## firmware builds this component.
+dependencies:
+  esphome/micro-opus: "^0.4.1"

@@ -45,6 +45,9 @@ typedef struct {
     uint8_t  n_rx, rx;       /* 0 MAIN, 1 SUB */
     uint8_t  n_ant, ant;     /* 0 ANT1 */
     bool     has_rx_ant, ant_rx, have_ant;
+    /* A tune carrier and an antenna tuner to start (radio.h): with them the
+     * swipe down opens a menu -- TUNE, ATU, and the tuner's memories. */
+    bool     has_tune, has_atu, atu_mem;
     /* A reflector (radio.h): the talkgroup and its name in place of band and
      * frequency, the talker in place of the S-units, lock and mute either
      * side of it, and the audio level on the arc. */
@@ -71,6 +74,10 @@ typedef struct {
 
 enum { UI_MEM_OFF = 0, UI_MEM_READING, UI_MEM_READY, UI_MEM_EMPTY };
 
+/* The swipe menu's items: SmartSDR's TX panel -- a tune carrier, a tuner
+ * cycle, and the tuner's memories on or off. */
+enum { UI_ACT_NONE = 0, UI_ACT_TUNE, UI_ACT_ATU, UI_ACT_MEM };
+
 void ui_update(const ui_state_t *st);
 
 /* Step chosen by tapping a frequency digit. Returns 0 if nothing changed. */
@@ -95,9 +102,13 @@ bool ui_take_lock_tap(void);
 bool ui_take_mute_tap(void);
 
 /* --- knob-driven field editors -------------------------------------------
- * Tapping band, mode, filter, AGC, gain, RIT or volume opens a large editor;
- * the knob chooses a value and a tap anywhere accepts it. While an editor is
- * open the knob must NOT tune, so the caller checks ui_edit_active() first.
+ * Tapping band, mode, filter, AGC, gain, RIT or volume opens a large editor
+ * and the knob chooses a value. Filter, AGC, gain and RIT (and volume and mic
+ * gain) take effect as the knob turns, and a tap anywhere closes them; the
+ * others -- band, mode, VFO, antenna, the swipe's menu -- act on a tap on
+ * their panel, and a tap anywhere else closes them untouched. While an
+ * editor is open the knob must NOT tune, so the caller checks
+ * ui_edit_active() first.
  *
  * Selection happens on the precise rotary and commitment on the imprecise
  * touch, which is what makes the whole thing usable on 45 mm of round glass. */
@@ -113,12 +124,27 @@ typedef struct {
     bool     have_mem_group; uint8_t mem_group;
     bool     have_rx;      uint8_t rx;
     bool     have_ant;     uint8_t ant;  bool ant_rx;
+    uint8_t  action;       /* UI_ACT_*: chosen from the swipe's menu */
+    bool     atu_mem;      /* with UI_ACT_MEM: the tuner's memories on */
+    bool     live;         /* sent as the knob turns, not on a tap */
     bool     have_rit;     int32_t rit_hz;
     bool     have_freq;    int64_t freq_hz;
 } ui_commit_t;
 
-/* Non-zero if the operator accepted an edit. Consumed by the caller. */
+/* Non-zero if the operator accepted an edit, or a live editor moved (live
+ * set): only the newest is kept. Consumed by the caller. */
 bool ui_take_commit(ui_commit_t *out);
+
+/* A question from the radio's client that needs an answer before it can go
+ * on (the multiflex firmware at boot: a station of its own, or the dial for
+ * one already on the radio). Shown like an editor -- the knob chooses, a tap
+ * on its panel answers -- but a tap anywhere else leaves it up. Each option
+ * is a title over a name ("DIAL FOR" / "SHACK-PC"). n = 0 takes it down. */
+#define UI_CHOICES 6
+void ui_ask_choice(const char titles[][12], const char names[][24], uint8_t n, uint8_t def);
+bool ui_choice_active(void);
+/* The answer, once: the option's index, or -1 while there is none. */
+int  ui_take_choice(void);
 
 /* Placeholder until v2 streams RX audio to the onboard DAC. The control and
  * its icon exist now so the interaction is settled before the audio path

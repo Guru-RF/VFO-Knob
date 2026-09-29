@@ -246,10 +246,7 @@ static void encoder_task(void *arg)
  * and a click or a buzz went out over the air with the operator's voice. */
 static void haptic(uint8_t effect)
 {
-    if (!effect) return;
-    radio_status_t st;
-    radio_get_status(&st);
-    if (st.tx || st.ptt_state != PTT_IDLE) return;
+    if (!effect || radio_on_air()) return;
     drv2605_fire(&s_drv, effect);
 }
 
@@ -321,6 +318,35 @@ _Static_assert((int)UI_MEM_OFF == (int)RADIO_MEM_OFF &&
                (int)UI_MEM_EMPTY == (int)RADIO_MEM_EMPTY,
                "ui_state_t.mem_state carries radio_mem_state_t");
 
+/* The client's question, when it has one (radio_get_choice: the multiflex
+ * firmware's "which station"), put on the dial and the answer given back.
+ * An answer given is not asked again while the client has yet to take it:
+ * that is one pass of this loop, and without this the question flickered
+ * back up. */
+static void ask_choice(const radio_status_t *st)
+{
+    static uint32_t asked_seq, answered_seq;
+    static char titles[UI_CHOICES][12], names[UI_CHOICES][24];
+    const int a = ui_take_choice();
+    if (a >= 0) {
+        ESP_LOGI(TAG, "choice -> %s %s", titles[a], names[a]);
+        answered_seq = asked_seq;
+        radio_choose((uint8_t)a);
+        haptic(7);
+    }
+    if (!st->n_choices) {
+        if (ui_choice_active()) ui_ask_choice(NULL, NULL, 0, 0);
+        return;
+    }
+    if (st->choices_seq == answered_seq) return;
+    if (ui_choice_active() && st->choices_seq == asked_seq) return;
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < st->n_choices && n < UI_CHOICES; i++)
+        if (radio_get_choice(i, titles[n], sizeof titles[n], names[n], sizeof names[n])) n++;
+    asked_seq = st->choices_seq;
+    ui_ask_choice(titles, names, n, st->choice_default);
+}
+
 static void ui_task(void *arg)
 {
     (void)arg;
@@ -337,25 +363,28 @@ static void ui_task(void *arg)
         }
         ui_commit_t c;
         if (ui_take_commit(&c)) {
+            /* A live editor's updates come as the knob turns: logged only at
+             * debug level, and felt through the detents, not the motor. */
+            const esp_log_level_t lv = c.live ? ESP_LOG_DEBUG : ESP_LOG_INFO;
             if (c.have_mode) {
                 ESP_LOGI(TAG, "mode -> %s", c.mode);
                 radio_set_mode(c.mode);
             }
             if (c.have_filter) {
-                ESP_LOGI(TAG, "filter -> %ld..%ld",
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "filter -> %ld..%ld",
                          (long)c.filt_lo, (long)c.filt_hi);
                 radio_set_filter(c.filt_lo, c.filt_hi);
             }
             if (c.have_filter_no) {
-                ESP_LOGI(TAG, "filter -> FIL%u", (unsigned)c.filter_no);
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "filter -> FIL%u", (unsigned)c.filter_no);
                 radio_select_filter(c.filter_no);
             }
             if (c.have_agc) {
-                ESP_LOGI(TAG, "agc -> %s", c.agc);
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "agc -> %s", c.agc);
                 radio_set_agc(c.agc);
             }
             if (c.have_gain) {
-                ESP_LOGI(TAG, "gain -> %d", c.gain);
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "gain -> %d", c.gain);
                 radio_set_gain(c.gain);
             }
             if (c.have_mem_group) {
@@ -370,15 +399,31 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "antenna -> ANT%u%s", (unsigned)c.ant + 1, c.ant_rx ? "+RX" : "");
                 radio_set_antenna(c.ant, c.ant_rx);
             }
+            switch (c.action) {
+            case UI_ACT_TUNE:
+                ESP_LOGI(TAG, "menu -> TUNE");
+                radio_tune();
+                break;
+            case UI_ACT_ATU:
+                ESP_LOGI(TAG, "menu -> ATU");
+                radio_atu_tune();
+                break;
+            case UI_ACT_MEM:
+                ESP_LOGI(TAG, "menu -> tuner memories %s", c.atu_mem ? "on" : "off");
+                radio_atu_memories(c.atu_mem);
+                break;
+            default:
+                break;
+            }
             if (c.have_rit) {
-                ESP_LOGI(TAG, "rit -> %+ld", (long)c.rit_hz);
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "rit -> %+ld", (long)c.rit_hz);
                 radio_set_rit(c.rit_hz);
             }
             if (c.have_freq) {
                 ESP_LOGI(TAG, "band -> %lld", (long long)c.freq_hz);
                 radio_goto_freq(c.freq_hz);
             }
-            haptic(7);                      /* soft bump: value committed */
+            if (!c.live) haptic(7);         /* soft bump: value committed */
         }
 
         /* Volume and mic gain live in the UI -- the dial's editors and the
@@ -414,7 +459,7 @@ static void ui_task(void *arg)
         {
             const bool lock = ui_take_lock_tap(), mute = ui_take_mute_tap();
             if (lock || mute) {
-                radio_status_t m;
+                static radio_status_t m;    /* this task's only; see st below */
                 radio_get_status(&m);
                 if (lock) {
                     ESP_LOGI(TAG, "talkgroup %s", m.tg_locked ? "unlocked" : "locked");
@@ -429,7 +474,7 @@ static void ui_task(void *arg)
         }
         /* A swipe down: into memory mode, or back to the VFO. */
         if (ui_take_swipe()) {
-            radio_status_t m;
+            static radio_status_t m;
             radio_get_status(&m);
             const bool on = m.mem_state == RADIO_MEM_OFF;
             ESP_LOGI(TAG, "swipe -> %s", on ? "memory mode" : "VFO, simplex");
@@ -437,8 +482,12 @@ static void ui_task(void *arg)
             haptic(10);                     /* double click: a change of mode */
         }
 
-        radio_status_t st;
+        /* Static: this task is the only one to run this, and three status
+         * copies on its stack -- they have grown with every radio -- ran it
+         * out of its 5 kB and crashed it. */
+        static radio_status_t st;
         radio_get_status(&st);
+        ask_choice(&st);
 
         /* High SWR: on the glass and in the log, no longer on the motor. It
          * ran for as long as SWR stayed above 2.5, and on the air that buzz
@@ -476,8 +525,17 @@ static void ui_task(void *arg)
             s_seen_refusals = st.ptt_refusals;
             s_warn_until    = nowms + 3000;
         }
-        if (nowms < s_warn_until)                    warn = st.n_rx > 1 && st.rx
-                                                            ? "SUB: RX ONLY" : "TX REFUSED";
+        /* The radio's notes ("ATU FAILED") get the same 3 s. */
+        static uint32_t s_seen_note;
+        static int64_t  s_note_until;
+        if (st.note_seq != s_seen_note) {
+            s_seen_note  = st.note_seq;
+            s_note_until = nowms + 3000;
+        }
+        /* A refusal says why, where the radio gives a reason. */
+        if (nowms < s_warn_until)                    warn = st.tx_why[0] ? st.tx_why
+                                                                         : "TX REFUSED";
+        else if (nowms < s_note_until && st.note[0]) warn = st.note;
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
         else if (!(st.link == RADIO_LINK_READY ||
                    st.link == RADIO_LINK_DEGRADED))    warn = "NO LINK";
@@ -510,6 +568,9 @@ static void ui_task(void *arg)
             .has_rx_ant    = st.has_rx_ant,
             .ant_rx        = st.ant_rx,
             .have_ant      = st.have_ant,
+            .has_tune      = st.has_tune,
+            .has_atu       = st.has_atu,
+            .atu_mem       = st.atu_mem,
             .reflector     = st.reflector,
             .connecting    = (st.link == RADIO_LINK_CONNECTING ||
                               st.link == RADIO_LINK_GREETING),
@@ -635,6 +696,14 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     strlcpy(ip, cfg->radio_host, iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (reflector %s) ---", cfg->radio_host);
 #else
+    if (!cfg->radio_host[0]) {
+        /* The multiflex firmware has no default: the radio's address is
+         * given on the configuration page. Said once, not every retry. */
+        static bool said;
+        if (!said) ESP_LOGW(TAG, "  no radio address set: see the configuration page");
+        said = true;
+        return NULL;
+    }
     if (net_prov_resolve(ip, iplen) != ESP_OK) {
         ESP_LOGE(TAG, "  cannot resolve %s", cfg->radio_host);
         return NULL;
@@ -1339,8 +1408,12 @@ void app_main(void)
          * all -- and could not be updated out of that state either, because
          * the OTA path needs the same memory. The bug blocked its own fix. */
         /* The svxconnect firmware's supervisor ran with 204 bytes to spare in
-         * 4 kB ([STK] in the log) and overflowed once at boot: it gets 5. */
-#if VFO_RADIO_SVXCONNECT
+         * 4 kB ([STK] in the log) and overflowed once at boot: it gets 5.
+         * The multiflex firmware's overflowed 4 kB too, and at 5 kB still
+         * came within 84 bytes of the end: it gets 6. */
+#if VFO_RADIO_MULTIFLEX
+        xTaskCreatePinnedToCore(net_task, "net_sup", 6144, NULL, 3, NULL, 0);
+#elif VFO_RADIO_SVXCONNECT
         xTaskCreatePinnedToCore(net_task, "net_sup", 5120, NULL, 3, NULL, 0);
 #else
         xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);

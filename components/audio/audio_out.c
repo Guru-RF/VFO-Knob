@@ -19,8 +19,14 @@ static const char *TAG = "audio";
  * the scarce resource that the display and WiFi are already fighting over. */
 #define RING_BYTES (48 * 1024)
 /* Wait for this much before starting playback, so a burst of jitter at the
- * start of a stream does not produce an immediate underrun. */
+ * start of a stream does not produce an immediate underrun. A FlexRadio is
+ * often a routed hop or a VPN away, and its 10 ms packets come in bursts:
+ * 85 ms ran dry every few seconds there, so that firmware keeps 170. */
+#if VFO_RADIO_MULTIFLEX
+#define PREROLL_BYTES (16 * 1024)
+#else
 #define PREROLL_BYTES (8 * 1024)
+#endif
 
 static i2s_chan_handle_t s_tx;
 static RingbufHandle_t   s_ring;

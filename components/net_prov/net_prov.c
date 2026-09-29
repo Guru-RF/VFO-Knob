@@ -29,6 +29,15 @@
 #define DEFAULT_PORT 5300            /* SvxLink's reflector port */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_MULTIFLEX
+#define KEY_HOST     "fxhost"
+#define KEY_PORT     "fxport"
+#define KEY_USER     "fxuser"
+#define KEY_PASS     "fxpass"
+#define DEFAULT_HOST ""              /* the radio's IP address, given on the page */
+#define DEFAULT_PORT 4992            /* FlexRadio's API */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_ICOM
 #define KEY_HOST     "rhost"
 #define KEY_PORT     "rport"

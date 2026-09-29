@@ -75,6 +75,11 @@ label.chk input{width:auto;margin:0}
      IC-7610: <b>MENU &raquo; SET &raquo; Network</b> &mdash; Network Control ON,
      and Network User1 with this name and password. The knob reaches the radio
      over WiFi, and applies changes here on its next boot.</p>
+  <p class="note" id="flexnote" hidden>The radio's IP address: the knob joins
+     it as a MultiFlex station of its own, with its own slice, beside SmartSDR,
+     AetherSDR or a Maestro. MultiFlex must be enabled on the radio. The knob
+     reaches the radio over WiFi, and applies changes here on its next
+     boot.</p>
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
@@ -262,9 +267,13 @@ async function load(){
   const icom = c.radio === 'icom';
   const lan = icom;                       /* the radio itself, with a login */
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
+  const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   LINKNAME = c.link || 'Radio';
-  $('rtitle').textContent = icom ? 'IC-705 / IC-7610' : SVX ? 'SvxLink reflector' : 'AetherSDR';
-  $('hostlbl').textContent = SVX ? 'Reflector' : 'Host (IP, or a name ending .local)';
+  $('rtitle').textContent = icom ? 'IC-705 / IC-7610' : SVX ? 'SvxLink reflector'
+                          : flex ? 'FlexRadio' : 'AetherSDR';
+  $('hostlbl').textContent = SVX ? 'Reflector' : flex ? "The radio's IP address"
+                           : 'Host (IP, or a name ending .local)';
+  $('flexnote').hidden = !flex;
   $('svxnote').hidden = !SVX;
   for (const id of ['svxstation','svxtg','svxcert']) $(id).hidden = !SVX;
   if (SVX) { document.documentElement.style.setProperty('--accent','#e5a823'); svxLoad(); }
@@ -272,10 +281,10 @@ async function load(){
   $('icomnote').hidden = !icom;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
-  myIp = c.client && !c.client_usb && !lan && !SVX ? c.client : '';
+  myIp = c.client && !c.client_usb && !lan && !SVX && !flex ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = lan || SVX || !(c.client && c.client_usb);
+  $('hostusb').hidden = lan || SVX || flex || !(c.client && c.client_usb);
 }
 let myIp='', LINKNAME='Radio', SVX=false;
 
@@ -480,7 +489,8 @@ $('upload').onclick = async()=>{
  * which the knob accepts only when the upload names that radio. */
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 (LAN)'},
-              {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'}];
+              {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'},
+              {id:'multiflex', name:'FlexRadio (MultiFlex)'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
 function radios(){

@@ -1383,6 +1383,17 @@ void radio_memory_mode(bool on)                 { (void)on; }
 void radio_memory_group(uint8_t group)          { (void)group; }
 void radio_select_rx(uint8_t rx)                { (void)rx; }
 void radio_set_antenna(uint8_t ant, bool rx_ant) { (void)ant; (void)rx_ant; }
+void radio_tune(void)     {}
+void radio_atu_tune(void) {}
+void radio_atu_memories(bool on) { (void)on; }
+
+/* Nothing to ask. */
+bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
+{
+    (void)i; (void)title; (void)tn; (void)name; (void)nn;
+    return false;
+}
+void radio_choose(uint8_t i) { (void)i; }
 
 void radio_tg_lock(bool locked) { s_lock_req = locked ? 2 : 1; }
 void radio_mute(bool muted)     { s_mute_val = muted; s_mute_req = true; }
@@ -1393,6 +1404,9 @@ void radio_ptt_toggle(void) { s_toggle = true; }
 void radio_ptt_force_abort(uint8_t reason) { s_abort = reason; }
 
 bool radio_is_ready(void) { return P.link == RADIO_LINK_READY; }
+
+/* What the haptic gate reads: the published state, as ptt_dispatch leaves it. */
+bool radio_on_air(void) { return P.tx || P.ptt_state != PTT_IDLE; }
 
 void radio_get_status(radio_status_t *o)
 {
