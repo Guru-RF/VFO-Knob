@@ -29,12 +29,35 @@ cd "$ROOT"
     echo "field can ever be updated again. Restore it from your backup." >&2
     exit 1; }
 
+# The image takes its version from `git describe`, so the release commit must
+# be tagged and the tree clean. An image that calls itself anything else is
+# installed, still reads as older than the manifest, and is offered again on
+# every check, forever.
+DESC=$(git describe --tags --dirty --always)
+[ "$DESC" = "v$VER" ] || {
+    echo "HEAD describes as $DESC, not a clean v$VER -- tag it first" >&2
+    exit 1; }
+
+# sdkconfig.defaults.local is optional, as in CMakeLists.txt. IDF refuses a
+# defaults file that does not exist, and a machine that only cuts releases
+# has no business holding anyone's WiFi password.
+DEFAULTS="sdkconfig.defaults"
+[ -f sdkconfig.defaults.local ] && DEFAULTS="$DEFAULTS;sdkconfig.defaults.local"
+
 echo "==> building $VER"
-idf.py -B build_usbnet \
-       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.usbnet" \
-       build >/dev/null
+# reconfigure: CMake reads `git describe` only when it configures, and a new
+# tag on an already-built commit does not make it configure again.
+idf.py -B build_usbnet -D SDKCONFIG_DEFAULTS="$DEFAULTS;sdkconfig.usbnet" \
+       reconfigure build >/dev/null
 
 BIN="build_usbnet/vfo-knob.bin"
+# esp_app_desc_t leads the first segment: magic at byte 32, version at 48.
+IMGVER=$(python3 -c 'import sys; b = open(sys.argv[1], "rb").read()
+print(b[48:80].split(b"\0")[0].decode() if b[32:36] == bytes.fromhex("3254cdab") else "?")' "$BIN")
+[ "$IMGVER" = "v$VER" ] || {
+    echo "the image says it is $IMGVER, not v$VER -- refusing to publish" >&2
+    exit 1; }
+
 echo "==> verifying the signature before publishing it"
 espsecure.py verify_signature --version 2 --keyfile ota_signing_key.pem "$BIN" \
     | grep -q "verification successful" \
