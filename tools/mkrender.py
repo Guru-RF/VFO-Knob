@@ -3,6 +3,9 @@
 
     tools/mkrender.py [--out DIR]   -> DIR/<radio>/*.svg and *.png
                                        (DIR defaults to docs/marketing)
+    tools/mkrender.py --glass --radio svxconnect
+                                    -> docs/display-svxconnect.svg, the face
+                                       alone, for the README
 
 The dial is the device's own face, drawn by tools/mkdisplay.py (the firmware's
 geometry and palette), frozen at one reading -- one for each radio's firmware,
@@ -10,6 +13,8 @@ in that firmware's colours, so the two sets tell apart at a glance:
 
   aethersdr   AetherSDR's dark theme: S9+40 on 80 m, 3.630.00 LSB
   icom        the IC-705's screen: S9+20 on 2 m, 145.500.00 FM, P.AMP on
+  svxconnect  svxconnect.app's ink and gold: TG 8 on be.svx.link, someone
+              talking, the arc at -14 dBFS
 
 The body is a 66 mm cylinder, 22 mm deep: a blue anodised ring with diagonal
 knurling over a black base, the cover glass, and the 1.8" panel inside it --
@@ -43,7 +48,72 @@ RADIOS = {
     "icom":      dict(name="the IC-705", dbm=-53, band="2m", mode="FM", filt="FIL1",
                       digits="145500" "00", active=4, step="10 kHz",
                       agc="FAST", gain_caption="P.AMP", gain="ON", gain_known=True),
+    # A reflector: the talkgroup where the frequency is, who is talking where
+    # the S-units are, and the arc in dBFS.
+    "svxconnect": dict(name="SvxLink", reflector=True, dbfs=-14, tg=8,
+                       tg_name="70cm Repeaters", server="be.svx.link",
+                       talker="ON6URE", talking="14s"),
 }
+
+
+def level_frac(db):
+    """ui.c smeter_frac() in the svxconnect build: -60 to 0 dBFS, evenly."""
+    return max(0.0, min(1.0, (db + 60.0) / 60.0))
+
+
+# The reflector face's lock and mute (font_svx_icons_24: Font Awesome's
+# lock-open and volume-up), centred on (x, y) as LVGL centres the label.
+def lock_open(x, y, colour):
+    return (f'<g transform="translate({x - 9:.1f},{y - 11:.1f})">'
+            f'<rect x="0" y="9" width="16" height="12" rx="2.5" fill="{colour}"/>'
+            f'<path d="M3.5,9 V6 a5,5 0 0 1 9.6,-2" fill="none" stroke="{colour}" '
+            f'stroke-width="2.6" stroke-linecap="round"/></g>')
+
+
+def sound_on(x, y, colour):
+    return (f'<g transform="translate({x - 11:.1f},{y - 10:.1f})" fill="{colour}">'
+            f'<path d="M0,6.5 h4.5 l6,-5.5 v18 l-6,-5.5 h-4.5 z"/>'
+            f'<path d="M14,6 a5,5 0 0 1 0,8 M17,3 a9,9 0 0 1 0,14" fill="none" '
+            f'stroke="{colour}" stroke-width="2" stroke-linecap="round"/></g>')
+
+
+def reflector_dial(R):
+    """The svxconnect firmware's receive face (ui.c, REFLECTOR_FACE)."""
+    DB = R["dbfs"]
+    s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
+         f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '
+         f'fill="none" stroke="{D.SUBTLE}" stroke-width="{D.BAND}"/>']
+    for lo, hi, col in D.RXZONES:
+        s.append(D.block(D.ARC_ROT + level_frac(lo) * D.ARC_SPAN,
+                         D.ARC_ROT + level_frac(hi) * D.ARC_SPAN, col))
+    a0, a1 = D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN
+    L = D.arc_len(a0, a1, D.RC)
+    s.append(f'<path d="{D.arc_path(a1, a0, D.RC)}" fill="none" stroke="{D.SUBTLE}" '
+             f'stroke-width="{D.BAND + 0.5}" '
+             f'stroke-dasharray="{L * (1 - level_frac(DB)):.2f} {L + 10:.2f}"/>')
+    for d in (-48, -36, -24, -18, -12, -6, -3):
+        s.append(D.notch(D.ARC_ROT + level_frac(d) * D.ARC_SPAN))
+    # ui.c add_ticks(), REFLECTOR_FACE: -12 dBFS is the landmark, amber above.
+    for d, ln, kind in ((-48, 6, 0), (-36, 6, 0), (-24, 6, 0), (-18, 6, 0),
+                        (-12, 11, 1), (-6, 6, 2), (-3, 6, 2), (0, 9, 2)):
+        col = D.TEXT2 if kind == 1 else (D.WARN if kind == 2 else D.LABEL)
+        s.append(D.tick(D.ARC_ROT + level_frac(d) * D.ARC_SPAN, ln, col,
+                        3 if kind == 1 else 2))
+    # Who is talking, where the S-units are, and for how long.
+    s.append(D.text(180, 83, R["talker"], 20, D.TEXT, 700))
+    s.append(D.text(180, 103, R["talking"], 14, D.GREEN))
+    # The talkgroup's row: the lock left, the mute right.
+    s.append(lock_open(D.CX - 76, 122, D.LABEL))
+    s.append(D.text(D.CX, 129, f"TG {R['tg']}", 20, D.ACCENT))
+    s.append(sound_on(D.CX + 76, 122, D.LABEL))
+    # Where the frequency is: the talkgroup's name, and the reflector.
+    s.append(D.text(D.CX, 170, R["tg_name"], 28, D.TEXT))
+    s.append(D.text(D.CX, 203, R["server"], 20, D.TEXT2))
+    s.append(D.text(D.CX - 56, 227, "connected", 20, D.GREEN))
+    s.append(D.icon_readout(D.CX + 42, 227, D.speaker, "40", D.TEXT2))
+    s.append(D.icon_readout(D.CX + 104, 227, D.microphone, "100", D.TEXT2))
+    s.append(D.ptt_slab(D.BG1, "PTT", D.TEXT2))
+    return "".join(s)
 
 # --- the body, in face pixels (360 px = the 1.8" panel) ---------------------
 R_BODY, R_GLASS = D.BODY_R, D.GLASS_R
@@ -126,6 +196,8 @@ def dial(radio):
     """A radio's receive face at its reading, in its own 360 px coordinates.
     The palette is the module's: see mkdisplay.use_palette()."""
     R = RADIOS[radio]
+    if R.get("reflector"):
+        return reflector_dial(R)
     DBM = R["dbm"]
     s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
          f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '
@@ -500,6 +572,15 @@ def main():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     root = arg("--out", os.path.join(here, "docs", "marketing"))
     radios = [arg("--radio")] if "--radio" in sys.argv else list(RADIOS)
+    if "--glass" in sys.argv:
+        # Just the face on its glass, for the README: docs/display-<radio>.svg.
+        for radio in radios:
+            D.use_palette(radio)
+            path = os.path.join(here, "docs", f"display-{radio}.svg")
+            with open(path, "w") as f:
+                f.write(glass_svg(radio))
+            print(f"{path}: {os.path.getsize(path)} bytes")
+        return
     if "--photo" in sys.argv:
         # One radio's dial onto a photograph: --radio names it (aethersdr).
         radio = radios[0] if "--radio" in sys.argv else "aethersdr"

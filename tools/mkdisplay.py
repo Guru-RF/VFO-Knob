@@ -69,6 +69,22 @@ PALETTES = {
                            (2.5, 3.0, "#FF3030")],
                  MICZONES=[(-40, -10, "#3FA9FF"), (-10, 0, "#FFB000"),
                            (0, 10, "#FF3030")]),
+    # The svxconnect firmware's face (ui.c under VFO_RADIO_SVXCONNECT):
+    # svxconnect.app's ink and gold, green for connected. Its arc is the audio,
+    # -60 to 0 dBFS, and these zones are in dBFS, not dBm.
+    "svxconnect": dict(BG="#08090C", BG1="#13161D", BG_TX="#2A0C0C", ACCENT="#E5A823",
+                       ACCENT_HI="#ECC34A", TEXT="#FFFFFF", TEXT2="#E2E8F0",
+                       LABEL="#94A3B8", SUBTLE="#1B1F29", WARN="#D29922",
+                       DANGER="#D13B3B", TX_RED="#D13B3B", TX_TEXT="#FFFFFF",
+                       GREEN="#2EA043", DISABLED="#475569", PWR="#E5A823",
+                       RXZONES=[(-60, -48, "#1B5E2E"), (-48, -36, "#237A3B"),
+                                (-36, -24, "#2EA043"), (-24, -18, "#35B35A"),
+                                (-18, -12, "#9DBD3B"), (-12,  -6, "#D8C43A"),
+                                ( -6,  -3, "#E08C33"), ( -3,   0, "#D13B3B")],
+                       SWRZONES=[(1.0, 2.0, "#35B35A"), (2.0, 2.5, "#D8C43A"),
+                                 (2.5, 3.0, "#D13B3B")],
+                       MICZONES=[(-40, -10, "#35B35A"), (-10, 0, "#D8C43A"),
+                                 (0, 10, "#D13B3B")]),
 }
 
 
