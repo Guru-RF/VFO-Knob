@@ -108,14 +108,19 @@ so an extra field is backward compatible by construction.
       the radio chosen at build time: everything but the TCI client is
       shared. Both ways in are worth having — over WiFi straight to the radio,
       which is what makes it useful on the go, and through a computer, as with
-      AetherSDR. Before the first release of it:
-      - two update channels (e.g. `firmware/aethersdr/`, `firmware/icom/`), so
-        a knob is only ever offered its own releases;
-      - refuse an upload or OTA image whose project name differs from the
-        running one — today any image with a valid signature installs;
-      - keep the same signing key and `partitions.csv`, so either firmware can
-        be swapped for the other through the configuration page's file
-        upload (the knob verifies against the key of the image it is running).
+      AetherSDR. The ground is laid:
+      - [x] one firmware per radio, chosen at build time
+        (`idf.py -D VFO_RADIO=…`) and named for it: `vfo-knob-aethersdr`;
+      - [x] an update channel per radio, `firmware/<radio>/`, so a knob is only
+        ever offered its own releases (`RADIO=… tools/release.sh`);
+      - [x] another radio's image is refused as an update, by upload and by
+        OTA alike; switching is deliberate, from the radio chooser under
+        **Firmware** on the configuration page (Icom listed, not yet offered);
+      - [x] the same signing key and `partitions.csv` for all of them.
+      Still to do: put the radio behind an interface — `main/app_main.c` and
+      `components/webcfg` still call the TCI client directly — then write the
+      Icom client as the second implementation, add `icom` to `_vfo_radios`
+      in `CMakeLists.txt`, and offer it in the chooser.
 
 ## Known hardware quirks
 

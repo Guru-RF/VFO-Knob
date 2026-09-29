@@ -63,9 +63,18 @@ esp_err_t ota_start_check(bool install);
 
 void ota_get_status(ota_status_t *out);
 
-/* Where images are published. The configuration page needs this so it can do
- * the download itself when the device has no route out. */
+/* The radio this firmware is for: its image is vfo-knob-<radio>, and it
+ * follows the update channel of that name. */
+const char *ota_radio(void);
+
+/* Where this firmware's images are published -- ota_root_url() plus the
+ * radio. The configuration page needs this so it can do the download itself
+ * when the device has no route out. */
 const char *ota_base_url(void);
+
+/* Where every radio's channel lives, for the page's switch to another radio's
+ * firmware. */
+const char *ota_root_url(void);
 
 /* Push an image in from the browser instead of pulling it from GitHub.
  *
@@ -73,8 +82,17 @@ const char *ota_base_url(void);
  * server and the computer is the client, so the knob has no gateway and cannot
  * reach the internet at all -- pulling a release only works when it is on
  * WiFi. Uploading moves the download to the machine that already has a browser
- * open. The image is signature-checked either way, by esp_ota_end(). */
-esp_err_t ota_upload_begin(void);
+ * open. The image is signature-checked either way, by esp_ota_end().
+ *
+ * `radio` is NULL for an update: the image must be this radio's firmware, and
+ * ota_upload_end() refuses another's with ESP_ERR_NOT_SUPPORTED. Naming a
+ * radio is a deliberate switch to that radio's firmware, and only that one's
+ * is accepted.
+ *
+ * `size` is the image's length when the sender gave one, 0 when not. With it,
+ * the slot is erased here, before any data arrives -- which takes seconds. */
+bool      ota_busy(void);
+esp_err_t ota_upload_begin(const char *radio, size_t size);
 esp_err_t ota_upload_write(const void *data, size_t len);
 esp_err_t ota_upload_end(void);
 void      ota_upload_abort(void);

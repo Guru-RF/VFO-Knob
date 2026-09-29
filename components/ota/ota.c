@@ -34,11 +34,15 @@ static const char *TAG = "ota";
  * Release assets redirect to release-assets.githubusercontent.com, which sends
  * no Access-Control-Allow-Origin, so a page served from 10.55.42.1 cannot read
  * them. raw.githubusercontent.com sends "*", so one source works for both the
- * device (over WiFi) and the browser (over USB). Measured, not assumed. */
-#define OTA_BASE_URL "https://raw.githubusercontent.com/" OTA_REPO \
+ * device (over WiFi) and the browser (over USB). Measured, not assumed.
+ *
+ * One channel per radio: the image vfo-knob-aethersdr is published under
+ * firmware/aethersdr/, so a knob is only ever offered its own releases. */
+#define OTA_ROOT_URL "https://raw.githubusercontent.com/" OTA_REPO \
                      "/" OTA_BRANCH "/firmware/"
-#define OTA_MANIFEST_URL OTA_BASE_URL "manifest.json"
+#define OTA_PREFIX   "vfo-knob-"
 
+static char            s_base[128];       /* OTA_ROOT_URL + radio + "/" */
 static ota_status_t    s_st = { .phase = OTA_IDLE };
 static portMUX_TYPE    s_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool   s_busy;
@@ -84,6 +88,28 @@ static bool is_newer(const char *candidate, const char *running)
     return false;
 }
 
+/* ------------------------------------------------------------ which radio */
+
+/* The image's project name says which radio's firmware it is. 1.5.0 and
+ * earlier were built as plain "vfo-knob": the AetherSDR firmware under its old
+ * name, so going back to one is an update, not a switch. */
+static const char *product_of(const char *project)
+{
+    return strcmp(project, "vfo-knob") == 0 ? OTA_PREFIX "aethersdr" : project;
+}
+
+static bool same_product(const char *a, const char *b)
+{
+    return strcmp(product_of(a), product_of(b)) == 0;
+}
+
+const char *ota_radio(void)
+{
+    const char *p = product_of(esp_app_get_description()->project_name);
+    const size_t n = strlen(OTA_PREFIX);
+    return strncmp(p, OTA_PREFIX, n) == 0 ? p + n : p;
+}
+
 /* --------------------------------------------------- tiny JSON extraction */
 
 /* The release feed is large and deeply nested, and a full parser is not worth
@@ -111,8 +137,10 @@ static bool json_string_field(const char *json, const char *key,
 
 static esp_err_t fetch_latest(char *body, size_t cap, int *out_len)
 {
+    char url[160];
+    snprintf(url, sizeof url, "%smanifest.json", s_base);
     esp_http_client_config_t c = {
-        .url               = OTA_MANIFEST_URL,
+        .url               = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms        = 8000,        /* a few hundred bytes; do not linger */
         .keep_alive_enable = false,
@@ -125,8 +153,9 @@ static esp_err_t fetch_latest(char *body, size_t cap, int *out_len)
     esp_err_t err = esp_http_client_open(h, 0);
     if (err != ESP_OK) goto out;
     esp_http_client_fetch_headers(h);
-    if (esp_http_client_get_status_code(h) != 200) {
-        err = ESP_ERR_INVALID_RESPONSE;
+    const int status = esp_http_client_get_status_code(h);
+    if (status != 200) {
+        err = status == 404 ? ESP_ERR_NOT_FOUND : ESP_ERR_INVALID_RESPONSE;
         goto out;
     }
     int n = esp_http_client_read_response(h, body, cap - 1);
@@ -151,7 +180,13 @@ static void ota_run(bool install)
 
     set_phase(OTA_CHECKING, "checking for a newer release");
     int len = 0;
-    if (fetch_latest(body, cap, &len) != ESP_OK) {
+    const esp_err_t got = fetch_latest(body, cap, &len);
+    if (got == ESP_ERR_NOT_FOUND) {
+        /* The server answered: this radio's channel has no release in it. */
+        set_phase(OTA_FAILED, "no release published for this radio yet");
+        goto done;
+    }
+    if (got != ESP_OK) {
         /* Over the USB cable this is expected and not a fault: the knob has no
          * gateway. The configuration page does the checking in that case. */
         set_phase(OTA_FAILED, "no route to the update server");
@@ -187,7 +222,7 @@ static void ota_run(bool install)
         set_phase(OTA_FAILED, "manifest names no image");
         goto done;
     }
-    snprintf(url, sizeof url, "%s%s", OTA_BASE_URL, file);
+    snprintf(url, sizeof url, "%s%s", s_base, file);
     free(body);
     body = NULL;                      /* the TLS session wants the room back */
 
@@ -198,11 +233,23 @@ static void ota_run(bool install)
         .timeout_ms        = 20000,
         .keep_alive_enable = true,
     };
-    esp_https_ota_config_t oc = { .http_config = &hc };
+    /* Erase the slot up front in blocks, not a sector per 4 kB as it arrives:
+     * see ota_upload_begin(). */
+    esp_https_ota_config_t oc = { .http_config = &hc, .bulk_flash_erase = true };
 
     esp_https_ota_handle_t oh = NULL;
     if (esp_https_ota_begin(&oc, &oh) != ESP_OK || !oh) {
         set_phase(OTA_FAILED, "could not start the download");
+        goto done;
+    }
+    /* The channel is this radio's, so this should never trip; it is what
+     * stands between a mistake in publishing and a knob that no longer talks
+     * to its radio. The header is read before the rest is downloaded. */
+    esp_app_desc_t nd = { 0 };
+    if (esp_https_ota_get_img_desc(oh, &nd) != ESP_OK ||
+        !same_product(nd.project_name, esp_app_get_description()->project_name)) {
+        esp_https_ota_abort(oh);
+        set_phase(OTA_FAILED, "the channel offered another radio's firmware");
         goto done;
     }
     int total = esp_https_ota_get_image_size(oh), err;
@@ -266,16 +313,43 @@ static void ota_check_task(void *arg)
 static esp_ota_handle_t       s_up;
 static const esp_partition_t *s_up_part;
 static size_t                 s_up_written;
+static char                   s_up_want[32];     /* the project it must be */
 
-esp_err_t ota_upload_begin(void)
+bool ota_busy(void) { return s_busy || s_up; }
+
+esp_err_t ota_upload_begin(const char *radio, size_t size)
 {
     if (s_busy || s_up) return ESP_ERR_INVALID_STATE;
+    if (radio && *radio)
+        snprintf(s_up_want, sizeof s_up_want, OTA_PREFIX "%s", radio);
+    else
+        strlcpy(s_up_want, esp_app_get_description()->project_name,
+                sizeof s_up_want);
     s_up_part = esp_ota_get_next_update_partition(NULL);
     if (!s_up_part) return ESP_ERR_NOT_FOUND;
+    if (size > s_up_part->size) return ESP_ERR_INVALID_SIZE;
     s_up_written = 0;
-    esp_err_t err = esp_ota_begin(s_up_part, OTA_WITH_SEQUENTIAL_WRITES, &s_up);
-    if (err != ESP_OK) { s_up = 0; return err; }
-    s_busy = true;
+    s_busy = true;                  /* before the erase: nothing else starts */
+
+    /* Erase the image's room first, in 64 kB blocks, rather than a 4 kB
+     * sector at a time as the data arrives. Every erase stalls both cores
+     * with the cache off. Sector by sector, erasing was most of an upload's
+     * 23 s and ran all through it, and core 1 -- TinyUSB and LVGL -- was left
+     * so little time that the task watchdog reset the knob mid-upload. Up
+     * front in blocks it takes 4 s and yields between blocks, and the
+     * transfer after it only programs pages: 10 s, the cores 5-24% idle
+     * (measured). Without a length, erase as it goes, as before. */
+    set_phase(OTA_DOWNLOADING, size ? "erasing the update slot"
+                                    : "receiving uploaded image");
+    esp_err_t err = esp_ota_begin(s_up_part,
+                                  size ? size : OTA_WITH_SEQUENTIAL_WRITES,
+                                  &s_up);
+    if (err != ESP_OK) {
+        s_up = 0;
+        s_busy = false;
+        set_phase(OTA_FAILED, "could not prepare the update slot");
+        return err;
+    }
     set_phase(OTA_DOWNLOADING, "receiving uploaded image");
     return ESP_OK;
 }
@@ -294,6 +368,26 @@ esp_err_t ota_upload_write(const void *data, size_t len)
     return ESP_OK;
 }
 
+/* Every radio's firmware is signed with the same key, so the signature alone
+ * would install any of them. Read back once it has been checked: the name is
+ * covered by the signature too.
+ *
+ * A function of its own, so these buffers are not on the stack while
+ * esp_ota_end() checks the RSA signature -- the deepest point of an upload, on
+ * the web server's task. Declared inside ota_upload_end() they overflowed it. */
+static __attribute__((noinline)) bool upload_is_wanted(void)
+{
+    esp_app_desc_t d = { 0 };
+    if (esp_ota_get_partition_description(s_up_part, &d) == ESP_OK &&
+        same_product(d.project_name, s_up_want))
+        return true;
+    char m[96];
+    snprintf(m, sizeof m, "rejected: %.32s is not %s", d.project_name,
+             s_up_want);
+    set_phase(OTA_FAILED, m);
+    return false;
+}
+
 esp_err_t ota_upload_end(void)
 {
     if (!s_up) return ESP_ERR_INVALID_STATE;
@@ -309,6 +403,7 @@ esp_err_t ota_upload_end(void)
                                   : "rejected: image did not validate");
         return err;
     }
+    if (!upload_is_wanted()) return ESP_ERR_NOT_SUPPORTED;
     err = esp_ota_set_boot_partition(s_up_part);
     if (err != ESP_OK) {
         set_phase(OTA_FAILED, "could not switch to the new image");
@@ -365,11 +460,13 @@ esp_err_t ota_set_interval(uint32_t hours)
                                     (uint64_t)hours * 3600ULL * 1000000ULL);
 }
 
-const char *ota_base_url(void) { return OTA_BASE_URL; }
+const char *ota_base_url(void) { return s_base; }
+const char *ota_root_url(void) { return OTA_ROOT_URL; }
 
 esp_err_t ota_init(void)
 {
     const esp_app_desc_t *d = esp_app_get_description();
+    snprintf(s_base, sizeof s_base, "%s%s/", OTA_ROOT_URL, ota_radio());
     strlcpy(s_st.running, d->version, sizeof s_st.running);
     strlcpy(s_st.message, "idle", sizeof s_st.message);
     return ESP_OK;

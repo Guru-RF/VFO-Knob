@@ -177,7 +177,14 @@ If an update fails to boot, the bootloader rolls back to the previous slot. The
 confirmation is tied to the same "this boot looks healthy" timer that clears the
 boot-loop guard.
 
-Publishing a release: `tools/release.sh 1.2.3 --push`.
+There is one firmware per radio, `vfo-knob-<radio>` — today only
+`vfo-knob-aethersdr` — and each has its own update channel, `firmware/<radio>/`,
+so a knob is only ever offered its own releases. It also refuses to install
+another radio's firmware as an update; switching radios is a deliberate choice
+under **Firmware** on the configuration page.
+
+Publishing a release: `tools/release.sh 1.2.3 --push` (another radio's:
+`RADIO=<radio> tools/release.sh …`).
 
 ## Building
 

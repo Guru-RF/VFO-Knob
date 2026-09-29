@@ -25,5 +25,16 @@ if(NOT DEFINED SDKCONFIG)
     set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 endif()
 
+# The radio this firmware is for: `idf.py -D VFO_RADIO=...`. There is one
+# firmware per radio -- they share everything but the radio's client, and
+# internal RAM has room for one -- and the image is named for it,
+# vfo-knob-<radio>. That name is how a knob tells its own updates from another
+# radio's firmware, and which update channel it follows (components/ota).
+set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
+set(_vfo_radios aethersdr)
+if(NOT VFO_RADIO IN_LIST _vfo_radios)
+    message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(vfo-knob)
+project(vfo-knob-${VFO_RADIO})

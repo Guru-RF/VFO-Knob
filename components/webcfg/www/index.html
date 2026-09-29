@@ -22,9 +22,10 @@ h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim)
 .row .k{color:var(--dim)}
 .row .v{font-variant-numeric:tabular-nums;text-align:right}
 label{display:block;margin:10px 0 4px;color:var(--dim);font-size:12px}
-input{width:100%;padding:8px 10px;background:#11131799;color:var(--fg);
+input,select{width:100%;padding:8px 10px;background:#11131799;color:var(--fg);
       border:1px solid var(--line);border-radius:6px;font:inherit}
-input:focus{outline:none;border-color:var(--accent)}
+input:focus,select:focus{outline:none;border-color:var(--accent)}
+option{background:var(--panel)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 button{margin-top:14px;padding:9px 16px;border:0;border-radius:6px;
        background:var(--accent);color:#1a1205;font:inherit;font-weight:600;cursor:pointer}
@@ -108,6 +109,11 @@ button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
 
 <section>
   <h2>Firmware</h2>
+  <label for="radio">Radio</label>
+  <select id="radio"></select>
+  <button id="switch" class="ghost" hidden>Switch to this radio's firmware</button>
+  <p class="note">There is one firmware per radio, and the knob runs one at a
+     time. Switching installs the other radio's latest release.</p>
   <div id="otarow"></div>
   <button id="install" hidden>Update now</button>
   <button id="check" class="ghost">Check now</button>
@@ -164,6 +170,7 @@ async function load(){
   $('vol').value=c.vol;   $('mic').value=c.mic;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
   $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||'';
+  FWROOT=c.fwroot||''; RADIO=c.radio||'aethersdr'; radios();
   /* The address this browser reaches the knob from. Over the cable that is the
      USB link's own 10.55.42.2 -- found automatically there, and unreachable
      from WiFi -- so it is only offered when it can be the right answer. */
@@ -302,6 +309,43 @@ $('upload').onclick = async()=>{
     if(r.ok) setTimeout(poll,4000);
   }catch(e){ $('msg').textContent='Upload failed: '+e; $('msg').style.color='var(--bad)' }
   $('upload').disabled=false; ota();
+};
+
+/* One firmware per radio, each published in its own channel under FWROOT.
+ * The knob says which it runs; installing another is a deliberate switch,
+ * which the knob accepts only when the upload names that radio. */
+const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
+              {id:'icom',      name:'Icom', soon:true}];
+let FWROOT='', RADIO='';
+const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
+function radios(){
+  const list=RADIOS.some(r=>r.id===RADIO) ? RADIOS : [{id:RADIO,name:RADIO},...RADIOS];
+  $('radio').innerHTML=list.map(r=>`<option value="${esc(r.id)}"${r.soon?' disabled':''}>`
+    +esc(r.name)+(r.soon?' — coming':'')+'</option>').join('');
+  $('radio').value=RADIO; $('switch').hidden=true;
+}
+$('radio').onchange=()=>{ $('switch').hidden=$('radio').value===RADIO };
+$('switch').onclick=async()=>{
+  const id=$('radio').value;
+  if(!confirm(`Replace the ${rname(RADIO)} firmware with the ${rname(id)} firmware?`)) return;
+  $('msg').style.color='var(--dim)'; $('switch').disabled=true;
+  try{
+    const r=await fetch(FWROOT+id+'/manifest.json',{cache:'no-store'});
+    if(!r.ok) throw new Error(`no ${rname(id)} firmware is published yet`);
+    const m=await r.json();
+    if(m.project && m.project!=='vfo-knob-'+id) throw new Error('the channel holds '+m.project);
+    $('msg').textContent=`Downloading the ${rname(id)} firmware ${m.version}…`;
+    const f=await fetch(FWROOT+id+'/'+m.file,{cache:'no-store'});
+    if(!f.ok) throw new Error('download failed ('+f.status+')');
+    const b=await f.blob();
+    $('msg').textContent=`Uploading ${(b.size/1048576).toFixed(2)} MB to the knob…`;
+    const u=await fetch('/api/ota/upload?radio='+encodeURIComponent(id),{method:'POST',body:b});
+    const t=await u.text();
+    $('msg').textContent = u.ok ? restarting : 'Rejected: '+t;
+    $('msg').style.color = u.ok ? 'var(--ok)' : 'var(--bad)';
+    if(u.ok) setTimeout(poll,4000);
+  }catch(e){ $('msg').textContent='Could not switch: '+e.message; $('msg').style.color='var(--bad)' }
+  $('switch').disabled=false;
 };
 
 load().then(webCheck).then(ota);

@@ -190,21 +190,22 @@ static esp_err_t config_get(httpd_req_t *r)
     bool client_usb;
     client_addr(r, client, sizeof client, &client_usb);
 
-    char buf[448];
+    char buf[640];
     /* The password is deliberately not returned. The page sends one only when
      * the field is non-empty, so a save does not have to round-trip it. */
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
-             "\"fwbase\":\"%s\",\"client\":\"%s\",\"client_usb\":%s}",
+             "\"radio\":\"%s\",\"fwbase\":\"%s\",\"fwroot\":\"%s\","
+             "\"client\":\"%s\",\"client_usb\":%s}",
              c->tci_host, (unsigned)c->tci_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              net_prov_web_user(),
              net_prov_web_is_default() ? "true" : "false",
              (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
-             (unsigned)net_prov_blank_min(), ota_base_url(),
-             client, client_usb ? "true" : "false");
+             (unsigned)net_prov_blank_min(), ota_radio(), ota_base_url(),
+             ota_root_url(), client, client_usb ? "true" : "false");
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
 }
@@ -387,11 +388,38 @@ static esp_err_t coredump_get(httpd_req_t *r)
     return httpd_resp_send_chunk(r, NULL, 0);
 }
 
+/* ?radio=<name> is the page switching the knob to that radio's firmware, on
+ * purpose. Without it, an upload is an update and must be this radio's own
+ * firmware. A name is a short run of [a-z0-9]; anything else is refused
+ * rather than guessed at.
+ *
+ * Parsed in a function of its own, into a static: the upload's deepest point,
+ * the RSA check at the end, leaves this task very little stack, and anything
+ * the handler itself keeps is on it the whole way down. */
+static char s_up_radio[16];               /* the server runs one handler at a time */
+
+static __attribute__((noinline)) bool upload_radio(httpd_req_t *r)
+{
+    char q[48] = { 0 };
+    s_up_radio[0] = 0;
+    if (httpd_req_get_url_query_str(r, q, sizeof q) != ESP_OK) return true;
+    const esp_err_t e = httpd_query_key_value(q, "radio", s_up_radio,
+                                              sizeof s_up_radio);
+    bool ok = e == ESP_OK || e == ESP_ERR_NOT_FOUND;       /* not: truncated */
+    for (const char *p = s_up_radio; ok && *p; p++)
+        ok = (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9');
+    if (e != ESP_OK) s_up_radio[0] = 0;
+    return ok;
+}
+
 static esp_err_t ota_upload_post(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
-    esp_err_t err = ota_upload_begin();
-    if (err != ESP_OK) {
+    if (!upload_radio(r)) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "no such radio");
+        return ESP_FAIL;
+    }
+    if (ota_busy()) {
         httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "an update is already running");
         return ESP_FAIL;
     }
@@ -399,17 +427,34 @@ static esp_err_t ota_upload_post(httpd_req_t *r)
      * nowhere to buffer it. */
     char *buf = heap_caps_malloc(2048, MALLOC_CAP_SPIRAM);
     if (!buf) buf = malloc(2048);
-    if (!buf) { ota_upload_abort(); return httpd_resp_send_500(r); }
+    if (!buf) return httpd_resp_send_500(r);
 
     /* Hand the whole device over to the transfer. RX audio is a continuous
      * ~96 kB/s inbound stream on the same socket and the same USB pipe, and
      * with both running the upload broke midway -- thousands of dropped audio
      * frames and a truncated image. The screen says so, and being a separate
-     * screen it also puts PTT out of reach while the flash is rewritten. */
+     * screen it also puts PTT out of reach while the flash is rewritten. It
+     * goes up before the slot is erased, which takes a few seconds. */
     tci_audio_suspend(true);
     ui_updating_show();
 
     const int total = r->content_len;
+    const int64_t t_begin = esp_timer_get_time();
+    esp_err_t err = ota_upload_begin(s_up_radio[0] ? s_up_radio : NULL,
+                                     total > 0 ? (size_t)total : 0);
+    if (err != ESP_OK) {
+        free(buf);
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            err == ESP_ERR_INVALID_SIZE
+                                ? "image too large for the update slot"
+                                : "could not start the update");
+        goto failed_sent;
+    }
+    /* Each core's idle time across the transfer, for the log at the end. */
+    const int64_t  t_xfer = esp_timer_get_time();
+    const uint32_t idle0  = ulTaskGetIdleRunTimeCounterForCore(0);
+    const uint32_t idle1  = ulTaskGetIdleRunTimeCounterForCore(1);
+
     int remaining = total;
     int last_pct = -1;
     int stalls = 0;
@@ -443,7 +488,26 @@ static esp_err_t ota_upload_post(httpd_req_t *r)
     }
     free(buf);
 
-    if (ota_upload_end() != ESP_OK) {
+    err = ota_upload_end();
+    /* Past the deepest point: how close it came to this task's stack, and
+     * how much room the cores had while the flash was written. */
+    const uint32_t us = (uint32_t)(esp_timer_get_time() - t_xfer) | 1;
+    ESP_LOGI(TAG, "upload: erase %u ms, transfer %u ms, core 0/1 idle %u%%/%u%%; "
+             "web server stack %u bytes never used",
+             (unsigned)((t_xfer - t_begin) / 1000), (unsigned)(us / 1000),
+             (unsigned)((uint64_t)(ulTaskGetIdleRunTimeCounterForCore(0) - idle0) * 100 / us),
+             (unsigned)((uint64_t)(ulTaskGetIdleRunTimeCounterForCore(1) - idle1) * 100 / us),
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+                            s_up_radio[0] ? "image rejected -- not that "
+                                            "radio's firmware"
+                                          : "image rejected -- that is another "
+                                            "radio's firmware; switch radios "
+                                            "under Firmware to install it");
+        goto failed_sent;
+    }
+    if (err != ESP_OK) {
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
                             "image rejected -- wrong signature or not a "
                             "VFO-Knob build");
@@ -508,7 +572,10 @@ esp_err_t webcfg_start(void)
     c.server_port      = 80;
     c.lru_purge_enable = true;
     c.max_uri_handlers = 9;
-    c.stack_size       = 4608;
+    /* An upload ends in esp_ota_end() checking the RSA signature, on this
+     * task: at 4608 that left 448 bytes (measured), and 416 more on the path
+     * overflowed it. Internal RAM, because the same task writes flash. */
+    c.stack_size       = 5632;
     /* Below LVGL and the knob: a page refresh must never cost a detent. */
     c.task_priority    = 3;
     c.recv_wait_timeout = 5;
