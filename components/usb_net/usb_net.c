@@ -9,8 +9,10 @@ const char *usb_net_host(void)  { return NULL; }
 #else
 
 
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <xtensa_context.h>
 
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -18,12 +20,14 @@ const char *usb_net_host(void)  { return NULL; }
 #include "esp_mac.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tinyusb.h"
 #include "tinyusb_net.h"
 #include "tusb.h"
 #include "soc/rtc_cntl_reg.h"
+#include "soc/system_reg.h"
 #include "soc/usb_serial_jtag_reg.h"
 #include "soc/soc.h"
 
@@ -196,6 +200,60 @@ static void on_dhcp_event(void *arg, esp_event_base_t base, int32_t id, void *da
     if (id == IP_EVENT_ETH_GOT_IP) s_host_seen = true;
 }
 
+/* Stop the USB OTG controller, DMA engine and all, and hand the PHY back.
+ *
+ * TinyUSB drives the controller in DMA mode: an armed OUT endpoint writes the
+ * host's next packet straight into RAM, at an address this image chose. A
+ * software restart resets the CPUs and GDMA but not this controller, and the
+ * host never sees the reset -- so the controller finishes that receive into
+ * the NEXT image, at the old image's buffer address. Measured after an update:
+ * the old build kept ncm_epbuf at 0x3fcae828, the new one kept a FreeRTOS port
+ * constant there, and it crashed in the first context switch, every time.
+ * Whether an update survived its first boot came down to what the linker
+ * happened to put where the old receive buffer had been. */
+static void otg_stop(void)
+{
+    SET_PERI_REG_MASK(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_USB_RST);
+    CLEAR_PERI_REG_MASK(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_USB_RST);
+    usb_net_release_phy();
+}
+
+/* FreeRTOS's Xtensa port keeps three offsets in DRAM for its context switch.
+ * These are port.c's own definitions of their values. */
+extern const uint32_t offset_pxEndOfStack, offset_cpsa, offset_xCoreID;
+static bool s_boot_repaired;
+
+static void restore(const uint32_t *p, uint32_t v)
+{
+    if (*(const volatile uint32_t *)p == v) return;
+    *(volatile uint32_t *)p = v;
+    s_boot_repaired = true;
+}
+
+/* A panic or watchdog reset runs no shutdown handler, and no image before
+ * this one had one at all -- so the controller may still be armed when this
+ * image starts, and may already have written a packet into it. A constructor
+ * is the earliest point an application gets: it runs before app_main and
+ * before the scheduler.
+ *
+ * Where that packet lands is the previous image's choice. From 1.4.0 and
+ * 1.4.1, which is where an update to this image comes from, it is up to
+ * 3200 bytes at 0x3fcae308: core 1's interrupt stack, idle this early; a log
+ * tag; our own ncm_epbuf; and FreeRTOS's three port offsets, which crash the
+ * first context switch. Those are compile-time values that nothing reads
+ * before the scheduler starts, so put them back. */
+__attribute__((constructor)) static void otg_stop_at_boot(void)
+{
+    otg_stop();
+#if XCHAL_CP_NUM > 0
+    restore(&offset_pxEndOfStack, offsetof(StaticTask_t, pxDummy8));
+    restore(&offset_cpsa,         XT_CP_SIZE);
+#if configNUMBER_OF_CORES > 1
+    restore(&offset_xCoreID,      offsetof(StaticTask_t, xDummyCoreID));
+#endif
+#endif
+}
+
 esp_err_t usb_net_init(void)
 {
     /* A locally-administered MAC derived from the chip's own, so two knobs on
@@ -222,6 +280,13 @@ esp_err_t usb_net_init(void)
         .string_descriptor_count = sizeof s_usb_strings / sizeof s_usb_strings[0],
     };
     ESP_RETURN_ON_ERROR(tinyusb_driver_install(&usb), TAG, "tinyusb");
+    /* Every esp_restart() -- an update, the page's reboot button, the last
+     * rung of the PTT ladder -- stops the controller first. See otg_stop(). */
+    if (esp_register_shutdown_handler(otg_stop) != ESP_OK)
+        ESP_LOGW(TAG, "no shutdown handler: a reboot may leave USB DMA armed");
+    if (s_boot_repaired)
+        ESP_LOGW(TAG, "the previous image's USB DMA had hit FreeRTOS's port "
+                      "offsets; restored at boot");
 
     tinyusb_net_config_t ncfg = { .on_recv_callback = usb_recv };
     memcpy(ncfg.mac_addr, mac, 6);
