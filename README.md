@@ -3,7 +3,7 @@
 A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR)
 and the Icom IC-705, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
-over WiFi.
+over WiFi. And, with its own firmware, a talkgroup knob for SvxLink reflectors.
 
 <p align="center">
   <img src="docs/display-rx.svg" width="400" alt="Receiving: the S-meter rises to S9+20 and falls back while its readout follows and the 100 Hz digit ticks; S-units marked around the blue 66 mm body">
@@ -25,6 +25,12 @@ With an **IC-705** it talks to the radio itself, over WiFi, in Icom's network
 protocol — the one RS-BA1 and wfview use — with receive and transmit audio,
 so knob and radio are a complete station with no computer in between. Its face
 wears Icom's colours, so which radio a knob is for shows at a glance.
+
+With the **svxconnect** firmware there is no radio at all: the knob is an
+[SvxLink](https://www.svxlink.org/) reflector client over WiFi, in the style of
+[SVXConnect](https://svxconnect.app/) and in its colours. The dial picks the
+talkgroup, the S-meter shows who is talking, and the built-in microphone and
+the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 
 ---
 
@@ -148,6 +154,54 @@ WiFi from wherever your network puts it. Let both in once, e.g.
 `sudo ufw allow proto tcp from 192.168.1.0/24 to any port 50001` with your own
 LAN's range for WiFi.
 
+## SvxLink reflectors
+
+The svxconnect firmware (`vfo-knob-svxconnect`) turns the knob into a node on
+an SvxLink reflector: protocol 3.0, the reflector's own TLS with a client
+certificate, Opus audio both ways at 16 kHz. It is a port of
+[SVXConnect-CLI](https://github.com/Guru-RF/SVXConnect-CLI)'s reflector client,
+and shares its protocol code, talkgroup manager and codec settings.
+
+<p align="center">
+  <img src="docs/display-svxconnect.svg" width="320" alt="The svxconnect face: ON6URE talking for 14 s on TG 8, 70cm Repeaters, on be.svx.link; the arc at -14 dBFS, the talkgroup unlocked and the sound on">
+</p>
+
+The face is the radio face, read differently:
+
+| | |
+|---|---|
+| **The dial** | Steps through the switchable talkgroups, one a detent. The talkgroup's name, from the reflector's portal, is where the frequency is — looping when it is long — with the reflector under it; `TG n` is where band and mode are. |
+| **Lock** | Left of the talkgroup: no switching, by the dial or by a busier talkgroup. |
+| **Mute** | Right of it: the speaker off, the talkgroup still selected, who is talking still shown. |
+| **Meter** | The received audio in dBFS, and in transmit the microphone. Above it, who is talking — with where they are, when the reflector publishes it — or who spoke last and how long ago. |
+| **PTT** | Tap to key, tap to unkey, as on the radios. The reflector's own announcement of your callsign confirms the key; on a busy talkgroup it refuses you the floor and the knob says so with the refusal click. |
+| **Link** | Where the step is: **connected**, **connecting** or **disconnected**. |
+
+Talkgroups follow SVXConnect's rules: *switchable* ones are on the dial,
+*monitored* ones are followed when there is traffic, a `+` after a number
+raises its priority (`9990, 8++, 1745+`), the knob stays on a talkgroup for a
+while after an over, and drops back to monitoring after a quiet spell. With
+no lists set it steps through every talkgroup the reflector's portal names.
+
+### First run
+
+1. Set the WiFi on the configuration page, and the reflector: its name, not its
+   host — `be.svx.link` is found through its SRV record.
+2. Under **Station**, give your callsign and an email address; the location and
+   position are for the reflector's map.
+3. Press **Request certificate**. The knob makes its RSA key (a few seconds),
+   sends the reflector a certificate request and keeps asking every 30 s until
+   the sysop has signed it, then logs in by itself. The certificate renews by
+   itself; the key never changes, because the reflector knows the callsign by
+   it.
+
+### On an enhanced reflector
+
+Where the reflector has a portal, the knob reads its `talkgroups.json` for the
+names (kept in flash, refreshed daily) and follows its live feed for where each
+talker is. The feed is a second connection to the same host; the knob pauses
+it while it logs in, and it can be switched off on the configuration page.
+
 ## Configuration page
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
@@ -185,8 +239,9 @@ If an update fails to boot, the bootloader rolls back to the previous slot. The
 confirmation is tied to the same "this boot looks healthy" timer that clears the
 boot-loop guard.
 
-There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr` and
-`vfo-knob-icom` — and each has its own update channel, `firmware/<radio>/`,
+There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
+`vfo-knob-icom` and `vfo-knob-svxconnect` — and each has its own update
+channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
 under **Firmware** on the configuration page.
@@ -214,6 +269,14 @@ link has no route to it):
 ```sh
 idf.py -B build_icom -D VFO_RADIO=icom \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.icom" \
+       build flash
+```
+
+So is the svxconnect firmware:
+
+```sh
+idf.py -B build_svxconnect -D VFO_RADIO=svxconnect \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.svxconnect" \
        build flash
 ```
 
