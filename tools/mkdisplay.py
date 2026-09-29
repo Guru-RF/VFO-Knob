@@ -85,6 +85,22 @@ PALETTES = {
                                  (2.5, 3.0, "#D13B3B")],
                        MICZONES=[(-40, -10, "#35B35A"), (-10, 0, "#D8C43A"),
                                  (0, 10, "#D13B3B")]),
+    # The multiflex firmware's face (ui.c under VFO_RADIO_MULTIFLEX): the
+    # Maestro's -- black, white digits, Flex blue, a blue S-meter that turns
+    # red over S9, power in green, TX a red badge.
+    "multiflex": dict(BG="#000000", BG1="#0C1622", BG_TX="#2A0608", ACCENT="#2A9DF4",
+                      ACCENT_HI="#62BBFF", TEXT="#FFFFFF", TEXT2="#C9D2DC",
+                      LABEL="#7D8792", SUBTLE="#141C26", WARN="#FFB000",
+                      DANGER="#F0302C", TX_RED="#E8262B", TX_TEXT="#FFFFFF",
+                      GREEN="#43B649", DISABLED="#3A424C", PWR="#43B649",
+                      RXZONES=[(-127, -121, "#0A3563"), (-121, -109, "#0F4C8A"),
+                               (-109,  -97, "#1666B3"), (-97,   -85, "#1F82D9"),
+                               (-85,   -73, "#2A9DF4"), (-73,   -53, "#F26A6A"),
+                               (-53,   -33, "#EE4444"), (-33,   -13, "#E8262B")],
+                      SWRZONES=[(1.0, 2.0, "#2A9DF4"), (2.0, 2.5, "#FFB000"),
+                                (2.5, 3.0, "#F0302C")],
+                      MICZONES=[(-40, -10, "#2A9DF4"), (-10, 0, "#FFB000"),
+                                (0, 10, "#F0302C")]),
 }
 
 

@@ -15,6 +15,8 @@ in that firmware's colours, so the two sets tell apart at a glance:
   icom        the IC-705's screen: S9+20 on 2 m, 145.500.00 FM, P.AMP on
   svxconnect  svxconnect.app's ink and gold: TG 8 on be.svx.link, someone
               talking, the arc at -14 dBFS
+  multiflex   the Maestro's colours: S9+20 on 20 m, 14.200.00 USB, RF.G at
+              +8 dB -- the FlexRadio's RF gain, which its own API carries
 
 The body is a 66 mm cylinder, 22 mm deep: a blue anodised ring with diagonal
 knurling over a black base, the cover glass, and the 1.8" panel inside it --
@@ -48,6 +50,10 @@ RADIOS = {
     "icom":      dict(name="the IC-705", dbm=-53, band="2m", mode="FM", filt="FIL1",
                       digits="145500" "00", active=4, step="10 kHz",
                       agc="FAST", gain_caption="P.AMP", gain="ON", gain_known=True),
+    # A FlexRadio over its own API: RF.G is the panadapter's RF gain, known.
+    "multiflex": dict(name="FlexRadio", dbm=-53, band="20m", mode="USB", filt="2700",
+                      digits=" 14200" "00", active=6, step="100 Hz",
+                      agc="MED", gain_caption="RF.G", gain="+8 dB", gain_known=True),
     # A reflector: the talkgroup where the frequency is, who is talking where
     # the S-units are, and the arc in dBFS.
     "svxconnect": dict(name="SvxLink", reflector=True, dbfs=-14, tg=8,
