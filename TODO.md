@@ -85,7 +85,7 @@ so an extra field is backward compatible by construction.
 - [ ] **On-screen provisioning.** WiFi and host currently come from Kconfig via
       NVS seeding. A SoftAP captive portal plus an on-screen host editor would
       remove the reflash-to-change-networks step.
-- [x] **Persist settings to NVS** — volume, mic gain, TOT, the dim and dark
+- [x] **Persist settings to NVS** — volume, mic gain, the dim and dark
       timings, the update interval, WiFi, host and page credentials. Not
       rotation, which only the serial console can change, and the USB build
       has no console.
@@ -103,8 +103,7 @@ so an extra field is backward compatible by construction.
       "PTT" text. First check what AetherSDR's TCI exposes for RX/TX antenna
       selection; if nothing, it is an upstream request like the ones above.
       With the slab repurposed the knob has no PTT at all, so the red TX
-      screen and TOT display must still follow the radio when it is keyed
-      from elsewhere.
+      screen must still follow the radio when it is keyed from elsewhere.
 - [ ] **Icom IC-705 / IC-7300 MK2.** When an IC-705 is at hand. Same repo,
       the radio chosen at build time: everything but the TCI client is
       shared. Both ways in are worth having — over WiFi straight to the radio,

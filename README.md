@@ -27,8 +27,8 @@ knob follows; turn the knob and the desktop moves.
 | | |
 |---|---|
 | **Tune** | Per-digit step selection: tap a digit to set the decade. Acceleration on top, so a flick crosses a band and a slow turn lands on 10 Hz. |
-| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. Time-out timer, a haptic reminder every 10 s while keyed, and a four-rung teardown that ends in dropping the socket. |
-| **Meters** | S-meter in receive; SWR and auto-ranging forward power (to 2.5 kW) in transmit. |
+| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. A haptic reminder every 10 s while keyed, and a four-rung teardown that ends in dropping the socket. The transmit time-out is the radio's own. |
+| **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 runs the haptic motor for as long as it lasts. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. |
 | **Mode / filter / RIT** | Tap to open, turn to choose, tap anywhere to accept. |
 | **Network** | Tap the meter arc to see the knob's addresses. |
@@ -143,8 +143,7 @@ LAN's range for WiFi.
 ## Configuration page
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
-WiFi credentials, audio levels, transmit time-out, access credentials, and
-firmware updates.
+WiFi credentials, audio levels, access credentials, and firmware updates.
 
 Opened over WiFi, the host field offers a green **my IP** — the address of the
 computer you are browsing from, one tap to fill in when that is where
@@ -226,8 +225,10 @@ way to watch a boot.
 The knob keys a transmitter. Two things are worth knowing:
 
 - **Toggle PTT** means the radio stays keyed when you let go. That is why the
-  time-out timer, the periodic haptic reminder and the very loud red screen all
-  exist.
+  periodic haptic reminder and the very loud red screen exist, and why the
+  radio's transmit time-out should be set: in AetherSDR, *Radio Setup → TX →
+  Timeout*. The radio enforces it itself, so it holds even if the knob, the
+  link or the computer does not. The knob no longer keeps a second one.
 - **A client that loses power while keyed cannot unkey itself.** No firmware on
   this device can fix that; the server has to notice. Filed upstream as
   [aethersdr#5985](https://github.com/aethersdr/AetherSDR/issues/5985).

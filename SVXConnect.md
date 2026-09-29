@@ -61,10 +61,10 @@ macOS helper that is dropped anyway.
   back to host:port), `util`/`log`/`config` (no `getenv`, `nanosleep`,
   `fchmod`), `codec` (lower complexity, one encoder and one decoder), `app`,
   `enroll`.
-- **From the knob**: `ptt_fsm` unchanged (its 120 s time-out is SVXConnect's
-  too); the PTT slab, red TX face and TOT countdown, the warning panel, the
-  update screens, and the turn-to-choose / tap-to-accept editor for
-  talkgroups. The knob turning through talkgroups is the natural control.
+- **From the knob**: `ptt_fsm`, with a transmit time-out added back for this
+  build (see 6); the PTT slab and red TX face, the warning panel, the update
+  screens, and the turn-to-choose / tap-to-accept editor for talkgroups. The
+  knob turning through talkgroups is the natural control.
 - **Audio stays at 24 kHz**: `opus_decoder_create(24000, 2)` writes exactly
   the play ring's int16 stereo format; `opus_encoder_create(24000, 1)` with
   `OPUS_SET_MAX_BANDWIDTH(WIDEBAND)` takes the PDM mic's 480-sample frames.
@@ -140,8 +140,11 @@ macOS helper that is dropped anyway.
    irreversible" rule.
 6. **PTT safety turns around.** With TCI a *dead* knob can leave the radio
    keyed; with SVX a *hung but alive* knob keeps sending 50 frames/s and keys
-   a whole reflector network. Every frame sent checks that `ptt_fsm` is ON;
-   the 120 s time-out stays the primary guard. The 6 s pong-stale abort cannot
+   a whole reflector network. Every frame sent checks that `ptt_fsm` is ON,
+   and a transmit time-out is the primary guard — which this build has to
+   bring back: the AetherSDR firmware dropped its own in favour of the
+   radio's, and there is no radio behind a reflector. SVXConnect's 120 s is
+   the model. The 6 s pong-stale abort cannot
    be copied — the reflector only heartbeats after ~10 s idle and SVXConnect's
    receive timeout is 30 s — so ~15 s or more. Confirmation becomes the
    reflector's talker-start naming us.

@@ -32,6 +32,7 @@ ACCENT, ACCENT_HI = "#00B4D8", "#00C8F0"
 TEXT, TEXT2, LABEL, SUBTLE = "#C8D8E8", "#8EA8C0", "#506070", "#1A2330"
 WARN, DANGER, TX_RED, TX_TEXT = "#FFB84D", "#FF4D4D", "#E01010", "#F0C890"
 GREEN, DISABLED = "#4DD87A", "#3A4A5A"
+RFG_GOLD = "#E9B61D"           # splash.h RFG_GOLD_HEX, the logo's gold
 FONT = "DejaVu Sans,Verdana,sans-serif"
 
 RXZONES = [(-127, -121, "#1A6B47"), (-121, -109, "#1F7A52"),
@@ -42,6 +43,8 @@ RXNOTCH = [-121, -109, -97, -85, -73, -53, -33]
 RXTICKS = [(-121, 6, "S1"), (-109, 6, "S3"), (-97, 6, "S5"), (-85, 6, "S7"),
            (-73, 11, "S9"), (-53, 6, "+20"), (-33, 6, "+40"), (-13, 9, "+60")]
 SWRZONES = [(1.0, 2.0, "#4DD87A"), (2.0, 2.5, "#FFB84D"), (2.5, 3.0, "#FF4D4D")]
+# ui.c MIC_ZONE: AetherSDR's mic Level gauge, -40 to +10 dB.
+MICZONES = [(-40, -10, "#4DD87A"), (-10, 0, "#FFB84D"), (0, 10, "#FF4D4D")]
 # ui.c add_tx_ticks(): value, on-screen label, 0 grey / 1 amber / 2 red.
 SWRTICKS = [(1.0, "1", 0), (1.5, None, 0), (2.0, "2", 1), (2.5, None, 2), (3.0, "3", 2)]
 PWR_FS, PWR_PEGS = 100, [(10, "10"), (50, "50"), (100, "100")]   # the 100 W range
@@ -74,6 +77,10 @@ def swr_frac(s):
     return max(0.0, min(1.0, (s - 1.0) / 2.0))
 
 
+def mic_frac(db):
+    return max(0.0, min(1.0, (db + 40.0) / 50.0))
+
+
 def pt(deg, r, cx=CX, cy=CY):
     a = math.radians(deg)
     return cx + r * math.cos(a), cy + r * math.sin(a)
@@ -91,9 +98,9 @@ def arc_len(a0, a1, r):
     return abs(math.radians(a1 - a0)) * r
 
 
-def block(a0, a1, colour, inner=""):
-    return (f'<path d="{arc_path(a0, a1, RC)}" fill="none" stroke="{colour}" '
-            f'stroke-width="{BAND}">{inner}</path>')
+def block(a0, a1, colour, inner="", r=RC, band=BAND):
+    return (f'<path d="{arc_path(a0, a1, r)}" fill="none" stroke="{colour}" '
+            f'stroke-width="{band}">{inner}</path>')
 
 
 def notch(deg):
@@ -117,16 +124,17 @@ def text(x, y, s, size, colour, weight=400, anchor="middle", extra="", inner="")
             f'{extra}>{s}{inner}</text>')
 
 
-def sweep_cover(a0, a1, values, dur, colour=SUBTLE):
+def sweep_cover(a0, a1, values, dur, colour=SUBTLE, r=RC, band=BAND):
     """A track-coloured arc drawn backwards over the blocks, its dash length
-    animated so the bar appears to fill and fall."""
-    L = arc_len(a0, a1, RC)
+    animated so the bar appears to fill and fall. The bar fills from a0, so
+    pass the ends swapped for one that fills the other way."""
+    L = arc_len(a0, a1, r)
     lens = " ; ".join(f"{L * (1 - v):.2f} {L + 10:.2f}" for v in values)
     # Open on the first value, so a renderer that ignores SMIL still shows a
     # meter with something in it rather than an empty track.
     first = L * (1 - values[0])
-    return (f'<path d="{arc_path(a1, a0, RC)}" fill="none" stroke="{colour}" '
-            f'stroke-width="{BAND + 0.5}" stroke-dasharray="{first:.2f} {L + 10:.2f}">'
+    return (f'<path d="{arc_path(a1, a0, r)}" fill="none" stroke="{colour}" '
+            f'stroke-width="{band + 0.5}" stroke-dasharray="{first:.2f} {L + 10:.2f}">'
             f'<animate attributeName="stroke-dasharray" dur="{dur}" '
             f'repeatCount="indefinite" values="{lens}"/></path>')
 
@@ -138,13 +146,6 @@ def step_keys(n):
     t = [k / (n - 1) for k in range(n)]
     return ";".join(f"{v:.4f}" for v in [0.0] + [(t[k] + t[k + 1]) / 2
                                                   for k in range(n - 1)])
-
-
-def stepped_stroke(colours, dur):
-    """A bar whose colour depends on its level, as ui.c recolours it."""
-    return (f'<animate attributeName="stroke" dur="{dur}" repeatCount="indefinite" '
-            f'calcMode="discrete" keyTimes="{step_keys(len(colours))}" '
-            f'values="{";".join(colours)}"/>')
 
 
 def stepped(x, y, labels, dur, size, colour, weight=400, colours=None):
@@ -255,7 +256,7 @@ def icon_readout(cx, y, icon, value, colour):
 def ptt_slab(fill, label, text_colour):
     """The slab carries a 2 px accent border along its top edge only. The
     label is Montserrat 28 in a box whose top is PTT_TOP + 14; that font's
-    baseline sits 25 px down. "TX  102" has two spaces on the device."""
+    baseline sits 25 px down. "TX  REMOTE" has two spaces on the device."""
     return (f'<rect x="0" y="{PTT_TOP}" width="360" height="{360 - PTT_TOP}" '
             f'fill="{fill}"/>'
             f'<line x1="0" y1="{PTT_TOP + 1}" x2="360" y2="{PTT_TOP + 1}" '
@@ -424,10 +425,8 @@ def tx_face():
     s.append(f'<path d="{arc_path(AUD_ROT, AUD_ROT + AUD_SPAN, RC)}" fill="none" '
              f'stroke="{SUBTLE}" stroke-width="{BAND}"/>')
     pwr = [.87, .62, .88, .70, .95, .81, .55, .70, .87]
-    # Accent until the bar passes 90% of its range, then amber: time to range
-    # up. (ui.c: pf > 0.9f ? C_WARN : C_ACCENT)
-    s.append(block(AUD_ROT, AUD_ROT + AUD_SPAN, ACCENT,
-                   stepped_stroke([WARN if f > 0.9 else ACCENT for f in pwr], "5s")))
+    # One colour all the way up, the RF.Guru logo's gold. (ui.c: C_BRAND)
+    s.append(block(AUD_ROT, AUD_ROT + AUD_SPAN, RFG_GOLD))
     s.append(sweep_cover(AUD_ROT, AUD_ROT + AUD_SPAN, pwr, "5s"))
     for w, _ in PWR_PEGS:
         if w < PWR_FS:
@@ -438,21 +437,17 @@ def tx_face():
         x, y = pt(a, 128)
         s.append(text(x, y + 5, lab, 14, LABEL))
     # The mic level is a thin inner ring under the power bar, filling the
-    # other way so two bars on the same side are not read as one quantity.
+    # other way so two bars on the same side are not read as one quantity:
+    # -40 dB at the bottom end, +10 dB at the top, green, amber from -10 and
+    # red from 0, like the SWR band. (ui.c: MIC_ZONE)
     rc_mic = MIC_R - MIC_BAND / 2
-    s.append(f'<path d="{arc_path(AUD_ROT, AUD_ROT + AUD_SPAN, rc_mic)}" fill="none" '
-             f'stroke="{SUBTLE}" stroke-width="{MIC_BAND}"/>')
-    Lm = arc_len(AUD_ROT, AUD_ROT + AUD_SPAN, rc_mic)
-    mic = [.55, .72, .41, .83, .60, .35, .77, .50, .55]
-    lens = " ; ".join(f"{Lm * v:.2f} {Lm + 10:.2f}" for v in mic)
-    # Green, amber past 70%, red past 92%. (ui.c: the mic arc's indicator)
-    mic_col = [DANGER if v > 0.92 else WARN if v > 0.7 else GREEN for v in mic]
-    s.append(f'<path d="{arc_path(AUD_ROT + AUD_SPAN, AUD_ROT, rc_mic)}" fill="none" '
-             f'stroke="{mic_col[0]}" stroke-width="{MIC_BAND}" '
-             f'stroke-dasharray="{Lm * mic[0]:.2f} {Lm + 10:.2f}">'
-             f'<animate attributeName="stroke-dasharray" dur="5s" '
-             f'repeatCount="indefinite" values="{lens}"/>'
-             + stepped_stroke(mic_col, "5s") + '</path>')
+    def mic_angle(db):
+        return AUD_ROT + (1 - mic_frac(db)) * AUD_SPAN
+    for lo, hi, col in MICZONES:
+        s.append(block(mic_angle(lo), mic_angle(hi), col, r=rc_mic, band=MIC_BAND))
+    mic = [-16, -9, -22, -3, -13, -26, -7, -15, -16]
+    s.append(sweep_cover(AUD_ROT + AUD_SPAN, AUD_ROT, [mic_frac(v) for v in mic],
+                         "5s", r=rc_mic, band=MIC_BAND))
     # Both readouts follow their bars. SWR is coloured by its zone, power in
     # the transmit text colour with the auto-range's full scale beside it.
     s.append(stepped(180, 83, [f"SWR {v:.1f}" for v in swr], "5s", 20, TEXT, 700,
@@ -468,8 +463,8 @@ def tx_face():
     s.append(text(CX - 24, 227, "RIT 0", 14, DISABLED))
     s.append(icon_readout(CX + 42, 227, speaker, "40", TEXT2))
     s.append(icon_readout(CX + 104, 227, microphone, "100", TEXT2))
-    # The time-out countdown, solid red: "TX  %lu" in ui.c.
-    s.append(ptt_slab(TX_RED, "TX  102", "#FFFFFF"))
+    # Solid red while we are transmitting: "TX" in ui.c.
+    s.append(ptt_slab(TX_RED, "TX", "#FFFFFF"))
     s.append(face_end())
     # The glass numbers the whole watts and SWR; the half-steps it leaves as
     # bare ticks are named out here, and so is each arc.
