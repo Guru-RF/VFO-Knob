@@ -2,11 +2,13 @@
 
 #include <string.h>
 
-/* DRV2605 ROM library effect ids used by the PTT path. Key and unkey are
- * deliberately different in character, not just amplitude, so they are
- * distinguishable with the radio out of sight. */
-#define EFF_ACK_WHISPER  63   /* Transition Click 6, played at low amplitude */
-#define EFF_KEYED         1   /* Strong Click                                */
+/* DRV2605 ROM library effect ids used by the PTT path.
+ *
+ * Nothing plays while the transmitter might be on the air -- from the tap
+ * that keys it until the radio confirms receive. The motor sits millimetres
+ * from the knob's microphone, and a click there went out with the operator's
+ * voice. So there is no click on keying and no still-keyed reminder; what is
+ * left is felt only once the microphone is off: a refusal, and the unkey. */
 #define EFF_UNKEYED       4   /* Sharp Click                                 */
 #define EFF_REFUSED      12   /* Triple Click                                */
 #define PRIO_PTT        255
@@ -72,11 +74,6 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
         enter(f, PTT_REQ_ON, now_ms);
         f->reason      = PTT_AB_NONE;
         out->send_key  = true;
-        /* A whisper, not a click: this only means "heard you". The real click
-         * waits for the radio to confirm. The gap between the two is the key
-         * latency, and after a week the operator reads it as station health. */
-        out->haptic      = EFF_ACK_WHISPER;
-        out->haptic_prio = PRIO_PTT;
         break;
 
     case PTT_EV_TAP_UNKEY:
@@ -89,11 +86,8 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
     case PTT_EV_CONFIRM_TRUE:
         if (f->state == PTT_REQ_ON) {
             enter(f, PTT_ON, now_ms);
-            f->t_last_nag_ms = now_ms;
             f->rung          = 0;
-            out->entered_tx  = true;
-            out->haptic      = EFF_KEYED;
-            out->haptic_prio = PRIO_PTT;
+            out->entered_tx  = true;         /* on the air: the red screen says so */
         }
         /* In IDLE this is someone else keying -- the PC operator, or our own
          * dead previous session. The caller raises the alarm; we must NOT try
@@ -132,15 +126,6 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
                 enter(f, PTT_IDLE, now_ms);
                 out->refused     = true;
                 out->haptic      = EFF_REFUSED;
-                out->haptic_prio = PRIO_PTT;
-            }
-        } else if (f->state == PTT_ON) {
-            if (since(now_ms, f->t_last_nag_ms) >= PTT_KEYED_NAG_MS) {
-                /* The toggle-specific signal. With momentary PTT the finger
-                 * IS the reminder; here nothing else tells you that you are
-                 * still transmitting. */
-                f->t_last_nag_ms = now_ms;
-                out->haptic      = EFF_ACK_WHISPER;
                 out->haptic_prio = PRIO_PTT;
             }
         } else if (f->state == PTT_RELEASING) {
@@ -185,9 +170,9 @@ void ptt_fsm_abort(ptt_fsm_t *f, ptt_abort_t reason, uint32_t now_ms,
         rung = 1;
         break;
     }
+    /* Still on the air, so no haptic: the operator feels the unkey, or the
+     * refusal, once the radio says it is back on receive. */
     start_ladder(f, rung, now_ms, out);
-    out->haptic      = EFF_REFUSED;
-    out->haptic_prio = PRIO_PTT;
 }
 
 const char *ptt_state_name(ptt_state_t s)

@@ -28,7 +28,6 @@
  * and it waits on a radio that is in no hurry. Anything tighter fires a
  * spurious fault on essentially every key. */
 #define PTT_CONFIRM_MS      1500u
-#define PTT_KEYED_NAG_MS    10000u   /* "still transmitting" reminder     */
 
 /* Teardown ladder deadlines. Rung 1 is how long an unkey may take to be
  * confirmed before the socket is torn down, and it was 600 ms. Through
@@ -101,7 +100,6 @@ typedef struct {
     ptt_abort_t reason;
     uint32_t    t_state_ms;     /* when the current state was entered */
     uint32_t    t_rung_ms;
-    uint32_t    t_last_nag_ms;
     uint32_t    refusals;
 } ptt_fsm_t;
 

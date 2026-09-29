@@ -1,4 +1,4 @@
-/* WiFi station bring-up and the stored AetherSDR endpoint.
+/* WiFi station bring-up and the stored radio endpoint.
  *
  * v1 seeds NVS from Kconfig on first boot so bench work can start immediately.
  * The SoftAP captive portal and the on-screen host editor come in v1.1; the
@@ -16,8 +16,11 @@
 typedef struct {
     char     ssid[33];
     char     pass[65];
-    char     tci_host[64];   /* IP, or a name -- ".local" resolves via mDNS */
-    uint16_t tci_port;
+    char     radio_host[64];   /* IP, or a name -- ".local" resolves via mDNS */
+    uint16_t radio_port;
+    /* For radios that log in (the IC-705's network user); empty otherwise. */
+    char     radio_user[33];
+    char     radio_pass[33];
 } vfo_cfg_t;
 
 /* Audio levels persist across reboots. Written debounced, because NVS wear is

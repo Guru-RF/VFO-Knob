@@ -129,6 +129,12 @@ static void test_state_and_telemetry(void)
     CHECK(P("lock:0,true;").b0);
     CHECK_EQ(P("rit_offset:0,-120;").i0, -120);
 
+    /* AetherSDR passes the FlexRadio names through: off, slow, med, fast. */
+    f = P("agc_mode:1,MED;");
+    CHECK_EQ(f.kind, TCI_AGC_MODE);
+    CHECK_EQ(f.trx, 1);
+    CHECK_STR(f.s0, "med");
+
     CASE("telemetry");
     f = P("rx_smeter:0,-93;");
     CHECK_EQ(f.kind, TCI_RX_SMETER);

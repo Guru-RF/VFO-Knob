@@ -44,6 +44,12 @@ esp_err_t audio_out_init(void);
  * call from the WebSocket task: it never blocks. */
 bool audio_out_feed(const void *frame, size_t len);
 
+/* Feed plain 16-bit PCM at AUDIO_RATE_HZ, for a radio whose stream is raw
+ * samples rather than TCI frames (the IC-705's LAN audio). `frames` counts
+ * sample frames; mono is widened to the stereo the I2S runs. Never blocks, so
+ * it is safe from the network task; a full buffer drops and counts. */
+bool audio_out_feed_pcm16(const int16_t *pcm, size_t frames, uint8_t channels);
+
 /* 0..100. Applied in the playback task, not on the network path. */
 void audio_out_set_volume(uint8_t vol);
 

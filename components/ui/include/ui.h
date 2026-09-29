@@ -25,6 +25,21 @@ typedef struct {
     uint8_t  accel_mult;
     const char *mode;
     int32_t  filt_lo, filt_hi;
+    uint8_t  filter_no;  /* the radio's preset (FIL1-3) where it has them; 0 = none */
+    /* Beside the S-unit readout: the AGC on the left, and on the right the
+     * front end's gain -- P.AMP on an Icom, RF.G on AetherSDR. See radio.h. */
+    char     agc[6];     /* "" = not known */
+    bool     have_gain;
+    int8_t   gain, gain_min, gain_max, gain_step;
+    /* Memory mode (radio.h): the knob selects channels instead of tuning, and
+     * the channel takes the frequency readout's place. mem_state is UI_MEM_*,
+     * in the order of radio_mem_state_t. */
+    bool     has_memories;
+    uint8_t  mem_state, mem_group, mem_ch;
+    char     mem_name[17];
+    int8_t   mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
+    int32_t  mem_offset_hz;
+    uint16_t mem_tone_dhz;
     int32_t  rit_hz;
     float    smeter_dbm;
     float    tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
@@ -37,6 +52,8 @@ typedef struct {
     const char *warn;
 } ui_state_t;
 
+enum { UI_MEM_OFF = 0, UI_MEM_READING, UI_MEM_READY, UI_MEM_EMPTY };
+
 void ui_update(const ui_state_t *st);
 
 /* Step chosen by tapping a frequency digit. Returns 0 if nothing changed. */
@@ -45,10 +62,19 @@ int32_t ui_take_step_request(void);
 /* A tap landed on the PTT pill. Consumed by the caller. */
 bool ui_take_ptt_tap(void);
 
+/* A swipe down the face: memory mode on, or off again. Only with a link, in
+ * receive, on a radio with memories, and with nothing else asking for the
+ * finger. Consumed by the caller.
+ *
+ * Everything but PTT and the update question acts when the finger lifts,
+ * not when it lands, so that a swipe is not first taken for a tap on
+ * whatever it started on. */
+bool ui_take_swipe(void);
+
 /* --- knob-driven field editors -------------------------------------------
- * Tapping band, mode, filter, RIT or volume opens a large editor; the knob
- * chooses a value and a tap anywhere accepts it. While an editor is open the
- * knob must NOT tune, so the caller checks ui_edit_active() first.
+ * Tapping band, mode, filter, AGC, gain, RIT or volume opens a large editor;
+ * the knob chooses a value and a tap anywhere accepts it. While an editor is
+ * open the knob must NOT tune, so the caller checks ui_edit_active() first.
  *
  * Selection happens on the precise rotary and commitment on the imprecise
  * touch, which is what makes the whole thing usable on 45 mm of round glass. */
@@ -58,6 +84,10 @@ void ui_edit_rotate(int32_t detents);
 typedef struct {
     bool     have_mode;    char    mode[8];
     bool     have_filter;  int32_t filt_lo, filt_hi;
+    bool     have_filter_no; uint8_t filter_no;
+    bool     have_agc;     char    agc[6];
+    bool     have_gain;    int8_t  gain;
+    bool     have_mem_group; uint8_t mem_group;
     bool     have_rit;     int32_t rit_hz;
     bool     have_freq;    int64_t freq_hz;
 } ui_commit_t;
@@ -74,8 +104,9 @@ uint8_t ui_mic_gain(void);
 /* Restore persisted levels at boot, before ui_init() draws anything. */
 void ui_set_levels(uint8_t volume, uint8_t mic_gain);
 
-/* Text shown when the meter arc is tapped: where the knob is on the network.
- * Kept as formatted text so the UI needs no networking headers. */
+/* Text shown after a long press on the meter arc: where the knob is on the
+ * network. A tap on the card puts it away. Kept as formatted text so the UI
+ * needs no networking headers. */
 void ui_set_netinfo(const char *text);
 
 /* Firmware-update screen. Takes over the display for the duration of an

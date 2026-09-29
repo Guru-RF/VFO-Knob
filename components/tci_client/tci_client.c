@@ -1,4 +1,24 @@
-#include "tci_client.h"
+/* TCI v2.0 client for AetherSDR.
+ *
+ * Connects out to ws://<host>:50001 and speaks the same protocol AetherSDR
+ * already serves to WSJT-X. Design notes that matter:
+ *
+ *  - Tuning is OPTIMISTIC. The wire round trip is 30-80 ms with an unbounded
+ *    tail (it waits on someone else's Qt event loop), while the glass and the
+ *    motor are 10-20 ms. Neither may wait for the wire, so the display leads
+ *    and the anti-echo classifier reconciles afterwards.
+ *
+ *  - There is NO outbound queue, deliberately. The server closes the socket
+ *    after 64 queued commands, so a queue would turn an enthusiastic flick
+ *    into a disconnection. Instead the sender polls for a difference and is
+ *    hard-capped at 20 Hz, which makes that failure structurally impossible
+ *    rather than merely unlikely.
+ *
+ *  - The greeting is authoritative on every (re)connect. Pushing our stale
+ *    pre-dropout frequency at a rig the operator has since retuned would be
+ *    the rudest possible bug.
+ */
+#include "radio.h"
 
 #include <string.h>
 
@@ -23,9 +43,10 @@ static const char *TAG = "tci";
 #define SEND_GATE_MS  5       /* how often we look for work */
 #define GREET_TMO_MS  4000    /* a socket that accepts but never greets is a
                                  real failure mode when AetherSDR is starting */
+#define AGC_POLL_MS   3000    /* see the AGC poll in tx_task */
 
 typedef struct {
-    tci_link_t link;
+    radio_link_t link;
     tune_t     tune;
     accel_t    accel;
     echo_ring_t echo;
@@ -33,6 +54,8 @@ typedef struct {
     uint32_t   t_last_input_ms, t_last_send_ms, t_ready_ms;
     bool       reconcile_armed;
     char       mode[8];
+    char       agc[6];
+    uint32_t   t_agc_poll;
     int32_t    filt_lo, filt_hi, rit_hz;
     float      smeter_dbm;
     float      tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
@@ -157,7 +180,7 @@ static void apply_fact(const tci_fact_t *f)
 
     case TCI_READY:
         taskENTER_CRITICAL(&S_LOCK);
-        S.link       = TCI_LINK_READY;
+        S.link       = RADIO_LINK_READY;
         S.t_ready_ms = now_ms();
         S.have_chan_sensors   = false;
         S.need_sensors_enable = true;
@@ -191,7 +214,7 @@ static void apply_fact(const tci_fact_t *f)
         uint32_t t = now_ms();
         taskENTER_CRITICAL(&S_LOCK);
         S.f_server = f->hz;
-        if (S.link != TCI_LINK_READY) {           /* still in the greeting */
+        if (S.link != RADIO_LINK_READY) {           /* still in the greeting */
             taskEXIT_CRITICAL(&S_LOCK);
             break;
         }
@@ -222,6 +245,10 @@ static void apply_fact(const tci_fact_t *f)
 
     case TCI_RX_FILTER_BAND:
         if (f->trx == S.my_trx) { S.filt_lo = f->i0; S.filt_hi = f->i1; }
+        break;
+
+    case TCI_AGC_MODE:
+        if (f->trx == S.my_trx) strlcpy(S.agc, f->s0, sizeof S.agc);
         break;
 
     case TCI_RIT_OFFSET:
@@ -446,7 +473,7 @@ static void link_lost(void)
         }
     }
     S.closes++;
-    S.link = TCI_LINK_DOWN;
+    S.link = RADIO_LINK_DOWN;
     S.tx   = false;
     s_fd   = -1;
 
@@ -479,7 +506,7 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:
         S.connects++;
-        S.link = TCI_LINK_GREETING;
+        S.link = RADIO_LINK_GREETING;
         s_retry_at_us = 0;
         s_rx_len = 0;
         s_greet_deadline_us = esp_timer_get_time() + GREET_TMO_MS * 1000;
@@ -542,7 +569,7 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
          * ladder is exactly such a close. Unhandled, the knob went on
          * believing the link was READY -- no reconnect, no pongs, every key
          * refused -- until it was power-cycled. */
-        if (S.link != TCI_LINK_DOWN) link_lost();
+        if (S.link != RADIO_LINK_DOWN) link_lost();
         break;
 
     case WEBSOCKET_EVENT_ERROR:
@@ -559,7 +586,7 @@ static uint32_t ptt_permit_now(uint32_t t)
 {
     uint32_t p = PERMIT_BAND | PERMIT_MODE | PERMIT_NO_OVERLAY | PERMIT_NO_FAULT;
 
-    if (S.link == TCI_LINK_READY || S.link == TCI_LINK_DEGRADED) {
+    if (S.link == RADIO_LINK_READY || S.link == RADIO_LINK_DEGRADED) {
         if (t - S.t_ready_ms >= 500) p |= PERMIT_LINK;
     }
     if (S.n_trx > 0 || S.my_trx == 0)       p |= PERMIT_TRX;
@@ -602,7 +629,7 @@ static void tx_task(void *arg)
         /* Reconnect supervisor. */
         if (s_retry_at_us && esp_timer_get_time() >= s_retry_at_us) {
             s_retry_at_us = 0;
-            S.link = TCI_LINK_CONNECTING;
+            S.link = RADIO_LINK_CONNECTING;
             esp_websocket_client_stop(s_ws);          /* idempotent */
             if (esp_websocket_client_start(s_ws) != ESP_OK) {
                 s_backoff_ms = s_backoff_ms < 8000 ? s_backoff_ms * 2 : 8000;
@@ -614,10 +641,10 @@ static void tx_task(void *arg)
         }
         /* Reset the backoff once the link has been solid for a while, so a
          * long healthy session does not inherit a previous bad patch's delay. */
-        if (S.link == TCI_LINK_READY && (t - S.t_ready_ms) > 30000)
+        if (S.link == RADIO_LINK_READY && (t - S.t_ready_ms) > 30000)
             s_backoff_ms = 250;
 
-        if (S.link == TCI_LINK_GREETING &&
+        if (S.link == RADIO_LINK_GREETING &&
             esp_timer_get_time() > s_greet_deadline_us) {
             ESP_LOGW(TAG, "no greeting within %d ms, reconnecting", GREET_TMO_MS);
             esp_websocket_client_close(s_ws, pdMS_TO_TICKS(200));
@@ -669,7 +696,7 @@ static void tx_task(void *arg)
             ptt_dispatch(&o);
         }
 
-        if (S.link != TCI_LINK_READY && S.link != TCI_LINK_DEGRADED) continue;
+        if (S.link != RADIO_LINK_READY && S.link != RADIO_LINK_DEGRADED) continue;
         /* Settle after a reconnect before pushing anything. */
         if (t - S.t_ready_ms < 500) continue;
 
@@ -719,9 +746,17 @@ static void tx_task(void *arg)
          * that ends the over is never stuck behind anything. */
         if (S.ptt.state != PTT_IDLE) continue;
 
+        /* AetherSDR sends agc_mode in its greeting, and afterwards only when
+         * another TCI client changes it -- never for a change made on the
+         * desktop. So ask now and then; the reply comes to us alone. */
+        if (t - S.t_agc_poll >= AGC_POLL_MS) {
+            S.t_agc_poll = t;
+            send_cmd("agc_mode:%u;", (unsigned)S.my_trx);
+        }
+
         bool     fire = false;
         int64_t  want = 0;
-        uint32_t period = (S.link == TCI_LINK_DEGRADED) ? 100 : AE_SEND_PERIOD_MS;
+        uint32_t period = (S.link == RADIO_LINK_DEGRADED) ? 100 : AE_SEND_PERIOD_MS;
 
         taskENTER_CRITICAL(&S_LOCK);
         /* Deferred reconcile: both quiet windows must have expired. */
@@ -763,7 +798,7 @@ static void tx_task(void *arg)
 
 /* ----------------------------------------------------------------- public */
 
-int64_t tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
+int64_t radio_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
 {
     uint32_t t = now_ms();
     int64_t f;
@@ -779,7 +814,7 @@ int64_t tci_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
     return f;
 }
 
-void tci_audio_suspend(bool suspend)
+void radio_audio_suspend(bool suspend)
 {
     if (S.audio_suspend == suspend) return;
     S.audio_suspend = suspend;
@@ -788,24 +823,43 @@ void tci_audio_suspend(bool suspend)
     ESP_LOGW(TAG, "RX audio %s", suspend ? "suspend requested" : "resume requested");
 }
 
-void tci_set_step(int32_t step_hz)
+void radio_set_step(int32_t step_hz)
 {
     taskENTER_CRITICAL(&S_LOCK);
     tune_set_step(&S.tune, step_hz);
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
-void tci_set_mode(const char *mode)
+void radio_set_mode(const char *mode)
 {
     if (mode && *mode) send_cmd("modulation:%u,%s;", (unsigned)S.my_trx, mode);
 }
 
-void tci_set_filter(int32_t lo, int32_t hi)
+void radio_set_filter(int32_t lo, int32_t hi)
 {
     send_cmd("rx_filter_band:%u,%ld,%ld;", (unsigned)S.my_trx, (long)lo, (long)hi);
 }
 
-void tci_set_rit(int32_t hz)
+/* AetherSDR's filters are passband edges, not presets. */
+void radio_select_filter(uint8_t n) { (void)n; }
+
+void radio_set_agc(const char *agc)
+{
+    if (!agc || !*agc) return;
+    /* A client's own SET is not echoed back to it, so show it at once. The
+     * poll corrects it if AetherSDR disagrees -- but not straight away, when
+     * the SET, which AetherSDR applies on its next pass, may not have landed. */
+    strlcpy(S.agc, agc, sizeof S.agc);
+    S.t_agc_poll = now_ms();
+    send_cmd("agc_mode:%u,%s;", (unsigned)S.my_trx, agc);
+}
+
+/* AetherSDR's TCI has no RF gain -- the panadapter's rfgain, -8 to +32 dB --
+ * to read or to set (see TODO.md). have_gain stays false, so the dial shows
+ * RF.G greyed out until it does. */
+void radio_set_gain(int8_t gain) { (void)gain; }
+
+void radio_set_rit(int32_t hz)
 {
     /* Confirmed on no path whatsoever, so set the local value optimistically
      * and let a later GET correct it if the rig disagrees. */
@@ -816,7 +870,7 @@ void tci_set_rit(int32_t hz)
     send_cmd("rit_enable:%u,%s;", (unsigned)S.my_trx, hz ? "true" : "false");
 }
 
-void tci_goto_freq(int64_t hz)
+void radio_goto_freq(int64_t hz)
 {
     /* Route through the same model the knob uses, so the echo ring sees it and
      * the jump is not mistaken for a remote change. */
@@ -828,19 +882,24 @@ void tci_goto_freq(int64_t hz)
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
-void tci_ptt_key(void)    { S.pending_key = 1; }
-void tci_ptt_unkey(void)  { S.pending_unkey = 1; }
-void tci_ptt_toggle(void) { S.pending_toggle = 1; }
-void tci_ptt_force_abort(uint8_t reason) { S.pending_abort = reason; }
+/* TCI has no way to select a memory channel. */
+void radio_memory_mode(bool on)        { (void)on; }
+void radio_memory_group(uint8_t group) { (void)group; }
 
-bool tci_is_ready(void)
+void radio_ptt_key(void)    { S.pending_key = 1; }
+void radio_ptt_unkey(void)  { S.pending_unkey = 1; }
+void radio_ptt_toggle(void) { S.pending_toggle = 1; }
+void radio_ptt_force_abort(uint8_t reason) { S.pending_abort = reason; }
+
+bool radio_is_ready(void)
 {
-    return S.link == TCI_LINK_READY || S.link == TCI_LINK_DEGRADED;
+    return S.link == RADIO_LINK_READY || S.link == RADIO_LINK_DEGRADED;
 }
 
-void tci_get_status(tci_status_t *o)
+void radio_get_status(radio_status_t *o)
 {
     if (!o) return;
+    memset(o, 0, sizeof *o);          /* what TCI has no word for stays zero */
     taskENTER_CRITICAL(&S_LOCK);
     o->link       = S.link;
     o->f_display  = S.tune.f_display;
@@ -879,6 +938,7 @@ void tci_get_status(tci_status_t *o)
         ? (int32_t)((esp_timer_get_time() - S.last_pong_us) / 1000) : -1;
     taskEXIT_CRITICAL(&S_LOCK);
     strlcpy(o->mode, S.mode, sizeof o->mode);
+    strlcpy(o->agc, S.agc, sizeof o->agc);
     strlcpy(o->last_close, S.last_close, sizeof o->last_close);
 }
 
@@ -891,8 +951,12 @@ static int ws_buffer_size(void)
     return 2048;
 }
 
-esp_err_t tci_client_start(const char *host, uint16_t port)
+const char *radio_link_name(void) { return "TCI"; }
+
+esp_err_t radio_start(const char *host, uint16_t port,
+                      const char *user, const char *pass)
 {
+    (void)user; (void)pass;       /* AetherSDR's TCI server has no login */
     char uri[96];
     snprintf(uri, sizeof uri, "ws://%s:%u/", host, (unsigned)port);
     s_port = port;
@@ -956,7 +1020,7 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
      * ESTABLISHED socket stuck at CONNECTING forever, sending nothing. Over
      * WiFi the handshake was always slower than these instructions, so it
      * never showed. */
-    S.link = TCI_LINK_CONNECTING;
+    S.link = RADIO_LINK_CONNECTING;
     if (err == ESP_OK) err = esp_websocket_client_start(s_ws);
     if (err != ESP_OK) {
         /* Destroy the handle before returning. Leaving it allocated leaked an
@@ -965,7 +1029,7 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
          * there -- a far worse failure than the one being retried. */
         esp_websocket_client_destroy(s_ws);
         s_ws = NULL;
-        S.link = TCI_LINK_DOWN;
+        S.link = RADIO_LINK_DOWN;
         ESP_LOGE(TAG, "websocket start failed: %s", esp_err_to_name(err));
         return err;
     }
@@ -985,7 +1049,7 @@ esp_err_t tci_client_start(const char *host, uint16_t port)
         esp_websocket_client_stop(s_ws);
         esp_websocket_client_destroy(s_ws);
         s_ws = NULL;
-        S.link = TCI_LINK_DOWN;
+        S.link = RADIO_LINK_DOWN;
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(TAG, "connecting to %s", uri);

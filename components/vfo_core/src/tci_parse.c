@@ -23,6 +23,7 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "drive",               TCI_DRIVE               },
     { "tune",                TCI_TUNE                },
     { "active_slice",        TCI_ACTIVE_SLICE        },
+    { "agc_mode",            TCI_AGC_MODE            },
     { "rx_smeter",           TCI_RX_SMETER           },
     { "rx_channel_sensors",  TCI_RX_CHANNEL_SENSORS  },
     { "tx_sensors",          TCI_TX_SENSORS          },
@@ -56,7 +57,6 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "sql_level",           TCI_IGNORED             },
     { "rx_volume",           TCI_IGNORED             },
     { "rx_balance",          TCI_IGNORED             },
-    { "agc_mode",            TCI_IGNORED             },
     { "agc_gain",            TCI_IGNORED             },
     { "rx_nb_enable",        TCI_IGNORED             },
     { "rx_nr_enable",        TCI_IGNORED             },
@@ -210,6 +210,7 @@ bool tci_parse(const char *line, size_t len, tci_fact_t *out)
         break;
 
     case TCI_MODULATION:
+    case TCI_AGC_MODE:
         out->trx = (int32_t)arg_i64(argv, argc, 0, -1);
         if (argc > 1 && argv[1]) {
             strncpy(out->s0, argv[1], TCI_STR_MAX - 1);
@@ -328,6 +329,7 @@ const char *tci_kind_name(tci_kind_t k)
     case TCI_DRIVE:               return "drive";
     case TCI_TUNE:                return "tune";
     case TCI_ACTIVE_SLICE:        return "active_slice";
+    case TCI_AGC_MODE:            return "agc_mode";
     case TCI_RX_SMETER:           return "rx_smeter";
     case TCI_RX_CHANNEL_SENSORS:  return "rx_channel_sensors";
     case TCI_TX_SENSORS:          return "tx_sensors";

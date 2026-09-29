@@ -55,13 +55,23 @@ button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
 </section>
 
 <section>
-  <h2>AetherSDR</h2>
+  <h2 id="rtitle">Radio</h2>
   <div class="grid">
     <div><label for="host">Host (IP, or a name ending .local)<button id="myip" type="button"
          class="pill up" title="Use this computer's address" hidden></button></label>
          <input id="host"></div>
     <div><label>Port</label><input id="port" inputmode="numeric"></div>
   </div>
+  <div class="grid" id="rlogin" hidden>
+    <div><label>User name</label><input id="ruser" autocomplete="off"></div>
+    <div><label>Password</label><input id="rpass" type="password"
+         placeholder="unchanged" autocomplete="new-password"></div>
+  </div>
+  <p class="note" id="icomnote" hidden>The radio's own network user. On the
+     IC-705: <b>MENU &raquo; SET &raquo; WLAN Set &raquo; Remote Settings</b> &mdash;
+     Network Control ON, and a Network User with this name and password. The
+     knob reaches the radio over WiFi, and applies changes here on its next
+     boot.</p>
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
@@ -147,7 +157,7 @@ async function refresh(){
   const pill = s.link==='READY' ? '<span class="pill up">READY</span>'
                                 : `<span class="pill down">${esc(s.link)}</span>`;
   $('status').innerHTML =
-      row('TCI link', pill)
+      row(LINKNAME+' link', pill)
     + row('Frequency', mhz(s.freq))
     + row('Mode / filter', `${esc(s.mode)} ${s.filt_lo}..${s.filt_hi}`)
     + row('S-meter', s.smeter.toFixed(0)+' dBm')
@@ -174,23 +184,36 @@ async function load(){
   /* The address this browser reaches the knob from. Over the cable that is the
      USB link's own 10.55.42.2 -- found automatically there, and unreachable
      from WiFi -- so it is only offered when it can be the right answer. */
-  myIp = c.client && !c.client_usb ? c.client : '';
+  /* The endpoint is the radio's own on the Icom firmware, with its login; on
+     AetherSDR's it is a computer, which the cable finds by itself. */
+  const icom = c.radio === 'icom';
+  LINKNAME = c.link || 'Radio';
+  $('rtitle').textContent = icom ? 'IC-705' : 'AetherSDR';
+  $('rlogin').hidden = $('icomnote').hidden = !icom;
+  $('ruser').value = c.ruser || '';
+  $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
+  myIp = c.client && !c.client_usb && !icom ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = !(c.client && c.client_usb);
+  $('hostusb').hidden = icom || !(c.client && c.client_usb);
 }
-let myIp='';
+let myIp='', LINKNAME='Radio';
 $('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
   for(const k of ['host','port','ssid','vol','mic','user','otah','dim','blank']) b.append(k,$(k).value);
   if($('pass').value) b.append('pass',$('pass').value);
+  if(!$('rlogin').hidden){
+    b.append('ruser',$('ruser').value);
+    if($('rpass').value) b.append('rpass',$('rpass').value);
+  }
   if($('webpass').value) b.append('webpass',$('webpass').value);
   const r=await fetch('/api/config',{method:'POST',body:b});
   $('msg').textContent = r.ok ? 'Saved. Network changes apply on reboot.'
                               : 'Save failed: '+await r.text();
   $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  if(r.ok) $('rpass').value='';
   if(r.ok && $('webpass').value){
     $('webpass').value='';
     $('msg').textContent += ' Password changed \u2014 the browser will ask again.';
@@ -315,7 +338,7 @@ $('upload').onclick = async()=>{
  * The knob says which it runs; installing another is a deliberate switch,
  * which the knob accepts only when the upload names that radio. */
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
-              {id:'icom',      name:'Icom', soon:true}];
+              {id:'icom',      name:'Icom IC-705 (LAN)'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
 function radios(){

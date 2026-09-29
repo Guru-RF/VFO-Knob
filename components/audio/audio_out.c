@@ -128,6 +128,34 @@ esp_err_t audio_out_init(void)
     return ESP_OK;
 }
 
+bool audio_out_feed_pcm16(const int16_t *pcm, size_t frames, uint8_t channels)
+{
+    if (!s_ring || !pcm || !frames || (channels != 1 && channels != 2)) return false;
+    s_stats.format      = TCI_AUDIO_FMT_INT16;
+    s_stats.sample_rate = AUDIO_RATE_HZ;
+    s_stats.channels    = channels;
+
+    static int16_t tmp[512];                 /* the one network task feeds it */
+    size_t done = 0;
+    while (done < frames) {
+        size_t chunk = frames - done;
+        if (chunk > sizeof tmp / sizeof tmp[0] / 2) chunk = sizeof tmp / sizeof tmp[0] / 2;
+        if (channels == 1) {
+            for (size_t i = 0; i < chunk; i++)
+                tmp[2 * i] = tmp[2 * i + 1] = pcm[done + i];
+        } else {
+            memcpy(tmp, pcm + 2 * done, chunk * 4);
+        }
+        if (xRingbufferSend(s_ring, tmp, chunk * 4, 0) != pdTRUE) {
+            s_stats.dropped++;
+            return false;
+        }
+        done += chunk;
+    }
+    s_stats.frames++;
+    return true;
+}
+
 bool audio_out_feed(const void *frame, size_t len)
 {
     if (!s_ring || len <= sizeof(tci_audio_hdr_t)) return false;

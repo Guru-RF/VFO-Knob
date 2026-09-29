@@ -12,26 +12,28 @@ static void test_normal_cycle(void)
     ptt_fsm_t f; ptt_out_t o;
     ptt_fsm_init(&f);
 
+    /* Nothing vibrates on the air: the motor is next to the microphone. */
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 1000, PERMIT_ALL, &o);
     CHECK(o.send_key);
     CHECK_EQ(f.state, PTT_REQ_ON);
-    CHECK_EQ(o.haptic, 63);              /* whisper, not the real click */
+    CHECK_EQ(o.haptic, 0);
 
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 1120, PERMIT_ALL, &o);
     CHECK_EQ(f.state, PTT_ON);
     CHECK(o.entered_tx);
-    CHECK_EQ(o.haptic, 1);               /* now you are on the air */
+    CHECK_EQ(o.haptic, 0);
     CHECK(ptt_is_tx(&f));
 
     ptt_fsm_event(&f, PTT_EV_TAP_UNKEY, 5000, PERMIT_ALL, &o);
     CHECK(o.send_unkey);
     CHECK_EQ(f.state, PTT_RELEASING);
     CHECK_EQ(f.rung, 1);
+    CHECK_EQ(o.haptic, 0);
 
     ptt_fsm_event(&f, PTT_EV_CONFIRM_FALSE, 5060, PERMIT_ALL, &o);
     CHECK_EQ(f.state, PTT_IDLE);
     CHECK(o.left_tx);
-    CHECK_EQ(o.haptic, 4);               /* different in character from key */
+    CHECK_EQ(o.haptic, 4);               /* back on receive: felt, not heard */
     CHECK(!ptt_is_tx(&f));
 }
 
@@ -86,20 +88,23 @@ static void test_no_timeout(void)
     CHECK_EQ(f.state, PTT_ON);
 }
 
-static void test_keyed_nag(void)
+static void test_silent_on_air(void)
 {
-    /* Toggle-specific: nothing else tells the operator they are still on. */
-    CASE("still-keyed reminder");
+    /* No still-keyed reminder, however long the over, and no haptic when a
+     * fault starts the ladder mid-over: the radio is still on the air. */
+    CASE("silent while keyed");
     ptt_fsm_t f; ptt_out_t o;
     ptt_fsm_init(&f);
     ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
     ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, 0, PERMIT_ALL, &o);
-
-    ptt_fsm_event(&f, PTT_EV_TICK, PTT_KEYED_NAG_MS - 1, PERMIT_ALL, &o);
+    for (uint32_t t = 0; t <= 5u * 60 * 1000; t += 1000) {
+        ptt_fsm_event(&f, PTT_EV_TICK, t, PERMIT_ALL, &o);
+        CHECK_EQ(o.haptic, 0);
+    }
+    CHECK_EQ(f.state, PTT_ON);
+    ptt_fsm_abort(&f, PTT_AB_PONG_STALE, 400000, &o);
     CHECK_EQ(o.haptic, 0);
-    ptt_fsm_event(&f, PTT_EV_TICK, PTT_KEYED_NAG_MS, PERMIT_ALL, &o);
-    CHECK_EQ(o.haptic, 63);
-    CHECK_EQ(f.state, PTT_ON);           /* a reminder, not an abort */
+    CHECK_EQ(f.state, PTT_RELEASING);
 }
 
 static void test_ladder(void)
@@ -197,7 +202,7 @@ T_MAIN({
     test_normal_cycle();
     test_refusals();
     test_no_timeout();
-    test_keyed_nag();
+    test_silent_on_air();
     test_ladder();
     test_remote_and_idle();
 })

@@ -14,6 +14,19 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+/* Each radio's firmware keeps its own endpoint, so switching firmware under
+ * Firmware on the configuration page never points one radio's client at the
+ * other radio. The AetherSDR keys are the ones every earlier firmware wrote. */
+#if VFO_RADIO_ICOM
+#define KEY_HOST     "rhost"
+#define KEY_PORT     "rport"
+#define DEFAULT_HOST "IC-705.local"
+#else
+#define KEY_HOST     "host"
+#define KEY_PORT     "port"
+#define DEFAULT_HOST "aethersdr.local"
+#endif
+
 static const char *TAG = "net";
 static const char *NVS_NS = "vfo";
 
@@ -47,10 +60,12 @@ static void load_or_seed(void)
         len = sizeof s_cfg.ssid;
         if (nvs_get_str(h, "ssid", s_cfg.ssid, &len) == ESP_OK && s_cfg.ssid[0]) {
             len = sizeof s_cfg.pass;     nvs_get_str(h, "pass", s_cfg.pass, &len);
-            len = sizeof s_cfg.tci_host; nvs_get_str(h, "host", s_cfg.tci_host, &len);
-            nvs_get_u16(h, "port", &s_cfg.tci_port);
             have = true;
         }
+        len = sizeof s_cfg.radio_host; nvs_get_str(h, KEY_HOST, s_cfg.radio_host, &len);
+        nvs_get_u16(h, KEY_PORT, &s_cfg.radio_port);
+        len = sizeof s_cfg.radio_user; nvs_get_str(h, "ruser", s_cfg.radio_user, &len);
+        len = sizeof s_cfg.radio_pass; nvs_get_str(h, "rpass", s_cfg.radio_pass, &len);
         nvs_close(h);
     }
 
@@ -61,9 +76,9 @@ static void load_or_seed(void)
      * used to build the image into every unit flashed from it. */
     if (!have) ESP_LOGW(TAG, "no WiFi credentials stored -- USB only until the "
                              "configuration page is used");
-    if (!s_cfg.tci_host[0])
-        strlcpy(s_cfg.tci_host, "aethersdr.local", sizeof s_cfg.tci_host);
-    if (!s_cfg.tci_port) s_cfg.tci_port = 50001;
+    if (!s_cfg.radio_host[0])
+        strlcpy(s_cfg.radio_host, DEFAULT_HOST, sizeof s_cfg.radio_host);
+    if (!s_cfg.radio_port) s_cfg.radio_port = 50001;
 
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
         uint8_t v;
@@ -88,9 +103,10 @@ static void load_or_seed(void)
     if (s_boots > 1) ESP_LOGW(TAG, "boot #%u since last healthy run", s_boots);
 
     /* Never log the passphrase, only whether one is present. */
-    ESP_LOGI(TAG, "ssid=\"%s\" psk=%s host=%s:%u",
+    ESP_LOGI(TAG, "ssid=\"%s\" psk=%s host=%s:%u user=%s",
              s_cfg.ssid, s_cfg.pass[0] ? "set" : "EMPTY",
-             s_cfg.tci_host, (unsigned)s_cfg.tci_port);
+             s_cfg.radio_host, (unsigned)s_cfg.radio_port,
+             s_cfg.radio_user[0] ? s_cfg.radio_user : "-");
 }
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -193,8 +209,10 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
     if (err != ESP_OK) return err;
     nvs_set_str(h, "ssid", cfg->ssid);
     nvs_set_str(h, "pass", cfg->pass);
-    nvs_set_str(h, "host", cfg->tci_host);
-    nvs_set_u16(h, "port", cfg->tci_port);
+    nvs_set_str(h, KEY_HOST, cfg->radio_host);
+    nvs_set_u16(h, KEY_PORT, cfg->radio_port);
+    nvs_set_str(h, "ruser", cfg->radio_user);
+    nvs_set_str(h, "rpass", cfg->radio_pass);
     err = nvs_commit(h);
     nvs_close(h);
     if (err == ESP_OK) s_cfg = *cfg;
@@ -299,15 +317,19 @@ esp_err_t net_prov_wifi_start(void)
             { "class",       "controller"    },
             { "tci-version", "1.5"           },
         };
-        mdns_service_add(NULL, "_tci", "_tcp", s_cfg.tci_port, txt,
+#if !VFO_RADIO_ICOM
+        mdns_service_add(NULL, "_tci", "_tcp", s_cfg.radio_port, txt,
                          sizeof txt / sizeof txt[0]);
+#else
+        (void)txt;
+#endif
     }
     return ESP_OK;
 }
 
 esp_err_t net_prov_resolve(char *out, size_t out_len)
 {
-    const char *host = s_cfg.tci_host;
+    const char *host = s_cfg.radio_host;
     size_t n = strlen(host);
 
     if (n > 6 && strcmp(host + n - 6, ".local") == 0) {

@@ -22,7 +22,7 @@
 #include "net_prov.h"
 #include "ota.h"
 #include "ptt_fsm.h"
-#include "tci_client.h"
+#include "radio.h"
 #include "ui.h"
 #include "usb_net.h"
 
@@ -133,8 +133,8 @@ static void client_addr(httpd_req_t *r, char *out, size_t len, bool *on_usb)
 static esp_err_t status_get(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
-    tci_status_t st;
-    tci_get_status(&st);
+    radio_status_t st;
+    radio_get_status(&st);
 
     audio_stats_t a;
     audio_out_stats(&a);
@@ -198,14 +198,16 @@ static esp_err_t config_get(httpd_req_t *r)
              "\"vol\":%u,\"mic\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
              "\"radio\":\"%s\",\"fwbase\":\"%s\",\"fwroot\":\"%s\","
+             "\"ruser\":\"%s\",\"rpass\":%s,\"link\":\"%s\","
              "\"client\":\"%s\",\"client_usb\":%s}",
-             c->tci_host, (unsigned)c->tci_port, c->ssid,
+             c->radio_host, (unsigned)c->radio_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              net_prov_web_user(),
              net_prov_web_is_default() ? "true" : "false",
              (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
              (unsigned)net_prov_blank_min(), ota_radio(), ota_base_url(),
-             ota_root_url(), client, client_usb ? "true" : "false");
+             ota_root_url(), c->radio_user, c->radio_pass[0] ? "true" : "false",
+             radio_link_name(), client, client_usb ? "true" : "false");
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
 }
@@ -264,12 +266,16 @@ static esp_err_t config_post(httpd_req_t *r)
     body[got] = 0;
 
     vfo_cfg_t cfg = *net_prov_cfg();
-    field(body, "host", cfg.tci_host, sizeof cfg.tci_host);
+    field(body, "host", cfg.radio_host, sizeof cfg.radio_host);
     field(body, "ssid", cfg.ssid,     sizeof cfg.ssid);
     field(body, "pass", cfg.pass,     sizeof cfg.pass);   /* absent = unchanged */
+    /* The radio's own login, for radios that have one. Like the WiFi
+     * passphrase, the password is only ever written: absent = unchanged. */
+    field(body, "ruser", cfg.radio_user, sizeof cfg.radio_user);
+    field(body, "rpass", cfg.radio_pass, sizeof cfg.radio_pass);
 
     long v;
-    if (field_num(body, "port", &v)) cfg.tci_port = (uint16_t)clampl(v, 1, 65535);
+    if (field_num(body, "port", &v)) cfg.radio_port = (uint16_t)clampl(v, 1, 65535);
     if (net_prov_save_cfg(&cfg) != ESP_OK) {
         httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs");
         return ESP_FAIL;
@@ -311,7 +317,7 @@ static esp_err_t config_post(httpd_req_t *r)
     audio_in_set_gain(mic);
 
     ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u",
-             cfg.tci_host, (unsigned)cfg.tci_port, cfg.ssid,
+             cfg.radio_host, (unsigned)cfg.radio_port, cfg.ssid,
              (unsigned)vol, (unsigned)mic);
     return httpd_resp_sendstr(r, "ok");
 }
@@ -435,7 +441,7 @@ static esp_err_t ota_upload_post(httpd_req_t *r)
      * frames and a truncated image. The screen says so, and being a separate
      * screen it also puts PTT out of reach while the flash is rewritten. It
      * goes up before the slot is erased, which takes a few seconds. */
-    tci_audio_suspend(true);
+    radio_audio_suspend(true);
     ui_updating_show();
 
     const int total = r->content_len;
@@ -530,7 +536,7 @@ failed_sent:
     /* Leave the message up briefly, then give the dial back. */
     vTaskDelay(pdMS_TO_TICKS(2500));
     ui_updating_hide();
-    tci_audio_suspend(false);
+    radio_audio_suspend(false);
     return ESP_FAIL;
 }
 
@@ -545,6 +551,12 @@ static void reboot_cb(void *arg)
 static esp_err_t reboot_post(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
+    /* An operator asking for a restart has been using this image, so confirm
+     * it first. A new image restarted before its 20 s "boot looks healthy"
+     * mark counts as a failed boot, and the bootloader goes back to the old
+     * one -- which is what saving the radio's settings and rebooting straight
+     * after an update did. */
+    ota_mark_valid();
     httpd_resp_sendstr(r, "rebooting");
     /* Answer first, then restart from a timer, so the browser sees the reply
      * rather than a dropped connection. */

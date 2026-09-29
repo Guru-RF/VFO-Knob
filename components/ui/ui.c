@@ -24,6 +24,31 @@ static const char *TAG = "ui";
 LV_FONT_DECLARE(font_mic_14);
 #define SYM_MIC "\xEF\x84\xB0"
 
+#if VFO_RADIO_ICOM
+/* --- Icom palette ----------------------------------------------------------
+ * The IC-705's own screen: black, white digits, the mode in Icom blue, the
+ * S-meter blue up to S9 and red above it, power in blue, TX in Icom red. The
+ * layout is the AetherSDR face's, unchanged; the colours say at a glance which
+ * radio this knob is for. */
+#define C_BG        lv_color_hex(0x000000)
+#define C_BG1       lv_color_hex(0x141A24)   /* panels, the PTT slab    */
+#define C_BG_TX     lv_color_hex(0x2A0508)   /* a red tint on the air   */
+#define C_ACCENT    lv_color_hex(0x2F7BFF)   /* Icom blue               */
+#define C_ACCENT_HI lv_color_hex(0x5A9BFF)
+#define C_TEXT      lv_color_hex(0xFFFFFF)   /* white digits            */
+#define C_TEXT2     lv_color_hex(0xC0C8D4)
+#define C_LABEL     lv_color_hex(0x707884)
+#define C_DISABLED  lv_color_hex(0x3A4048)
+#define C_SUBTLE    lv_color_hex(0x181C24)
+#define C_WARN      lv_color_hex(0xFFB000)
+#define C_DANGER    lv_color_hex(0xFF3030)
+#define C_TX_BORDER lv_color_hex(0xE60012)   /* Icom red                */
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xFFFFFF)
+#define C_TX_RED    lv_color_hex(0xE60012)
+#define C_GREEN     lv_color_hex(0x3FA9FF)   /* Icom's meters are blue  */
+#define PWR_HEX     0x3FA9FF                 /* ...its Po meter too     */
+#else
 /* --- AetherSDR "Default Dark" palette ------------------------------------
  * Taken from resources/themes/default-dark.json so the knob reads as an
  * extension of the desktop rather than a separate device. Note TX is AMBER
@@ -50,7 +75,9 @@ LV_FONT_DECLARE(font_mic_14);
 #define C_TX_RED    lv_color_hex(0xE01010)
 #define C_GREEN     lv_color_hex(0x4DD87A)   /* accent.success */
 /* Not from the theme: the power bar wears the RF.Guru logo's gold. */
-#define C_BRAND     lv_color_hex(RFG_GOLD_HEX)
+#define PWR_HEX     RFG_GOLD_HEX
+#endif
+#define C_BRAND     lv_color_hex(PWR_HEX)
 
 /* The theme's own meter.bar gradient runs green -> amber -> red but only
  * reaches red at 95% of full scale. On an S-meter that is roughly S9+53, so a
@@ -102,6 +129,20 @@ static uint32_t      s_ask_since;
 static volatile int  s_ask_answer;       /* 1 yes, -1 no, 0 none */
 static volatile bool s_ask_knob;         /* the knob turned while asking */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
+static lv_obj_t *s_agc_cap, *s_agc_val, *s_gain_cap, *s_gain_val;
+
+/* Memory mode: the channel in the frequency readout's place -- its name large,
+ * and under it the channel number, frequency, shift and tone. */
+static lv_obj_t *s_mem_big, *s_mem_small;
+static bool      s_mem_face;
+
+/* AGC and the front end's gain, either side of the S-unit readout: centred
+ * AUX_DX from the middle, and tapped anywhere from AUX_IN to AUX_OUT out and
+ * from AUX_TOP down to the band row. */
+#define AUX_DX   72
+#define AUX_IN   40
+#define AUX_OUT  118
+#define AUX_TOP  60
 static lv_obj_t *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
 
 /* Mic level on AetherSDR's own scale -- the P/CW applet's Level gauge: -40 to
@@ -112,9 +153,15 @@ static lv_obj_t *s_pwr_arc, *s_rx_ticks, *s_tx_ticks;
 #define MIC_DB_MAX  (10.0f)
 #define MIC_ZONES 3
 static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
+#if VFO_RADIO_ICOM
+    { -40.0f, -10.0f, 0x3FA9FF },   /* blue  */
+    { -10.0f,   0.0f, 0xFFB000 },   /* amber */
+    {   0.0f,  10.0f, 0xFF3030 },   /* red   */
+#else
     { -40.0f, -10.0f, 0x4DD87A },   /* green */
     { -10.0f,   0.0f, 0xFFB84D },   /* amber */
     {   0.0f,  10.0f, 0xFF4D4D },   /* red   */
+#endif
 };
 static lv_obj_t *s_mic_zone[MIC_ZONES];
 static float mic_frac(float db) { return (db - MIC_DB_MIN) / (MIC_DB_MAX - MIC_DB_MIN); }
@@ -287,9 +334,15 @@ static void pwr_set_range(int r)
 }
 #define SWR_ZONES 3
 static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
+#if VFO_RADIO_ICOM
+    { 1.0f, 2.0f, 0x3FA9FF },   /* blue  */
+    { 2.0f, 2.5f, 0xFFB000 },   /* amber */
+    { 2.5f, 3.0f, 0xFF3030 },   /* red   */
+#else
     { 1.0f, 2.0f, 0x4DD87A },   /* green */
     { 2.0f, 2.5f, 0xFFB84D },   /* amber */
     { 2.5f, 3.0f, 0xFF4D4D },   /* red   */
+#endif
 };
 static lv_obj_t *s_swr_zone[SWR_ZONES];
 
@@ -309,6 +362,16 @@ static lv_obj_t *s_swr_zone[SWR_ZONES];
  * against each other cleanly. */
 #define RX_ZONES 8
 static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
+#if VFO_RADIO_ICOM
+    { -127.0f, -121.0f, 0x0D3B8C },   /* S0 to S1: blue, deepening  */
+    { -121.0f, -109.0f, 0x1350B0 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0x1A68D4 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0x2A86F2 },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0x46A8FF },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0xFF6A5A },   /* S9 to +20: red over S9, as on the radio */
+    {  -53.0f,  -33.0f, 0xFF4040 },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0xE60012 },   /* +40 to +60 */
+#else
     { -127.0f, -121.0f, 0x1A6B47 },   /* S0 to S1   */
     { -121.0f, -109.0f, 0x1F7A52 },   /* S1 to S3   */
     { -109.0f,  -97.0f, 0x2F9E6A },   /* S3 to S5   */
@@ -317,6 +380,7 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0xFFD24D },   /* S9 to +20  */
     {  -53.0f,  -33.0f, 0xFF9A3C },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0xFF4D4D },   /* +40 to +60 */
+#endif
 };
 
 /* Every boundary gets a notch, which means every printed tick gets one -- the
@@ -337,11 +401,12 @@ static char      s_netinfo_text[128] = "no network yet";
 static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 #define NETINFO_MS 10000
 
-typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_RIT, ED_VOL,
-               ED_MIC } edit_t;
+typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
+               ED_GROUP, ED_RIT, ED_VOL, ED_MIC } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int32_t s_edit_rit;
+static int8_t  s_edit_gain, s_edit_gmin, s_edit_gmax, s_edit_gstep;
 static bool    s_edit_lsb;   /* passband sits below the carrier */
 static uint8_t s_volume = 40;
 static uint8_t s_micgain = 100;
@@ -352,15 +417,36 @@ static bool    s_have_commit;
  * widths are the common SSB/CW/digi set rather than a continuous range,
  * because a rotary picking from a short list is far quicker than one
  * scrubbing through hundreds of values. */
+#if VFO_RADIO_ICOM
+/* The IC-705's own modes (it has no synchronous AM or narrow FM of its own),
+ * and its bands, which run on to 2 m and 70 cm. Its AGC is FAST, MID or SLOW,
+ * and the gain beside the S-meter is its preamp. */
+static const char *MODES[] = { "usb","lsb","cw","cwr","am","fm","rtty",
+                               "digu","digl" };
+static const char *AGCS[]  = { "fast","mid","slow" };
+#define GAIN_CAPTION "P.AMP"
+#else
+/* AetherSDR passes FlexRadio's AGC settings through by name, and the gain
+ * beside the S-meter is the panadapter's RF gain. */
 static const char *MODES[] = { "usb","lsb","cw","cwr","am","sam","fm","nfm",
                                "digu","digl","rtty" };
+static const char *AGCS[]  = { "fast","med","slow","off" };
+#define GAIN_CAPTION "RF.G"
+#endif
 static const int32_t FILTERS[] = { 250, 500, 700, 1000, 1500, 1800, 2100,
                                    2400, 2700, 3000, 3600, 6000 };
+/* A radio with filter presets (the IC-705's FIL1-3) is offered those instead
+ * of widths: its widths belong to each preset, set on the radio. */
+#define N_PRESETS 3
+static bool s_edit_presets;
 static const struct { const char *name; int64_t hz; } BANDS[] = {
     { "160m",  1840000 }, { "80m",   3700000 }, { "60m",   5355000 },
     { "40m",   7100000 }, { "30m",  10130000 }, { "20m",  14100000 },
     { "17m",  18120000 }, { "15m",  21200000 }, { "12m",  24940000 },
     { "10m",  28400000 }, { "6m",   50200000 },
+#if VFO_RADIO_ICOM
+    { "2m",  144300000 }, { "70cm", 432200000 },
+#endif
 };
 #define NELEM(a) ((int)(sizeof (a) / sizeof (a)[0]))
 static int   s_dig_x[N_DIG];
@@ -432,8 +518,84 @@ static const char *band_of(int64_t hz)
     if (m >= 21000  && m <= 21450)  return "15m";
     if (m >= 24890  && m <= 24990)  return "12m";
     if (m >= 28000  && m <= 29700)  return "10m";
-    if (m >= 50000  && m <= 52000)  return "6m";
+    if (m >= 50000  && m <= 54000)  return "6m";
+    if (m >= 144000 && m <= 148000) return "2m";
+    if (m >= 430000 && m <= 440000) return "70cm";
     return "--";
+}
+
+/* Upper case for the glass: modes and AGC settings arrive as "usb", "mid". */
+static void upcase(const char *in, char *out, size_t n)
+{
+    size_t i = 0;
+    for (; in && in[i] && i + 1 < n; i++)
+        out[i] = (in[i] >= 'a' && in[i] <= 'z') ? (char)(in[i] - 32) : in[i];
+    out[i] = 0;
+}
+
+/* The gain as the radio puts it: the IC-705's preamp is OFF, 1 or 2 -- or ON
+ * where it has only the one -- and AetherSDR's RF gain is in dB. */
+static void gain_text(int g, int gmax, char *out, size_t n)
+{
+#if VFO_RADIO_ICOM
+    if (g <= 0)         snprintf(out, n, "OFF");
+    else if (gmax <= 1) snprintf(out, n, "ON");
+    else                snprintf(out, n, "%d", g);
+#else
+    (void)gmax;
+    if (g) snprintf(out, n, "%+d dB", g);
+    else   snprintf(out, n, "0 dB");
+#endif
+}
+
+/* 145.6375, 438.625: MHz to the 100 Hz digit, which FM channels need and
+ * nothing finer. */
+static void mhz_text(int64_t hz, char *out, size_t n)
+{
+    if (hz < 0) hz = 0;
+    const long mhz = (long)(hz / 1000000), khz = (long)(hz / 1000 % 1000);
+    const int  d   = (int)(hz % 1000 / 100);
+    if (d) snprintf(out, n, "%ld.%03ld%d", mhz, khz, d);
+    else   snprintf(out, n, "%ld.%03ld", mhz, khz);
+}
+
+/* A repeater's shift as it is usually said: -0.6, +7.6, -1.25. */
+static void shift_text(int8_t dup, int32_t hz, char *out, size_t n)
+{
+    if (!dup) { out[0] = 0; return; }
+    const long khz = (long)(hz / 1000) % 100000;
+    char frac[12];
+    snprintf(frac, sizeof frac, "%03ld", khz % 1000);
+    for (int i = 2; i > 0 && frac[i] == '0'; i--) frac[i] = 0;
+    snprintf(out, n, "%c%ld.%s", dup < 0 ? '-' : '+', khz / 1000, frac);
+}
+
+/* What the memory face says: a channel, or why there is none yet. */
+static void mem_texts(const ui_state_t *st, char *big, size_t nb, char *small, size_t ns)
+{
+    if (st->mem_state == UI_MEM_READING) {
+        snprintf(big, nb, "MEMORIES");
+        snprintf(small, ns, "reading group %02u", (unsigned)st->mem_group);
+        return;
+    }
+    if (st->mem_state == UI_MEM_EMPTY) {
+        snprintf(big, nb, "NO MEMORIES");
+        snprintf(small, ns, "in group %02u", (unsigned)st->mem_group);
+        return;
+    }
+    char f[24], sh[32] = "", tn[16] = "", t[24];
+    mhz_text(st->freq_hz, f, sizeof f);
+    shift_text(st->mem_duplex, st->mem_offset_hz, t, sizeof t);
+    if (t[0]) snprintf(sh, sizeof sh, "  %s", t);
+    if (st->mem_tone_dhz)
+        snprintf(tn, sizeof tn, "  T%u.%u", st->mem_tone_dhz / 10u, st->mem_tone_dhz % 10u);
+    if (st->mem_name[0]) {
+        snprintf(big, nb, "%s", st->mem_name);
+        snprintf(small, ns, "M%02u  %s%s%s", (unsigned)st->mem_ch, f, sh, tn);
+    } else {                          /* no name: the frequency is the headline */
+        snprintf(big, nb, "%s", f);
+        snprintf(small, ns, "M%02u%s%s", (unsigned)st->mem_ch, sh, tn);
+    }
 }
 
 /* --- field editors -------------------------------------------------------- */
@@ -453,18 +615,26 @@ static void edit_render(void)
         title = "BAND";
         snprintf(v, sizeof v, "%s", BANDS[s_edit_idx].name);
         break;
-    case ED_MODE: {
+    case ED_MODE:
         title = "MODE";
-        const char *m = MODES[s_edit_idx];
-        size_t n = strlen(m); if (n > 7) n = 7;
-        for (size_t i = 0; i < n; i++)
-            v[i] = (m[i] >= 'a' && m[i] <= 'z') ? (char)(m[i] - 32) : m[i];
-        v[n] = 0;
+        upcase(MODES[s_edit_idx], v, 8);
         break;
-    }
     case ED_FILTER:
         title = "FILTER";
-        snprintf(v, sizeof v, "%ld Hz", (long)FILTERS[s_edit_idx]);
+        if (s_edit_presets) snprintf(v, sizeof v, "FIL%d", s_edit_idx + 1);
+        else                snprintf(v, sizeof v, "%ld Hz", (long)FILTERS[s_edit_idx]);
+        break;
+    case ED_AGC:
+        title = "AGC";
+        upcase(AGCS[s_edit_idx], v, sizeof v);
+        break;
+    case ED_GAIN:
+        title = GAIN_CAPTION;
+        gain_text(s_edit_gain, s_edit_gmax, v, sizeof v);
+        break;
+    case ED_GROUP:
+        title = "MEMORY GROUP";
+        snprintf(v, sizeof v, "%02d", s_edit_idx);
         break;
     case ED_RIT:
         title = "RIT";
@@ -491,6 +661,13 @@ static int index_of_mode(const char *m)
     return 0;
 }
 
+static int index_of_agc(const char *a)
+{
+    for (int i = 0; i < NELEM(AGCS); i++)
+        if (a && strcasecmp(AGCS[i], a) == 0) return i;
+    return 0;
+}
+
 static int nearest_filter(int32_t w)
 {
     int best = 0;
@@ -513,13 +690,21 @@ static int nearest_band(int64_t hz)
     return best;
 }
 
+static void netinfo_show(bool on);
+
 static void edit_open(edit_t what, const ui_state_t *st)
 {
     s_edit = what;
+    netinfo_show(false);                  /* it would peek out from behind */
     switch (what) {
     case ED_BAND:   s_edit_idx = nearest_band(st->freq_hz); break;
     case ED_MODE:   s_edit_idx = index_of_mode(st->mode);   break;
     case ED_FILTER:
+        s_edit_presets = st->filter_no != 0;
+        if (s_edit_presets) {
+            s_edit_idx = st->filter_no - 1;
+            break;
+        }
         s_edit_idx = nearest_filter(st->filt_hi - st->filt_lo);
         /* Remember which side of the carrier this mode uses. Applying a
          * positive passband to LSB mutes the radio, which reads as a hardware
@@ -528,6 +713,14 @@ static void edit_open(edit_t what, const ui_state_t *st)
                      (st->mode && (strcasecmp(st->mode, "lsb") == 0 ||
                                    strcasecmp(st->mode, "cwr") == 0 ||
                                    strcasecmp(st->mode, "digl") == 0));
+        break;
+    case ED_AGC:    s_edit_idx = index_of_agc(st->agc); break;
+    case ED_GROUP:  s_edit_idx = st->mem_group; break;
+    case ED_GAIN:
+        s_edit_gain  = st->gain;
+        s_edit_gmin  = st->gain_min;
+        s_edit_gmax  = st->gain_max;
+        s_edit_gstep = st->gain_step > 0 ? st->gain_step : 1;
         break;
     case ED_RIT:    s_edit_rit = st->rit_hz; break;
     default: break;
@@ -548,12 +741,29 @@ static void edit_commit(void)
         strlcpy(s_commit.mode, MODES[s_edit_idx], sizeof s_commit.mode);
         break;
     case ED_FILTER: {
+        if (s_edit_presets) {
+            s_commit.have_filter_no = true;
+            s_commit.filter_no = (uint8_t)(s_edit_idx + 1);
+            break;
+        }
         s_commit.have_filter = true;
         int32_t w = FILTERS[s_edit_idx];
         if (s_edit_lsb) { s_commit.filt_lo = -w;  s_commit.filt_hi = -100; }
         else            { s_commit.filt_lo = 100; s_commit.filt_hi =  w;   }
         break;
     }
+    case ED_AGC:
+        s_commit.have_agc = true;
+        strlcpy(s_commit.agc, AGCS[s_edit_idx], sizeof s_commit.agc);
+        break;
+    case ED_GAIN:
+        s_commit.have_gain = true;
+        s_commit.gain      = s_edit_gain;
+        break;
+    case ED_GROUP:
+        s_commit.have_mem_group = true;
+        s_commit.mem_group      = (uint8_t)s_edit_idx;
+        break;
     case ED_RIT:
         s_commit.have_rit = true;
         s_commit.rit_hz   = s_edit_rit;
@@ -582,11 +792,30 @@ void ui_edit_rotate(int32_t detents)
         if (s_edit_idx < 0) s_edit_idx = 0;
         if (s_edit_idx >= NELEM(MODES)) s_edit_idx = NELEM(MODES) - 1;
         break;
-    case ED_FILTER:
+    case ED_FILTER: {
+        const int n = s_edit_presets ? N_PRESETS : NELEM(FILTERS);
         s_edit_idx += detents;
         if (s_edit_idx < 0) s_edit_idx = 0;
-        if (s_edit_idx >= NELEM(FILTERS)) s_edit_idx = NELEM(FILTERS) - 1;
+        if (s_edit_idx >= n) s_edit_idx = n - 1;
         break;
+    }
+    case ED_AGC:
+        s_edit_idx += detents;
+        if (s_edit_idx < 0) s_edit_idx = 0;
+        if (s_edit_idx >= NELEM(AGCS)) s_edit_idx = NELEM(AGCS) - 1;
+        break;
+    case ED_GROUP:
+        s_edit_idx += detents;
+        if (s_edit_idx < 0)  s_edit_idx = 0;
+        if (s_edit_idx > 99) s_edit_idx = 99;
+        break;
+    case ED_GAIN: {
+        int g = s_edit_gain + detents * s_edit_gstep;
+        if (g < s_edit_gmin) g = s_edit_gmin;
+        if (g > s_edit_gmax) g = s_edit_gmax;
+        s_edit_gain = (int8_t)g;
+        break;
+    }
     case ED_RIT:
         s_edit_rit += detents * 10;
         if (s_edit_rit >  9990) s_edit_rit =  9990;
@@ -660,10 +889,137 @@ static int nearest_digit(int x)
  * value. The touch callback runs on the LVGL task and cannot ask the client. */
 static ui_state_t s_last;
 
+/* The addresses come up on a long press on the meter arc, timed from press
+ * to release. A tap there used to bring them up, and the arc is where a hand
+ * reaching for the dial lands: they kept appearing by themselves. */
+#define NETINFO_HOLD_MS 600
+static uint32_t s_pressed_at;
+
+/* Taps act when the finger lifts, not when it lands -- all but PTT and the
+ * update question. A swipe starts with a press too, and acting on the press
+ * would first take it for a tap on whatever it started on: a swipe begun on
+ * the mode would open the mode's editor. So the press is only noted, and the
+ * release decides: a gesture on the way, or a finger that wandered, means it
+ * was not a tap. */
+#define TAP_SLOP 24                       /* px a tap may wander */
+static lv_point_t    s_press_pt;
+static bool          s_press_tap;         /* this press may still be a tap */
+static bool          s_gestured;          /* ...and this one became a gesture */
+static volatile bool s_swipe;
+
+static void netinfo_show(bool on)
+{
+    if (!s_netinfo) return;
+    if (on) {
+        lv_label_set_text(s_netinfo, s_netinfo_text);
+        lv_obj_clear_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_netinfo);
+        s_netinfo_until = lv_tick_get() + NETINFO_MS;
+    } else {
+        lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
+        s_netinfo_until = 0;
+    }
+}
+
+/* A tap at p, the finger down for `held` ms. */
+static void tap(lv_point_t p, uint32_t held)
+{
+    /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
+     * selection on the precise one. */
+    if (s_edit != ED_NONE) { edit_commit(); return; }
+
+    /* The address card goes away with a tap on the card itself, and that tap
+     * does nothing else. Like any other control on the face it answers only
+     * to a tap on itself: a tap beside it goes to whatever is there. */
+    if (s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN)) {
+        lv_area_t a;
+        lv_obj_get_coords(s_netinfo, &a);
+        if (p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2) {
+            netinfo_show(false);
+            return;
+        }
+    }
+
+    /* AGC left of the S-unit readout, the gain right of it. Receive settings,
+     * shown only in receive, and like every editor only with a link. */
+    if (p.y >= AUX_TOP && p.y < 104 && s_last.link_ok && !s_last.tx) {
+        const int dx = p.x - CX;
+        if (dx <= -AUX_IN && dx >= -AUX_OUT) {
+            edit_open(ED_AGC, &s_last);
+            return;
+        }
+        if (dx >= AUX_IN && dx <= AUX_OUT && s_last.have_gain) {
+            edit_open(ED_GAIN, &s_last);
+            return;
+        }
+    }
+
+    /* The meter arc: a long press shows the addresses. */
+    if (p.y < 104) {
+        if (held >= NETINFO_HOLD_MS) netinfo_show(true);
+        return;
+    }
+
+    /* With no link there is nothing behind any of these: opening an editor
+     * would let the operator choose a mode or a filter that goes nowhere. The
+     * warning panel is the only thing on screen that means anything, so leave
+     * it alone -- the long press on the meter still works, since the
+     * addresses are what you want. */
+    if (!s_last.link_ok) return;
+
+    const bool mem = s_last.mem_state != UI_MEM_OFF;
+    /* band | mode | filter -- in memory mode the band's place holds the group */
+    if (p.y >= 104 && p.y < 140) {
+        if      (p.x < CX - 38) edit_open(mem ? ED_GROUP : ED_BAND, &s_last);
+        else if (p.x > CX + 38) edit_open(ED_FILTER, &s_last);
+        else                    edit_open(ED_MODE,   &s_last);
+        return;
+    }
+    /* frequency digits -> step decade; a channel has no digits to pick */
+    if (p.y >= 144 && p.y < 212) {
+        if (mem) return;
+        s_active_dig = nearest_digit(p.x);
+        s_step_req   = DIG_STEP[s_active_dig];
+        return;
+    }
+    /* step | rit | volume | mic */
+    if (p.y >= 208 && p.y < PTT_TOP) {
+        if      (p.x > CX + 74) edit_open(ED_MIC, &s_last);
+        else if (p.x > CX + 12) edit_open(ED_VOL, &s_last);
+        else if (p.x > CX - 56) edit_open(ED_RIT, &s_last);
+        return;
+    }
+}
+
 static void release_cb(lv_event_t *e)
 {
     (void)e;
     s_released_at = lv_tick_get();
+    const bool was_tap = s_press_tap && !s_gestured;
+    s_press_tap = false;
+    if (!was_tap) return;
+    lv_indev_t *indev = lv_indev_active();
+    if (indev) {
+        lv_point_t q;
+        lv_indev_get_point(indev, &q);
+        if (LV_ABS(q.x - s_press_pt.x) > TAP_SLOP ||
+            LV_ABS(q.y - s_press_pt.y) > TAP_SLOP) return;   /* a drag */
+    }
+    tap(s_press_pt, lv_tick_elaps(s_pressed_at));
+}
+
+/* A swipe: down is memory mode, on or off; any other way is nothing, but was
+ * not a tap either. */
+static void gesture_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    s_gestured = true;
+    if (lv_indev_get_gesture_dir(indev) != LV_DIR_BOTTOM) return;
+    if (s_edit != ED_NONE || s_asking || !s_last.link_ok || s_last.tx ||
+        !s_last.has_memories) return;
+    s_swipe = true;
 }
 
 static void touch_cb(lv_event_t *e)
@@ -674,6 +1030,10 @@ static void touch_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     ui_note_activity();
+    s_press_pt   = p;
+    s_pressed_at = lv_tick_get();
+    s_press_tap  = false;
+    s_gestured   = false;
 
     /* A question is up: this tap answers it and goes nowhere else. On the
      * panel is yes; anywhere else is no -- the operator was reaching for
@@ -696,33 +1056,10 @@ static void touch_cb(lv_event_t *e)
         return;
     }
 
-    /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
-     * selection on the precise one. */
-    if (s_edit != ED_NONE) { edit_commit(); return; }
-
-
-    /* The meter arc: show the addresses, tap again to dismiss. */
-    if (p.y < 104) {
-        if (s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN)) {
-            lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
-            s_netinfo_until = 0;
-        } else if (s_netinfo) {
-            lv_label_set_text(s_netinfo, s_netinfo_text);
-            lv_obj_clear_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(s_netinfo);
-            s_netinfo_until = lv_tick_get() + NETINFO_MS;
-        }
-        return;
-    }
-
-    /* With no link there is nothing behind any of these: opening an editor
-     * would let the operator choose a mode or a filter that goes nowhere, and
-     * the PTT slab would arm a transmitter we cannot reach. The warning panel
-     * is the only thing on screen that means anything, so leave it alone --
-     * the meter tap still works, since the addresses are what you want. */
-    if (!s_last.link_ok) return;
-
-    if (p.y >= PTT_TOP) {                               /* the whole slab */
+    /* PTT keeps acting on the press: the whole slab, with a link, and not
+     * while an editor is open, when a tap there accepts the edit. With no
+     * link the slab would arm a transmitter we cannot reach. */
+    if (p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
         /* One tap, one toggle. A light touch can flicker -- press, release,
          * press within a single tap -- and on a toggle each extra press
          * undoes the one before: keyed and unkeyed in one tap, which reads as
@@ -738,26 +1075,8 @@ static void touch_cb(lv_event_t *e)
         return;
     }
 
-    /* band | mode | filter */
-    if (p.y >= 104 && p.y < 140) {
-        if      (p.x < CX - 38) edit_open(ED_BAND,   &s_last);
-        else if (p.x > CX + 38) edit_open(ED_FILTER, &s_last);
-        else                    edit_open(ED_MODE,   &s_last);
-        return;
-    }
-    /* frequency digits -> step decade */
-    if (p.y >= 144 && p.y < 212) {
-        s_active_dig = nearest_digit(p.x);
-        s_step_req   = DIG_STEP[s_active_dig];
-        return;
-    }
-    /* step | rit | volume | mic */
-    if (p.y >= 208 && p.y < PTT_TOP) {
-        if      (p.x > CX + 74) edit_open(ED_MIC, &s_last);
-        else if (p.x > CX + 12) edit_open(ED_VOL, &s_last);
-        else if (p.x > CX - 56) edit_open(ED_RIT, &s_last);
-        return;
-    }
+    /* Everything else: see release_cb. */
+    s_press_tap = true;
 }
 
 /* --- build --------------------------------------------------------------- */
@@ -1092,7 +1411,7 @@ static void build(void)
         for (size_t z = 0; z < RX_ZONES; z++)  rx[z]  = RXZONES[z].rgb;
         for (size_t z = 0; z < MIC_ZONES; z++) mic[z] = MIC_ZONE[z].rgb;
         for (size_t z = 0; z < SWR_ZONES; z++) swr[z] = ZONES[z].rgb;
-        static const uint32_t pwr[1] = { RFG_GOLD_HEX };        /* the bar's */
+        static const uint32_t pwr[1] = { PWR_HEX };             /* the bar's */
         led_build(&s_sig_led, ARC_ROT, ARC_SPAN, ARC_R0, 12, false, rx, RX_ZONES);
         led_build(&s_swr_led, SWR_ROT, SWR_SPAN, ARC_R0, 12, false, swr, SWR_ZONES);
         led_build(&s_pwr_led, AUD_ROT, AUD_SPAN, ARC_R0, 12, false, pwr, 1);
@@ -1124,6 +1443,13 @@ static void build(void)
      * lets you report a readable signal report. */
     s_srd  = mklabel(&lv_font_montserrat_20, C_TEXT,  CX, 76,  "S0");
     s_dbm  = mklabel(&lv_font_montserrat_14, C_LABEL, CX, 98,  "-127 dBm");
+
+    /* Either side of it, a caption and the setting under it: the AGC, and
+     * the front end's gain. Tapping either opens its editor. */
+    s_agc_cap  = mklabel(&lv_font_montserrat_14, C_LABEL, CX - AUX_DX, 78, "AGC");
+    s_agc_val  = mklabel(&lv_font_montserrat_14, C_DISABLED, CX - AUX_DX, 97, "--");
+    s_gain_cap = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 78, GAIN_CAPTION);
+    s_gain_val = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 97, "--");
 
     s_band = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 76, 122, "--");
     s_mode = mklabel(&lv_font_montserrat_20, C_TEXT,   CX,      122, "USB");
@@ -1157,6 +1483,17 @@ static void build(void)
     lv_obj_set_style_radius(s_underline, 2, 0);
     lv_obj_remove_flag(s_underline, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_underline, LV_OBJ_FLAG_CLICKABLE);
+
+    /* The memory face, in the digits' place. A fixed width, so a sixteen-
+     * character name ends in dots rather than off the glass. */
+    s_mem_big = mklabel(&lv_font_montserrat_28, C_TEXT, CX, 160, "");
+    lv_obj_set_width(s_mem_big, 300);
+    lv_label_set_long_mode(s_mem_big, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_mem_big, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_mem_big, LV_ALIGN_CENTER, 0, 160 - CY);
+    s_mem_small = mklabel(&lv_font_montserrat_20, C_TEXT2, CX, 196, "");
+    lv_obj_add_flag(s_mem_big, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_mem_small, LV_OBJ_FLAG_HIDDEN);
 
     s_step_lbl = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 98, 220, "1 kHz");
     s_rit      = mklabel(&lv_font_montserrat_14, C_WARN,   CX - 24, 222, "RIT 0");
@@ -1315,6 +1652,7 @@ static void build(void)
 
     lv_obj_add_event_cb(s_scr, touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_scr, release_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(s_scr, gesture_cb, LV_EVENT_GESTURE, NULL);
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
 }
 
@@ -1518,6 +1856,34 @@ void ui_update(const ui_state_t *st)
     }
 
     int64_t f = st->freq_hz < 0 ? 0 : st->freq_hz;
+
+    /* Memory mode swaps the frequency readout for the channel. */
+    const bool mem = st->mem_state != UI_MEM_OFF;
+    if (mem != s_mem_face) {
+        s_mem_face = mem;
+        lv_obj_t *vfo[N_DIG + 3];
+        for (int i = 0; i < N_DIG; i++) vfo[i] = s_dig[i];
+        vfo[N_DIG] = s_sep[0]; vfo[N_DIG + 1] = s_sep[1]; vfo[N_DIG + 2] = s_underline;
+        for (int i = 0; i < N_DIG + 3; i++) {
+            if (mem) lv_obj_add_flag(vfo[i], LV_OBJ_FLAG_HIDDEN);
+            else     lv_obj_remove_flag(vfo[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        if (mem) {
+            lv_obj_remove_flag(s_mem_big, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_mem_small, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_mem_big, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_mem_small, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (mem) {
+        char big[24], small[80];
+        mem_texts(st, big, sizeof big, small, sizeof small);
+        set_text(s_mem_big, big);
+        set_text(s_mem_small, small);
+        set_text_color(s_mem_big, st->tx ? C_TX_TEXT : C_TEXT);
+    }
+
     int mhz = (int)(f / 1000000);
     int khz = (int)((f / 1000) % 1000);
     int hz  = (int)((f % 1000) / 10);
@@ -1528,7 +1894,7 @@ void ui_update(const ui_state_t *st)
     };
     int lead = (mhz >= 100) ? 0 : (mhz >= 10) ? 1 : 2;
 
-    for (int i = 0; i < N_DIG; i++) {
+    for (int i = 0; i < N_DIG && !mem; i++) {
         char b[2] = { (char)('0' + d[i]), 0 };
         const char *txt = (i < lead) ? "" : b;
         if (strcmp(lv_label_get_text(s_dig[i]), txt) != 0)
@@ -1545,21 +1911,33 @@ void ui_update(const ui_state_t *st)
                      s_dig_x[s_active_dig] - CX, 204 - CY);
     }
 
-    set_text(s_band, band_of(f));
+    if (mem) {
+        char g[8];
+        snprintf(g, sizeof g, "G%02u", (unsigned)st->mem_group);
+        set_text(s_band, g);
+    } else {
+        set_text(s_band, band_of(f));
+    }
     if (st->mode) {
         char up[8];
-        size_t n = strlen(st->mode); if (n > 7) n = 7;
-        for (size_t i = 0; i < n; i++) {
-            char ch = st->mode[i];
-            up[i] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
-        }
-        up[n] = 0;
+        upcase(st->mode, up, sizeof up);
         set_text(s_mode, up);
     }
     char tb[24];
-    snprintf(tb, sizeof tb, "%ld", (long)(st->filt_hi - st->filt_lo));
+    if (st->filter_no) snprintf(tb, sizeof tb, "FIL%u", (unsigned)st->filter_no);
+    else               snprintf(tb, sizeof tb, "%ld", (long)(st->filt_hi - st->filt_lo));
     set_text(s_filt, tb);
-    set_text(s_step_lbl, step_name(st->step_hz));
+    set_text(s_step_lbl, mem ? "MEM" : step_name(st->step_hz));
+
+    /* Greyed out while the radio has not said -- which for AetherSDR's RF
+     * gain is always: its TCI carries none. */
+    upcase(st->agc, tb, 8);
+    set_text(s_agc_val, tb[0] ? tb : "--");
+    set_text_color(s_agc_val, tb[0] ? C_TEXT2 : C_DISABLED);
+    if (st->have_gain) gain_text(st->gain, st->gain_max, tb, sizeof tb);
+    set_text(s_gain_val, st->have_gain ? tb : "--");
+    set_text_color(s_gain_val, st->have_gain ? C_TEXT2 : C_DISABLED);
+    set_text_color(s_gain_cap, st->have_gain ? C_LABEL : C_DISABLED);
 
     /* RIT is always shown so it is always tappable, but greyed at zero: RIT
      * silently non-zero is a classic way to lose a QSO, so when it IS set it
@@ -1731,7 +2109,13 @@ void ui_update(const ui_state_t *st)
     if (st->tx != s_was_tx) {
         s_was_tx = st->tx;
         lv_obj_set_style_bg_color(s_scr, st->tx ? C_BG_TX : C_BG, 0);
-        /* Swap the meter set wholesale. */
+        /* Swap the meter set wholesale. AGC and gain are receive settings
+         * and make way for the transmit readouts, which are wider. */
+        lv_obj_t *aux[] = { s_agc_cap, s_agc_val, s_gain_cap, s_gain_val };
+        for (size_t i = 0; i < sizeof aux / sizeof aux[0]; i++) {
+            if (st->tx) lv_obj_add_flag(aux[i], LV_OBJ_FLAG_HIDDEN);
+            else        lv_obj_remove_flag(aux[i], LV_OBJ_FLAG_HIDDEN);
+        }
         if (st->tx) {
             lv_obj_add_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
             for (size_t z = 0; z < RX_ZONES; z++)
@@ -1803,6 +2187,7 @@ uint8_t ui_rotation(void) { return s_rot; }
 
 int32_t ui_take_step_request(void) { int32_t v = s_step_req; s_step_req = 0; return v; }
 bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false; return v; }
+bool    ui_take_swipe(void)        { bool v = s_swipe;       s_swipe    = false; return v; }
 
 
 /* ------------------------------------------------------------------- dim */

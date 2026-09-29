@@ -14,6 +14,7 @@
 #include <inttypes.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "audio_in.h"
 #include "audio_out.h"
@@ -23,7 +24,7 @@
 #include "gpio_scan.h"
 #include "hal_encoder.h"
 #include "net_prov.h"
-#include "tci_client.h"
+#include "radio.h"
 #include "hal_touch.h"
 #include "panel.h"
 #include "ui.h"
@@ -228,8 +229,8 @@ static void encoder_task(void *arg)
          * read it back so rollover and decimation fire on the frequency the
          * operator is actually on. Keeping a second local copy let the two
          * drift 10 MHz apart during the first real-radio test. */
-        int64_t before = tci_tune_by(0, 1, tune.step_hz);
-        int64_t after  = tci_tune_by(detents, mult, tune.step_hz);
+        int64_t before = radio_tune_by(0, 1, tune.step_hz);
+        int64_t after  = radio_tune_by(detents, mult, tune.step_hz);
         tune.f_display = after;        /* keep the local step model in step */
 
         /* Tuning is silent by design; see the note above. `before` and
@@ -239,13 +240,27 @@ static void encoder_task(void *arg)
     }
 }
 
-/* The TCI client declares this weak so it stays free of a haptic dependency.
- * This is where the haptic channel is actually spent: PTT state, a rejected
- * tune, link loss. Never tuning -- the knob has real detents of its own. */
+/* Every haptic goes through here, and none plays on the air: from the moment
+ * a key is asked for until the radio is back on receive -- keyed by us or by
+ * anyone -- the motor stays still. It sits millimetres from the microphone,
+ * and a click or a buzz went out over the air with the operator's voice. */
+static void haptic(uint8_t effect)
+{
+    if (!effect) return;
+    radio_status_t st;
+    radio_get_status(&st);
+    if (st.tx || st.ptt_state != PTT_IDLE) return;
+    drv2605_fire(&s_drv, effect);
+}
+
+/* The radio clients declare this weak so they stay free of a haptic
+ * dependency. This is where their share of the haptic channel is spent: a
+ * refused key, the unkey. Never tuning -- the knob has real detents of its
+ * own. */
 void haptic_hook(uint8_t effect, uint8_t prio)
 {
     (void)prio;
-    if (effect) drv2605_fire(&s_drv, effect);
+    haptic(effect);
 }
 
 /* Serial console. Touch does not exist yet, and every PTT fault path needs
@@ -275,16 +290,16 @@ static void console_task(void *arg)
         switch (ch) {
         /* No key/toggle: see the banner above. Unkey stays -- it can only
          * ever make things safer. */
-        case 'u': ESP_LOGI(TAG, "console: unkey");  tci_ptt_unkey();  break;
+        case 'u': ESP_LOGI(TAG, "console: unkey");  radio_ptt_unkey();  break;
         case 'p': ESP_LOGI(TAG, "console: forcing pong-stale abort");
-                  tci_ptt_force_abort(PTT_AB_PONG_STALE); break;
+                  radio_ptt_force_abort(PTT_AB_PONG_STALE); break;
         case 'd': ESP_LOGI(TAG, "console: forcing link-down abort");
-                  tci_ptt_force_abort(PTT_AB_LINK_DOWN);  break;
+                  radio_ptt_force_abort(PTT_AB_LINK_DOWN);  break;
         case 'r': ui_cycle_rotation();
                   ESP_LOGI(TAG, "rotation -> %u degrees", ui_rotation() * 90u);
                   break;
         case 's': {
-            tci_status_t st; tci_get_status(&st);
+            radio_status_t st; radio_get_status(&st);
             ESP_LOGI(TAG, "ptt=%s rung=%u reason=%s permit=0x%03X%s "
                           "pong=%ldms refusals=%u",
                      ptt_state_name((ptt_state_t)st.ptt_state), st.ptt_rung,
@@ -299,6 +314,13 @@ static void console_task(void *arg)
     }
 }
 
+/* The dial's memory states are the radio's, in the same order. */
+_Static_assert((int)UI_MEM_OFF == (int)RADIO_MEM_OFF &&
+               (int)UI_MEM_READING == (int)RADIO_MEM_READING &&
+               (int)UI_MEM_READY == (int)RADIO_MEM_READY &&
+               (int)UI_MEM_EMPTY == (int)RADIO_MEM_EMPTY,
+               "ui_state_t.mem_state carries radio_mem_state_t");
+
 static void ui_task(void *arg)
 {
     (void)arg;
@@ -309,30 +331,46 @@ static void ui_task(void *arg)
         int32_t req = ui_take_step_request();
         if (req) {
             atomic_store(&s_step_hz, req);
-            tci_set_step(req);
+            radio_set_step(req);
             ESP_LOGI(TAG, "step -> %ld Hz", (long)req);
-            drv2605_fire(&s_drv, 26);      /* confirm the tap landed */
+            haptic(26);                    /* confirm the tap landed */
         }
         ui_commit_t c;
         if (ui_take_commit(&c)) {
             if (c.have_mode) {
                 ESP_LOGI(TAG, "mode -> %s", c.mode);
-                tci_set_mode(c.mode);
+                radio_set_mode(c.mode);
             }
             if (c.have_filter) {
                 ESP_LOGI(TAG, "filter -> %ld..%ld",
                          (long)c.filt_lo, (long)c.filt_hi);
-                tci_set_filter(c.filt_lo, c.filt_hi);
+                radio_set_filter(c.filt_lo, c.filt_hi);
+            }
+            if (c.have_filter_no) {
+                ESP_LOGI(TAG, "filter -> FIL%u", (unsigned)c.filter_no);
+                radio_select_filter(c.filter_no);
+            }
+            if (c.have_agc) {
+                ESP_LOGI(TAG, "agc -> %s", c.agc);
+                radio_set_agc(c.agc);
+            }
+            if (c.have_gain) {
+                ESP_LOGI(TAG, "gain -> %d", c.gain);
+                radio_set_gain(c.gain);
+            }
+            if (c.have_mem_group) {
+                ESP_LOGI(TAG, "memory group -> %02u", (unsigned)c.mem_group);
+                radio_memory_group(c.mem_group);
             }
             if (c.have_rit) {
                 ESP_LOGI(TAG, "rit -> %+ld", (long)c.rit_hz);
-                tci_set_rit(c.rit_hz);
+                radio_set_rit(c.rit_hz);
             }
             if (c.have_freq) {
                 ESP_LOGI(TAG, "band -> %lld", (long long)c.freq_hz);
-                tci_goto_freq(c.freq_hz);
+                radio_goto_freq(c.freq_hz);
             }
-            drv2605_fire(&s_drv, 7);        /* soft bump: value committed */
+            haptic(7);                      /* soft bump: value committed */
         }
 
         /* Volume and mic gain live in the UI -- the dial's editors and the
@@ -360,37 +398,40 @@ static void ui_task(void *arg)
 
         if (ui_take_ptt_tap()) {
             ESP_LOGI(TAG, "PTT tapped");
-            tci_ptt_toggle();
+            radio_ptt_toggle();
         }
 
-        tci_status_t st;
-        tci_get_status(&st);
+        /* A swipe down: into memory mode, or back to the VFO. */
+        if (ui_take_swipe()) {
+            radio_status_t m;
+            radio_get_status(&m);
+            const bool on = m.mem_state == RADIO_MEM_OFF;
+            ESP_LOGI(TAG, "swipe -> %s", on ? "memory mode" : "VFO, simplex");
+            radio_memory_mode(on);
+            haptic(10);                     /* double click: a change of mode */
+        }
 
-        /* SWR alarm: the motor runs for as long as SWR stays above 2.5 on the
-         * air. A bad match is not something to find out later from the glass.
-         * Readings count only with real forward power (in a speech pause the
-         * figure is noise), and the alarm holds a second past the last bad one
-         * so the pauses between words do not chop it up. Real-time mode, so it
-         * is one continuous buzz rather than a string of effects; a click
-         * fired meanwhile is simply not heard. */
+        radio_status_t st;
+        radio_get_status(&st);
+
+        /* High SWR: on the glass and in the log, no longer on the motor. It
+         * ran for as long as SWR stayed above 2.5, and on the air that buzz
+         * went out through the microphone beside it. The readout turns red
+         * instead. Readings count only with real forward power (in a speech
+         * pause the figure is noise), and the alarm holds a second past the
+         * last bad one so the pauses between words do not chop it up. */
         {
-            static bool    s_swr_buzz;
+            static bool    s_swr_high;
             static int64_t s_swr_bad_us;
             const int64_t  now_us = esp_timer_get_time();
             if (st.tx && st.tx_fwd_w >= 1.0f && st.tx_swr > 2.5f)
                 s_swr_bad_us = now_us;
-            const bool want = st.tx && s_swr_bad_us &&
+            const bool high = st.tx && s_swr_bad_us &&
                               now_us - s_swr_bad_us < 1000000;
-            if (want != s_swr_buzz) {
-                s_swr_buzz = want;
-                if (want) {
-                    drv2605_rtp_begin(&s_drv);
-                    drv2605_rtp_write(&s_drv, 0x70);   /* ~88% of full drive */
-                    ESP_LOGW(TAG, "SWR alarm: %.1f", (double)st.tx_swr);
-                } else {
-                    drv2605_rtp_end(&s_drv);
-                    ESP_LOGI(TAG, "SWR alarm over");
-                }
+            if (high != s_swr_high) {
+                s_swr_high = high;
+                if (high) ESP_LOGW(TAG, "SWR high: %.1f", (double)st.tx_swr);
+                else      ESP_LOGI(TAG, "SWR high: over");
             }
         }
 
@@ -399,8 +440,8 @@ static void ui_task(void *arg)
          * the banner and the refusal haptic are all the operator gets. Hold a
          * refusal on screen for 3 s; it is otherwise a single frame. */
         static uint32_t s_seen_refusals;
-        const bool link_ok = (st.link == TCI_LINK_READY ||
-                              st.link == TCI_LINK_DEGRADED);
+        const bool link_ok = (st.link == RADIO_LINK_READY ||
+                              st.link == RADIO_LINK_DEGRADED);
         static int64_t  s_warn_until;
         const char     *warn = NULL;
         int64_t nowms = esp_timer_get_time() / 1000;
@@ -411,8 +452,8 @@ static void ui_task(void *arg)
         }
         if (nowms < s_warn_until)                    warn = "TX REFUSED";
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
-        else if (!(st.link == TCI_LINK_READY ||
-                   st.link == TCI_LINK_DEGRADED))    warn = "NO LINK";
+        else if (!(st.link == RADIO_LINK_READY ||
+                   st.link == RADIO_LINK_DEGRADED))    warn = "NO LINK";
         else if (st.slice_locked)                    warn = "VFO LOCKED";
         else if (!(st.permit & PERMIT_TX_ENABLE))    warn = "TX DISABLED";
 
@@ -422,6 +463,19 @@ static void ui_task(void *arg)
             .mode          = st.mode,
             .filt_lo       = st.filt_lo,
             .filt_hi       = st.filt_hi,
+            .filter_no     = st.filter_no,
+            .have_gain     = st.have_gain,
+            .gain          = st.gain,
+            .gain_min      = st.gain_min,
+            .gain_max      = st.gain_max,
+            .gain_step     = st.gain_step,
+            .has_memories  = st.has_memories,
+            .mem_state     = st.mem_state,
+            .mem_group     = st.mem_group,
+            .mem_ch        = st.mem_ch,
+            .mem_duplex    = st.mem_duplex,
+            .mem_offset_hz = st.mem_offset_hz,
+            .mem_tone_dhz  = st.mem_tone_dhz,
             .rit_hz        = st.rit_hz,
             .smeter_dbm    = st.smeter_dbm,
             .tx_mic_dbm    = st.tx_mic_dbm,
@@ -451,6 +505,8 @@ static void ui_task(void *arg)
             .may_key       = (st.permit == PERMIT_ALL),
             .warn          = warn,
         };
+        strlcpy(u.agc, st.agc, sizeof u.agc);
+        strlcpy(u.mem_name, st.mem_name, sizeof u.mem_name);
         ui_update(&u);
     }
 }
@@ -462,6 +518,7 @@ static void ui_task(void *arg)
  * cable has power, including a charger with no computer behind it, and
  * esp_netif's DHCP *server* raises no event when it hands out a lease. The
  * only honest test is whether AetherSDR actually answers over the cable. */
+#if CONFIG_VFO_USB_NET
 static bool host_answers(const char *ip, uint16_t port, int timeout_ms)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -476,8 +533,9 @@ static bool host_answers(const char *ip, uint16_t port, int timeout_ms)
     close(fd);
     return ok;
 }
+#endif
 
-/* Picks the transport for the TCI link, cable first.
+/* Picks the transport for the radio link, cable first.
  *
  * The cable is preferred because it is the whole point of the USB build: the
  * machined case makes 2.4 GHz unreliable, and with both interfaces up the
@@ -490,7 +548,7 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
 {
 #if CONFIG_VFO_USB_NET
     if (usb_net_host_present()) {
-        if (host_answers(usb_net_host(), cfg->tci_port, 500)) {
+        if (host_answers(usb_net_host(), cfg->radio_port, 500)) {
             ESP_LOGI(TAG, "--- transport: USB cable (%s) ---", usb_net_host());
             *via_usb = true;
             return usb_net_host();
@@ -525,10 +583,10 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     }
     if (!net_prov_is_connected()) return NULL;
     if (net_prov_resolve(ip, iplen) != ESP_OK) {
-        ESP_LOGE(TAG, "  cannot resolve %s", cfg->tci_host);
+        ESP_LOGE(TAG, "  cannot resolve %s", cfg->radio_host);
         return NULL;
     }
-    ESP_LOGI(TAG, "--- transport: WiFi (%s -> %s) ---", cfg->tci_host, ip);
+    ESP_LOGI(TAG, "--- transport: WiFi (%s -> %s) ---", cfg->radio_host, ip);
     return ip;
 }
 
@@ -686,11 +744,12 @@ static void net_task(void *arg)
             if (host) {
                 ESP_LOGI(TAG, "--- M13 TCI client --- ws://%s:%u "
                               "(free internal %u, largest DMA %u)",
-                         host, (unsigned)cfg->tci_port,
+                         host, (unsigned)cfg->radio_port,
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_largest_free_block(
                              MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
-                if (tci_client_start(host, cfg->tci_port) == ESP_OK) {
+                if (radio_start(host, cfg->radio_port, cfg->radio_user,
+                                cfg->radio_pass) == ESP_OK) {
                     started = true;
                 } else {
                     /* Usually means internal RAM was too tight to spawn the
@@ -745,14 +804,14 @@ static void net_task(void *arg)
         }
 
         {   /* Transmitting counts as use, however long the over runs. */
-            tci_status_t ds;
-            tci_get_status(&ds);
+            radio_status_t ds;
+            radio_get_status(&ds);
             ui_dim_tick(ds.tx || ds.ptt_state != PTT_IDLE);
         }
 
         if (started) {
-            tci_status_t st;
-            tci_get_status(&st);
+            radio_status_t st;
+            radio_get_status(&st);
 
             /* A periodic check falls due: start it only while the radio is
              * idle and internal RAM has room, or it would compete with the
@@ -787,13 +846,13 @@ static void net_task(void *arg)
                      * PTT is out of reach. Make sure ours is idle before the
                      * restart: a reset while keyed would leave the radio
                      * transmitting until AetherSDR noticed the socket gone. */
-                    tci_status_t now;
-                    tci_get_status(&now);
+                    radio_status_t now;
+                    radio_get_status(&now);
                     if (now.ptt_state != PTT_IDLE) {
-                        tci_ptt_unkey();
+                        radio_ptt_unkey();
                         for (int i = 0; i < 50 && now.ptt_state != PTT_IDLE; i++) {
                             vTaskDelay(pdMS_TO_TICKS(100));
-                            tci_get_status(&now);
+                            radio_get_status(&now);
                         }
                     }
                     if (now.ptt_state != PTT_IDLE) {
@@ -817,12 +876,18 @@ static void net_task(void *arg)
              * cycle anyway, so the transport still gets chosen afresh then. */
             static const char *L[] = { "down", "connecting", "greeting",
                                        "READY", "degraded" };
+            char memtag[40] = "";
+            if (st.mem_state != RADIO_MEM_OFF)
+                snprintf(memtag, sizeof memtag, " MEM %02u/%02u%s%s",
+                         (unsigned)st.mem_group, (unsigned)st.mem_ch,
+                         st.mem_name[0] ? " " : "", st.mem_name);
             ESP_LOGI(TAG,
-                "[TCI] %-10s f=%lld srv=%lld %s %ld..%ld s=%.0fdBm%s ptt=%s | "
+                "[%s] %-10s f=%lld srv=%lld %s %ld..%ld s=%.0fdBm%s%s ptt=%s | "
                 "conn=%u close=%u send=%u echo=%u recon=%u rej=%u unk=%u%s%s",
-                L[st.link], (long long)st.f_display, (long long)st.f_server,
+                radio_link_name(), L[st.link],
+                (long long)st.f_display, (long long)st.f_server,
                 st.mode, (long)st.filt_lo, (long)st.filt_hi,
-                (double)st.smeter_dbm, st.slice_locked ? " LOCK" : "",
+                (double)st.smeter_dbm, st.slice_locked ? " LOCK" : "", memtag,
                 ptt_state_name((ptt_state_t)st.ptt_state),
                 (unsigned)st.connects, (unsigned)st.closes,
                 (unsigned)st.sends, (unsigned)st.echoes,
