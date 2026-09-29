@@ -163,6 +163,28 @@ the range in `radio_get_status()`.
       - [x] a first `icom` release (1.7.0), offered in the radio chooser;
       - [ ] through a computer: wfview's server speaks the same protocol, so
         the same client should reach a USB-connected radio behind a PC.
+- [ ] **FlexRadio direct, as a MultiFlex station.** A firmware of its own
+      (`VFO_RADIO=flex`) that talks to a FLEX-6000/8000 itself, with no
+      AetherSDR or SmartSDR in between: the radio's own API, TCP 4992 on the
+      LAN, and the knob one of the stations sharing the radio -- another
+      SmartSDR or AetherSDR client beside it. It should:
+      - hold its own slice and tune only that, never another station's;
+      - know who holds transmit: refuse PTT with that as the reason ("TX:
+        other station") rather than the generic refusal, and show it on the
+        face while the other station is keyed;
+      - treat another station keying as normal. Today a key confirmation in
+        IDLE is read as "someone else keyed our radio" and raises the alarm
+        (`ptt_fsm`);
+      - play only its own slice's audio, and send its own microphone.
+      To find out first:
+      - what registering as a station takes (a client of its own, owning
+        slices, as SmartSDR is), and how many the radio allows at once;
+      - what the radio reports of the other stations: their slices, and which
+        of them transmits;
+      - audio with no computer: the radio's remote audio streams are Opus, and
+        the svxconnect firmware already runs Opus on the knob, both ways;
+      - SmartLink, for a radio away from home: its account login and TLS
+        relay are a much bigger job than the LAN. The LAN first.
 
 ## Known hardware quirks
 
