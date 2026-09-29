@@ -1,0 +1,29 @@
+{
+  "firmwares": [
+    {
+      "radio": "aethersdr",
+      "name": "AetherSDR",
+      "version": "1.9.0"
+    },
+    {
+      "radio": "icom",
+      "name": "Icom",
+      "version": "1.9.0"
+    },
+    {
+      "radio": "multiflex",
+      "name": "FlexRadio",
+      "version": "1.9.0"
+    },
+    {
+      "radio": "svxconnect",
+      "name": "SvxLink",
+      "version": "1.8.0"
+    },
+    {
+      "radio": "setup",
+      "name": "Setup",
+      "version": "1.10.0"
+    }
+  ]
+}
