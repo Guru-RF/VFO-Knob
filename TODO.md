@@ -174,28 +174,33 @@ the range in `radio_get_status()`.
         IC-705 and the IC-7610;
       - [ ] through a computer: wfview's server speaks the same protocol, so
         the same client should reach a USB-connected radio behind a PC.
-- [ ] **FlexRadio direct, as a MultiFlex station.** A firmware of its own
-      (`VFO_RADIO=flex`) that talks to a FLEX-6000/8000 itself, with no
+- [ ] **FlexRadio direct, as a MultiFlex station.** A firmware of its own,
+      `multiflex` (`VFO_RADIO=multiflex`, `components/flex_client`, the
+      Maestro's colours), that talks to a FLEX-6000/8000 itself, with no
       AetherSDR or SmartSDR in between: the radio's own API, TCP 4992 on the
-      LAN, and the knob one of the stations sharing the radio -- another
-      SmartSDR or AetherSDR client beside it. It should:
-      - hold its own slice and tune only that, never another station's;
-      - know who holds transmit: refuse PTT with that as the reason ("TX:
-        other station") rather than the generic refusal, and show it on the
-        face while the other station is keyed;
-      - treat another station keying as normal. Today a key confirmation in
-        IDLE is read as "someone else keyed our radio" and raises the alarm
-        (`ptt_fsm`);
-      - play only its own slice's audio, and send its own microphone.
-      To find out first:
-      - what registering as a station takes (a client of its own, owning
-        slices, as SmartSDR is), and how many the radio allows at once;
-      - what the radio reports of the other stations: their slices, and which
-        of them transmits;
-      - audio with no computer: the radio's remote audio streams are Opus, and
-        the svxconnect firmware already runs Opus on the knob, both ways;
-      - SmartLink, for a radio away from home: its account login and TLS
-        relay are a much bigger job than the LAN. The LAN first.
+      LAN. Tried against a FLEX-6600 on SmartSDR 4.2.20.
+      - [x] a station of its own (`client gui`, its id kept so the radio gives
+        its slice back), tuning only its own slice; its own transmit settings,
+        which the radio keeps per station;
+      - [x] or, chosen on the dial at boot, the dial and PTT for a station
+        already there (`client bind`): its active slice followed, its PTT and
+        its microphone, no audio on the knob;
+      - [x] Opus both ways: the radio's 10 ms CELT frames in, the microphone
+        out in mono (the uncompressed stream, 1.4 Mbit/s, crackled on WiFi);
+      - [x] PTT through the interlock, refused with the reason -- out of band,
+        or another station on the air -- and another station keying shown,
+        never unkeyed;
+      - [x] TUNE, ATU and the tuner's MEM on the swipe;
+      - [x] a first release (1.9.0), offered in the radio chooser;
+      - [ ] as the dial for a station, what the radio does when the knob
+        loses power mid-over: the station is still there, so it may stay
+        keyed (key from the knob into a dummy load, pull the knob's power);
+      - [ ] finding the radio by its discovery broadcast, for a radio on the
+        same subnet (it is given by its IP address for now);
+      - [ ] SmartLink, for a radio away from home: its account login and TLS
+        relay are a much bigger job than the LAN;
+      - [ ] the radio's memory channels, and its receive antennas on the
+        swipe (`rx_ant_list`).
 
 ## Known hardware quirks
 

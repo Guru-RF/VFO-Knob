@@ -1,7 +1,7 @@
 # VFO-Knob
 
-A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR)
-and the Icom IC-705, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
+A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
+FlexRadio and the Icom IC-705, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
 over WiFi. And, with its own firmware, a talkgroup knob for SvxLink reflectors.
 
@@ -24,7 +24,14 @@ knob follows; turn the knob and the desktop moves.
 With an **IC-705** it talks to the radio itself, over WiFi, in Icom's network
 protocol — the one RS-BA1 and wfview use — with receive and transmit audio,
 so knob and radio are a complete station with no computer in between. Its face
-wears Icom's colours, so which radio a knob is for shows at a glance.
+wears Icom's colours, so which radio a knob is for shows at a glance. The same
+firmware knows the IC-7610 — MAIN or SUB and its antennas on a swipe — though
+it has not yet been tried on one.
+
+With a **FlexRadio** it is one of the radio's MultiFlex stations, over the
+radio's own API: a station of its own, with Opus audio both ways, or the dial
+and PTT for a SmartSDR, AetherSDR or Maestro station already on the radio. In
+the Maestro's colours. See [FlexRadio](#flexradio-multiflex).
 
 With the **svxconnect** firmware there is no radio at all: the knob is an
 [SvxLink](https://www.svxlink.org/) reflector client over WiFi, in the style of
@@ -42,8 +49,8 @@ the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 | **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
-| **Mode / filter / RIT** | Tap to open, turn to choose, tap anywhere to accept. |
-| **AGC / gain** | Either side of the S-meter's reading, edited the same way: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on AetherSDR, greyed out until AetherSDR's TCI can carry it. |
+| **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
+| **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705, swipe down for memory mode: the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). Swipe down again for the VFO, simplex. |
 | **Network** | Hold a finger on the meter arc for the knob's addresses; tap the card to put it away. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
@@ -154,6 +161,42 @@ WiFi from wherever your network puts it. Let both in once, e.g.
 `sudo ufw allow proto tcp from 192.168.1.0/24 to any port 50001` with your own
 LAN's range for WiFi.
 
+## FlexRadio (MultiFlex)
+
+The multiflex firmware (`vfo-knob-multiflex`) talks to a FLEX-6000 or
+FLEX-8000 itself, over the radio's own API on the LAN — no SmartSDR, no
+AetherSDR, no computer. The knob is one of the radio's MultiFlex stations,
+beside SmartSDR, AetherSDR or a Maestro, in the Maestro's colours.
+
+<p align="center">
+  <img src="docs/display-multiflex.svg" width="320" alt="The multiflex face: S9+20 on 20 m, 14.200.00 USB with a 2700 Hz filter, AGC MED and RF.G +8 dB, in the Maestro's blue">
+</p>
+
+At boot the knob looks at who is already on the radio and, if anyone is, asks
+on the dial what to be:
+
+- **STATION OWN** — a station of its own. Its own slice, which the radio gives
+  back where it was after a restart; its own audio both ways, as Opus over
+  WiFi, so the speaker and the built-in microphone are the station; and its
+  own transmit settings, which leave the other stations' alone.
+- **DIAL FOR** *station* — the dial and PTT for a station already there, like
+  a FlexControl on its computer. The knob works that station's active slice,
+  and follows when its operator clicks another; PTT keys that station's
+  transmitter, with that station's microphone. The knob plays no audio.
+
+The last choice is offered first, and taken after 30 s without an answer. With
+nobody else on the radio the knob does not ask.
+
+| | |
+|---|---|
+| **The dial** | Tunes the slice. Mode, filter, AGC, RIT and RF.G — the panadapter's RF gain, which the radio's API carries — are edited as on the other radios. |
+| **Swipe down** | **TUNE**, a carrier at the tune power, for an external tuner or to check SWR — PTT stops it, and it stops by itself after 30 s. **ATU**, one cycle of the radio's tuner. **MEM**, the tuner's memories, lit when on; a tap switches them and the menu stays. The menu opens on MEM: TUNE and ATU are a turn away. |
+| **PTT** | Refused with the reason when the radio will not transmit here: out of band, or another station on the air. |
+
+The radio is given by its IP address on the configuration page, and MultiFlex
+must be enabled on it. Finding the radio by its discovery broadcast, and
+SmartLink for a radio away from home, are still to come.
+
 ## SvxLink reflectors
 
 The svxconnect firmware (`vfo-knob-svxconnect`) turns the knob into a node on
@@ -240,7 +283,7 @@ confirmation is tied to the same "this boot looks healthy" timer that clears the
 boot-loop guard.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom` and `vfo-knob-svxconnect` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-multiflex` and `vfo-knob-svxconnect` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -272,9 +315,12 @@ idf.py -B build_icom -D VFO_RADIO=icom \
        build flash
 ```
 
-So is the svxconnect firmware:
+So are the multiflex and the svxconnect firmwares:
 
 ```sh
+idf.py -B build_multiflex -D VFO_RADIO=multiflex \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.multiflex" \
+       build flash
 idf.py -B build_svxconnect -D VFO_RADIO=svxconnect \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.svxconnect" \
        build flash
@@ -319,7 +365,12 @@ The knob keys a transmitter. Two things are worth knowing:
   link or the computer does not. The knob no longer keeps a second one.
 - **A client that loses power while keyed cannot unkey itself.** No firmware on
   this device can fix that; the server has to notice. Filed upstream as
-  [aethersdr#5985](https://github.com/aethersdr/AetherSDR/issues/5985).
+  [aethersdr#5985](https://github.com/aethersdr/AetherSDR/issues/5985). On a
+  FlexRadio the knob as a station of its own is safe from this: the radio stops
+  a station's transmission when it leaves. As the dial for another station it
+  is not — that station is still there — so try it before relying on it: key
+  from the knob, pull its power, and see what the radio does. The radio's
+  transmit time-out is the backstop.
 
 ## Hardware
 
