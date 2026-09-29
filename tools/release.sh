@@ -107,6 +107,9 @@ cat "$DIR/manifest.json"
 
 echo "==> publishing to the firmware branch"
 TMP=$(mktemp -d)
+# Always hand the branch back: a worktree left holding it made the next
+# radio's release fail ("'firmware' is already used by worktree").
+trap 'git worktree remove --force "$TMP/wt" >/dev/null 2>&1 || true; rm -rf "$TMP"' EXIT
 cp "$DIR/manifest.json" "$DIR/$OUT" "$TMP/"
 git fetch origin firmware:firmware 2>/dev/null || true
 if git rev-parse --verify firmware >/dev/null 2>&1; then
@@ -118,9 +121,36 @@ else
 fi
 mkdir -p "$TMP/wt/$DIR"
 cp "$TMP/manifest.json" "$TMP/$OUT" "$TMP/wt/$DIR/"
+
+# Every firmware published, with its name and version: what the setup
+# firmware offers. Read from the server, not built in, so a setup firmware
+# made before a radio's first release still offers it. Rebuilt from the
+# manifests on the branch; a new radio gets its name here.
+python3 - "$TMP/wt/firmware" <<'PY'
+import glob, json, os, sys
+root = sys.argv[1]
+NAMES = {"aethersdr": "AetherSDR", "icom": "Icom", "multiflex": "FlexRadio",
+         "svxconnect": "SvxLink", "setup": "Setup"}
+order = list(NAMES)
+out = []
+for m in glob.glob(os.path.join(root, "*", "manifest.json")):
+    radio = os.path.basename(os.path.dirname(m))
+    out.append({"radio": radio, "name": NAMES.get(radio, radio),
+                "version": json.load(open(m))["version"]})
+out.sort(key=lambda f: (order.index(f["radio"]) if f["radio"] in order else len(order), f["radio"]))
+with open(os.path.join(root, "index.json"), "w") as f:
+    json.dump({"firmwares": out}, f, indent=2)
+    f.write("\n")
+PY
+cat "$TMP/wt/firmware/index.json"
+
 git -C "$TMP/wt" add firmware
 git -C "$TMP/wt" commit -q -m "firmware $VER for $RADIO"
-git -C "$TMP/wt" push -u origin firmware
-git worktree remove --force "$TMP/wt"
-rm -rf "$TMP"
+# GitHub's SSH port times out from here now and then: try again rather than
+# leave the release half made.
+for try in 1 2 3 4 5; do
+    git -C "$TMP/wt" push -u origin firmware && break
+    [ "$try" = 5 ] && { echo "push failed; the commit waits on the local firmware branch" >&2; exit 1; }
+    sleep 20
+done
 echo "==> published; $RADIO knobs will see $VER within their check interval"
