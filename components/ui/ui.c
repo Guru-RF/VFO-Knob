@@ -9,6 +9,8 @@
 #include "esp_heap_caps.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -3186,6 +3188,130 @@ void ui_cycle_rotation(void)
 }
 
 uint8_t ui_rotation(void) { return s_rot; }
+
+/* --- screenshot ------------------------------------------------------------
+ * The face rendered again into a buffer of our own, not read back from the
+ * panel (which cannot be read) nor from LVGL's pool (a frame is 259 kB; the
+ * pool has a few tens). Rendered from the screen object, so it is upright
+ * whatever the panel's rotation. All of it in PSRAM: internal RAM is for DMA
+ * and the tasks that cannot wait, and a picture can -- the one thing taken
+ * from internal RAM is the semaphore that says the render is done. */
+
+static void b64_line(const uint8_t *in, size_t n)
+{
+    static const char T[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    char out[4 * ((57 + 2) / 3) + 1];
+    size_t o = 0;
+    for (size_t i = 0; i < n; i += 3) {
+        const uint32_t v = (uint32_t)in[i] << 16 |
+                           (i + 1 < n ? (uint32_t)in[i + 1] << 8 : 0) |
+                           (i + 2 < n ? (uint32_t)in[i + 2] : 0);
+        out[o++] = T[(v >> 18) & 63];
+        out[o++] = T[(v >> 12) & 63];
+        out[o++] = i + 1 < n ? T[(v >> 6) & 63] : '=';
+        out[o++] = i + 2 < n ? T[v & 63] : '=';
+    }
+    out[o] = '\0';
+    printf("SNAP:%s\n", out);
+}
+
+typedef struct {
+    lv_draw_buf_t     buf;
+    lv_result_t       r;
+    SemaphoreHandle_t done;
+} snap_job_t;
+
+/* On the LVGL task, from lv_async_call. */
+static void snap_job(void *arg)
+{
+    snap_job_t *job = arg;
+    job->r = lv_snapshot_take_to_draw_buf(lv_screen_active(),
+                                          LV_COLOR_FORMAT_RGB565, &job->buf);
+    xSemaphoreGive(job->done);
+}
+
+uint16_t *ui_snapshot(uint32_t *out_w, uint32_t *out_h)
+{
+    if (!s_disp) return NULL;
+    const uint32_t w = BOARD_LCD_H_RES, h = BOARD_LCD_V_RES;
+    const uint32_t stride = lv_draw_buf_width_to_stride(w, LV_COLOR_FORMAT_RGB565);
+    const uint32_t size = stride * h;
+    uint8_t *mem = heap_caps_malloc(size + LV_DRAW_BUF_ALIGN, MALLOC_CAP_SPIRAM);
+    if (!mem) {
+        ESP_LOGE(TAG, "snapshot: no memory");
+        return NULL;
+    }
+
+    /* Rendered on the LVGL task, not here. A snapshot draws the whole face,
+     * and the tasks that ask for one -- the console, the web server -- have
+     * stacks sized for their own work, not for LVGL's renderer; the LVGL task
+     * has. The job lives on the heap: if it ever outlasts the wait it is
+     * left to finish into memory nobody will free, rather than into a stack
+     * frame that has gone. */
+    snap_job_t *job = heap_caps_calloc(1, sizeof *job, MALLOC_CAP_SPIRAM);
+    if (!job || lv_draw_buf_init(&job->buf, w, h, LV_COLOR_FORMAT_RGB565, stride,
+                                 lv_draw_buf_align(mem, LV_COLOR_FORMAT_RGB565),
+                                 size) != LV_RESULT_OK ||
+        !(job->done = xSemaphoreCreateBinary())) {
+        heap_caps_free(job);
+        heap_caps_free(mem);
+        return NULL;
+    }
+    job->r = LV_RESULT_INVALID;
+    bool queued = false;
+    if (lvgl_port_lock(500)) {
+        queued = lv_async_call(snap_job, job) == LV_RESULT_OK;
+        lvgl_port_unlock();
+    }
+    if (!queued || xSemaphoreTake(job->done, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        ESP_LOGE(TAG, "snapshot %s", queued ? "timed out" : "not queued");
+        if (!queued) {
+            vSemaphoreDelete(job->done);
+            heap_caps_free(job);
+            heap_caps_free(mem);
+        }
+        return NULL;
+    }
+    const lv_result_t r = job->r;
+    const uint8_t *data = job->buf.data;
+    vSemaphoreDelete(job->done);
+    heap_caps_free(job);
+    if (r != LV_RESULT_OK) {
+        heap_caps_free(mem);
+        ESP_LOGE(TAG, "snapshot failed");
+        return NULL;
+    }
+    /* Close up the rows to the start of the allocation, so the caller gets
+     * plain w*h pixels and one pointer to free. Forward is safe: each row
+     * moves towards the start, never past a row not yet moved. */
+    for (uint32_t y = 0; y < h; y++)
+        memmove(mem + y * w * 2, data + y * stride, w * 2);
+    *out_w = w;
+    *out_h = h;
+    return (uint16_t *)mem;
+}
+
+esp_err_t ui_screenshot(void)
+{
+    uint32_t w, h;
+    uint16_t *px = ui_snapshot(&w, &h);
+    if (!px) return ESP_FAIL;
+
+    /* 57 bytes a line: 76 base64 characters, short enough that a line from
+     * another task's log landing in between costs nothing. */
+    printf("VFO-SNAP-BEGIN %u %u RGB565\n", (unsigned)w, (unsigned)h);
+    const uint8_t *b = (const uint8_t *)px;
+    for (uint32_t y = 0; y < h; y++) {
+        const uint8_t *row = b + y * w * 2;
+        for (uint32_t x = 0; x < w * 2; x += 57)
+            b64_line(row + x, (w * 2 - x) < 57 ? (w * 2 - x) : 57);
+    }
+    printf("VFO-SNAP-END\n");
+    fflush(stdout);
+    heap_caps_free(px);
+    return ESP_OK;
+}
 
 int32_t ui_take_step_request(void) { int32_t v = s_step_req; s_step_req = 0; return v; }
 bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false; return v; }

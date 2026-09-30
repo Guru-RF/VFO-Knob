@@ -465,6 +465,10 @@ cmake -S test/host -B build_host && cmake --build build_host && (cd build_host &
 `tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
 paths without a radio.
 
+`tools/snap.py` takes a screenshot of the face as a PNG, over the serial
+console of a WiFi-only build (`x` there); the USB build has no console, so its
+configuration page serves the same picture at `/api/screenshot`, as a BMP.
+
 To try the face's touch with nothing keyed, `-D VFO_PTT_DRY_RUN=1` builds an
 image whose PTT taps are only logged, never sent to the radio; its slab reads
 **PTT TEST**. Never for a release.

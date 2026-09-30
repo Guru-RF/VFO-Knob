@@ -262,4 +262,16 @@ bool ui_ask_knob_moved(void);
 void    ui_cycle_rotation(void);
 uint8_t ui_rotation(void);
 
+/* Print the face as it is drawn -- upright, as the operator sees it -- to
+ * stdout, framed for tools/snap.py: a "VFO-SNAP-BEGIN <w> <h> RGB565" line,
+ * the pixels as base64 lines prefixed "SNAP:", and "VFO-SNAP-END". Read-only;
+ * safe to ask for at any time. */
+esp_err_t ui_screenshot(void);
+
+/* The same picture as pixels: w*h RGB565, row-major, upright, in PSRAM. The
+ * caller frees it with heap_caps_free(). NULL if it could not be taken. For
+ * the configuration page's /api/screenshot, which works in the USB build,
+ * where there is no console to print to. */
+uint16_t *ui_snapshot(uint32_t *w, uint32_t *h);
+
 #endif /* VFO_UI_H */
