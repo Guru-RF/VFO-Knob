@@ -96,6 +96,45 @@ Step`) so a client need not hard-code one radio's steps; and for
 then a few lines in `tci_client.c`: `radio_set_gain()`, and `have_gain` with
 the range in `radio_get_status()`.
 
+## Radios
+
+Ticked once the knob has worked with the radio itself, not only built for it.
+
+**Icom**, the icom firmware, over the radio's own LAN:
+- [x] IC-705
+- [ ] IC-7610 — in the icom firmware (MAIN/SUB and the antennas on the
+      swipe), not yet tried on one
+- [ ] IC-7760
+- [ ] IC-9700
+- [ ] IC-R8600 — a receiver: no PTT
+- [ ] IC-7300 MK2
+
+**Yaesu**, through the YAESU SCU-LAN10 interface, which these need:
+- [ ] FT-710
+- [ ] FTdx10
+- [ ] FTdx101 (D or MP)
+
+**Kenwood**
+- [ ] TS-890
+
+**Elecraft**
+- [ ] K4
+
+**Xiegu**, the xiegu firmware, through the wfview server built into the radio:
+- [ ] X6100 — control works (radio on APP 1.2.0, the newest); receive
+      audio does not. Its WFSERVER (wfview's server; it says so at login)
+      stops sending audio after anything from 0.4 s to 39 s and often never
+      recovers, even in a new session. Measured from a PC with a prototype
+      client: sooner at 24 kHz, the knob's rate, than at 48 kHz; sooner with
+      silence streamed back to it; no help from a longer latency or from
+      answering its resend requests as wfview does. Next: the radio on a
+      wired USB-C Ethernet adapter instead of its WiFi. If that holds, the
+      firmware should ask for 48 kHz and halve it for the knob's output.
+- [ ] X6200 — said to behave the same
+
+wfview's source (`src/radio/`) speaks the Yaesu (SCU-LAN10) and Kenwood
+network protocols as well as Icom's: a reference for those clients.
+
 ## Firmware
 
 - [ ] **Endurance soak.** Nothing has run for 24 h. Watch free internal heap,
