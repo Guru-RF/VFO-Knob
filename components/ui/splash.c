@@ -247,7 +247,8 @@ void ui_updating_show(void)
     lvgl_port_unlock();
 }
 
-void ui_updating_reboot(void)
+/* The update screen for a restart: a title, the refresh sign, a line. */
+static void restart_screen(const char *title, const char *msg, lv_color_t color)
 {
     /* The lock held across the whole of it, and for longer: ui_updating_show()
      * gives up after 200 ms without it and builds nothing, and writing into
@@ -257,14 +258,25 @@ void ui_updating_reboot(void)
     if (!lvgl_port_lock(1000)) return;
     ui_updating_show();
     if (s_upd_title) {
-        lv_label_set_text(s_upd_title, "REBOOTING");
+        lv_label_set_text(s_upd_title, title);
         lv_obj_align(s_upd_title, LV_ALIGN_CENTER, 0, -62);
         lv_label_set_text(s_upd_pct, LV_SYMBOL_REFRESH);
         lv_obj_align(s_upd_pct, LV_ALIGN_CENTER, 0, -6);
-        lv_label_set_text(s_upd_msg, "into update mode");
+        lv_label_set_text(s_upd_msg, msg);
+        lv_obj_set_style_text_color(s_upd_msg, color, 0);
         lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
     }
     lvgl_port_unlock();
+}
+
+void ui_updating_reboot(void)
+{
+    restart_screen("REBOOTING", "into update mode", lv_color_hex(0xFF9A3C));
+}
+
+void ui_switching(const char *radio)
+{
+    restart_screen("SWITCHING TO", radio ? radio : "", lv_color_hex(0xFFFFFF));
 }
 
 void ui_updating_progress(int percent)

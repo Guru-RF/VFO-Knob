@@ -32,6 +32,24 @@ void    net_prov_save_audio(uint8_t volume, uint8_t mic_gain);
 
 esp_err_t net_prov_init(void);
 
+/* The radios the knob knows -- up to NET_PROV_RADIOS, each firmware its own
+ * list -- and the one in use, whose endpoint is the configuration's: the
+ * client starts with it at boot. Choosing another (a swipe up, or the page)
+ * takes effect on the next boot; the caller restarts the knob for that. */
+#define NET_PROV_RADIOS 4
+typedef struct {
+    char     name[24];         /* on the dial; "" = its host */
+    char     host[64];
+    uint16_t port;
+    char     user[33];
+    char     pass[33];
+} net_radio_t;
+int       net_prov_radio_count(void);
+int       net_prov_radio_active(void);
+bool      net_prov_radio_get(int i, net_radio_t *out);
+esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active);
+esp_err_t net_prov_radio_activate(int i);
+
 /* Written by the HTTP configuration page. Takes effect on the next boot: the
  * transport is chosen once at startup and the TCI client has no restart path. */
 esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg);

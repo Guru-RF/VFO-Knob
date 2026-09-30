@@ -45,6 +45,9 @@ label.chk input{width:auto;margin:0}
 button.show,button.show:active{position:absolute;right:4px;top:50%;transform:translateY(-50%);
   margin:0;padding:3px 10px;background:transparent;color:var(--accent);font-size:12px}
 @media(max-width:520px){.grid{grid-template-columns:1fr}}
+.sdr{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:4px}
+.sdrrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sdrres{margin-top:14px}
 </style>
 </head>
 <body><div class="wrap">
@@ -63,6 +66,13 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
 
 <section id="radiosec">
   <h2 id="rtitle">Radio</h2>
+  <div id="rlist"></div>
+  <button id="radd" class="ghost" type="button" hidden>Add a radio</button>
+  <p class="note" id="rlistnote" hidden>Up to four. A swipe up on the knob
+     chooses another, and the knob restarts into it; here, <b>In use</b> takes
+     effect when the knob next starts. Over the USB cable there is no
+     choosing: the cable reaches one computer, or one radio.</p>
+  <div id="rsingle">
   <div class="grid">
     <div><label for="host"><span id="hostlbl">Host (IP, or a name ending .local)</span><button id="myip" type="button"
          class="pill up" title="Use this computer's address" hidden></button></label>
@@ -73,6 +83,7 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
     <div><label>User name</label><input id="ruser" autocomplete="off"></div>
     <div><label>Password</label><input id="rpass" type="password"
          placeholder="unchanged" autocomplete="new-password"></div>
+  </div>
   </div>
   <p class="note" id="icomnote" hidden>The radio's own network user. On the
      IC-705: <b>MENU &raquo; SET &raquo; WLAN Set &raquo; Remote Settings</b> &mdash;
@@ -97,6 +108,24 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      its SRV record says which host and port to use (<b>be.svx.link</b> is
      <b>reflector.be.svx.link:5300</b>). The port counts only for a name
      without one. Changes here apply on the knob's next boot.</p>
+</section>
+
+<section id="sdrsec" hidden>
+  <h2 id="sdr">Web SDRs</h2>
+  <div id="sdrlist"></div>
+  <button id="sdradd" class="ghost" type="button">Add a receiver</button>
+  <p class="note">A second receiver beside the radio, following its frequency
+     and mode: a KiwiSDR, a Web-888, or an UberSDR through its Kiwi input. On
+     the knob, swipe down and turn to <b>LOCAL</b> or a receiver, then tap.
+     With one playing, the radio is in the left ear and the SDR in the right,
+     both brought to the same loudness; <b>BALANCE</b>, first on the swipe from
+     the left, fades from one to the other. Its S-meter is the thin blue line
+     outside the radio's, its reading the blue one under the radio's. The SDR
+     is silent while you transmit.</p>
+  <p class="note">The address is the receiver's own, with its port &mdash;
+     <b>host:8073</b> on most KiwiSDRs &mdash; not an https:// link through a
+     proxy or a tunnel. The time-limit password, where a receiver has one,
+     exempts you from its session limit. Saved with <b>Save</b> below.</p>
 </section>
 
 <section id="svxstation" hidden>
@@ -309,8 +338,162 @@ async function load(){
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
   $('hostusb').hidden = lan || SVX || flex || !(c.client && c.client_usb);
+  /* A list of radios, one in use, for all but the reflector's firmware. */
+  LIST = !SVX && c.radio !== 'setup'; LAN = lan;
+  HOSTLBL = flex || xiegu ? "The radio's IP address" : 'Host (IP, or a name ending .local)';
+  $('rsingle').hidden = LIST;
+  if (LIST) { $('rlogin').hidden = true; rigsLoad(); }
+  sdrLoad();
+}
+
+/* ---- the radios: one in use, a swipe up on the knob for another ---- */
+let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, HOSTLBL='Host';
+async function rigsLoad(){
+  let s; try{ const r=await fetch('/api/radios',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
+  RIGS=s.list.map((x,i)=>({name:x.name,host:x.host,port:String(x.port),user:x.user,pass:'',
+                            hasPass:x.pass,clrPass:false,was:i,host0:x.host,port0:String(x.port)}));
+  RIG_USE=s.sel; rigsDirty=false; rigsRender();
+}
+function rigsRender(){
+  const L=$('rlist'); L.innerHTML='';
+  RIGS.forEach((x,i)=>{
+    const d=document.createElement('div'); d.className='sdr';
+    d.innerHTML=`<label class="chk"><input type="radio" name="ruse"${i===RIG_USE?' checked':''}> In use</label>
+      <div class="grid">
+      <div><label>Name, on the knob</label><input data-k="name" maxlength="15" placeholder="its address"></div>
+      <div><label>${HOSTLBL}${myIp?` <button type="button" class="pill up" data-myip>my IP ${esc(myIp)}</button>`:''}</label>
+        <input data-k="host" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      <div><label>Port</label><input data-k="port" inputmode="numeric"></div>
+      ${LAN?`<div><label>User name</label><input data-k="user" autocomplete="off" autocapitalize="none"></div>
+      <div><label>Password${x.hasPass?' <button type="button" class="pill down" data-clr>clear</button>':''}</label>
+        <div class="pw"><input data-k="pass" type="password" autocomplete="new-password" autocapitalize="none"
+         autocorrect="off" spellcheck="false"><button type="button" class="show">Show</button></div></div>`:''}
+      </div>
+      <div class="sdrrow"><button type="button" class="ghost" data-act="rm"${RIGS.length<2?' hidden':''}>Remove</button></div>`;
+    for(const inp of d.querySelectorAll('input[data-k]')){
+      const k=inp.dataset.k; inp.value=x[k];
+      inp.oninput=()=>{ x[k]=inp.value; rigsDirty=true; if(k==='host'||k==='port') pwHint(d,x) };
+    }
+    pwHint(d,x);
+    d.querySelector('input[name=ruse]').onchange=()=>{ RIG_USE=i; rigsDirty=true };
+    for(const b of d.querySelectorAll('button.show')) b.onclick=()=>{
+      const p=b.previousElementSibling, s=p.type==='password'; p.type=s?'text':'password'; b.textContent=s?'Hide':'Show'; p.focus() };
+    for(const b of d.querySelectorAll('[data-clr]')) b.onclick=()=>{ x.hasPass=false; x.clrPass=true; rigsDirty=true; rigsRender() };
+    for(const b of d.querySelectorAll('[data-myip]')) b.onclick=()=>{ x.host=myIp; rigsDirty=true; rigsRender() };
+    d.querySelector('[data-act=rm]').onclick=()=>{
+      RIGS.splice(i,1); RIG_USE=RIG_USE===i?0:RIG_USE>i?RIG_USE-1:RIG_USE; rigsDirty=true; rigsRender() };
+    L.appendChild(d);
+  });
+  $('radd').hidden=RIGS.length>=4; $('rlistnote').hidden=false;
+}
+$('radd').onclick=()=>{
+  RIGS.push({name:'',host:'',port:(RIGS[0]&&RIGS[0].port)||'50001',user:'',pass:'',
+               hasPass:false,clrPass:false,was:-1});
+  rigsDirty=true; rigsRender();
+  const all=$('rlist').querySelectorAll('input[data-k=host]'); all[all.length-1].focus();
+};
+/* A password goes along only when typed, or cleared: otherwise the knob keeps
+   the one it has for that radio, at that address. */
+async function rigsSave(){
+  if(!LIST||!RIGS||!rigsDirty) return '';
+  const b=new URLSearchParams(); b.append('n',RIGS.length); b.append('use',RIG_USE);
+  RIGS.forEach((x,i)=>{ b.append('name'+i,x.name.trim()); b.append('host'+i,x.host.trim());
+    b.append('port'+i,x.port); b.append('user'+i,x.user); b.append('was'+i,x.was);
+    if(x.pass||x.clrPass) b.append('pass'+i,x.pass) });
+  const r=await fetch('/api/radios',{method:'POST',body:b});
+  return r.ok ? '' : await r.text();
+}
+
+/* ---- web SDRs, beside the radio: the Icom, Xiegu and FlexRadio firmwares ---- */
+let SDRS=null, sdrDirty=false;
+async function sdrLoad(){
+  let s; try{ const r=await fetch('/api/sdr',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
+  $('sdrsec').hidden=false;
+  SDRS=s.list.map((x,i)=>({name:x.name,host:x.host+(x.port?':'+x.port:''),pass:'',ipl:'',
+                          hasPass:x.pass,hasIpl:x.ipl,clrPass:false,clrIpl:false,was:i}));
+  for(const x of SDRS) x.host0=x.host;
+  sdrDirty=false; sdrRender();
+}
+const LOGIN={ok:'logged in','wrong password':'wrong password',busy:'all its channels are in use',
+             refused:'the login refused','no answer':'no answer to the login',
+             'no apps':'its owner lets no apps listen, only browsers: it would cut the knob off after 10 s'};
+function sdrRender(){
+  const L=$('sdrlist'); L.innerHTML='';
+  const pwf=(k,label,has)=>`<div><label>${label}${has?` <button type="button" class="pill down" data-clr="${k}">clear</button>`:''}</label>
+    <div class="pw"><input data-k="${k}" type="password" autocomplete="new-password" autocapitalize="none"
+     autocorrect="off" spellcheck="false"><button type="button" class="show">Show</button></div></div>`;
+  SDRS.forEach((x,i)=>{
+    const d=document.createElement('div'); d.className='sdr';
+    d.innerHTML=`<div class="grid">
+      <div><label>Name, on the knob</label><input data-k="name" maxlength="15" placeholder="its address"></div>
+      <div><label>Address</label><input data-k="host" placeholder="host:8073" autocapitalize="none"
+           autocorrect="off" spellcheck="false"></div>
+      ${pwf('pass','Password',x.hasPass)}${pwf('ipl','Time-limit password',x.hasIpl)}</div>
+      <div class="sdrrow"><button type="button" class="ghost" data-act="test">Test</button>
+      <button type="button" class="ghost" data-act="rm">Remove</button><span class="sdrres note"></span></div>`;
+    for(const inp of d.querySelectorAll('input[data-k]')){
+      const k=inp.dataset.k; inp.value=x[k];
+      inp.oninput=()=>{ x[k]=inp.value; sdrDirty=true; if(k==='host') pwHint(d,x) };
+    }
+    pwHint(d,x);
+    for(const b of d.querySelectorAll('button.show')) b.onclick=()=>{
+      const p=b.previousElementSibling, s=p.type==='password'; p.type=s?'text':'password'; b.textContent=s?'Hide':'Show'; p.focus() };
+    for(const b of d.querySelectorAll('[data-clr]')) b.onclick=()=>{
+      if(b.dataset.clr==='pass'){ x.hasPass=false; x.clrPass=true } else { x.hasIpl=false; x.clrIpl=true }
+      sdrDirty=true; sdrRender() };
+    const res=d.querySelector('.sdrres');
+    d.querySelector('[data-act=rm]').onclick=()=>{ SDRS.splice(i,1); sdrDirty=true; sdrRender() };
+    d.querySelector('[data-act=test]').onclick=()=>sdrTest(x,res);
+    L.appendChild(d);
+  });
+  $('sdradd').hidden=SDRS.length>=4;
+}
+$('sdradd').onclick=()=>{
+  SDRS.push({name:'',host:'',pass:'',ipl:'',hasPass:false,hasIpl:false,clrPass:false,clrIpl:false,was:-1});
+  sdrDirty=true; sdrRender();
+  const all=$('sdrlist').querySelectorAll('input[data-k=host]'); all[all.length-1].focus();
+};
+/* A password goes along only when typed, or cleared: otherwise the knob keeps
+   the one it has for that receiver. */
+function sdrPw(b,x,sfx){
+  if(x.pass||x.clrPass) b.append('pass'+sfx,x.pass);
+  if(x.ipl||x.clrIpl)   b.append('ipl'+sfx,x.ipl);
+}
+async function sdrTest(x,res){
+  const h=x.host.trim();
+  if(!h){ res.textContent='An address first'; res.style.color='var(--bad)'; return }
+  const b=new URLSearchParams({host:h,was:x.was}); sdrPw(b,x,'');
+  res.style.color='var(--dim)';
+  res.textContent=/^https:/i.test(h) ? 'An https:// address is not spoken here: trying its Kiwi port, 8073…' : 'Testing…';
+  try{
+    const r=await fetch('/api/sdr/test',{method:'POST',body:b});
+    if(!r.ok) throw new Error(await r.text());
+    const j=await r.json();
+    if(j.error){ res.textContent='\u2717 '+j.error; res.style.color='var(--bad)'; return }
+    const who=[j.name,j.sw,j.users!=='?'?`${j.users} of ${j.users_max} channels in use`:''].filter(Boolean).join(' \u00b7 ');
+    res.textContent=(j.ok?'\u2713 ':'\u2717 ')+(LOGIN[j.login]||j.login)+(who?' \u2014 '+who:'');
+    res.style.color=j.ok?'var(--ok)':'var(--bad)';
+  }catch(e){ res.textContent='The test failed: '+e.message; res.style.color='var(--bad)' }
+}
+async function sdrSave(){
+  if(!SDRS||!sdrDirty) return '';
+  const b=new URLSearchParams(); b.append('n',SDRS.length);
+  SDRS.forEach((x,i)=>{ b.append('name'+i,x.name.trim()); b.append('host'+i,x.host.trim());
+                        b.append('was'+i,x.was); sdrPw(b,x,i) });
+  const r=await fetch('/api/sdr',{method:'POST',body:b});
+  return r.ok ? '' : await r.text();
 }
 let myIp='', LINKNAME='Radio', SVX=false;
+/* A stored password is only ever sent to the address it was given for: moved
+   to another address -- a name changed to the radio's IP, say -- it has to be
+   typed again, and the box says so. */
+function pwHint(d,x){
+  const moved=x.was>=0 && (x.host.trim()!==x.host0 || (x.port0!==undefined && String(x.port).trim()!==x.port0));
+  for(const [k,had] of [['pass',x.hasPass],['ipl',x.hasIpl]]){
+    const p=d.querySelector(`input[data-k=${k}]`); if(!p) continue;
+    p.placeholder=!had?'none':moved?'again, for the new address':'unchanged';
+  }
+}
 
 /* ---- the svxconnect firmware: the station and its certificate ---- */
 const SVXF={call:'scall',email:'semail',loc:'sloc',lat:'slat',lon:'slon',sw:'ssw',
@@ -371,7 +554,8 @@ $('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
-  for(const k of ['host','port','ssid','vol','mic','user','otah','dim','blank']) b.append(k,$(k).value);
+  /* With a list of radios the one in use is saved with the list, below. */
+  for(const k of [...(LIST?[]:['host','port']),'ssid','vol','mic','user','otah','dim','blank']) b.append(k,$(k).value);
   if($('pass').value) b.append('pass',$('pass').value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);
@@ -386,6 +570,12 @@ $('save').onclick=async()=>{
     const e=await svxSave();
     if(e) say('Station not saved: '+e,false);
     else  $('msg').textContent='Saved. The knob logs in to the reflector again; the reflector itself changes on reboot.';
+  }
+  if(r.ok){
+    const e=await rigsSave();
+    if(e) say('Radios not saved: '+e,false);
+    const e2=await sdrSave();
+    if(e2) say('Web SDRs not saved: '+e2,false);
   }
   if(r.ok) $('rpass').value='';
   if(r.ok && $('webpass').value){

@@ -1,6 +1,8 @@
 #include "audio_out.h"
 #include "board_pins.h"
 
+#include <math.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -8,6 +10,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
@@ -30,6 +33,21 @@ static const char *TAG = "audio";
 
 static i2s_chan_handle_t s_tx;
 static RingbufHandle_t   s_ring;
+
+/* A second receiver: a web SDR's audio (components/sdr_rx), mono at the same
+ * 24 kHz, in a ring of its own with a longer pre-roll -- a web SDR is further
+ * away and burstier than the radio. While one plays, the radio goes to the
+ * left ear and the SDR to the right, each levelled to the same loudness, and
+ * the balance fades between them. Without one, playback is as it always was. */
+#define SDR_RING_BYTES (40 * 1024)          /* ~0.8 s of mono int16 */
+#define SDR_PREROLL    (12 * 1024)          /* 250 ms */
+#define MIX_FRAMES     240                  /* 10 ms blocks */
+static RingbufHandle_t   s_sdr_ring;
+static volatile bool     s_sdr_on, s_sdr_flush, s_sdr_mute;
+static volatile int8_t   s_balance;         /* -100 radio .. 0 split .. +100 SDR */
+static bool              s_sdr_playing;
+typedef struct { float gain; } leveler_t;
+static leveler_t         s_lv_radio = { 1.0f }, s_lv_sdr = { 1.0f };
 static volatile uint8_t  s_vol = 40;
 static volatile bool     s_playing;
 static volatile bool     s_kick, s_flush;
@@ -48,10 +66,121 @@ size_t audio_out_queued(void)
     return s_ring ? (RING_BYTES - xRingbufferGetCurFreeSize(s_ring)) / 4 : 0;
 }
 
+void audio_out_set_balance(int8_t b) { s_balance = b < -100 ? -100 : (b > 100 ? 100 : b); }
+
+void audio_out_sdr(bool on)
+{
+    if (on == s_sdr_on) return;
+    s_sdr_on = on;
+    /* What is left belongs to the session just ended. The playback task drops
+     * it: a byte ring has one reader at a time. */
+    if (!on) s_sdr_flush = true;
+}
+
+void audio_out_sdr_mute(bool mute) { s_sdr_mute = mute; }
+
+bool audio_out_feed_sdr(const int16_t *pcm, size_t n)
+{
+    if (!s_sdr_ring || !s_sdr_on || !pcm || !n) return false;
+    return xRingbufferSend(s_sdr_ring, pcm, n * 2, 0) == pdTRUE;
+}
+
+static void drain(RingbufHandle_t r)
+{
+    size_t n;
+    void  *p;
+    while ((p = xRingbufferReceiveUpTo(r, &n, 0, SIZE_MAX)))
+        vRingbufferReturnItem(r, p);
+}
+
+/* Up to `bytes` out of a byte ring, across its wrap. */
+static size_t ring_take(RingbufHandle_t r, uint8_t *dst, size_t bytes)
+{
+    size_t got = 0;
+    while (got < bytes) {
+        size_t n = 0;
+        uint8_t *p = xRingbufferReceiveUpTo(r, &n, 0, bytes - got);
+        if (!p) break;
+        memcpy(dst + got, p, n);
+        vRingbufferReturnItem(r, p);
+        got += n;
+    }
+    return got;
+}
+
+/* Each source towards the same loudness: quick to come down, slow to come
+ * back up, holding through silence, within -14 to +18 dB. */
+static void level(leveler_t *lv, float *x, int n)
+{
+    float e = 0;
+    for (int i = 0; i < n; i++) e += x[i] * x[i];
+    const float rms = sqrtf(e / n);
+    if (rms > 60.0f) {
+        float want = 3000.0f / rms;
+        if (want < 0.2f) want = 0.2f;
+        if (want > 8.0f) want = 8.0f;
+        lv->gain += (want - lv->gain) * (want < lv->gain ? 0.3f : 0.01f);
+    }
+    for (int i = 0; i < n; i++) x[i] *= lv->gain;
+}
+
+static int16_t sat16(float v) { return v > 32767.0f ? 32767 : (v < -32768.0f ? -32768 : (int16_t)v); }
+
+/* One 10 ms block of the two sources mixed, or nothing when neither plays. */
+static void mix_block(void)
+{
+    EXT_RAM_BSS_ATTR static int16_t radio[MIX_FRAMES * 2], sdr[MIX_FRAMES], out[MIX_FRAMES * 2];
+    EXT_RAM_BSS_ATTR static float   fr[MIX_FRAMES], fs[MIX_FRAMES];
+
+    const size_t rbuf = RING_BYTES - xRingbufferGetCurFreeSize(s_ring);
+    const size_t sbuf = SDR_RING_BYTES - xRingbufferGetCurFreeSize(s_sdr_ring);
+    if (!s_playing && rbuf >= PREROLL_BYTES) s_playing = true;
+    if (!s_sdr_playing && sbuf >= SDR_PREROLL) s_sdr_playing = true;
+    if (!s_playing && !s_sdr_playing) { vTaskDelay(pdMS_TO_TICKS(5)); return; }
+
+    size_t got = s_playing ? ring_take(s_ring, (uint8_t *)radio, sizeof radio) : 0;
+    if (s_playing && got < sizeof radio) { s_stats.underruns++; s_playing = false; }
+    memset((uint8_t *)radio + got, 0, sizeof radio - got);
+    got = s_sdr_playing ? ring_take(s_sdr_ring, (uint8_t *)sdr, sizeof sdr) : 0;
+    if (s_sdr_playing && got < sizeof sdr) s_sdr_playing = false;
+    memset((uint8_t *)sdr + got, 0, sizeof sdr - got);
+
+    for (int i = 0; i < MIX_FRAMES; i++) {
+        fr[i] = 0.5f * ((float)radio[2 * i] + (float)radio[2 * i + 1]);
+        fs[i] = (float)sdr[i];
+    }
+    level(&s_lv_radio, fr, MIX_FRAMES);
+    /* Not while transmitting: the SDR hears the over a second late, and from
+     * a speaker the microphone would hear it too. Its ring runs on meanwhile,
+     * so it comes back in time. */
+    if (s_sdr_mute) memset(fs, 0, sizeof fs);
+    else            level(&s_lv_sdr, fs, MIX_FRAMES);
+
+    /* 0: radio left, SDR right. Towards -100 the radio takes the right ear
+     * too, towards +100 the SDR the left: at either end one source alone. */
+    const float b  = s_balance / 100.0f;
+    const float lr = b > 0 ? 1.0f - b : 1.0f, ls = b > 0 ? b : 0.0f;
+    const float rs = b < 0 ? 1.0f + b : 1.0f, rr = b < 0 ? -b : 0.0f;
+    const float g  = s_vol / 100.0f;
+    for (int i = 0; i < MIX_FRAMES; i++) {
+        out[2 * i]     = sat16(g * (lr * fr[i] + ls * fs[i]));
+        out[2 * i + 1] = sat16(g * (rs * fs[i] + rr * fr[i]));
+    }
+    size_t written = 0;
+    i2s_channel_write(s_tx, out, sizeof out, &written, portMAX_DELAY);
+}
+
 static void play_task(void *arg)
 {
     (void)arg;
     for (;;) {
+        if (s_sdr_flush) {
+            s_sdr_flush   = false;
+            drain(s_sdr_ring);
+            s_sdr_playing = false;
+            s_lv_radio.gain = s_lv_sdr.gain = 1.0f;
+        }
+        if (s_sdr_on) { mix_block(); continue; }
         /* Pre-roll. Starting playback the instant the first bytes arrive means
          * the very next scheduling hiccup is an audible gap; waiting for a
          * cushion first costs a few tens of milliseconds once, at the start of
@@ -115,6 +244,9 @@ esp_err_t audio_out_init(void)
     s_ring = xRingbufferCreateWithCaps(RING_BYTES, RINGBUF_TYPE_BYTEBUF,
                                        MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(s_ring, ESP_ERR_NO_MEM, TAG, "ring");
+    s_sdr_ring = xRingbufferCreateWithCaps(SDR_RING_BYTES, RINGBUF_TYPE_BYTEBUF,
+                                           MALLOC_CAP_SPIRAM);
+    ESP_RETURN_ON_FALSE(s_sdr_ring, ESP_ERR_NO_MEM, TAG, "sdr ring");
 
         /* I2S1 explicitly, not AUTO: PDM receive for the microphone is only
      * available on I2S0 on the ESP32-S3, so the DAC must not take it. */

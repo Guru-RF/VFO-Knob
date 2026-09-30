@@ -77,4 +77,17 @@ endif()
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
 idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND)
+# Web SDRs as a second receiver (components/sdr_rx): for the radios with a
+# receiver of their own to set one beside -- not a reflector, nor AetherSDR,
+# which is an SDR already.
+if(VFO_RADIO MATCHES "^(icom|xiegu|multiflex)$")
+    idf_build_set_property(COMPILE_DEFINITIONS "VFO_HAS_SDR=1" APPEND)
+endif()
+# For trying the face's touch without a transmitter: -D VFO_PTT_DRY_RUN=1
+# logs every PTT tap and sends none to the radio, and the slab says TEST.
+# Never for a release.
+if(VFO_PTT_DRY_RUN)
+    idf_build_set_property(COMPILE_DEFINITIONS "VFO_PTT_DRY_RUN=1" APPEND)
+    message(WARNING "VFO_PTT_DRY_RUN: this build's PTT keys nothing")
+endif()
 project(vfo-knob-${VFO_RADIO})

@@ -46,6 +46,10 @@
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "esp_ota_ops.h"
+/* Web SDRs as a second receiver: the Icom, Xiegu and FlexRadio firmwares. */
+#if VFO_HAS_SDR
+#include "sdr_rx.h"
+#endif
 #include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
 #include "ptt_fsm.h"
@@ -84,6 +88,36 @@ static void boot_ok_now(void)
 }
 
 static void log_cpu(void);
+
+/* The link is the USB cable: one computer, or one radio, at its far end. */
+static volatile bool s_on_usb;
+
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+/* Another radio, chosen with a swipe up: in use from the next boot, and the
+ * knob restarts into it at once -- the clients have no restart path. Never
+ * while transmitting. The boot is confirmed first: a restart inside its first
+ * 20 s would count against the image, and three would mean safe mode. */
+static void switch_radio(int i)
+{
+    static net_radio_t r;
+    if (i == net_prov_radio_active() || !net_prov_radio_get(i, &r)) return;
+    if (radio_on_air()) {
+        ESP_LOGW(TAG, "radio not switched: on the air");
+        return;
+    }
+    const char *name = r.name[0] ? r.name : r.host;
+    ESP_LOGW(TAG, "switching to %s (%s:%u)", name, r.host, (unsigned)r.port);
+    ui_switching(name);
+    boot_ok_now();
+    if (net_prov_radio_activate(i) != ESP_OK) {
+        ESP_LOGE(TAG, "radio not switched: the choice could not be saved");
+        ui_updating_hide();
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    esp_restart();
+}
+#endif
 
 #define DRV2605_REG_STATUS 0x00
 
@@ -470,6 +504,26 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "tuner -> %s", c.tuner_on ? "in the line" : "out");
                 radio_set_tuner(c.tuner_on);
             }
+#if VFO_HAS_SDR
+            if (c.have_rxsrc) {
+                ESP_LOGI(TAG, "rx -> %s", c.rxsrc < 0 ? "LOCAL" : "web SDR");
+                sdr_rx_select(c.rxsrc);
+            }
+            if (c.have_balance) sdr_rx_set_balance(c.balance);
+#endif
+            /* V/M, last on the swipe down: into memory mode, or back to the
+             * VFO -- only when it is not already that. */
+            if (c.have_vm) {
+                static radio_status_t m;
+                radio_get_status(&m);
+                if (c.vm_mem != (m.mem_state != RADIO_MEM_OFF)) {
+                    ESP_LOGI(TAG, "V/M -> %s", c.vm_mem ? "memory mode" : "VFO, simplex");
+                    radio_memory_mode(c.vm_mem);
+                }
+            }
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+            if (c.have_radio) switch_radio(c.radio);
+#endif
             if (!c.live) haptic(7);         /* soft bump: value committed */
         }
 
@@ -497,8 +551,14 @@ static void ui_task(void *arg)
         }
 
         if (ui_take_ptt_tap()) {
+#if VFO_PTT_DRY_RUN
+            /* A test build (-D VFO_PTT_DRY_RUN=1): what would have keyed or
+             * unkeyed the radio, logged and nothing more. */
+            ESP_LOGW(TAG, "PTT tapped -- dry run, not sent to the radio");
+#else
             ESP_LOGI(TAG, "PTT tapped");
             radio_ptt_toggle();
+#endif
         }
 
         /* The address card, up under a finger held on the S-meter: a click
@@ -558,16 +618,6 @@ static void ui_task(void *arg)
                 haptic(26);                 /* confirm the tap landed */
             }
         }
-        /* A swipe down: into memory mode, or back to the VFO. */
-        if (ui_take_swipe()) {
-            static radio_status_t m;
-            radio_get_status(&m);
-            const bool on = m.mem_state == RADIO_MEM_OFF;
-            ESP_LOGI(TAG, "swipe -> %s", on ? "memory mode" : "VFO, simplex");
-            radio_memory_mode(on);
-            haptic(10);                     /* double click: a change of mode */
-        }
-
         /* Static: this task is the only one to run this, and three status
          * copies on its stack -- they have grown with every radio -- ran it
          * out of its 5 kB and crashed it. */
@@ -575,6 +625,14 @@ static void ui_task(void *arg)
         radio_get_status(&st);
 #if !VFO_RADIO_SETUP
         ask_choice(&st);        /* the setup firmware asks its own, directly */
+#endif
+#if VFO_HAS_SDR
+        /* The web SDR follows the radio; retuned only when something moved. */
+        if (st.link == RADIO_LINK_READY || st.link == RADIO_LINK_DEGRADED)
+            sdr_rx_tune(st.f_display, st.mode, st.filt_lo, st.filt_hi);
+        static sdr_status_t sd;
+        sdr_rx_status(&sd);
+        audio_out_sdr_mute(st.tx || st.ptt_state != PTT_IDLE);
 #endif
 
         /* High SWR: on the glass and in the log, no longer on the motor. It
@@ -699,6 +757,7 @@ static void ui_task(void *arg)
              * radio is still transmitting and the state is not PTT_ON, which
              * briefly and wrongly read as a remote transmission. */
             .tx_remote     = (st.tx && link_ok && st.ptt_state == PTT_IDLE),
+            .keyed         = st.ptt_state != PTT_IDLE,
             .link_ok       = link_ok,
             .slice_locked  = st.slice_locked,
             .may_key       = (st.permit == PERMIT_ALL),
@@ -711,6 +770,32 @@ static void ui_task(void *arg)
         strlcpy(u.talker_info, st.talker_info, sizeof u.talker_info);
         strlcpy(u.last_talker, st.last_talker, sizeof u.last_talker);
         strlcpy(u.server, st.server, sizeof u.server);
+#if VFO_HAS_SDR
+        u.n_sdr = (uint8_t)sdr_count();
+        for (int i = 0; i < u.n_sdr && i < UI_SDR_MAX; i++) {
+            sdr_cfg_t c;
+            if (sdr_get(i, &c)) strlcpy(u.sdr_name[i], c.name[0] ? c.name : c.host, sizeof u.sdr_name[i]);
+        }
+        u.rxsrc         = (int8_t)sdr_rx_selected();
+        u.sdr_streaming = sd.streaming;
+        u.sdr_trouble   = sd.trouble;
+        u.sdr_dbm       = sd.smeter_dbm;
+        strlcpy(u.sdr_note, sd.note, sizeof u.sdr_note);
+        u.balance       = sdr_rx_balance();
+#else
+        u.rxsrc = -1;
+#endif
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+        /* The radios to choose from with a swipe up: not over the cable,
+         * which reaches one computer or one radio. */
+        u.n_radios  = s_on_usb ? 0 : (uint8_t)net_prov_radio_count();
+        u.radio_sel = (int8_t)net_prov_radio_active();
+        for (int i = 0; i < u.n_radios && i < UI_RADIOS_MAX; i++) {
+            static net_radio_t r;           /* static: this stack is tight */
+            if (net_prov_radio_get(i, &r))
+                strlcpy(u.radio_name[i], r.name[0] ? r.name : r.host, sizeof u.radio_name[i]);
+        }
+#endif
         ui_update(&u);
     }
 }
@@ -1152,6 +1237,7 @@ RADIO_ONLY_FN static void net_task(void *arg)
              * stayed up long enough to dim. */
             bool via_usb = false;
             const char *host = pick_transport(cfg, ip, sizeof ip, &via_usb);
+            if (host) s_on_usb = via_usb;
             /* The firmware picker, asked for and accepted before the restart
              * this boot came from: from WiFi, which has a way out -- the
              * cable does not. */
@@ -1660,6 +1746,9 @@ void app_main(void)
     if (!safe) {
         bring_up("audio-out", audio_out_init);
         bring_up("mic", audio_in_init);
+#if VFO_HAS_SDR
+        bring_up("web SDR", sdr_rx_init);
+#endif
         /* The saved levels, even with no display to carry them. */
         audio_out_set_volume(net_prov_volume());
         audio_in_set_gain(net_prov_mic_gain());

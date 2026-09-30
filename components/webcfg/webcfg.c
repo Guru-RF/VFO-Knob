@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "esp_app_desc.h"
+#include "esp_attr.h"
 #include "esp_core_dump.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
@@ -23,6 +24,9 @@
 #include "ota.h"
 #include "ptt_fsm.h"
 #include "radio.h"
+#if VFO_HAS_SDR
+#include "sdr_rx.h"
+#endif
 #include "ui.h"
 #include "usb_net.h"
 #include "esp_task_wdt.h"
@@ -746,6 +750,340 @@ static esp_err_t portal_404(httpd_req_t *r, httpd_err_code_t err)
 #define PORTAL_URIS 0
 #endif
 
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+/* ------------------------------------------------------------- the radios
+ *
+ * The radios the knob knows, one in use (see net_prov.h):
+ *
+ *   GET  /api/radios          {"sel":0,"list":[{"name","host","port","user",
+ *                             "pass":true}, ...]} -- passwords only as set
+ *   POST /api/radios          n=, then name0 host0 port0 user0 pass0 was0 ...,
+ *                             and use= (the one in use, in the new list): the
+ *                             list, saved. A password left out is the one the
+ *                             radio `was` had, at the same address. The radio
+ *                             in use changes on the next boot.
+ *   POST /api/radios/switch   to=N: that one in use now -- the knob restarts
+ *                             into it, as a swipe up does. Not on the air.
+ */
+#define RADIOS_URIS 3
+
+/* ,"radios":{"sel":0,"names":[...]} -- for the radio's JSON. */
+static size_t radios_names_json(char *j, size_t cap)
+{
+    int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"names\":[", net_prov_radio_active());
+    for (int i = 0; i < net_prov_radio_count() && o > 0 && (size_t)o < cap; i++) {
+        static net_radio_t r;
+        if (!net_prov_radio_get(i, &r)) break;
+        char n[68];
+        json_esc(r.name[0] ? r.name : r.host, n, sizeof n);
+        o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", n);
+    }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
+
+static esp_err_t radios_get_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char j[1600];
+    int o = snprintf(j, sizeof j, "{\"sel\":%d,\"list\":[", net_prov_radio_active());
+    for (int i = 0; i < net_prov_radio_count() && (size_t)o < sizeof j; i++) {
+        EXT_RAM_BSS_ATTR static net_radio_t e;
+        if (!net_prov_radio_get(i, &e)) break;
+        char n[52], h[132], u[70];
+        json_esc(e.name, n, sizeof n);
+        json_esc(e.host, h, sizeof h);
+        json_esc(e.user, u, sizeof u);
+        o += snprintf(j + o, sizeof j - o, "%s{\"name\":\"%s\",\"host\":\"%s\",\"port\":%u,"
+                      "\"user\":\"%s\",\"pass\":%s}", i ? "," : "", n, h, (unsigned)e.port,
+                      u, e.pass[0] ? "true" : "false");
+    }
+    if ((size_t)o >= sizeof j - 4) return httpd_resp_send_500(r);
+    snprintf(j + o, sizeof j - o, "]}");
+    return send_json(r, j);
+}
+
+static esp_err_t radios_post_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char body[1800];
+    EXT_RAM_BSS_ATTR static net_radio_t list[NET_PROV_RADIOS], old;
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body size");
+        return ESP_FAIL;
+    }
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    long n = 0, use = 0;
+    if (!field_num(body, "n", &n) || n < 1 || n > NET_PROV_RADIOS) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "n: 1 to 4 radios");
+        return ESP_FAIL;
+    }
+    field_num(body, "use", &use);
+    int k = 0, in_use = 0;
+    for (int i = 0; i < n; i++) {
+        net_radio_t *e = &list[k];
+        char key[12], v[96] = "";
+        memset(e, 0, sizeof *e);
+        snprintf(key, sizeof key, "host%d", i);
+        if (!field(body, key, v, sizeof v)) continue;
+        /* "http://host:port/" and "host:port" too, as for the SDRs. */
+        const char *s = strstr(v, "://");
+        s = s ? s + 3 : v;
+        const size_t hl = strcspn(s, ":/ ");
+        if (!hl || hl >= sizeof e->host) continue;
+        memcpy(e->host, s, hl);
+        e->host[hl] = 0;
+        long port = 0;
+        snprintf(key, sizeof key, "port%d", i);
+        if (field_num(body, key, &port) && port > 0 && port < 65536) e->port = (uint16_t)port;
+        else if (s[hl] == ':') e->port = (uint16_t)clampl(strtol(s + hl + 1, NULL, 10), 1, 65535);
+        else e->port = net_prov_cfg()->radio_port;
+        snprintf(key, sizeof key, "name%d", i);
+        field(body, key, e->name, sizeof e->name);
+        snprintf(key, sizeof key, "user%d", i);
+        field(body, key, e->user, sizeof e->user);
+        /* A password not sent is the one it had -- at the same address only,
+         * so a radio moved elsewhere never gets the old one's. */
+        long was = -1;
+        snprintf(key, sizeof key, "was%d", i);
+        field_num(body, key, &was);
+        const bool had = was >= 0 && net_prov_radio_get((int)was, &old) &&
+                         !strcasecmp(old.host, e->host) && old.port == e->port;
+        snprintf(key, sizeof key, "pass%d", i);
+        if (!field(body, key, e->pass, sizeof e->pass) && had)
+            strlcpy(e->pass, old.pass, sizeof e->pass);
+        if (i == use) in_use = k;
+        k++;
+    }
+    if (!k) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "no radio with an address");
+        return ESP_FAIL;
+    }
+    if (net_prov_radios_save(list, k, in_use) != ESP_OK) return httpd_resp_send_500(r);
+    return radios_get_h(r);
+}
+
+static void switch_cb(void *arg)
+{
+    (void)arg;
+    esp_restart();
+}
+
+static esp_err_t radios_switch_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char q[48] = "";
+    const int total = r->content_len;
+    if (total > 0 && total < (int)sizeof q) {
+        int got = 0;
+        while (got < total) {
+            const int k = httpd_req_recv(r, q + got, total - got);
+            if (k <= 0) return ESP_FAIL;
+            got += k;
+        }
+        q[got] = 0;
+    } else if (total > 0 || httpd_req_get_url_query_str(r, q, sizeof q) != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "to=N");
+        return ESP_FAIL;
+    }
+    long to = -1;
+    static net_radio_t e;
+    if (!field_num(q, "to", &to) || !net_prov_radio_get((int)to, &e)) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "to=N: a radio in the list");
+        return ESP_FAIL;
+    }
+    if (to == net_prov_radio_active()) return httpd_resp_sendstr(r, "already in use");
+    if (radio_on_air()) {
+        httpd_resp_set_status(r, "409 Conflict");
+        return httpd_resp_sendstr(r, "the radio is transmitting");
+    }
+    const char *name = e.name[0] ? e.name : e.host;
+    ESP_LOGW(TAG, "web: switching to %s (%s:%u)", name, e.host, (unsigned)e.port);
+    /* As the dial's: the image confirmed and the boot counted healthy first,
+     * then the restart, after the answer has gone. */
+    ota_mark_valid();
+    net_prov_boot_ok();
+    if (net_prov_radio_activate((int)to) != ESP_OK) return httpd_resp_send_500(r);
+    ui_switching(name);
+    httpd_resp_sendstr(r, "switching");
+    const esp_timer_create_args_t a = { .callback = switch_cb, .name = "wcswitch" };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 1200 * 1000);
+    return ESP_OK;
+}
+#else
+#define RADIOS_URIS 0
+#endif
+
+#if VFO_HAS_SDR
+/* ------------------------------------------------------------- web SDRs
+ *
+ *   GET  /api/sdr        the receivers (their passwords only as set or not),
+ *                        the one listened to and how that goes, the balance
+ *   POST /api/sdr        n=, then name0 host0 pass0 ipl0 was0, name1 ... : the
+ *                        list, saved. A password left out is the one receiver
+ *                        `was` had, at the same address; empty is none.
+ *                        sel= (local, or 0-3) and balance= (-100..100) too.
+ *   POST /api/sdr/test   host pass ipl was: one receiver tried -- reached,
+ *                        what it calls itself, its users, the password
+ */
+#define SDR_URIS 3
+
+/* ,"sdr":{...} -- for the radio's JSON, and without the key for /api/sdr. */
+static size_t sdr_json(char *j, size_t cap)
+{
+    sdr_status_t s;
+    sdr_rx_status(&s);
+    char st[48];
+    json_esc(s.state, st, sizeof st);
+    int o = snprintf(j, cap, ",\"sdr\":{\"sel\":%d,\"state\":\"%s\",\"streaming\":%s,"
+                     "\"smeter\":%.1f,\"balance\":%d,\"list\":[",
+                     sdr_rx_selected(), st, s.streaming ? "true" : "false",
+                     (double)s.smeter_dbm, sdr_rx_balance());
+    for (int i = 0; i < sdr_count() && o > 0 && (size_t)o < cap; i++) {
+        sdr_cfg_t c;
+        if (!sdr_get(i, &c)) break;
+        char n[52], h[132];
+        json_esc(c.name, n, sizeof n);
+        json_esc(c.host, h, sizeof h);
+        o += snprintf(j + o, cap - o, "%s{\"name\":\"%s\",\"host\":\"%s\",\"port\":%u,"
+                      "\"pass\":%s,\"ipl\":%s}", i ? "," : "", n, h, (unsigned)c.port,
+                      c.pass[0] ? "true" : "false", c.ipl[0] ? "true" : "false");
+    }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
+
+static esp_err_t sdr_get_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char j[1400];     /* internal RAM is the scarce one */
+    const size_t n = sdr_json(j, sizeof j);
+    if (n < 8) return httpd_resp_send_500(r);
+    return send_json(r, j + 7);                 /* past ,"sdr": */
+}
+
+/* A form body, whole, into `buf`; false, answered, if it does not fit. */
+static bool recv_form(httpd_req_t *r, char *buf, size_t cap)
+{
+    const int total = r->content_len;
+    if (total < 0 || total >= (int)cap) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body size");
+        return false;
+    }
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, buf + got, total - got);
+        if (k <= 0) return false;
+        got += k;
+    }
+    buf[got] = 0;
+    return true;
+}
+
+/* "http://host:port/...", "host:port" or "host": the host, and the port when
+ * there is one. */
+static bool split_host(const char *in, char *host, size_t cap, uint16_t *port)
+{
+    const char *s = strstr(in, "://");
+    s = s ? s + 3 : in;
+    while (*s == ' ') s++;
+    const size_t n = strcspn(s, ":/ ");
+    if (!n || n >= cap) return false;
+    memcpy(host, s, n);
+    host[n] = 0;
+    if (s[n] == ':') {
+        const long p = strtol(s + n + 1, NULL, 10);
+        if (p > 0 && p < 65536) *port = (uint16_t)p;
+    }
+    return true;
+}
+
+/* A receiver's fields from a form, their names ending in `sfx` ("0".."3", or
+ * "" for the test). A password not in the form is the one it had -- only at
+ * the same address, so a receiver moved elsewhere never gets the old one's. */
+static bool sdr_from_form(const char *body, const char *sfx, sdr_cfg_t *c, long *was_out)
+{
+    char key[12], hp[96] = "";
+    memset(c, 0, sizeof *c);
+    c->port = 8073;
+    snprintf(key, sizeof key, "host%s", sfx);
+    if (!field(body, key, hp, sizeof hp) || !split_host(hp, c->host, sizeof c->host, &c->port))
+        return false;
+    snprintf(key, sizeof key, "name%s", sfx);
+    field(body, key, c->name, sizeof c->name);
+    long was = -1;
+    snprintf(key, sizeof key, "was%s", sfx);
+    field_num(body, key, &was);
+    if (was_out) *was_out = was;
+    EXT_RAM_BSS_ATTR static sdr_cfg_t old;       /* this task's stack is tight */
+    const bool had = was >= 0 && sdr_get((int)was, &old) &&
+                     !strcasecmp(old.host, c->host) && old.port == c->port;
+    snprintf(key, sizeof key, "pass%s", sfx);
+    if (!field(body, key, c->pass, sizeof c->pass) && had) strlcpy(c->pass, old.pass, sizeof c->pass);
+    snprintf(key, sizeof key, "ipl%s", sfx);
+    if (!field(body, key, c->ipl, sizeof c->ipl) && had) strlcpy(c->ipl, old.ipl, sizeof c->ipl);
+    return true;
+}
+
+static esp_err_t sdr_post_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char body[1600];
+    if (!recv_form(r, body, sizeof body)) return ESP_FAIL;
+    long n;
+    char v[12];
+    if (field_num(body, "n", &n)) {
+        EXT_RAM_BSS_ATTR static sdr_cfg_t list[SDR_MAX];
+        const int cur = sdr_rx_selected();
+        int k = 0, sel = -1;
+        for (int i = 0; i < clampl(n, 0, SDR_MAX); i++) {
+            char sfx[4];
+            long was;
+            snprintf(sfx, sizeof sfx, "%d", i);
+            if (!sdr_from_form(body, sfx, &list[k], &was)) continue;
+            if (cur >= 0 && was == cur) sel = k;      /* the one listened to, still */
+            k++;
+        }
+        sdr_rx_select(-1);
+        if (sdr_save(list, k) != ESP_OK) return httpd_resp_send_500(r);
+        sdr_rx_select(sel);
+        ESP_LOGI(TAG, "web: %d web SDR%s", k, k == 1 ? "" : "s");
+    }
+    if (field(body, "sel", v, sizeof v) && v[0]) {
+        if (v[0] >= '0' && v[0] <= '9') sdr_rx_select(atoi(v));
+        else if (!strcasecmp(v, "local")) sdr_rx_select(-1);
+    }
+    if (field_num(body, "balance", &n)) sdr_rx_set_balance((int8_t)clampl(n, -100, 100));
+    return sdr_get_h(r);
+}
+
+/* Blocks this task for the test's few seconds: the page waits for it. */
+static esp_err_t sdr_test_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char body[512], j[400];
+    EXT_RAM_BSS_ATTR static sdr_cfg_t c;
+    if (!recv_form(r, body, sizeof body)) return ESP_FAIL;
+    if (!sdr_from_form(body, "", &c, NULL)) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "no address");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "web: testing %s:%u", c.host, (unsigned)c.port);
+    sdr_test(&c, j, sizeof j);
+    return send_json(r, j);
+}
+#else
+#define SDR_URIS 0
+#endif
+
 /* ------------------------------------------------------------- the radio
  *
  * With the radio connected, the page opens on its controls: everything the
@@ -757,6 +1095,8 @@ static esp_err_t portal_404(httpd_req_t *r, httpd_err_code_t err)
  *   GET /api/radio/set?freq=14074000        Hz; 14.074 (a point) is MHz
  *       ...&mode=usb&filter=2&agc=mid&gain=1&rfgain=80&power=50
  *       ...&tuner=on&rx=sub&ant=2&rxant=1&rit=-120&lo=100&hi=2800
+ *       ...&sdr=0&balance=-30    a web SDR beside it, "local" for none (see
+ *                                above: the Icom, Xiegu and FlexRadio ones)
  *   (POST, with the same fields as a form, does the same.)
  *
  * Behind the page's login like everything here. Nothing that transmits:
@@ -801,7 +1141,7 @@ static esp_err_t radio_get(httpd_req_t *r)
     REQUIRE_AUTH(r);
     /* Static: this task serves one request at a time, and both are big. */
     static radio_status_t st;
-    static char j[1024];
+    EXT_RAM_BSS_ATTR static char j[2560];
     radio_get_status(&st);
     static const char *LINK[] = { "DOWN", "CONNECTING", "GREETING", "READY", "DEGRADED" };
     char mode[8], agc[8], model[16], mem[20];
@@ -818,7 +1158,7 @@ static esp_err_t radio_get(httpd_req_t *r)
         "\"levels\":%s,\"rfgain\":%u,\"power\":%u,\"max_w\":%u,"
         "\"tuner\":%s,\"tuner_on\":%s,"
         "\"n_rx\":%u,\"rx\":%u,\"n_ant\":%u,\"ant\":%u,\"has_rx_ant\":%s,\"ant_rx\":%s,"
-        "\"memories\":%s,\"mem_state\":%u,\"mem_group\":%u,\"mem_ch\":%u,\"mem_name\":\"%s\"}",
+        "\"memories\":%s,\"mem_state\":%u,\"mem_group\":%u,\"mem_ch\":%u,\"mem_name\":\"%s\"",
         ota_radio(), model, st.link <= RADIO_LINK_DEGRADED ? LINK[st.link] : "?",
         ready ? "true" : "false",
         (long long)st.f_display, (long long)st.f_max, mode, st.tx ? "true" : "false",
@@ -832,6 +1172,12 @@ static esp_err_t radio_get(httpd_req_t *r)
         st.has_rx_ant ? "true" : "false", st.ant_rx ? "true" : "false",
         st.has_memories ? "true" : "false", (unsigned)st.mem_state,
         (unsigned)st.mem_group, (unsigned)st.mem_ch, mem);
+    size_t o = strlen(j);
+#if VFO_HAS_SDR
+    o += sdr_json(j + o, sizeof j - o);
+#endif
+    o += radios_names_json(j + o, sizeof j - o);
+    snprintf(j + o, sizeof j - o, "}");
     return send_json(r, j);
 }
 
@@ -894,6 +1240,15 @@ static esp_err_t radio_set(httpd_req_t *r)
         radio_set_antenna((uint8_t)(n - 1), rxant != 0);
     }
     if (field_num(q, "rit", &n)) radio_set_rit((int32_t)clampl(n, -9999, 9999));
+#if VFO_HAS_SDR
+    /* What is heard: the radio alone ("local"), or a web SDR beside it -- by
+     * its place in the configuration page's list, from 0 -- and the mix. */
+    if (field(q, "sdr", v, sizeof v) && v[0]) {
+        if (v[0] >= '0' && v[0] <= '9') sdr_rx_select(atoi(v));
+        else if (!strcasecmp(v, "local")) sdr_rx_select(-1);
+    }
+    if (field_num(q, "balance", &n)) sdr_rx_set_balance((int8_t)clampl(n, -100, 100));
+#endif
     /* The state as it stands: what was asked goes out to the radio as this
      * answers, so a reader wanting it confirmed asks again. */
     return radio_get(r);
@@ -930,7 +1285,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + RADIO_URIS;
+    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -970,6 +1325,24 @@ esp_err_t webcfg_start(void)
     };
     for (size_t i = 0; i < sizeof radio_uris / sizeof radio_uris[0]; i++)
         httpd_register_uri_handler(s_srv, &radio_uris[i]);
+#endif
+#if RADIOS_URIS
+    static const httpd_uri_t radios_uris[] = {
+        { .uri = "/api/radios",        .method = HTTP_GET,  .handler = radios_get_h },
+        { .uri = "/api/radios",        .method = HTTP_POST, .handler = radios_post_h },
+        { .uri = "/api/radios/switch", .method = HTTP_POST, .handler = radios_switch_h },
+    };
+    for (size_t i = 0; i < sizeof radios_uris / sizeof radios_uris[0]; i++)
+        httpd_register_uri_handler(s_srv, &radios_uris[i]);
+#endif
+#if VFO_HAS_SDR
+    static const httpd_uri_t sdr_uris[] = {
+        { .uri = "/api/sdr",      .method = HTTP_GET,  .handler = sdr_get_h },
+        { .uri = "/api/sdr",      .method = HTTP_POST, .handler = sdr_post_h },
+        { .uri = "/api/sdr/test", .method = HTTP_POST, .handler = sdr_test_h },
+    };
+    for (size_t i = 0; i < sizeof sdr_uris / sizeof sdr_uris[0]; i++)
+        httpd_register_uri_handler(s_srv, &sdr_uris[i]);
 #endif
     for (size_t i = 0; i < n_extra; i++) {
         const httpd_uri_t u = { .uri = extra[i].uri, .method = extra[i].method,

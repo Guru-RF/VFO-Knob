@@ -59,7 +59,8 @@ input[type=range]:disabled{opacity:.35}
 @media(max-width:560px){.two{grid-template-columns:1fr}}
 code{font:12.5px ui-monospace,Menlo,Consolas,monospace;color:var(--accent-hi);word-break:break-all}
 .api p{margin:6px 0;color:var(--text2);font-size:13px}
-body.off main section:not(.api){opacity:.45;pointer-events:none}
+/* The radio row stays: from a radio that does not answer, to one that does. */
+body.off main section:not(.api):not(#radiosec){opacity:.45;pointer-events:none}
 body.tx main section.ctl{opacity:.45;pointer-events:none}
 #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--panel);border:1px solid var(--danger);
       color:var(--text);padding:9px 14px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
@@ -73,6 +74,9 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   <a class="btn" href="/config" title="The knob's settings; the radio stays connected">Config</a>
 </header>
 <main>
+<section id="radiosec" hidden>
+  <div class="row"><span class="sub" style="margin:0;min-width:86px">Radio</span><span id="radios" class="row"></span></div>
+</section>
 <section class="vfo">
   <div class="row between">
     <div class="row"><span id="rxtag" class="tag" hidden>MAIN</span><span id="modetag" class="tag acc">--</span>
@@ -124,6 +128,16 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
     <span id="ants" class="row"></span></div>
 </section>
 
+<section class="ctl" id="sdrsec" hidden>
+  <h2>Web SDR</h2>
+  <div class="row"><span class="sub" style="margin:0;min-width:86px">Listen to</span><span id="sdrs" class="row"></span></div>
+  <p class="sub" id="sdrstate"></p>
+  <div id="balbox" class="slider" hidden><label for="bal">Balance</label>
+    <input id="bal" type="range" min="-100" max="100" step="10"><output id="balv">--</output></div>
+  <p class="sub" id="sdrnone" hidden>No web SDRs yet: add a KiwiSDR, a Web-888 or an UberSDR on the
+    <a href="/config#sdr" style="color:var(--accent-hi)">configuration page</a>.</p>
+</section>
+
 <section class="ctl">
   <h2>RIT</h2>
   <div class="row"><button data-rit="-100">&minus;100</button><button data-rit="-10">&minus;10</button>
@@ -141,9 +155,13 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   <h2>For other programs</h2>
   <p>Read the frequency, mode and the rest, as JSON:<br><code id="apiget"></code></p>
   <p>Set the frequency (Hz, or MHz with a point) and anything else on this page:<br><code id="apiset"></code></p>
+  <p>Another radio, by its place in the list from 0 &mdash; the knob restarts into it:<br>
+     <code>POST /api/radios/switch</code> with <code>to=1</code></p>
   <p>Also <code>mode</code>, <code>filter</code> (1&ndash;3), <code>agc</code>, <code>gain</code>, <code>rfgain</code> and
      <code>power</code> (0&ndash;100), <code>tuner</code> (on/off), <code>rx</code> (main/sub), <code>ant</code>,
-     <code>rit</code> (Hz). Both need this page's login &mdash; <code>http://user:password@&hellip;</code> &mdash;
+     <code>rit</code> (Hz)<span id="apisdr" hidden>, and <code>sdr</code> (<code>local</code>, or a web SDR by its
+     place in the list, from 0) and <code>balance</code> (&minus;100 the radio alone, 0 the radio left and the SDR
+     right, 100 the SDR alone)</span>. Both need this page's login &mdash; <code>http://user:password@&hellip;</code> &mdash;
      and nothing here transmits.</p>
 </section>
 </main>
@@ -232,8 +250,33 @@ function render(){
       btns($('ants'),items,v=>{const [a,rx]=v.split(':');set({ant:a,rxant:rx})})}
     mark($('ants'),(R.ant+1)+':'+(R.ant_rx?1:0))}
   $('ritv').textContent=(R.rit>0?'+':'')+R.rit+' Hz';
+  /* The radios the knob knows: another is a restart away. */
+  const RS=R.radios;$('radiosec').hidden=!(RS&&RS.names.length>1);
+  if(RS&&RS.names.length>1){const key=RS.names.join('|');
+    if($('radios').dataset.k!==key){$('radios').dataset.k=key;btns($('radios'),RS.names.map((n,i)=>[i,n]),switchTo)}
+    mark($('radios'),RS.sel)}
+  /* A web SDR beside the radio: the Icom, Xiegu and FlexRadio firmwares. */
+  const S=R.sdr;$('sdrsec').hidden=!S;$('apisdr').hidden=!S;
+  if(S){const items=[['local','LOCAL'],...S.list.map((x,i)=>[i,x.name||x.host])];
+    const key=items.map(i=>i[1]).join('|');if($('sdrs').dataset.k!==key){$('sdrs').dataset.k=key;btns($('sdrs'),items,v=>set({sdr:v}))}
+    mark($('sdrs'),S.sel<0?'local':S.sel);$('sdrnone').hidden=S.list.length>0;
+    const x=S.list[S.sel];
+    $('sdrstate').textContent=S.sel<0||!x?'The radio alone, in both ears.':(x.name||x.host)+': '+S.state+
+      (S.streaming?' \u00b7 '+sunits(S.smeter)+'  '+Math.round(S.smeter)+' dBm \u00b7 the radio left, the SDR right':'');
+    $('balbox').hidden=S.sel<0;
+    if(!busy('bal')){$('bal').value=S.balance;$('balv').textContent=balText(S.balance)}}
 }
+/* As the knob's face has it. */
+const balText=b=>b<=-100?'radio':b>=100?'SDR':b===0?'L | R':b<0?'\u25c0 '+(-b):b+' \u25b6';
 const pwrText=p=>R&&R.max_w?Math.round(p*R.max_w/100)+' W':p+'%';
+/* Another radio: the knob restarts into it, as a swipe up on it does. */
+async function switchTo(i){
+  const RS=R&&R.radios;if(!RS||i===RS.sel)return;
+  if(!confirm('Switch to '+RS.names[i]+'? The knob restarts into it.'))return;
+  try{const r=await fetch('/api/radios/switch',{method:'POST',body:'to='+i});
+    toast(r.ok?'Switching to '+RS.names[i]+': the knob restarts':await r.text())}
+  catch(e){toast('The knob did not answer')}
+}
 
 async function poll(){try{R=await (await fetch('/api/radio',{cache:'no-store'})).json();render()}
   catch(e){const l=$('link');l.textContent='knob not answering';l.className='pill down'}
@@ -254,6 +297,7 @@ async function init(){
   $('tunon').onclick=()=>set({tuner:'on'});$('tunoff').onclick=()=>set({tuner:'off'});
   slider('rfg','rfgv',v=>v+'%',v=>set({rfgain:v}));
   slider('pwr','pwrv',pwrText,v=>set({power:v}));
+  slider('bal','balv',balText,v=>set({balance:v}));
   const knob=(k,v)=>fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:k+'='+v}).catch(()=>{});
   /* The knob's own levels are saved with its settings: sent once, on letting go. */
   for(const [id,out] of [['vol','volv'],['mic','micv']]){const s=$(id);

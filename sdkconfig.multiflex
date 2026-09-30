@@ -15,3 +15,11 @@ CONFIG_LWIP_UDP_RECVMBOX_SIZE=16
 # Opus in fixed point, as the svxconnect firmware runs it: its floating-point
 # encoder does not keep up with real time on the ESP32-S3.
 CONFIG_OPUS_FLOATING_POINT=n
+
+# A web SDR beside the radio (components/sdr_rx) and its test on the web
+# page, beside the radio's own sockets, the web page's and the log's: 10 ran
+# out with a browser open.
+CONFIG_LWIP_MAX_SOCKETS=16
+# ...and every address its name stands for, to try each in turn. Safe only
+# without SNTP: lwIP's cache then writes them all where SNTP keeps one.
+CONFIG_LWIP_DNS_MAX_HOST_IP=4

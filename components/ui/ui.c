@@ -95,6 +95,7 @@ LV_FONT_DECLARE(font_mic_14);
 #define C_TX_RED    lv_color_hex(0xE8200C)
 #define C_GREEN     lv_color_hex(0xFF8C1A)   /* the meters are orange   */
 #define PWR_HEX     0xFF8C1A                 /* ...Po as well           */
+#define SDR_HEX     0x4DA6FF                 /* a web SDR is blue on every face */
 #elif VFO_RADIO_SVXCONNECT
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
@@ -162,6 +163,18 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
+/* A web SDR beside the radio: blue -- the Icom's and the Maestro's own. */
+#ifndef SDR_HEX
+#if VFO_RADIO_ICOM
+#define SDR_HEX     0x5A9BFF                 /* C_ACCENT_HI */
+#elif VFO_RADIO_MULTIFLEX
+#define SDR_HEX     0x62BBFF                 /* C_ACCENT_HI */
+#else
+#define SDR_HEX     0x4DA6FF
+#endif
+#endif
+#define C_SDR       lv_color_hex(SDR_HEX)
+#define SDR_R       176       /* its S-meter: a line just outside the radio's */
 
 /* The theme's own meter.bar gradient runs green -> amber -> red but only
  * reaches red at 95% of full scale. On an S-meter that is roughly S9+53, so a
@@ -217,6 +230,9 @@ static bool          s_ask_restarts;     /* a yes restarts first: see ui.h */
 static volatile uint32_t s_turned_at;    /* when a turn said that yes */
 #define TURN_SPENT_MS 2000   /* ...and the turns after it tune nothing either */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
+#if VFO_HAS_SDR
+static lv_obj_t *s_sdr_arc;
+#endif
 static lv_obj_t *s_agc_cap, *s_agc_val, *s_gain_cap, *s_gain_val;
 #if REFLECTOR_FACE
 /* The reflector face's lock and mute, in the talkgroup's row. */
@@ -327,6 +343,9 @@ typedef struct {
     bool      reverse;        /* fills from the far end (the mic ring) */
 } peak_led_t;
 static peak_led_t s_sig_led, s_swr_led, s_pwr_led, s_mic_led;
+#if VFO_HAS_SDR
+static peak_led_t s_sdr_led;         /* the web SDR's, on its thin line */
+#endif
 
 static void led_build(peak_led_t *l, int rot, int span, int r, int width,
                       bool reverse, const uint32_t *rgb, int n)
@@ -554,7 +573,8 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
-               ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER } edit_t;
+               ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER, ED_RXSRC,
+               ED_BALANCE, ED_RADIO, ED_VM } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int     s_edit_from, s_edit_n;  /* where the receiver's opened; how many */
@@ -574,6 +594,7 @@ static ui_state_t s_last;
 static int32_t s_edit_rit;
 static int8_t  s_edit_gain, s_edit_gmin, s_edit_gmax, s_edit_gstep;
 static int     s_edit_pct;             /* RF GAIN and POWER, 0-100 */
+static int     s_edit_bal;             /* BALANCE, -100..100 */
 static bool    s_edit_lsb;   /* passband sits below the carrier */
 static uint8_t s_volume = 40;
 static uint8_t s_micgain = 100;
@@ -640,6 +661,7 @@ static int   s_dig_x[N_DIG];
 static int   s_active_dig = 5;
 static int32_t s_step_req;
 static bool  s_ptt_tap, s_was_tx;
+static bool  s_ptt_armed;            /* a press on the slab, in receive: see touch_cb */
 /* A PTT press counts only once the finger has been up this long (touch_cb).
  * A flicker is a few tens of ms; a deliberate second tap is well over this. */
 #define PTT_REARM_MS 150
@@ -896,12 +918,36 @@ static void edit_render(void)
         snprintf(v, sizeof v, "%s", s_edit_idx ? "ON" : "OFF");
         vcolor = s_edit_idx ? C_ACCENT_HI : C_DISABLED;
         break;
+    case ED_RXSRC:
+        title = "RX";
+        snprintf(v, sizeof v, "%s", s_edit_idx ? s_last.sdr_name[s_edit_idx - 1] : "LOCAL");
+        break;
+    case ED_RADIO:
+        title = "RADIO";
+        snprintf(v, sizeof v, "%s", s_last.radio_name[s_edit_idx]);
+        break;
+    case ED_VM:
+        /* Icom's own name for it: the V/M key. */
+        title = "V/M";
+        snprintf(v, sizeof v, "%s", s_edit_idx ? "MEMORY" : "VFO");
+        break;
+    case ED_BALANCE:
+        title = "BALANCE";
+        /* 0: the radio left and the SDR right; towards an end, that one alone. */
+        if (s_edit_bal <= -100)     snprintf(v, sizeof v, "RADIO");
+        else if (s_edit_bal >= 100) snprintf(v, sizeof v, "SDR");
+        else if (s_edit_bal == 0)   snprintf(v, sizeof v, "L | R");
+        else if (s_edit_bal < 0)    snprintf(v, sizeof v, LV_SYMBOL_LEFT " %d", -s_edit_bal);
+        else                        snprintf(v, sizeof v, "%d " LV_SYMBOL_RIGHT, s_edit_bal);
+        break;
     default: return;
     }
     lv_label_set_text(s_edit_title, title);
     /* A station's name wants more room than a mode or a width. */
-    lv_obj_set_style_text_font(s_edit_value, s_edit == ED_CHOICE ? &lv_font_montserrat_28
-                                                                 : &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_font(s_edit_value,
+                               s_edit == ED_CHOICE || s_edit == ED_RADIO || s_edit == ED_VM ||
+                               (s_edit == ED_RXSRC && s_edit_idx)
+                               ? &lv_font_montserrat_28 : &lv_font_montserrat_48, 0);
     lv_label_set_text(s_edit_value, v);
     lv_obj_set_style_text_color(s_edit_value, vcolor, 0);
 }
@@ -948,6 +994,10 @@ static void edit_open(edit_t what, const ui_state_t *st)
 {
     s_edit = what;
     netinfo_show(false);                  /* it would peek out from behind */
+    /* ...and a warning -- NO LINK, with the radio in use switched off --
+     * would cover it: it waits until the editor closes. */
+    if (s_warn_panel) lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_edit_panel);
     switch (what) {
     case ED_BAND:   s_edit_idx = nearest_band(st->freq_hz); break;
     case ED_MODE:   s_edit_idx = index_of_mode(st->mode);   break;
@@ -995,6 +1045,19 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_mem_lit    = st->atu_mem;
         s_mem_tapped = 0;
         break;
+    case ED_RXSRC:
+        s_edit_n   = 1 + st->n_sdr;
+        s_edit_idx = st->rxsrc >= 0 && st->rxsrc < st->n_sdr ? st->rxsrc + 1 : 0;
+        break;
+    case ED_BALANCE: s_edit_bal = st->balance; break;
+    case ED_RADIO:
+        s_edit_n   = st->n_radios;
+        s_edit_idx = st->radio_sel >= 0 && st->radio_sel < st->n_radios ? st->radio_sel : 0;
+        break;
+    case ED_VM:
+        s_edit_n   = 2;
+        s_edit_idx = st->mem_state != UI_MEM_OFF;
+        break;
     case ED_RFGAIN: s_edit_pct = st->rf_gain_pct;  break;
     case ED_POWER:  s_edit_pct = st->rf_power_pct; break;
     case ED_TUNER:
@@ -1016,7 +1079,7 @@ static bool edit_live(edit_t e)
 {
     return e == ED_FILTER || e == ED_AGC || e == ED_GAIN || e == ED_RIT ||
            e == ED_VOL || e == ED_MIC || e == ED_RFGAIN || e == ED_POWER ||
-           e == ED_TUNER;
+           e == ED_TUNER || e == ED_BALANCE;
 }
 
 /* What the open editor's value asks of the radio, into s_commit. */
@@ -1078,6 +1141,22 @@ static void edit_fill(void)
     case ED_TUNER:
         s_commit.have_tuner = true;
         s_commit.tuner_on   = s_edit_idx == 1;
+        break;
+    case ED_RXSRC:
+        s_commit.have_rxsrc = true;
+        s_commit.rxsrc      = (int8_t)(s_edit_idx - 1);
+        break;
+    case ED_BALANCE:
+        s_commit.have_balance = true;
+        s_commit.balance      = (int8_t)s_edit_bal;
+        break;
+    case ED_RADIO:
+        s_commit.have_radio = true;
+        s_commit.radio      = (int8_t)s_edit_idx;
+        break;
+    case ED_VM:
+        s_commit.have_vm = true;
+        s_commit.vm_mem  = s_edit_idx == 1;
         break;
     case ED_ANT: {
         /* Only when turned to: until then the editor follows the radio, and
@@ -1155,6 +1234,14 @@ void ui_edit_rotate(int32_t detents)
         if (s_edit_pct < 0)   s_edit_pct = 0;
         if (s_edit_pct > 100) s_edit_pct = 100;
         break;
+    case ED_BALANCE:
+        s_edit_bal += detents * 10;
+        if (s_edit_bal < -100) s_edit_bal = -100;
+        if (s_edit_bal > 100)  s_edit_bal = 100;
+        break;
+    case ED_RXSRC:
+    case ED_RADIO:
+    case ED_VM:
     case ED_RX:
     case ED_ANT:
     case ED_MENU:
@@ -1316,7 +1403,6 @@ static volatile bool s_picker_req;
 static lv_point_t    s_press_pt;
 static bool          s_press_tap;         /* this press may still be a tap */
 static bool          s_gestured;          /* ...and this one became a gesture */
-static volatile bool s_swipe;
 
 static bool shown_at(lv_obj_t *o, lv_point_t p)
 {
@@ -1380,6 +1466,13 @@ static void tap(lv_point_t p, uint32_t held)
          * but RF GAIN, tapped on its panel, goes on to POWER, as the swipe
          * down's receiver goes on to its antenna. */
         if (edit_live(was)) {
+            /* ...as BALANCE, first while a web SDR is chosen, goes on to
+             * RF GAIN. */
+            if (was == ED_BALANCE && shown_at(s_edit_panel, p) &&
+                s_last.has_levels && s_last.have_levels) {
+                edit_open(ED_RFGAIN, &s_last);
+                return;
+            }
             if (was == ED_RFGAIN && shown_at(s_edit_panel, p)) {
                 edit_open(ED_POWER, &s_last);
                 return;
@@ -1406,8 +1499,18 @@ static void tap(lv_point_t p, uint32_t held)
             return;
         }
         edit_commit();
-        /* The swipe's editors come in a row: the receiver, then its antenna. */
-        if (was == ED_RX && s_last.n_ant) edit_open(ED_ANT, &s_last);
+        /* The swipe's editors come in a row: what is heard beside the radio
+         * -- LOCAL or a web SDR -- then the radio's own receiver, then its
+         * antenna. The radio plays on in the left ear with an SDR in the
+         * right, so its choices follow either way. */
+        if (was == ED_RXSRC && s_last.mem_state == UI_MEM_OFF) {
+            if (s_last.n_rx > 1)  { edit_open(ED_RX, &s_last);  return; }
+            if (s_last.n_ant)     { edit_open(ED_ANT, &s_last); return; }
+        }
+        if (was == ED_RX && s_last.n_ant) { edit_open(ED_ANT, &s_last); return; }
+        /* ...and last, on a radio with memories, V/M. */
+        if ((was == ED_RXSRC || was == ED_RX || was == ED_ANT) && s_last.has_memories)
+            edit_open(ED_VM, &s_last);
         return;
     }
 
@@ -1518,6 +1621,22 @@ static void release_cb(lv_event_t *e)
                  s_press_picker ? " (towards the picker)" : "", (unsigned)held);
     s_press_picker = false;
     s_press_card   = false;
+    /* A press on the PTT slab in receive: a tap keys, a swipe does not. */
+    if (s_ptt_armed) {
+        s_ptt_armed = false;
+        lv_point_t q = s_press_pt;
+        lv_indev_t *indev = lv_indev_active();
+        if (indev) lv_indev_get_point(indev, &q);
+        if (s_gestured || LV_ABS(q.x - s_press_pt.x) > TAP_SLOP ||
+            LV_ABS(q.y - s_press_pt.y) > TAP_SLOP) {
+            ESP_LOGI(TAG, "PTT not keyed: a %s from the slab, %d,%d to %d,%d",
+                     s_gestured ? "swipe" : "drag", (int)s_press_pt.x, (int)s_press_pt.y,
+                     (int)q.x, (int)q.y);
+            return;
+        }
+        s_ptt_tap = true;
+        return;
+    }
     const bool was_tap = s_press_tap && !s_gestured;
     s_press_tap = false;
     if (!was_tap) return;
@@ -1531,9 +1650,10 @@ static void release_cb(lv_event_t *e)
     tap(s_press_pt, lv_tick_elaps(s_pressed_at));
 }
 
-/* A swipe: down is memory mode, on or off -- or, on a radio with a second
- * receiver or a choice of antennas, their editors: the receiver, and a tap
- * later the antenna. Any other way is nothing, but was not a tap either. */
+/* A swipe. Down chooses what is heard: LOCAL or a web SDR, and then, on a
+ * radio with a second receiver or a choice of antennas, their editors -- the
+ * receiver, and a tap later the antenna -- and last, with memories, V/M. Up
+ * chooses the radio. From the left, the levels; from the right, the tuner. */
 static void gesture_cb(lv_event_t *e)
 {
     (void)e;
@@ -1541,21 +1661,36 @@ static void gesture_cb(lv_event_t *e)
     if (!indev) return;
     s_gestured = true;
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (s_edit != ED_NONE || s_asking || !s_last.link_ok || s_last.tx) return;
-    /* From the left: RF gain, then power. From the right: the tuner. */
+    if (s_edit != ED_NONE || s_asking || s_last.tx) return;
+    /* Up: another radio, where the knob knows more than one -- with or
+     * without a link, since the one in use may be switched off. */
+    if (dir == LV_DIR_TOP) {
+        if (s_last.n_radios > 1) edit_open(ED_RADIO, &s_last);
+        return;
+    }
+    if (!s_last.link_ok) return;
+    /* From the left: with a web SDR chosen, the balance first -- the one
+     * turned most -- then RF gain and power. From the right: the tuner, or
+     * the FlexRadio's TUNE/ATU/MEM. */
     if (dir == LV_DIR_RIGHT) {
-        if (s_last.has_levels && s_last.have_levels) edit_open(ED_RFGAIN, &s_last);
+        if (s_last.rxsrc >= 0)                       edit_open(ED_BALANCE, &s_last);
+        else if (s_last.has_levels && s_last.have_levels) edit_open(ED_RFGAIN, &s_last);
         return;
     }
     if (dir == LV_DIR_LEFT) {
-        if (s_last.has_tuner && s_last.have_tuner) edit_open(ED_TUNER, &s_last);
+        if (s_last.has_tuner && s_last.have_tuner)  edit_open(ED_TUNER, &s_last);
+        else if (s_last.has_tune || s_last.has_atu) edit_open(ED_MENU, &s_last);
         return;
     }
     if (dir != LV_DIR_BOTTOM) return;
-    if (s_last.has_tune || s_last.has_atu) {
-        edit_open(ED_MENU, &s_last);
+    /* Down: the receiver -- LOCAL or a web SDR -- and after it, a second
+     * receiver's and the antennas' choice (see tap()). */
+#if VFO_HAS_SDR
+    if (s_last.n_sdr > 0) {
+        edit_open(ED_RXSRC, &s_last);
         return;
     }
+#endif
     if (s_last.mem_state == UI_MEM_OFF && s_last.n_rx > 1) {
         edit_open(ED_RX, &s_last);
         return;
@@ -1564,7 +1699,7 @@ static void gesture_cb(lv_event_t *e)
         edit_open(ED_ANT, &s_last);
         return;
     }
-    if (s_last.has_memories) s_swipe = true;
+    if (s_last.has_memories) edit_open(ED_VM, &s_last);
 }
 
 static void touch_cb(lv_event_t *e)
@@ -1579,6 +1714,7 @@ static void touch_cb(lv_event_t *e)
     s_pressed_at = lv_tick_get();
     s_press_tap  = false;
     s_gestured   = false;
+    s_ptt_armed  = false;
     /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS. */
     s_press_picker = addresses_up() &&
                      (p.y < 104 || shown_at(s_netinfo, p) || shown_at(s_warn_panel, p));
@@ -1630,7 +1766,16 @@ static void touch_cb(lv_event_t *e)
             ESP_LOGI(TAG, "PTT press ignored: finger up only %u ms", (unsigned)up);
             return;
         }
-        s_ptt_tap = true;
+        /* On the air, the press unkeys, at once. In receive it keys only
+         * once the finger lifts without having moved: a swipe up begun on
+         * the slab -- memory mode -- would otherwise key the transmitter on
+         * its way, before anything could know it was a swipe. A tap's
+         * length, a tenth of a second, is all keying waits. */
+        if (s_last.tx || s_last.keyed) {
+            s_ptt_tap = true;
+            return;
+        }
+        s_ptt_armed = true;
         return;
     }
 
@@ -1879,6 +2024,27 @@ static void build(void)
         s_rx_zone[z] = b;
         s_rx_val[z]  = 0;
     }
+#if VFO_HAS_SDR
+    /* A web SDR's S-meter: a thin line just outside the radio's, on its
+     * scale, in the SDR's blue -- clear of the notches and the ticks, and
+     * over the hairline, which only shows in transmit, when this does not. */
+    s_sdr_arc = lv_arc_create(s_scr);
+    lv_obj_set_size(s_sdr_arc, SDR_R * 2, SDR_R * 2);
+    lv_obj_center(s_sdr_arc);
+    lv_arc_set_rotation(s_sdr_arc, ARC_ROT);
+    lv_arc_set_bg_angles(s_sdr_arc, 0, ARC_SPAN);
+    lv_arc_set_range(s_sdr_arc, 0, 1000);
+    lv_arc_set_value(s_sdr_arc, 0);
+    lv_obj_remove_style(s_sdr_arc, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(s_sdr_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(s_sdr_arc, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_sdr_arc, C_SUBTLE, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_sdr_arc, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_sdr_arc, C_SDR, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_sdr_arc, false, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(s_sdr_arc, false, LV_PART_INDICATOR);
+    lv_obj_add_flag(s_sdr_arc, LV_OBJ_FLAG_HIDDEN);
+#endif
     s_rx_ticks = mkgroup();
     s_tx_ticks = mkgroup();
     add_rx_notches();
@@ -1984,6 +2150,12 @@ static void build(void)
         led_show(&s_swr_led, false);
         led_show(&s_pwr_led, false);
         led_show(&s_mic_led, false);
+#if VFO_HAS_SDR
+        /* The web SDR's line holds its peak the same way. */
+        static const uint32_t sdr[1] = { SDR_HEX };
+        led_build(&s_sdr_led, ARC_ROT, ARC_SPAN, SDR_R, 4, false, sdr, 1);
+        led_show(&s_sdr_led, false);
+#endif
     }
 
     /* Notch the SWR band at each printed mark, exactly as the receive meter is
@@ -2686,7 +2858,7 @@ void ui_update(const ui_state_t *st)
     snprintf(tb, sizeof tb, SYM_MIC " %u", (unsigned)s_micgain);
     set_text(s_mic, tb);
 
-    if (st->warn && st->warn[0] && !s_asking) {
+    if (st->warn && st->warn[0] && !s_asking && s_edit == ED_NONE) {
         if (strcmp(lv_label_get_text(s_warn), st->warn) != 0) {
             lv_label_set_text(s_warn, st->warn);
             lv_obj_align(s_warn, LV_ALIGN_TOP_MID, 0, 8);
@@ -2770,11 +2942,54 @@ void ui_update(const ui_state_t *st)
 #else
     char sbuf[10];
     smeter_text(sig_pk, sbuf, sizeof sbuf);
+#if VFO_HAS_SDR
+    /* A web SDR playing beside the radio: its S-meter, the thin blue line
+     * outside the radio's, and its reading where the dBm is -- in blue, which
+     * says whose it is. Not in transmit, when the SDR is silent. */
+    static float   s_sdr_disp = -127.0f;
+    static peak_t  s_sdr_pk = { .v = -127.0f };
+    static int16_t s_sdr_val;
+    const bool sdr_on = st->rxsrc >= 0 && st->sdr_streaming && !st->tx;
+    if (sdr_on == lv_obj_has_flag(s_sdr_arc, LV_OBJ_FLAG_HIDDEN)) {
+        if (sdr_on) lv_obj_remove_flag(s_sdr_arc, LV_OBJ_FLAG_HIDDEN);
+        else        lv_obj_add_flag(s_sdr_arc, LV_OBJ_FLAG_HIDDEN);
+        led_set(&s_sdr_led, 0.0f, -1);
+        led_show(&s_sdr_led, sdr_on);
+    }
+    float sdr_pk = -127.0f;
+    if (sdr_on) {
+        release(&s_sdr_disp, st->sdr_dbm);
+        /* Its peak held a second above the line, then falling at 30 dB/s
+         * to meet it, as the radio's does. */
+        sdr_pk = peak_hold(&s_sdr_pk, s_sdr_disp, 30.0f);
+        led_set(&s_sdr_led, smeter_frac(sdr_pk), 0);
+        const int16_t v = (int16_t)(smeter_frac(s_sdr_disp) * 1000.0f);
+        if (v != s_sdr_val) {               /* only what changed: see s_rx_val */
+            s_sdr_val = v;
+            lv_arc_set_value(s_sdr_arc, v);
+        }
+    } else {
+        s_sdr_disp = -127.0f;
+        peak_reset(&s_sdr_pk, -127.0f);
+    }
+#endif
     if (!st->tx) {
         set_text(s_srd, sbuf);
-        snprintf(tb, sizeof tb, "%d dBm", (int)sig_pk);
-        set_text(s_dbm, tb);
-        set_text_color(s_dbm, C_LABEL);
+#if VFO_HAS_SDR
+        if (st->rxsrc >= 0) {
+            /* Playing, its S-units; on its way, dots; not to be had, why. */
+            if (sdr_on)                smeter_text(sdr_pk, tb, sizeof tb);
+            else if (st->sdr_trouble)  snprintf(tb, sizeof tb, "%s", st->sdr_note);
+            else                       snprintf(tb, sizeof tb, "...");
+            set_text(s_dbm, tb);
+            set_text_color(s_dbm, sdr_on ? C_SDR : st->sdr_trouble ? C_WARN : C_LABEL);
+        } else
+#endif
+        {
+            snprintf(tb, sizeof tb, "%d dBm", (int)sig_pk);
+            set_text(s_dbm, tb);
+            set_text_color(s_dbm, C_LABEL);
+        }
     }
     set_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT);
 #endif
@@ -2936,7 +3151,11 @@ void ui_update(const ui_state_t *st)
     else if (st->tx)
         set_text(s_ptt_lbl, "TX");
     else
+#if VFO_PTT_DRY_RUN
+        set_text(s_ptt_lbl, st->may_key ? "PTT TEST" : "----");
+#else
         set_text(s_ptt_lbl, st->may_key ? "PTT" : "----");
+#endif
 
     lvgl_port_unlock();
 }
@@ -2960,7 +3179,6 @@ uint8_t ui_rotation(void) { return s_rot; }
 
 int32_t ui_take_step_request(void) { int32_t v = s_step_req; s_step_req = 0; return v; }
 bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false; return v; }
-bool    ui_take_swipe(void)        { bool v = s_swipe;       s_swipe    = false; return v; }
 bool    ui_take_lock_tap(void)     { bool v = s_lock_tap;    s_lock_tap = false; return v; }
 bool    ui_take_mute_tap(void)     { bool v = s_mute_tap;    s_mute_tap = false; return v; }
 

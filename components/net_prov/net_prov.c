@@ -1,8 +1,12 @@
 #include "net_prov.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -20,6 +24,8 @@
  * firmware wrote. */
 #if VFO_RADIO_SVXCONNECT
 #define KEY_HOST     "svhost"
+#define KEY_RLIST    "svlist"     /* the radios, one in use: see below */
+#define KEY_RSEL     "svsel"
 #define KEY_PORT     "svport"
 /* Unused: the station -- callsign, certificate and all -- is the svx
  * client's own ("svx" namespace), and the reflector takes no password. */
@@ -31,6 +37,8 @@
 #define DEFAULT_PASS ""
 #elif VFO_RADIO_MULTIFLEX
 #define KEY_HOST     "fxhost"
+#define KEY_RLIST    "fxlist"     /* the radios, one in use: see below */
+#define KEY_RSEL     "fxsel"
 #define KEY_PORT     "fxport"
 #define KEY_USER     "fxuser"
 #define KEY_PASS     "fxpass"
@@ -40,6 +48,8 @@
 #define DEFAULT_PASS ""
 #elif VFO_RADIO_XIEGU
 #define KEY_HOST     "xhost"
+#define KEY_RLIST    "xlist"     /* the radios, one in use: see below */
+#define KEY_RSEL     "xsel"
 #define KEY_PORT     "xport"
 #define KEY_USER     "xuser"
 #define KEY_PASS     "xpass"
@@ -49,6 +59,8 @@
 #define DEFAULT_PASS "123"
 #elif VFO_RADIO_ICOM
 #define KEY_HOST     "rhost"
+#define KEY_RLIST    "rlist"     /* the radios, one in use: see below */
+#define KEY_RSEL     "rsel"
 #define KEY_PORT     "rport"
 #define KEY_USER     "ruser"
 #define KEY_PASS     "rpass"
@@ -58,6 +70,8 @@
 #define DEFAULT_PASS ""
 #else
 #define KEY_HOST     "host"
+#define KEY_RLIST    "hlist"     /* the radios, one in use: see below */
+#define KEY_RSEL     "hsel"
 #define KEY_PORT     "port"
 #define KEY_USER     "ruser"
 #define KEY_PASS     "rpass"
@@ -82,6 +96,9 @@ static char s_web_user[24] = "admin";
 static char s_web_pass[33] = "admin";
 
 static vfo_cfg_t          s_cfg;
+/* The radios the knob knows, the one in use feeding s_cfg's endpoint. */
+EXT_RAM_BSS_ATTR static net_radio_t s_radios[NET_PROV_RADIOS];
+static int                s_nradios, s_radio_sel;
 static EventGroupHandle_t s_events;
 static bool               s_connected;
 static int                s_retries;
@@ -110,6 +127,157 @@ static const char *reason_text(uint8_t r)
     case WIFI_REASON_MIC_FAILURE:              return "wrong password?";
     default:                                   return "could not connect";
     }
+}
+
+/* ------------------------------------------------------------ the radios
+ *
+ * Up to NET_PROV_RADIOS, each firmware its own list (as its own endpoint):
+ * name \t host \t port \t user \t pass, a line each. The one in use is the
+ * configuration's endpoint, which is what the client starts with at boot --
+ * a swipe up chooses another and restarts the knob into it. A knob from
+ * before the list has its one radio made the first. */
+static void radio_to_cfg(const net_radio_t *r)
+{
+    strlcpy(s_cfg.radio_host, r->host, sizeof s_cfg.radio_host);
+    s_cfg.radio_port = r->port;
+    strlcpy(s_cfg.radio_user, r->user, sizeof s_cfg.radio_user);
+    strlcpy(s_cfg.radio_pass, r->pass, sizeof s_cfg.radio_pass);
+}
+
+static void cfg_to_radio(net_radio_t *r)
+{
+    strlcpy(r->host, s_cfg.radio_host, sizeof r->host);
+    r->port = s_cfg.radio_port;
+    strlcpy(r->user, s_cfg.radio_user, sizeof r->user);
+    strlcpy(r->pass, s_cfg.radio_pass, sizeof r->pass);
+}
+
+static void radios_parse(const char *blob)
+{
+    int n = 0;
+    for (const char *p = blob; p && *p && n < NET_PROV_RADIOS; ) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        char line[200];
+        if (len >= sizeof line) len = sizeof line - 1;
+        memcpy(line, p, len);
+        line[len] = 0;
+        char *f[5] = { line, "", "", "", "" };
+        int k = 1;
+        for (char *q = line; *q && k < 5; q++)
+            if (*q == '\t') { *q = 0; f[k++] = q + 1; }
+        if (f[1][0]) {
+            net_radio_t *r = &s_radios[n++];
+            memset(r, 0, sizeof *r);
+            strlcpy(r->name, f[0], sizeof r->name);
+            strlcpy(r->host, f[1], sizeof r->host);
+            r->port = (uint16_t)atoi(f[2]);
+            if (!r->port) r->port = DEFAULT_PORT;
+            strlcpy(r->user, f[3], sizeof r->user);
+            strlcpy(r->pass, f[4], sizeof r->pass);
+        }
+        p = eol ? eol + 1 : NULL;
+    }
+    s_nradios = n;
+}
+
+static void radios_load(void)
+{
+    nvs_handle_t h;
+    int8_t sel = 0;
+    s_nradios = 0;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = 0;
+        if (nvs_get_str(h, KEY_RLIST, NULL, &n) == ESP_OK && n > 1) {
+            char *blob = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+            if (blob && nvs_get_str(h, KEY_RLIST, blob, &n) == ESP_OK) radios_parse(blob);
+            free(blob);
+        }
+        nvs_get_i8(h, KEY_RSEL, &sel);
+        nvs_close(h);
+    }
+    if (!s_nradios) {                        /* the one radio it always had */
+        memset(&s_radios[0], 0, sizeof s_radios[0]);
+        cfg_to_radio(&s_radios[0]);
+        s_nradios = 1;
+        sel = 0;
+    }
+    s_radio_sel = sel >= 0 && sel < s_nradios ? sel : 0;
+    radio_to_cfg(&s_radios[s_radio_sel]);
+    if (s_nradios > 1)
+        ESP_LOGI(TAG, "%d radios; in use: %s", s_nradios,
+                 s_radios[s_radio_sel].name[0] ? s_radios[s_radio_sel].name
+                                               : s_radios[s_radio_sel].host);
+}
+
+static bool clean(const char *s)
+{
+    for (; *s; s++) if (*s == '\t' || *s == '\n' || *s == '\r') return false;
+    return true;
+}
+
+/* The list and the one in use, and that one's endpoint as the config's. */
+static esp_err_t radios_write(void)
+{
+    const size_t cap = NET_PROV_RADIOS * 200 + 1;
+    char *blob = heap_caps_calloc(1, cap, MALLOC_CAP_SPIRAM);
+    if (!blob) return ESP_ERR_NO_MEM;
+    size_t o = 0;
+    for (int i = 0; i < s_nradios; i++) {
+        const net_radio_t *r = &s_radios[i];
+        o += snprintf(blob + o, cap - o, "%s\t%s\t%u\t%s\t%s\n",
+                      r->name, r->host, (unsigned)r->port, r->user, r->pass);
+    }
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (e == ESP_OK) {
+        nvs_set_str(h, KEY_RLIST, blob);
+        nvs_set_i8(h, KEY_RSEL, (int8_t)s_radio_sel);
+        nvs_set_str(h, KEY_HOST, s_cfg.radio_host);
+        nvs_set_u16(h, KEY_PORT, s_cfg.radio_port);
+        nvs_set_str(h, KEY_USER, s_cfg.radio_user);
+        nvs_set_str(h, KEY_PASS, s_cfg.radio_pass);
+        e = nvs_commit(h);
+        nvs_close(h);
+    }
+    free(blob);
+    return e;
+}
+
+int  net_prov_radio_count(void)  { return s_nradios; }
+int  net_prov_radio_active(void) { return s_radio_sel; }
+
+bool net_prov_radio_get(int i, net_radio_t *out)
+{
+    if (i < 0 || i >= s_nradios || !out) return false;
+    *out = s_radios[i];
+    return true;
+}
+
+esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active)
+{
+    if (!list || n < 1 || n > NET_PROV_RADIOS || active < 0 || active >= n)
+        return ESP_ERR_INVALID_ARG;
+    for (int i = 0; i < n; i++)
+        if (!list[i].host[0] || !clean(list[i].name) || !clean(list[i].host) ||
+            !clean(list[i].user) || !clean(list[i].pass))
+            return ESP_ERR_INVALID_ARG;
+    memcpy(s_radios, list, n * sizeof list[0]);
+    s_nradios   = n;
+    s_radio_sel = active;
+    radio_to_cfg(&s_radios[active]);
+    const esp_err_t e = radios_write();
+    ESP_LOGI(TAG, "%d radio%s saved; in use: %s", n, n == 1 ? "" : "s",
+             list[active].name[0] ? list[active].name : list[active].host);
+    return e;
+}
+
+esp_err_t net_prov_radio_activate(int i)
+{
+    if (i < 0 || i >= s_nradios) return ESP_ERR_INVALID_ARG;
+    s_radio_sel = i;
+    radio_to_cfg(&s_radios[i]);
+    return radios_write();
 }
 
 static void load_or_seed(void)
@@ -167,6 +335,8 @@ static void load_or_seed(void)
         nvs_close(h);
     }
     if (s_boots > 1) ESP_LOGW(TAG, "boot #%u since last healthy run", s_boots);
+
+    radios_load();
 
     /* Never log the passphrase, only whether one is present. */
     ESP_LOGI(TAG, "ssid=\"%s\" psk=%s host=%s:%u user=%s",
@@ -336,7 +506,18 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
     nvs_set_str(h, KEY_PASS, cfg->radio_pass);
     err = nvs_commit(h);
     nvs_close(h);
-    if (err == ESP_OK) s_cfg = *cfg;
+    if (err == ESP_OK) {
+        s_cfg = *cfg;
+        /* The endpoint given this way is the radio in use: the list follows. */
+        if (s_nradios > 0) {
+            net_radio_t *r = &s_radios[s_radio_sel];
+            if (strcmp(r->host, cfg->radio_host) || r->port != cfg->radio_port ||
+                strcmp(r->user, cfg->radio_user) || strcmp(r->pass, cfg->radio_pass)) {
+                cfg_to_radio(r);
+                err = radios_write();
+            }
+        }
+    }
     return err;
 }
 

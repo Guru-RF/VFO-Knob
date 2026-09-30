@@ -19,6 +19,9 @@
 
 esp_err_t ui_init(void);
 
+#define UI_SDR_MAX 4
+#define UI_RADIOS_MAX 4
+
 typedef struct {
     int64_t  freq_hz;
     int32_t  step_hz;
@@ -54,6 +57,22 @@ typedef struct {
     uint8_t  rf_gain_pct, rf_power_pct;
     uint16_t max_w;
     bool     has_tuner, have_tuner, tuner_on;
+    /* Web SDRs as a second receiver (components/sdr_rx): a swipe down chooses
+     * LOCAL or one of them; while one plays, the radio is heard left and the
+     * SDR right, and BALANCE follows POWER on the swipe from the left. */
+    uint8_t  n_sdr;
+    char     sdr_name[UI_SDR_MAX][16];
+    int8_t   rxsrc;          /* -1 LOCAL, else the SDR */
+    bool     sdr_streaming;
+    bool     sdr_trouble;    /* not reached, refused, busy ... */
+    char     sdr_note[12];   /* ...in a word */
+    float    sdr_dbm;        /* its S-meter */
+    int8_t   balance;        /* -100 radio .. 0 split .. +100 SDR */
+    /* The radios the knob knows: a swipe up chooses another, when there is
+     * one, and the knob restarts into it (see ui_commit_t.have_radio). */
+    uint8_t  n_radios;       /* 0 or 1: no chooser */
+    char     radio_name[UI_RADIOS_MAX][16];
+    int8_t   radio_sel;
     /* A reflector (radio.h): the talkgroup and its name in place of band and
      * frequency, the talker in place of the S-units, lock and mute either
      * side of it, and the audio level on the arc. */
@@ -71,6 +90,7 @@ typedef struct {
     float    tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
     bool     tx;         /* the radio is transmitting, whoever keyed it */
     bool     tx_remote;  /* ...and it was not us, so we cannot stop it */
+    bool     keyed;      /* our PTT is not idle: keying, on the air, unkeying */
     bool     link_ok;
     bool     slice_locked;
     bool     may_key;
@@ -92,16 +112,14 @@ int32_t ui_take_step_request(void);
 /* A tap landed on the PTT pill. Consumed by the caller. */
 bool ui_take_ptt_tap(void);
 
-/* A swipe down the face: memory mode on, or off again. Only with a link, in
- * receive, on a radio with memories, and with nothing else asking for the
- * finger. Consumed by the caller. On a radio with a second receiver or a
- * choice of antennas the swipe opens their editors instead, and what they
- * choose comes as a commit.
+/* Memory mode on, or off again: V/M, last on the swipe down, on a radio with
+ * memories. Consumed by the caller. (The swipe down chooses what is heard --
+ * LOCAL or a web SDR, then a second receiver and the antenna, then V/M; the
+ * swipe up, the radio; what they choose comes as a commit.)
  *
  * Everything but PTT and the update question acts when the finger lifts,
  * not when it lands, so that a swipe is not first taken for a tap on
  * whatever it started on. */
-bool ui_take_swipe(void);
 
 /* A reflector's lock or mute symbol was tapped. Consumed by the caller. */
 bool ui_take_lock_tap(void);
@@ -138,6 +156,10 @@ typedef struct {
     bool     have_rf_gain;  uint8_t rf_gain_pct;
     bool     have_rf_power; uint8_t rf_power_pct;
     bool     have_tuner;    bool    tuner_on;
+    bool     have_rxsrc;    int8_t  rxsrc;
+    bool     have_balance;  int8_t  balance;
+    bool     have_radio;    int8_t  radio;      /* another radio: restart into it */
+    bool     have_vm;       bool    vm_mem;     /* V/M: memory mode, or the VFO */
 } ui_commit_t;
 
 /* Non-zero if the operator accepted an edit, or a live editor moved (live
@@ -185,6 +207,9 @@ void ui_updating_show(void);
  * REBOOTING, into update mode -- no percentage yet, which read as a download
  * stuck at 0%. The install after the restart shows its progress as usual. */
 void ui_updating_reboot(void);
+/* ...and for a restart into another radio: SWITCHING TO, and its name. Being
+ * that screen, it puts PTT out of reach until the restart. */
+void ui_switching(const char *radio);
 void ui_updating_progress(int percent);
 void ui_updating_result(bool ok, const char *message);
 void ui_updating_hide(void);

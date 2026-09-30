@@ -70,6 +70,17 @@ void audio_out_flush(void);
 /* Sample frames buffered and not yet played. */
 size_t audio_out_queued(void);
 
+/* A second receiver, a web SDR (components/sdr_rx): mono 16-bit PCM at
+ * AUDIO_RATE_HZ. While on, the radio is heard on the left and the SDR on the
+ * right, both levelled to the same loudness; off, the radio alone, in both
+ * ears, as without it. Feeding never blocks. */
+void audio_out_sdr(bool on);
+bool audio_out_feed_sdr(const int16_t *pcm, size_t n);
+/* The SDR silent -- while transmitting -- its stream kept running. */
+void audio_out_sdr_mute(bool mute);
+/* -100 the radio alone, 0 radio left and SDR right, +100 the SDR alone. */
+void audio_out_set_balance(int8_t balance);
+
 typedef struct {
     uint32_t frames, dropped, underruns;
     uint32_t sample_rate, format, channels;
