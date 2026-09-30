@@ -4353,17 +4353,25 @@ esp_err_t ui_init(void)
     lvgl_port_lock(0);
     lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
     lvgl_port_unlock();
-    const lvgl_port_touch_cfg_t tc = { .disp = disp, .handle = hal_touch_handle() };
-    lv_indev_t *touch = lvgl_port_add_touch(&tc);
-    ESP_RETURN_ON_FALSE(touch, ESP_FAIL, TAG, "add touch");
-    lvgl_port_lock(0);
-    lv_indev_set_read_cb(touch, touch_read);
-    lvgl_port_unlock();
-    /* LVGL reads once per refresh period (16 ms) by default. A brisk tap can
-     * fall between slower reads, which reads as "press firmly". */
-    lvgl_port_lock(0);
-    lv_timer_set_period(lv_indev_get_read_timer(touch), TOUCH_POLL_MS);
-    lvgl_port_unlock();
+    /* A face without touch, if touch did not come up. lvgl_port_add_touch()
+     * asserts on a NULL handle rather than failing, and that abort during
+     * init was a boot loop into safe mode behind a black screen -- the dial
+     * is worth having even when nothing on it can be pressed. */
+    if (hal_touch_handle()) {
+        const lvgl_port_touch_cfg_t tc = { .disp = disp, .handle = hal_touch_handle() };
+        lv_indev_t *touch = lvgl_port_add_touch(&tc);
+        ESP_RETURN_ON_FALSE(touch, ESP_FAIL, TAG, "add touch");
+        lvgl_port_lock(0);
+        lv_indev_set_read_cb(touch, touch_read);
+        lvgl_port_unlock();
+        /* LVGL reads once per refresh period (16 ms) by default. A brisk tap
+         * can fall between slower reads, which reads as "press firmly". */
+        lvgl_port_lock(0);
+        lv_timer_set_period(lv_indev_get_read_timer(touch), TOUCH_POLL_MS);
+        lvgl_port_unlock();
+    } else {
+        ESP_LOGE(TAG, "no touch -- the dial shows, but nothing on it responds");
+    }
 
     lvgl_port_lock(0);
     build();
