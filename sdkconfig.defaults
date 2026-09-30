@@ -85,6 +85,8 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
 CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_USE_PERF_MONITOR=n
+# The screenshot: console 'x' for tools/snap.py, and /api/screenshot.
+CONFIG_LV_USE_SNAPSHOT=y
 
 # --- OTA: signed images, no Secure Boot ------------------------------------
 # The signature is verified before an update is accepted, but nothing is burned

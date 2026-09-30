@@ -362,7 +362,7 @@ static void console_task(void *arg)
      * has a real button on the screen, so the console keeps only commands that
      * are safe to receive by accident: unkey and the aborts both STOP a
      * transmission, and the rest are read-only. */
-    ESP_LOGI(TAG, "console: u=unkey  s=status  r=rotate");
+    ESP_LOGI(TAG, "console: u=unkey  s=status  r=rotate  x=screenshot");
     ESP_LOGI(TAG, "         p=abort:pong-stale  d=abort:link-down");
 
     for (;;) {
@@ -376,6 +376,7 @@ static void console_task(void *arg)
                   radio_ptt_force_abort(PTT_AB_PONG_STALE); break;
         case 'd': ESP_LOGI(TAG, "console: forcing link-down abort");
                   radio_ptt_force_abort(PTT_AB_LINK_DOWN);  break;
+        case 'x': ui_screenshot(); break;      /* read-only: tools/snap.py */
         case 'r': ui_cycle_rotation();
                   ESP_LOGI(TAG, "rotation -> %u degrees", ui_rotation() * 90u);
                   break;
