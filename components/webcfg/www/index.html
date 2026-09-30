@@ -48,7 +48,8 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
 </style>
 </head>
 <body><div class="wrap">
-<h1>VFO-Knob</h1>
+<h1>VFO-Knob <a id="toradio" class="pill up" href="/radio" hidden
+    style="font-size:12px;text-decoration:none;margin-left:8px;vertical-align:middle">&#9664; Radio controls</a></h1>
 <p class="sub" id="ident">&nbsp;</p>
 <div id="warn" class="warn" hidden>
   This knob still uses the shipped password (<b>admin/admin</b>). Anyone on this
@@ -247,6 +248,8 @@ function mhz(hz){return (hz/1e6).toFixed(6)+' MHz'}
 async function refresh(){
   let s; try{ s=await (await fetch('/api/status')).json() }catch(e){ return }
   $('ident').textContent = `${s.version} · ${s.transport} · up ${hhmmss(s.uptime_s)}`;
+  /* Back to the radio's controls, while it is connected (not a reflector's). */
+  $('toradio').hidden = !(s.link==='READY' && !s.reflector);
   const pill = s.link==='READY' ? '<span class="pill up">READY</span>'
                                 : `<span class="pill down">${esc(s.link)}</span>`;
   $('status').innerHTML =

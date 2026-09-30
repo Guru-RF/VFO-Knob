@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VFO-Knob radio</title>
+<style>
+/* The knob's own face, per radio (components/ui/ui.c): set from /api/config. */
+:root{--bg:#000;--panel:#141a24;--panel2:#0c1119;--line:#232b38;--text:#fff;--text2:#c0c8d4;
+      --label:#707884;--dim:#3a4048;--accent:#2f7bff;--accent-hi:#5a9bff;--warn:#ffb000;
+      --danger:#ff3030;--tx:#e60012;--meter:#3fa9ff;--ok:#3fbf6f}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+.wrap{max-width:760px;margin:0 auto;padding:14px 14px 40px}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand h1{font-size:19px;margin:0;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{font-size:12px;padding:2px 9px;border-radius:99px;background:var(--panel);color:var(--label);border:1px solid var(--line)}
+.pill.up{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+.pill.down{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,transparent)}
+a.btn,button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--panel);
+      color:var(--text2);padding:9px 14px;text-decoration:none;display:inline-block;touch-action:manipulation}
+a.btn:hover,button:hover{border-color:var(--accent)}
+button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button:disabled{opacity:.35;cursor:default}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--label);margin:0 0 10px;font-weight:600}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.between{justify-content:space-between}
+.tag{font-size:12px;letter-spacing:.08em;padding:2px 8px;border-radius:6px;background:var(--panel2);color:var(--text2);border:1px solid var(--line)}
+.tag.acc{color:var(--accent-hi);border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.txbadge{font-weight:700;letter-spacing:.14em;padding:2px 12px;border-radius:6px;background:var(--tx);color:#fff}
+.vfo{background:linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%)}
+.freq{font:600 clamp(40px,11vw,68px)/1.05 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+      font-variant-numeric:tabular-nums;letter-spacing:.02em;text-align:center;margin:10px 0 4px;color:var(--text)}
+.freq small{font-size:.42em;color:var(--label);margin-left:.3em;letter-spacing:.1em}
+.meter{position:relative;height:16px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);overflow:hidden;margin-top:10px}
+.mbar{position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,var(--meter) 0%,var(--meter) 60%,var(--danger) 100%);
+      transition:width .18s linear}
+.mbar.tx{background:linear-gradient(90deg,var(--tx),var(--danger))}
+.scale{display:flex;justify-content:space-between;font-size:11px;color:var(--label);margin-top:3px;padding:0 2px}
+.sval{font:600 14px ui-monospace,Menlo,Consolas,monospace;color:var(--text2)}
+.fentry{display:flex;gap:8px;margin-top:12px}
+.fentry input{flex:1;min-width:0;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
+      background:var(--panel2);color:var(--text)}
+.fentry input:focus{outline:none;border-color:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:8px}
+.grid button{padding:10px 4px}
+.slider{display:grid;grid-template-columns:86px 1fr 64px;align-items:center;gap:10px;margin:6px 0}
+.slider label{color:var(--text2);font-size:13px}
+.slider output{text-align:right;font:600 14px ui-monospace,Menlo,Consolas,monospace;color:var(--accent-hi)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:3px;background:var(--dim);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--accent);border:2px solid #fff;cursor:pointer}
+input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--accent);border:2px solid #fff;cursor:pointer}
+input[type=range]:disabled{opacity:.35}
+.sub{color:var(--label);font-size:12px;margin:8px 0 0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:560px){.two{grid-template-columns:1fr}}
+code{font:12.5px ui-monospace,Menlo,Consolas,monospace;color:var(--accent-hi);word-break:break-all}
+.api p{margin:6px 0;color:var(--text2);font-size:13px}
+body.off main section:not(.api){opacity:.45;pointer-events:none}
+body.tx main section.ctl{opacity:.45;pointer-events:none}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--panel);border:1px solid var(--danger);
+      color:var(--text);padding:9px 14px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+</style>
+</head>
+<body class="off">
+<div class="wrap">
+<header>
+  <div class="brand"><h1 id="model">VFO-Knob</h1><span id="link" class="pill">…</span></div>
+  <a class="btn" href="/config" title="The knob's settings; the radio stays connected">Config</a>
+</header>
+<main>
+<section class="vfo">
+  <div class="row between">
+    <div class="row"><span id="rxtag" class="tag" hidden>MAIN</span><span id="modetag" class="tag acc">--</span>
+      <span id="filtag" class="tag">--</span><span id="rittag" class="tag" hidden></span></div>
+    <span id="txbadge" class="txbadge" hidden>TX</span>
+  </div>
+  <div id="freq" class="freq">--.---.---<small>MHz</small></div>
+  <div class="meter"><div id="mbar" class="mbar"></div></div>
+  <div class="scale"><span>S1</span><span>3</span><span>5</span><span>7</span><span>9</span><span>+20</span><span>+40</span><span>+60</span></div>
+  <div class="row between" style="margin-top:6px"><span id="sval" class="sval">S0</span><span id="memtag" class="tag" hidden></span></div>
+  <form id="fform" class="fentry" autocomplete="off">
+    <input id="fin" inputmode="decimal" placeholder="14.074 MHz, or 14074 kHz">
+    <button class="on">Set</button>
+  </form>
+  <div class="row" style="margin-top:10px">
+    <button data-step="-1">&minus;</button><button data-step="1">+</button>
+    <div class="row" id="steps"></div>
+  </div>
+</section>
+
+<section class="ctl"><h2>Band</h2><div id="bands" class="grid"></div></section>
+<section class="ctl"><h2>Mode</h2><div id="modes" class="grid"></div></section>
+<section class="ctl"><h2>Filter</h2><div id="filters" class="grid"></div></section>
+
+<section class="ctl">
+  <h2>Receive</h2>
+  <div class="two">
+    <div><div class="sub" style="margin:0 0 6px">AGC</div><div id="agcs" class="grid"></div></div>
+    <div id="gainbox"><div class="sub" style="margin:0 0 6px" id="gaincap">P.AMP</div><div id="gains" class="grid"></div></div>
+  </div>
+  <div id="rfgbox" class="slider" hidden><label for="rfg">RF gain</label>
+    <input id="rfg" type="range" min="0" max="100" step="1"><output id="rfgv">--</output></div>
+</section>
+
+<section class="ctl" id="txset" hidden>
+  <h2>Transmitter</h2>
+  <div id="pwrbox" class="slider" hidden><label for="pwr">Power</label>
+    <input id="pwr" type="range" min="0" max="100" step="1"><output id="pwrv">--</output></div>
+  <div id="tunerbox" class="row" hidden><span class="sub" style="margin:0;min-width:86px">Tuner</span>
+    <button id="tunoff">OFF</button><button id="tunon">ON</button></div>
+  <p class="sub">No transmitting from here: the knob keys the radio, not this page.</p>
+</section>
+
+<section class="ctl" id="rxant" hidden>
+  <h2>Receiver &amp; antenna</h2>
+  <div id="rxrow" class="row" hidden><span class="sub" style="margin:0;min-width:86px">VFO</span>
+    <button data-rx="0">MAIN</button><button data-rx="1">SUB</button></div>
+  <div id="antrow" class="row" style="margin-top:8px" hidden><span class="sub" style="margin:0;min-width:86px">Antenna</span>
+    <span id="ants" class="row"></span></div>
+</section>
+
+<section class="ctl">
+  <h2>RIT</h2>
+  <div class="row"><button data-rit="-100">&minus;100</button><button data-rit="-10">&minus;10</button>
+    <span id="ritv" class="sval" style="min-width:90px;text-align:center">0 Hz</span>
+    <button data-rit="10">+10</button><button data-rit="100">+100</button><button data-rit="0">Clear</button></div>
+</section>
+
+<section>
+  <h2>The knob's audio</h2>
+  <div class="slider"><label for="vol">Volume</label><input id="vol" type="range" min="0" max="100" step="1"><output id="volv">--</output></div>
+  <div class="slider"><label for="mic">Mic gain</label><input id="mic" type="range" min="0" max="200" step="5"><output id="micv">--</output></div>
+</section>
+
+<section class="api">
+  <h2>For other programs</h2>
+  <p>Read the frequency, mode and the rest, as JSON:<br><code id="apiget"></code></p>
+  <p>Set the frequency (Hz, or MHz with a point) and anything else on this page:<br><code id="apiset"></code></p>
+  <p>Also <code>mode</code>, <code>filter</code> (1&ndash;3), <code>agc</code>, <code>gain</code>, <code>rfgain</code> and
+     <code>power</code> (0&ndash;100), <code>tuner</code> (on/off), <code>rx</code> (main/sub), <code>ant</code>,
+     <code>rit</code> (Hz). Both need this page's login &mdash; <code>http://user:password@&hellip;</code> &mdash;
+     and nothing here transmits.</p>
+</section>
+</main>
+</div>
+<div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+/* Per radio: its face's colours, modes, AGC and gain caption (components/ui/ui.c). */
+const PAL={
+ icom:{bg:'#000000',panel:'#141a24',panel2:'#0b1018',line:'#232b38',text2:'#c0c8d4',label:'#707884',dim:'#3a4048',
+       accent:'#2f7bff','accent-hi':'#5a9bff',danger:'#ff3030',tx:'#e60012',meter:'#3fa9ff'},
+ xiegu:{bg:'#000000',panel:'#1e1a16',panel2:'#120f0c',line:'#332c25',text2:'#d2ccc4',label:'#7e7770',dim:'#3e3a36',
+       accent:'#ff8c1a','accent-hi':'#ffa64d',danger:'#ff3b30',tx:'#e8200c',meter:'#ff8c1a'},
+ multiflex:{bg:'#000000',panel:'#0c1622',panel2:'#070e17',line:'#1c2a3a',text2:'#c9d2dc',label:'#7d8792',dim:'#3a424c',
+       accent:'#2a9df4','accent-hi':'#62bbff',danger:'#f0302c',tx:'#e8262b',meter:'#2a9df4'},
+ aethersdr:{bg:'#0f0f1a',panel:'#1a2a3a',panel2:'#121e2b',line:'#26394d',text2:'#8ea8c0',label:'#506070',dim:'#3a4a5a',
+       accent:'#00b4d8','accent-hi':'#00c8f0',danger:'#ff4d4d',tx:'#e01010',meter:'#00b4d8'}};
+const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR'};
+const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',am:'AM',sam:'SAM',fm:'FM',nfm:'NFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
+const MODES={icom:['usb','lsb','cw','cwr','am','fm','rtty','digu','digl'],
+  xiegu:['usb','lsb','cw','cwr','am','fm','digu','digl'],
+  multiflex:['usb','lsb','cw','am','sam','fm','nfm','digu','digl','rtty'],
+  aethersdr:['usb','lsb','cw','cwr','am','sam','fm','nfm','digu','digl','rtty']};
+const AGCS={icom:['fast','mid','slow'],xiegu:['fast','mid','slow'],multiflex:['fast','med','slow','off'],aethersdr:['fast','med','slow','off']};
+const GAINCAP={icom:'P.AMP',xiegu:'PRE',multiflex:'RF.G',aethersdr:'RF.G'};
+const BANDS=[['160m',1840000],['80m',3700000],['60m',5355000],['40m',7100000],['30m',10130000],['20m',14100000],
+  ['17m',18120000],['15m',21200000],['12m',24940000],['10m',28400000],['6m',50200000],['2m',144300000],['70cm',432200000]];
+const WIDTHS=[1800,2100,2400,2700,3000,3600];
+const STEPS=[[10,'10 Hz'],[100,'100 Hz'],[1000,'1 kHz'],[10000,'10 kHz'],[100000,'100 kHz']];
+let RADIO='icom',R=null,step=1000,touched={};
+const lsbSide=m=>['lsb','cwr','digl'].includes(m);
+
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2600)}
+function fmt(hz){const s=String(Math.round(hz)).padStart(7,'0');return s.slice(0,-6)+'.'+s.slice(-6,-3)+'.'+s.slice(-3)}
+function btns(el,items,onclick){el.innerHTML='';for(const [v,label] of items){const b=document.createElement('button');
+  b.textContent=label;b.dataset.v=v;b.onclick=()=>onclick(v);el.appendChild(b)}}
+function mark(el,cur){for(const b of el.children)b.classList.toggle('on',String(b.dataset.v)===String(cur))}
+async function set(o){try{const r=await fetch('/api/radio/set?'+new URLSearchParams(o),{cache:'no-store'});
+  if(r.ok){R=await r.json();render()}else toast(await r.text())}catch(e){toast('The knob did not answer')}}
+function slider(id,out,fmtv,send){const s=$(id);let t=0;
+  s.oninput=()=>{touched[id]=Date.now();$(out).textContent=fmtv(+s.value);clearTimeout(t);t=setTimeout(()=>send(+s.value),120)};
+  s.onchange=()=>{touched[id]=Date.now();send(+s.value)}}
+const busy=id=>Date.now()-(touched[id]||0)<1500;
+
+function sunits(dbm){if(dbm<=-126)return 'S0';if(dbm<=-73)return 'S'+Math.max(0,Math.round((dbm+127)/6));return 'S9+'+Math.round(dbm+73)}
+function gainLabel(g,max){if(RADIO==='multiflex'||RADIO==='aethersdr')return (g>0?'+':'')+g+' dB';
+  if(g<=0)return 'OFF';if(max<=1)return 'ON';return (RADIO==='xiegu'?'PRE':'P.AMP')+g}
+
+function render(){
+  if(!R)return;
+  const ready=R.ready;document.body.classList.toggle('off',!ready);document.body.classList.toggle('tx',!!R.tx);
+  const l=$('link');l.textContent=ready?'connected':(R.link||'').toLowerCase();l.className='pill '+(ready?'up':'down');
+  $('model').textContent=R.model||NAME[RADIO]||'Radio';
+  $('freq').innerHTML=(ready?fmt(R.freq):'--.---.---')+'<small>MHz</small>';
+  $('modetag').textContent=ML[R.mode]||(R.mode||'--').toUpperCase();
+  $('filtag').textContent=R.filter?('FIL'+R.filter):((R.hi-R.lo)>0?(R.hi-R.lo)+' Hz':'--');
+  $('rittag').hidden=!R.rit;$('rittag').textContent='RIT '+(R.rit>0?'+':'')+R.rit;
+  $('rxtag').hidden=!(R.n_rx>1);$('rxtag').textContent=R.rx?'SUB':'MAIN';
+  $('txbadge').hidden=!R.tx;
+  const pct=Math.max(0,Math.min(1,(R.smeter+127)/114))*100;
+  $('mbar').style.width=(R.tx?0:pct)+'%';$('sval').textContent=ready?(sunits(R.smeter)+'  '+Math.round(R.smeter)+' dBm'):'--';
+  $('memtag').hidden=!(R.memories&&R.mem_state>0);
+  $('memtag').textContent='MEM '+String(R.mem_group).padStart(2,'0')+'/'+String(R.mem_ch).padStart(2,'0')+(R.mem_name?' '+R.mem_name:'');
+  // bands: 2 m and 70 cm only where the radio tunes that high
+  const bands=BANDS.filter(b=>b[1]<=(R.f_max||60000000));
+  if($('bands').children.length!==bands.length)btns($('bands'),bands.map(b=>[b[1],b[0]]),hz=>set({freq:hz}));
+  const cur=[...bands].reverse().find(b=>Math.abs(R.freq-b[1])<Math.max(500000,b[1]*0.05));mark($('bands'),cur?cur[1]:'');
+  mark($('modes'),R.mode);
+  if(R.filter){if($('filters').dataset.kind!=='pre'){$('filters').dataset.kind='pre';btns($('filters'),[[1,'FIL1'],[2,'FIL2'],[3,'FIL3']],n=>set({filter:n}))}mark($('filters'),R.filter)}
+  else{if($('filters').dataset.kind!=='w'){$('filters').dataset.kind='w';btns($('filters'),WIDTHS.map(w=>[w,(w/1000).toFixed(1)+'k']),w=>{
+      const l=lsbSide(R.mode);set(l?{lo:-w,hi:-100}:{lo:100,hi:w})})}
+    const w=R.hi-R.lo;mark($('filters'),WIDTHS.reduce((a,b)=>Math.abs(b-w)<Math.abs(a-w)?b:a))}
+  mark($('agcs'),R.agc);
+  $('gainbox').hidden=!R.have_gain;
+  if(R.have_gain){const items=[];for(let g=R.gain_min;g<=R.gain_max;g+=Math.max(1,R.gain_step))items.push([g,gainLabel(g,R.gain_max)]);
+    const key=items.map(i=>i[0]).join(',');if($('gains').dataset.k!==key){$('gains').dataset.k=key;btns($('gains'),items,g=>set({gain:g}))}
+    mark($('gains'),R.gain)}
+  $('rfgbox').hidden=!R.levels;$('pwrbox').hidden=!R.levels;$('tunerbox').hidden=!R.tuner;$('txset').hidden=!(R.levels||R.tuner);
+  if(R.levels){if(!busy('rfg')){$('rfg').value=R.rfgain;$('rfgv').textContent=R.rfgain+'%'}
+    if(!busy('pwr')){$('pwr').value=R.power;$('pwrv').textContent=pwrText(R.power)}}
+  $('tunon').classList.toggle('on',R.tuner_on);$('tunoff').classList.toggle('on',!R.tuner_on);
+  $('rxant').hidden=!(R.n_rx>1||R.n_ant>0);$('rxrow').hidden=!(R.n_rx>1);$('antrow').hidden=!(R.n_ant>0);
+  for(const b of document.querySelectorAll('[data-rx]'))b.classList.toggle('on',+b.dataset.rx===R.rx);
+  if(R.n_ant>0){const items=[];for(let a=1;a<=R.n_ant;a++){items.push([a+':0','ANT'+a]);if(R.has_rx_ant)items.push([a+':1','ANT'+a+'+RX'])}
+    const key=items.map(i=>i[0]).join(',');if($('ants').dataset.k!==key){$('ants').dataset.k=key;
+      btns($('ants'),items,v=>{const [a,rx]=v.split(':');set({ant:a,rxant:rx})})}
+    mark($('ants'),(R.ant+1)+':'+(R.ant_rx?1:0))}
+  $('ritv').textContent=(R.rit>0?'+':'')+R.rit+' Hz';
+}
+const pwrText=p=>R&&R.max_w?Math.round(p*R.max_w/100)+' W':p+'%';
+
+async function poll(){try{R=await (await fetch('/api/radio',{cache:'no-store'})).json();render()}
+  catch(e){const l=$('link');l.textContent='knob not answering';l.className='pill down'}
+  setTimeout(poll,700)}
+
+async function init(){
+  try{const c=await (await fetch('/api/config',{cache:'no-store'})).json();
+    RADIO=PAL[c.radio]?c.radio:'icom';
+    $('vol').value=c.vol;$('volv').textContent=c.vol;$('mic').value=c.mic;$('micv').textContent=c.mic}catch(e){}
+  const p=PAL[RADIO],st=document.documentElement.style;for(const k in p)st.setProperty('--'+k,p[k]);
+  btns($('modes'),MODES[RADIO].map(m=>[m,ML[m]]),m=>set({mode:m}));
+  btns($('agcs'),AGCS[RADIO].map(a=>[a,a.toUpperCase()]),a=>set({agc:a}));
+  $('gaincap').textContent=GAINCAP[RADIO];
+  btns($('steps'),STEPS,s=>{step=s;mark($('steps'),step)});mark($('steps'),step);
+  for(const b of document.querySelectorAll('[data-step]'))b.onclick=()=>R&&set({freq:Math.round(R.freq/step)*step+(+b.dataset.step)*step});
+  for(const b of document.querySelectorAll('[data-rit]'))b.onclick=()=>R&&set({rit:+b.dataset.rit?Math.max(-9999,Math.min(9999,R.rit+(+b.dataset.rit))):0});
+  for(const b of document.querySelectorAll('[data-rx]'))b.onclick=()=>set({rx:b.dataset.rx});
+  $('tunon').onclick=()=>set({tuner:'on'});$('tunoff').onclick=()=>set({tuner:'off'});
+  slider('rfg','rfgv',v=>v+'%',v=>set({rfgain:v}));
+  slider('pwr','pwrv',pwrText,v=>set({power:v}));
+  const knob=(k,v)=>fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:k+'='+v}).catch(()=>{});
+  /* The knob's own levels are saved with its settings: sent once, on letting go. */
+  for(const [id,out] of [['vol','volv'],['mic','micv']]){const s=$(id);
+    s.oninput=()=>{$(out).textContent=s.value};s.onchange=()=>knob(id,s.value)}
+  $('fform').onsubmit=e=>{e.preventDefault();const t=$('fin').value.trim().replace(',','.');if(!t)return;let f=parseFloat(t);
+    if(!isFinite(f))return toast('Not a frequency');
+    /* a point means MHz; a whole number below 100000 is kHz; above, Hz */
+    f=t.includes('.')?f*1e6:(f<100000?f*1e3:f);set({freq:Math.round(f)});$('fin').value='';$('fin').blur()};
+  const h=location.host;$('apiget').textContent='http://'+h+'/api/radio';$('apiset').textContent='http://'+h+'/api/radio/set?freq=14074000';
+  poll();
+}
+init();
+</script>
+</body>
+</html>

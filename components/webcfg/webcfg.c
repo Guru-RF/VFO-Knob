@@ -25,11 +25,14 @@
 #include "radio.h"
 #include "ui.h"
 #include "usb_net.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "webcfg";
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[]   asm("_binary_index_html_end");
+extern const char radio_html_start[] asm("_binary_radio_html_start");
+extern const char radio_html_end[]   asm("_binary_radio_html_end");
 
 static httpd_handle_t s_srv;
 
@@ -466,7 +469,7 @@ static __attribute__((noinline)) bool upload_radio(httpd_req_t *r)
     return ok;
 }
 
-static esp_err_t ota_upload_post(httpd_req_t *r)
+static esp_err_t ota_upload_run(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     if (!upload_radio(r)) {
@@ -588,6 +591,44 @@ failed_sent:
     return ESP_FAIL;
 }
 
+/* The task watchdog, relaxed while an upload runs. Its flash erase and writes
+ * stall the other core while the display redraws the progress ring, and with
+ * a radio session keeping both cores busy besides, core 1's idle task went
+ * 5 s without running: the watchdog reset the knob two seconds into an
+ * upload. The upload has its own stall timeout (kUploadStalls); the watchdog
+ * gets half a minute while it runs, and its usual 5 s back after. */
+#ifdef CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0
+#define WDT_IDLE0 1
+#else
+#define WDT_IDLE0 0
+#endif
+#ifdef CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1
+#define WDT_IDLE1 2
+#else
+#define WDT_IDLE1 0
+#endif
+static void upload_watchdog(bool relaxed)
+{
+#ifdef CONFIG_ESP_TASK_WDT_INIT
+    const esp_task_wdt_config_t c = {
+        .timeout_ms     = relaxed ? 30000 : CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000,
+        .idle_core_mask = WDT_IDLE0 | WDT_IDLE1,
+        .trigger_panic  = true,
+    };
+    esp_task_wdt_reconfigure(&c);
+#else
+    (void)relaxed;
+#endif
+}
+
+static esp_err_t ota_upload_post(httpd_req_t *r)
+{
+    upload_watchdog(true);
+    const esp_err_t e = ota_upload_run(r);
+    upload_watchdog(false);
+    return e;
+}
+
 /* ---------------------------------------------------------------- reboot */
 
 static void reboot_cb(void *arg)
@@ -705,6 +746,162 @@ static esp_err_t portal_404(httpd_req_t *r, httpd_err_code_t err)
 #define PORTAL_URIS 0
 #endif
 
+/* ------------------------------------------------------------- the radio
+ *
+ * With the radio connected, the page opens on its controls: everything the
+ * knob can set on it, and the API behind them -- for the page, and for
+ * logging programs and anything else that wants the frequency and mode, or
+ * to set them with a plain URL:
+ *
+ *   GET /api/radio                          the state, as JSON
+ *   GET /api/radio/set?freq=14074000        Hz; 14.074 (a point) is MHz
+ *       ...&mode=usb&filter=2&agc=mid&gain=1&rfgain=80&power=50
+ *       ...&tuner=on&rx=sub&ant=2&rxant=1&rit=-120&lo=100&hi=2800
+ *   (POST, with the same fields as a form, does the same.)
+ *
+ * Behind the page's login like everything here. Nothing that transmits:
+ * neither PTT nor a tune cycle, on the page or in the API, and no setting at
+ * all while the radio is on the air. Not for the setup firmware, which has
+ * no radio, nor svxconnect's reflector. */
+#define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT)
+
+static esp_err_t send_page(httpd_req_t *r, const char *start, const char *end)
+{
+    httpd_resp_set_type(r, "text/html");
+    return httpd_resp_send(r, start, end - start - 1);
+}
+
+static esp_err_t config_page(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    return send_page(r, index_html_start, index_html_end);
+}
+
+#if RADIO_PAGE
+#define RADIO_URIS 4
+
+static esp_err_t radio_page(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    return send_page(r, radio_html_start, radio_html_end);
+}
+
+static void json_str(char *out, size_t cap, const char *s)
+{
+    /* The radio's own names: no quotes or backslashes to escape, but keep
+     * anything unexpected out of the JSON rather than trust it. */
+    size_t o = 0;
+    for (; s && *s && o + 1 < cap; s++)
+        if (*s >= 0x20 && *s != '"' && *s != '\\') out[o++] = *s;
+    out[o] = 0;
+}
+
+static esp_err_t radio_get(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    /* Static: this task serves one request at a time, and both are big. */
+    static radio_status_t st;
+    static char j[1024];
+    radio_get_status(&st);
+    static const char *LINK[] = { "DOWN", "CONNECTING", "GREETING", "READY", "DEGRADED" };
+    char mode[8], agc[8], model[16], mem[20];
+    json_str(mode, sizeof mode, st.mode);
+    json_str(agc, sizeof agc, st.agc);
+    json_str(model, sizeof model, st.model);
+    json_str(mem, sizeof mem, st.mem_name);
+    const bool ready = st.link == RADIO_LINK_READY || st.link == RADIO_LINK_DEGRADED;
+    snprintf(j, sizeof j,
+        "{\"radio\":\"%s\",\"model\":\"%s\",\"link\":\"%s\",\"ready\":%s,"
+        "\"freq\":%lld,\"f_max\":%lld,\"mode\":\"%s\",\"tx\":%s,\"smeter\":%.1f,"
+        "\"filter\":%u,\"lo\":%ld,\"hi\":%ld,\"agc\":\"%s\",\"rit\":%ld,"
+        "\"have_gain\":%s,\"gain\":%d,\"gain_min\":%d,\"gain_max\":%d,\"gain_step\":%d,"
+        "\"levels\":%s,\"rfgain\":%u,\"power\":%u,\"max_w\":%u,"
+        "\"tuner\":%s,\"tuner_on\":%s,"
+        "\"n_rx\":%u,\"rx\":%u,\"n_ant\":%u,\"ant\":%u,\"has_rx_ant\":%s,\"ant_rx\":%s,"
+        "\"memories\":%s,\"mem_state\":%u,\"mem_group\":%u,\"mem_ch\":%u,\"mem_name\":\"%s\"}",
+        ota_radio(), model, st.link <= RADIO_LINK_DEGRADED ? LINK[st.link] : "?",
+        ready ? "true" : "false",
+        (long long)st.f_display, (long long)st.f_max, mode, st.tx ? "true" : "false",
+        (double)st.smeter_dbm,
+        (unsigned)st.filter_no, (long)st.filt_lo, (long)st.filt_hi, agc, (long)st.rit_hz,
+        st.have_gain ? "true" : "false", st.gain, st.gain_min, st.gain_max, st.gain_step,
+        st.has_levels && st.have_levels ? "true" : "false",
+        (unsigned)st.rf_gain_pct, (unsigned)st.rf_power_pct, (unsigned)st.max_w,
+        st.has_tuner && st.have_tuner ? "true" : "false", st.tuner_on ? "true" : "false",
+        (unsigned)st.n_rx, (unsigned)st.rx, (unsigned)st.n_ant, (unsigned)st.ant,
+        st.has_rx_ant ? "true" : "false", st.ant_rx ? "true" : "false",
+        st.has_memories ? "true" : "false", (unsigned)st.mem_state,
+        (unsigned)st.mem_group, (unsigned)st.mem_ch, mem);
+    return send_json(r, j);
+}
+
+/* Settings from the query string, or from a form: see above. */
+static esp_err_t radio_set(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    static char q[320];
+    q[0] = 0;
+    if (r->method == HTTP_POST) {
+        const int total = r->content_len;
+        if (total <= 0 || total >= (int)sizeof q) {
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body size");
+            return ESP_FAIL;
+        }
+        int got = 0;
+        while (got < total) {
+            const int k = httpd_req_recv(r, q + got, total - got);
+            if (k <= 0) return ESP_FAIL;
+            got += k;
+        }
+        q[got] = 0;
+    } else if (httpd_req_get_url_query_str(r, q, sizeof q) != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "nothing to set");
+        return ESP_FAIL;
+    }
+    if (!radio_is_ready()) {
+        httpd_resp_set_status(r, "503 Service Unavailable");
+        return httpd_resp_sendstr(r, "the radio is not connected");
+    }
+    if (radio_on_air()) {
+        httpd_resp_set_status(r, "409 Conflict");
+        return httpd_resp_sendstr(r, "the radio is transmitting");
+    }
+    char v[32];
+    long n;
+    if (field(q, "freq", v, sizeof v) && v[0]) {
+        /* Hz, or MHz with a point: 14074000 or 14.074. */
+        const double f = strchr(v, '.') ? strtod(v, NULL) * 1e6 : strtod(v, NULL);
+        if (f >= 10000.0 && f <= 1.3e9) {
+            ESP_LOGI(TAG, "web: freq -> %.0f", f);
+            radio_goto_freq((int64_t)(f + 0.5));
+        }
+    }
+    if (field(q, "mode", v, sizeof v) && v[0]) radio_set_mode(v);
+    if (field_num(q, "filter", &n) && n >= 1 && n <= 3) radio_select_filter((uint8_t)n);
+    long lo, hi;
+    if (field_num(q, "lo", &lo) && field_num(q, "hi", &hi) && lo < hi) radio_set_filter(lo, hi);
+    if (field(q, "agc", v, sizeof v) && v[0]) radio_set_agc(v);
+    if (field_num(q, "gain", &n)) radio_set_gain((int8_t)clampl(n, -20, 60));
+    if (field_num(q, "rfgain", &n)) radio_set_rf_gain((uint8_t)clampl(n, 0, 100));
+    if (field_num(q, "power", &n)) radio_set_rf_power((uint8_t)clampl(n, 0, 100));
+    if (field(q, "tuner", v, sizeof v) && v[0])
+        radio_set_tuner(strcmp(v, "on") == 0 || strcmp(v, "1") == 0);
+    if (field(q, "rx", v, sizeof v) && v[0])
+        radio_select_rx(strcasecmp(v, "sub") == 0 || strcmp(v, "1") == 0);
+    if (field_num(q, "ant", &n) && n >= 1 && n <= 4) {
+        long rxant = 0;
+        field_num(q, "rxant", &rxant);
+        radio_set_antenna((uint8_t)(n - 1), rxant != 0);
+    }
+    if (field_num(q, "rit", &n)) radio_set_rit((int32_t)clampl(n, -9999, 9999));
+    /* The state as it stands: what was asked goes out to the radio as this
+     * answers, so a reader wanting it confirmed asks again. */
+    return radio_get(r);
+}
+#else
+#define RADIO_URIS 0
+#endif
+
 static esp_err_t root_get(httpd_req_t *r)
 {
 #if VFO_RADIO_SETUP
@@ -715,9 +912,12 @@ static esp_err_t root_get(httpd_req_t *r)
     }
 #endif
     REQUIRE_AUTH(r);
-    httpd_resp_set_type(r, "text/html");
-    return httpd_resp_send(r, index_html_start,
-                           index_html_end - index_html_start - 1);
+#if RADIO_PAGE
+    /* The radio's controls while it is connected; the configuration page,
+     * at /config, a button away. */
+    if (radio_is_ready()) return send_page(r, radio_html_start, radio_html_end);
+#endif
+    return send_page(r, index_html_start, index_html_end);
 }
 
 esp_err_t webcfg_start(void)
@@ -730,7 +930,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 9 + n_extra + PORTAL_URIS;
+    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + RADIO_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -757,9 +957,20 @@ esp_err_t webcfg_start(void)
         { .uri = "/api/ota/upload", .method = HTTP_POST, .handler = ota_upload_post },
         { .uri = "/api/reboot",  .method = HTTP_POST, .handler = reboot_post },
         { .uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get },
+        { .uri = "/config",      .method = HTTP_GET,  .handler = config_page },
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++)
         httpd_register_uri_handler(s_srv, &uris[i]);
+#if RADIO_PAGE
+    static const httpd_uri_t radio_uris[] = {
+        { .uri = "/radio",          .method = HTTP_GET,  .handler = radio_page },
+        { .uri = "/api/radio",      .method = HTTP_GET,  .handler = radio_get },
+        { .uri = "/api/radio/set",  .method = HTTP_GET,  .handler = radio_set },
+        { .uri = "/api/radio/set",  .method = HTTP_POST, .handler = radio_set },
+    };
+    for (size_t i = 0; i < sizeof radio_uris / sizeof radio_uris[0]; i++)
+        httpd_register_uri_handler(s_srv, &radio_uris[i]);
+#endif
     for (size_t i = 0; i < n_extra; i++) {
         const httpd_uri_t u = { .uri = extra[i].uri, .method = extra[i].method,
                                 .handler = radio_endpoint, .user_ctx = (void *)&extra[i] };
