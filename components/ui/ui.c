@@ -72,6 +72,29 @@ LV_FONT_DECLARE(font_mic_14);
 #define C_TX_RED    lv_color_hex(0xE8262B)
 #define C_GREEN     lv_color_hex(0x43B649)   /* multiFLEX green         */
 #define PWR_HEX     0x43B649                 /* Po in green, as on the Maestro */
+#elif VFO_RADIO_XIEGU
+/* --- Xiegu palette ---------------------------------------------------------
+ * The X6100 and X6200 highlight in orange. Black, white digits, an orange
+ * accent, and an S-meter in orange up to S9 and red above it. The layout is
+ * the other faces', unchanged; the colours say which radio this knob is for. */
+#define C_BG        lv_color_hex(0x000000)
+#define C_BG1       lv_color_hex(0x1E1A16)   /* panels, the PTT slab    */
+#define C_BG_TX     lv_color_hex(0x2A0A05)   /* a red tint on the air   */
+#define C_ACCENT    lv_color_hex(0xFF8C1A)   /* Xiegu orange            */
+#define C_ACCENT_HI lv_color_hex(0xFFA64D)
+#define C_TEXT      lv_color_hex(0xFFFFFF)   /* white digits            */
+#define C_TEXT2     lv_color_hex(0xD2CCC4)
+#define C_LABEL     lv_color_hex(0x7E7770)
+#define C_DISABLED  lv_color_hex(0x3E3A36)
+#define C_SUBTLE    lv_color_hex(0x1E1C1A)
+#define C_WARN      lv_color_hex(0xFFD000)
+#define C_DANGER    lv_color_hex(0xFF3B30)
+#define C_TX_BORDER lv_color_hex(0xFF3B30)
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xFFFFFF)
+#define C_TX_RED    lv_color_hex(0xE8200C)
+#define C_GREEN     lv_color_hex(0xFF8C1A)   /* the meters are orange   */
+#define PWR_HEX     0xFF8C1A                 /* ...Po as well           */
 #elif VFO_RADIO_SVXCONNECT
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
@@ -231,6 +254,10 @@ static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
     { -40.0f, -10.0f, 0x2A9DF4 },   /* blue  */
     { -10.0f,   0.0f, 0xFFB000 },   /* amber */
     {   0.0f,  10.0f, 0xF0302C },   /* red   */
+#elif VFO_RADIO_XIEGU
+    { -40.0f, -10.0f, 0xFF8C1A },   /* orange */
+    { -10.0f,   0.0f, 0xFFD000 },   /* yellow */
+    {   0.0f,  10.0f, 0xFF3B30 },   /* red    */
 #elif VFO_RADIO_SVXCONNECT
     { -40.0f, -10.0f, 0x35B35A },   /* SvxConnect's meter: green  */
     { -10.0f,   0.0f, 0xD8C43A },   /* yellow */
@@ -420,6 +447,10 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0x2A9DF4 },   /* blue  */
     { 2.0f, 2.5f, 0xFFB000 },   /* amber */
     { 2.5f, 3.0f, 0xF0302C },   /* red   */
+#elif VFO_RADIO_XIEGU
+    { 1.0f, 2.0f, 0xFF8C1A },   /* orange */
+    { 2.0f, 2.5f, 0xFFD000 },   /* yellow */
+    { 2.5f, 3.0f, 0xFF3B30 },   /* red    */
 #elif VFO_RADIO_SVXCONNECT
     { 1.0f, 2.0f, 0x35B35A },
     { 2.0f, 2.5f, 0xD8C43A },
@@ -466,6 +497,15 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0xF26A6A },   /* S9 to +20: red over S9, as on the Maestro */
     {  -53.0f,  -33.0f, 0xEE4444 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0xE8262B },   /* +40 to +60 */
+#elif VFO_RADIO_XIEGU
+    { -127.0f, -121.0f, 0x5C2A00 },   /* S0 to S1: orange, brightening */
+    { -121.0f, -109.0f, 0x7F3A00 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0xA64E00 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0xD46A0A },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0xFF8C1A },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0xFF6A3D },   /* S9 to +20: red over S9 */
+    {  -53.0f,  -33.0f, 0xFF4A2E },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0xE8200C },   /* +40 to +60 */
 #elif VFO_RADIO_SVXCONNECT
     /* Not an S-meter: the audio level, -60 to 0 dBFS, in SvxConnect's meter
      * colours -- green, then yellow from -12 dB, red in the last 3. */
@@ -559,6 +599,12 @@ static const char *MODES[] = { "usb","lsb","cw","am","sam","fm","nfm",
                                "digu","digl","rtty" };
 static const char *AGCS[]  = { "fast","med","slow","off" };
 #define GAIN_CAPTION "RF.G"
+#elif VFO_RADIO_XIEGU
+/* The X6100 and X6200 are HF and 6 m radios behind an IC-705's CI-V, so
+ * the IC-705's names, less the modes they lack; the preamp is their PRE. */
+static const char *MODES[] = { "usb","lsb","cw","cwr","am","fm","digu","digl" };
+static const char *AGCS[]  = { "fast","mid","slow" };
+#define GAIN_CAPTION "PRE"
 #elif VFO_RADIO_SVXCONNECT
 /* A reflector has no modes, AGC or gain; the tables stay for the editors'
  * sake, which the reflector face never opens. */
@@ -684,7 +730,7 @@ static void upcase(const char *in, char *out, size_t n)
  * where it has only the one -- and AetherSDR's RF gain is in dB. */
 static void gain_text(int g, int gmax, char *out, size_t n)
 {
-#if VFO_RADIO_ICOM
+#if VFO_RADIO_ICOM || VFO_RADIO_XIEGU
     if (g <= 0)         snprintf(out, n, "OFF");
     else if (gmax <= 1) snprintf(out, n, "ON");
     else                snprintf(out, n, "%d", g);

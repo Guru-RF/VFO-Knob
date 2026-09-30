@@ -84,6 +84,11 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      AetherSDR or a Maestro. MultiFlex must be enabled on the radio. The knob
      reaches the radio over WiFi, and applies changes here on its next
      boot.</p>
+  <p class="note" id="xiegunote" hidden>The knob talks to the wfview server
+     built into the radio: <b>SYSTEM SETTING &raquo; WFSERVER &raquo; START</b>.
+     Its user is <b>user</b>, password <b>123</b>, unless changed there. The
+     radio announces no name on the network, so give its IP address above.
+     Changes here apply on the knob's next boot.</p>
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
@@ -277,16 +282,16 @@ async function load(){
      from WiFi -- so it is only offered when it can be the right answer. */
   /* The endpoint is the radio's own on the Icom firmware, with its login; on
      AetherSDR's it is a computer, which the cable finds by itself. */
-  const icom = c.radio === 'icom';
-  const lan = icom;                       /* the radio itself, with a login */
+  const icom = c.radio === 'icom', xiegu = c.radio === 'xiegu';
+  const lan = icom || xiegu;              /* the radio itself, with a login */
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup';
   LINKNAME = c.link || 'Radio';
-  $('rtitle').textContent = icom ? 'IC-705 / IC-7610' : SVX ? 'SvxLink reflector'
-                          : flex ? 'FlexRadio' : 'AetherSDR';
-  $('hostlbl').textContent = SVX ? 'Reflector' : flex ? "The radio's IP address"
+  $('rtitle').textContent = icom ? 'IC-705 / IC-7610' : xiegu ? 'X6100 / X6200'
+                          : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : 'AetherSDR';
+  $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
   $('svxnote').hidden = !SVX;
@@ -294,6 +299,7 @@ async function load(){
   if (SVX) { document.documentElement.style.setProperty('--accent','#e5a823'); svxLoad(); }
   $('rlogin').hidden = !lan;
   $('icomnote').hidden = !icom;
+  $('xiegunote').hidden = !xiegu;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
   myIp = c.client && !c.client_usb && !lan && !SVX && !flex ? c.client : '';
@@ -504,6 +510,7 @@ $('upload').onclick = async()=>{
  * which the knob accepts only when the upload names that radio. */
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 (LAN)'},
+              {id:'xiegu',     name:'Xiegu X6100 / X6200 (LAN)', soon:true},
               {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];

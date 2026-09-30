@@ -38,6 +38,15 @@
 #define DEFAULT_PORT 4992            /* FlexRadio's API */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_XIEGU
+#define KEY_HOST     "xhost"
+#define KEY_PORT     "xport"
+#define KEY_USER     "xuser"
+#define KEY_PASS     "xpass"
+#define DEFAULT_HOST ""              /* the X6100 and X6200 announce no name */
+#define DEFAULT_PORT 50001
+#define DEFAULT_USER "user"          /* their wfview server's own login */
+#define DEFAULT_PASS "123"
 #elif VFO_RADIO_ICOM
 #define KEY_HOST     "rhost"
 #define KEY_PORT     "rport"

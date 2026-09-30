@@ -83,12 +83,42 @@ static const char *TAG = "icom";
 #define STREAM_DEAD_MS 5000          /* CI-V or audio silent: the session is gone */
 #define CIV_FRESH_MS   1500          /* PTT only while CI-V is answering */
 
+/* The X6100's server stops sending receive audio within a second unless the
+ * client sends audio too -- wfview always does, its microphone or silence --
+ * so that firmware keeps a stream of silence going whenever it is not
+ * transmitting. An IC-705 streams without it, and is spared the traffic. */
+#if VFO_RADIO_XIEGU
+#define AUDIO_BOTH_WAYS 1
+#else
+#define AUDIO_BOTH_WAYS 0
+#endif
+
+/* The X6100's server also stops sending audio now and then, for good, while
+ * its CI-V carries on unharmed -- measured: after 0.2 s in one session, after
+ * 19 s in another. A new session brings it back only for as long, so there a
+ * silent audio stream does not end the session: the dial carries on, without
+ * the sound. On an IC-705 it means the session is gone, and it is started
+ * over. */
+#if VFO_RADIO_XIEGU
+#define AUDIO_BEST_EFFORT 1
+#else
+#define AUDIO_BEST_EFFORT 0
+#endif
+
 /* Memory channels: groups 00-99 of channels 00-99 (see the memories
  * section). */
 #define MEM_CHANNELS   100
 #define MEM_REQ_MS     300           /* a memory read not answered: again  */
 #define MEM_STEP_MS    60            /* channel selects, while turning     */
 #define MEM_SETTLE_MS  3000          /* after ready, before reading them   */
+/* Where the dial keeps its memory state: per firmware, so a knob switched from
+ * the IC-705's firmware to the Xiegu's does not come up in the IC-705's
+ * memory mode. */
+#if VFO_RADIO_XIEGU
+#define MEM_NVS_NS     "xiegu"
+#else
+#define MEM_NVS_NS     "icom"
+#endif
 
 #define KEEP_N         16            /* tracked packets kept for resends   */
 #define KEEP_LEN       192
@@ -173,6 +203,7 @@ static struct {
      * setting). An IC-705 refuses neither; a radio behind wfview's server
      * that is not one may. */
     bool       no_mem, no_modin;
+    bool       aud_quiet;          /* the radio's audio has stopped (AUDIO_BEST_EFFORT) */
     uint32_t   t_token, t_civ_rx, t_civ_open, t_session, t_retry, t_aud_rx;
     bool       waiting_busy;       /* the radio still holds our last session */
     uint32_t   backoff_ms;
@@ -638,6 +669,12 @@ static const model_t MODELS[] = {
       .modin_voice = 0x0091, .modin_data = 0x0092, .modin_lan = 5,
       .modin_names = MODIN_7610, .n_modin_names = 6,
       .n_rx = 2, .n_ant = 2, .rx_ant = true },
+    /* The X6100 and X6200: 0.5-54 MHz behind an IC-705's CI-V, one preamp.
+     * Their server has neither the memories nor the modulation inputs. */
+    { .name = "X6", .f_min = 500000, .f_max = 54000000,
+      .preamps = 1,
+      .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
+      .n_rx = 1 },
 };
 
 static const model_t MODEL_OTHER = {
@@ -930,6 +967,13 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         if (bn >= 2 && b[0] == 0x03) {               /* filter width */
             S.width_idx = (uint8_t)unbcd(b[1]);
             set_edges();
+        } else if (b[0] == 0x05 && bn < 4) {
+            /* The X6100's server answers 1A 05 01 18 with 1A 05 00: no
+             * such setting. Stop asking, and stop warning about it. */
+            if (!C.no_modin)
+                ESP_LOGW(TAG, "the radio has no modulation-input setting over CI-V: "
+                              "overs go out on whatever input it is set to");
+            C.no_modin = true;
         } else if (bn >= 4 && b[0] == 0x05 && model_now()->modin_voice && !C.modin_switched) {
             const uint16_t which = (uint16_t)(b[1] << 8 | b[2]);
             if (which == model_now()->modin_voice) C.modin_off = b[3];   /* modulation inputs */
@@ -1167,7 +1211,7 @@ static bool session_begin(uint32_t t)
     C.modin_off = C.modin_d1 = 0xFF;
     C.modin_switched = C.modin_logged = false;
     C.civ_addr = CIV_RADIO;
-    C.no_mem = C.no_modin = false;
+    C.no_mem = C.no_modin = C.aud_quiet = false;
     C.waiting_busy = false;
     C.t_session = t;
     taskENTER_CRITICAL(&S_LOCK);
@@ -1361,32 +1405,41 @@ static void on_audio(const uint8_t *d, int n)
     const uint16_t type = get16le(d + 4);
     if (n < 0x20 || type == 0x01) return;
     C.t_aud_rx = now_ms();
+    if (C.aud_quiet) {
+        C.aud_quiet = false;
+        ESP_LOGI(TAG, "the radio's audio is back");
+    }
     if (S.audio_suspend) return;
     size_t bytes = (size_t)n - PKT_AUDIO_HDR;
     audio_out_feed_pcm16((const int16_t *)(d + PKT_AUDIO_HDR), bytes / 2, 1);
 }
 
-/* 20 ms of the microphone, as one audio packet. Silence when the mic has
- * nothing yet: the radio times its playback on the stream, and a gap is a
- * click in the transmitted audio. */
-static void send_tx_audio(void)
+/* 20 ms of the microphone, as one audio packet -- or, with `mic` false, 20 ms
+ * of silence to keep a receive stream going (AUDIO_BOTH_WAYS). Silence too
+ * when the mic has nothing yet: the radio times its playback on the stream,
+ * and a gap is a click in the transmitted audio. */
+static void send_tx_audio(bool mic)
 {
     if (!s_txa || s_aud.fd < 0 || !s_aud.ready) return;
     int16_t *pcm = (int16_t *)(s_txa + PKT_AUDIO_HDR);
-    C.over_frames++;
-    if (!audio_in_take(pcm, AUDIO_FRAME)) {
+    if (!mic) {
         memset(pcm, 0, AUDIO_FRAME * 2);
-        S.txa_skipped++;
-        C.over_silent++;
     } else {
-        int peak = 0;
-        for (int i = 0; i < AUDIO_FRAME; i++) {
-            int v = pcm[i] < 0 ? -pcm[i] : pcm[i];
-            if (v > peak) peak = v;
+        C.over_frames++;
+        if (!audio_in_take(pcm, AUDIO_FRAME)) {
+            memset(pcm, 0, AUDIO_FRAME * 2);
+            S.txa_skipped++;
+            C.over_silent++;
+        } else {
+            int peak = 0;
+            for (int i = 0; i < AUDIO_FRAME; i++) {
+                int v = pcm[i] < 0 ? -pcm[i] : pcm[i];
+                if (v > peak) peak = v;
+            }
+            if (peak > C.over_peak) C.over_peak = peak;
+            /* The same scale AetherSDR's mic meter uses: dB below full scale. */
+            S.tx_mic_dbm = peak ? 20.0f * log10f((float)peak / 32767.0f) : -60.0f;
         }
-        if (peak > C.over_peak) C.over_peak = peak;
-        /* The same scale AetherSDR's mic meter uses: dB below full scale. */
-        S.tx_mic_dbm = peak ? 20.0f * log10f((float)peak / 32767.0f) : -60.0f;
     }
     const size_t len = PKT_AUDIO_HDR + AUDIO_FRAME * 2;
     hdr(&s_aud, s_txa, len, 0x00, 0);
@@ -1417,7 +1470,7 @@ static void send_tx_audio(void)
 static void mem_nvs(bool save)
 {
     nvs_handle_t h;
-    if (nvs_open("icom", save ? NVS_READWRITE : NVS_READONLY, &h) != ESP_OK) return;
+    if (nvs_open(MEM_NVS_NS, save ? NVS_READWRITE : NVS_READONLY, &h) != ESP_OK) return;
     if (save) {
         nvs_set_u8(h, "mgrp", C.mem_group);
         nvs_set_u8(h, "mch", S.mem_ch);
@@ -1869,8 +1922,12 @@ static void icom_task(void *arg)
         if (S.link == RADIO_LINK_READY && t - S.t_ready_ms > STREAM_DEAD_MS) {
             if (t - C.t_civ_rx > STREAM_DEAD_MS) { session_end(true, "CI-V went silent"); continue; }
             if (!S.audio_suspend && t - C.t_aud_rx > STREAM_DEAD_MS) {
-                session_end(true, "audio went silent");
-                continue;
+                if (!AUDIO_BEST_EFFORT) {
+                    session_end(true, "audio went silent");
+                    continue;
+                }
+                if (!C.aud_quiet) ESP_LOGW(TAG, "the radio stopped sending audio; carrying on without it");
+                C.aud_quiet = true;
             }
         }
         if (C.authed && t - C.t_token >= TOKEN_MS) { send_token(0x05); C.t_token = t; }
@@ -1890,12 +1947,14 @@ static void icom_task(void *arg)
         rx_ant_task();
         poll_civ(t);
 
-        /* TX audio, every 20 ms from the moment the key goes out. */
-        if (S.ptt.state == PTT_REQ_ON || S.ptt.state == PTT_ON) {
+        /* TX audio, every 20 ms from the moment the key goes out -- and on a
+         * radio that wants audio both ways, silence the rest of the time. */
+        const bool on_air = S.ptt.state == PTT_REQ_ON || S.ptt.state == PTT_ON;
+        if (on_air || (AUDIO_BOTH_WAYS && S.link == RADIO_LINK_READY && !S.audio_suspend)) {
             if (t - C.t_tx_frame >= 20) {
                 C.t_tx_frame = (t - C.t_tx_frame > 60) ? t : C.t_tx_frame + 20;
-                S.chronos++;
-                send_tx_audio();
+                if (on_air) S.chronos++;
+                send_tx_audio(on_air);
             }
         } else {
             C.t_tx_frame = t;

@@ -31,13 +31,15 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom svxconnect multiflex setup)
+set(_vfo_radios aethersdr icom xiegu svxconnect multiflex setup)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
 
 # Each radio's client implements components/radio/include/radio.h, so exactly
-# one may be built: two would be two definitions of everything in it.
+# one may be built: two would be two definitions of everything in it. The
+# Xiegu X6100 and X6200 run wfview's server, which speaks Icom's network
+# protocol and presents the radio as an IC-705: they share the Icom client.
 # svxconnect is not a radio but an SvxLink reflector: its client speaks the
 # reflector protocol, and the dial picks talkgroups instead of frequencies.
 # multiflex speaks a FlexRadio's own API, with no computer in between: the
@@ -70,7 +72,7 @@ if(NOT VFO_RADIO STREQUAL "aethersdr")
     idf_build_set_property(DEPENDENCIES_LOCK dependencies.${VFO_RADIO}.lock)
 endif()
 # For components that call the client (main, webcfg), and for code that looks
-# different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM,
+# different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_XIEGU,
 # VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX or VFO_RADIO_SETUP is defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
