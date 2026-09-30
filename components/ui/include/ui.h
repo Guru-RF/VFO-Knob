@@ -48,6 +48,12 @@ typedef struct {
     /* A tune carrier and an antenna tuner to start (radio.h): with them the
      * swipe down opens a menu -- TUNE, ATU, and the tuner's memories. */
     bool     has_tune, has_atu, atu_mem;
+    /* RF gain and power, and a tuner in the line (radio.h): a swipe from the
+     * left opens RF GAIN, then POWER; a swipe from the right, TUNER. */
+    bool     has_levels, have_levels;
+    uint8_t  rf_gain_pct, rf_power_pct;
+    uint16_t max_w;
+    bool     has_tuner, have_tuner, tuner_on;
     /* A reflector (radio.h): the talkgroup and its name in place of band and
      * frequency, the talker in place of the S-units, lock and mute either
      * side of it, and the audio level on the arc. */
@@ -129,6 +135,9 @@ typedef struct {
     bool     live;         /* sent as the knob turns, not on a tap */
     bool     have_rit;     int32_t rit_hz;
     bool     have_freq;    int64_t freq_hz;
+    bool     have_rf_gain;  uint8_t rf_gain_pct;
+    bool     have_rf_power; uint8_t rf_power_pct;
+    bool     have_tuner;    bool    tuner_on;
 } ui_commit_t;
 
 /* Non-zero if the operator accepted an edit, or a live editor moved (live

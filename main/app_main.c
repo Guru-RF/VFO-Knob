@@ -458,6 +458,18 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "band -> %lld", (long long)c.freq_hz);
                 radio_goto_freq(c.freq_hz);
             }
+            if (c.have_rf_gain) {
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "rf gain -> %u%%", (unsigned)c.rf_gain_pct);
+                radio_set_rf_gain(c.rf_gain_pct);
+            }
+            if (c.have_rf_power) {
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "rf power -> %u%%", (unsigned)c.rf_power_pct);
+                radio_set_rf_power(c.rf_power_pct);
+            }
+            if (c.have_tuner) {
+                ESP_LOGI(TAG, "tuner -> %s", c.tuner_on ? "in the line" : "out");
+                radio_set_tuner(c.tuner_on);
+            }
             if (!c.live) haptic(7);         /* soft bump: value committed */
         }
 
@@ -647,6 +659,14 @@ static void ui_task(void *arg)
             .has_tune      = st.has_tune,
             .has_atu       = st.has_atu,
             .atu_mem       = st.atu_mem,
+            .has_levels    = st.has_levels,
+            .have_levels   = st.have_levels,
+            .rf_gain_pct   = st.rf_gain_pct,
+            .rf_power_pct  = st.rf_power_pct,
+            .max_w         = st.max_w,
+            .has_tuner     = st.has_tuner,
+            .have_tuner    = st.have_tuner,
+            .tuner_on      = st.tuner_on,
             .reflector     = st.reflector,
             .connecting    = (st.link == RADIO_LINK_CONNECTING ||
                               st.link == RADIO_LINK_GREETING),

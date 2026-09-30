@@ -554,7 +554,7 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
-               ED_CHOICE } edit_t;
+               ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int     s_edit_from, s_edit_n;  /* where the receiver's opened; how many */
@@ -573,6 +573,7 @@ static volatile int s_ch_answer = -1;
 static ui_state_t s_last;
 static int32_t s_edit_rit;
 static int8_t  s_edit_gain, s_edit_gmin, s_edit_gmax, s_edit_gstep;
+static int     s_edit_pct;             /* RF GAIN and POWER, 0-100 */
 static bool    s_edit_lsb;   /* passband sits below the carrier */
 static uint8_t s_volume = 40;
 static uint8_t s_micgain = 100;
@@ -879,6 +880,22 @@ static void edit_render(void)
         snprintf(v, sizeof v, "ANT%d%s", s_edit_idx % n + 1, s_edit_idx >= n ? "+RX" : "");
         break;
     }
+    case ED_RFGAIN:
+        title = "RF GAIN";
+        snprintf(v, sizeof v, "%d%%", s_edit_pct);
+        break;
+    case ED_POWER:
+        title = "POWER";
+        /* In watts where the radio's full scale is known: the IC-7610's
+         * 100 W, the IC-705's 10 W. */
+        if (s_last.max_w) snprintf(v, sizeof v, "%d W", (s_edit_pct * s_last.max_w + 50) / 100);
+        else              snprintf(v, sizeof v, "%d%%", s_edit_pct);
+        break;
+    case ED_TUNER:
+        title = "TUNER";
+        snprintf(v, sizeof v, "%s", s_edit_idx ? "ON" : "OFF");
+        vcolor = s_edit_idx ? C_ACCENT_HI : C_DISABLED;
+        break;
     default: return;
     }
     lv_label_set_text(s_edit_title, title);
@@ -978,6 +995,12 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_mem_lit    = st->atu_mem;
         s_mem_tapped = 0;
         break;
+    case ED_RFGAIN: s_edit_pct = st->rf_gain_pct;  break;
+    case ED_POWER:  s_edit_pct = st->rf_power_pct; break;
+    case ED_TUNER:
+        s_edit_idx = st->tuner_on ? 1 : 0;
+        s_edit_n   = 2;
+        break;
     default: break;
     }
     s_edit_from  = s_edit_idx;
@@ -992,7 +1015,8 @@ static void edit_open(edit_t what, const ui_state_t *st)
 static bool edit_live(edit_t e)
 {
     return e == ED_FILTER || e == ED_AGC || e == ED_GAIN || e == ED_RIT ||
-           e == ED_VOL || e == ED_MIC;
+           e == ED_VOL || e == ED_MIC || e == ED_RFGAIN || e == ED_POWER ||
+           e == ED_TUNER;
 }
 
 /* What the open editor's value asks of the radio, into s_commit. */
@@ -1042,6 +1066,18 @@ static void edit_fill(void)
         break;
     case ED_MENU:
         s_commit.action = s_menu[s_edit_idx];
+        break;
+    case ED_RFGAIN:
+        s_commit.have_rf_gain = true;
+        s_commit.rf_gain_pct  = (uint8_t)s_edit_pct;
+        break;
+    case ED_POWER:
+        s_commit.have_rf_power = true;
+        s_commit.rf_power_pct  = (uint8_t)s_edit_pct;
+        break;
+    case ED_TUNER:
+        s_commit.have_tuner = true;
+        s_commit.tuner_on   = s_edit_idx == 1;
         break;
     case ED_ANT: {
         /* Only when turned to: until then the editor follows the radio, and
@@ -1113,10 +1149,17 @@ void ui_edit_rotate(int32_t detents)
         if (s_edit_idx < 0)  s_edit_idx = 0;
         if (s_edit_idx > 99) s_edit_idx = 99;
         break;
+    case ED_RFGAIN:
+    case ED_POWER:
+        s_edit_pct += detents;
+        if (s_edit_pct < 0)   s_edit_pct = 0;
+        if (s_edit_pct > 100) s_edit_pct = 100;
+        break;
     case ED_RX:
     case ED_ANT:
     case ED_MENU:
     case ED_CHOICE:
+    case ED_TUNER:
         s_edit_idx += detents;
         if (s_edit_idx < 0)         s_edit_idx = 0;
         if (s_edit_idx >= s_edit_n) s_edit_idx = s_edit_n - 1;
@@ -1333,8 +1376,17 @@ static void tap(lv_point_t p, uint32_t held)
     }
     if (s_edit != ED_NONE) {
         const edit_t was = s_edit;
-        /* A live editor has done its work as it turned: any tap closes it. */
-        if (edit_live(was)) { edit_close(); return; }
+        /* A live editor has done its work as it turned: any tap closes it --
+         * but RF GAIN, tapped on its panel, goes on to POWER, as the swipe
+         * down's receiver goes on to its antenna. */
+        if (edit_live(was)) {
+            if (was == ED_RFGAIN && shown_at(s_edit_panel, p)) {
+                edit_open(ED_POWER, &s_last);
+                return;
+            }
+            edit_close();
+            return;
+        }
         /* The panel is the button: a tap on it accepts, anywhere else closes
          * it untouched. */
         lv_area_t a;
@@ -1488,8 +1540,18 @@ static void gesture_cb(lv_event_t *e)
     lv_indev_t *indev = lv_indev_active();
     if (!indev) return;
     s_gestured = true;
-    if (lv_indev_get_gesture_dir(indev) != LV_DIR_BOTTOM) return;
+    const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (s_edit != ED_NONE || s_asking || !s_last.link_ok || s_last.tx) return;
+    /* From the left: RF gain, then power. From the right: the tuner. */
+    if (dir == LV_DIR_RIGHT) {
+        if (s_last.has_levels && s_last.have_levels) edit_open(ED_RFGAIN, &s_last);
+        return;
+    }
+    if (dir == LV_DIR_LEFT) {
+        if (s_last.has_tuner && s_last.have_tuner) edit_open(ED_TUNER, &s_last);
+        return;
+    }
+    if (dir != LV_DIR_BOTTOM) return;
     if (s_last.has_tune || s_last.has_atu) {
         edit_open(ED_MENU, &s_last);
         return;

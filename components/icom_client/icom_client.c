@@ -81,6 +81,7 @@ static const char *TAG = "icom";
 #define GREET_TMO_MS   8000
 #define BUSY_TMO_MS    180000        /* how long the radio may hold a stale one */
 #define STREAM_DEAD_MS 5000          /* CI-V or audio silent: the session is gone */
+#define SLOW_TICK_MS   220           /* one slow-poll question per tick */
 #define CIV_FRESH_MS   1500          /* PTT only while CI-V is answering */
 
 /* The X6100's server stops sending receive audio within a second unless the
@@ -156,6 +157,9 @@ typedef struct {
     char       agc[6];               /* 16 12: "fast", "mid", "slow" */
     uint8_t    preamp;               /* 16 02: 0 off, 1 P.AMP1, 2 P.AMP2 */
     bool       have_preamp;
+    uint8_t    rf_gain, rf_power;    /* 14 02, 14 0A: 0-255 */
+    uint8_t    tuner;                /* 1C 01: 0 out, 1 in the line, 2 tuning */
+    bool       have_rf_gain, have_rf_power, have_tuner;
     int32_t    filt_lo, filt_hi, rit_hz;
     float      smeter_dbm;
     float      tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
@@ -209,6 +213,7 @@ static struct {
     uint32_t   backoff_ms;
     /* CI-V scheduling */
     uint32_t   t_poll_s, t_poll_tx, t_poll_ptt, t_poll_slow;
+    uint8_t    slow_i;             /* the slow poll's next question */
     uint8_t    tx_meter_i;
     uint32_t   t_tx_frame;
     /* The radio's modulation inputs as the operator left them: 1A 05 01 18
@@ -645,6 +650,8 @@ typedef struct model {
     uint8_t        n_rx;            /* receivers: MAIN and SUB, 07 D0/D1/D2 */
     uint8_t        n_ant;           /* antennas to choose from, 12 */
     bool           rx_ant;          /* ...each also with the RX ANT input */
+    uint16_t       max_w;           /* RF power's full scale, 14 0A; 0 = say % */
+    bool           tuner;           /* an antenna tuner in the line, 1C 01 */
 } model_t;
 
 static const char *const MODIN_705[]  = { "MIC", "USB", "MIC+USB", "WLAN" };
@@ -659,7 +666,7 @@ static const model_t MODELS[] = {
       .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
       .modin_voice = 0x0118, .modin_data = 0x0119, .modin_lan = 3,
       .modin_names = MODIN_705, .n_modin_names = 4,
-      .memories = true, .n_rx = 1 },
+      .memories = true, .n_rx = 1, .max_w = 10 },
     /* 30 kHz-60 MHz, two receivers, ANT1 and ANT2 each with or without the
      * RX ANT input. Its memories are not the IC-705's groups; the swipe
      * chooses the receiver and the antenna instead. */
@@ -668,13 +675,13 @@ static const model_t MODELS[] = {
       .cal_s = CAL_S_7610, .n_cal_s = NCAL(CAL_S_7610), .po_scale = 10,
       .modin_voice = 0x0091, .modin_data = 0x0092, .modin_lan = 5,
       .modin_names = MODIN_7610, .n_modin_names = 6,
-      .n_rx = 2, .n_ant = 2, .rx_ant = true },
+      .n_rx = 2, .n_ant = 2, .rx_ant = true, .max_w = 100, .tuner = true },
     /* The X6100 and X6200: 0.5-54 MHz behind an IC-705's CI-V, one preamp.
      * Their server has neither the memories nor the modulation inputs. */
     { .name = "X6", .f_min = 500000, .f_max = 54000000,
       .preamps = 1,
       .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
-      .n_rx = 1 },
+      .n_rx = 1, .max_w = 10 },
 };
 
 static const model_t MODEL_OTHER = {
@@ -1012,6 +1019,9 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
             ptt_fsm_event(&S.ptt, on ? PTT_EV_CONFIRM_TRUE : PTT_EV_CONFIRM_FALSE,
                           t, ptt_permit_now(t), &o);
             ptt_dispatch(&o);
+        } else if (bn >= 2 && b[0] == 0x01 && b[1] <= 2) {  /* 1C 01: the tuner */
+            S.tuner = b[1];
+            S.have_tuner = true;
         }
         return;
     case 0x16:                                       /* functions */
@@ -1060,7 +1070,13 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
             on_refused(asked, asked_sub, asked_len);
         }
         return;
-    case 0x14:                                       /* levels: not used */
+    case 0x14:                                       /* levels: 0000-0255 */
+        if (bn >= 3 && (b[0] == 0x02 || b[0] == 0x0A)) {
+            const unsigned v = unbcd(b[1]) * 100 + unbcd(b[2]);
+            const uint8_t level = v > 255 ? 255 : (uint8_t)v;
+            if (b[0] == 0x02) { S.rf_gain  = level; S.have_rf_gain  = true; }
+            else              { S.rf_power = level; S.have_rf_power = true; }
+        }
         return;
     default:
         S.unknown_cmds++;
@@ -1365,8 +1381,11 @@ static void civ_hello(uint32_t t)
     CIV(0x21, 0x00);              /* RIT */
     CIV(0x16, 0x12);              /* AGC */
     CIV(0x16, 0x02);              /* preamp */
+    CIV(0x14, 0x02);              /* RF gain */
+    CIV(0x14, 0x0A);              /* RF power */
     CIV(0x1C, 0x00);              /* transmitting? */
     const model_t *m = model_now();
+    if (m->tuner) CIV(0x1C, 0x01);      /* the tuner in the line? */
     if (m->n_rx > 1) CIV(0x07, 0xD2);   /* MAIN or SUB */
     if (m->n_ant) CIV(0x12);            /* the antenna */
     if (s_modin_saved.magic == MODIN_MAGIC && m->modin_voice &&
@@ -1776,22 +1795,30 @@ static void poll_civ(uint32_t t)
         if (t - C.t_poll_s >= 100) { CIV(0x15, 0x02); C.t_poll_s = t; }
         if (t - C.t_poll_ptt >= 1000) { CIV(0x1C, 0x00); C.t_poll_ptt = t; }
         /* What the operator may change on the radio itself. The preamp is
-         * kept per band, so this is also how a band change shows. */
-        if (t - C.t_poll_slow >= 2000 && t - S.t_last_input_ms >= QUIET_MS) {
-            CIV(0x03);
-            CIV(0x26, 0x00);
-            CIV(0x16, 0x12);
-            CIV(0x16, 0x02);
-            /* Asked for once at the start, but an answer lost on the WiFi
-             * left them unknown for the whole session -- and without them no
-             * over is switched to WLAN: it goes out on the radio's own
-             * microphone, silent. So ask until they are known. */
+         * kept per band, so this is also how a band change shows. One
+         * question at a time, round about every 2 s: asked all at once, an
+         * IC-7610 answered the first seven and let the rest go, every time
+         * -- its RF power and its tuner were never known. */
+        if (t - C.t_poll_slow >= SLOW_TICK_MS && t - S.t_last_input_ms >= QUIET_MS) {
             const model_t *m = model_now();
-            if (m->modin_voice && !C.no_modin && C.modin_off == 0xFF) modin_read(m->modin_voice);
-            if (m->modin_voice && !C.no_modin && C.modin_d1 == 0xFF)  modin_read(m->modin_data);
-            /* Changed on the radio itself. */
-            if (m->n_rx > 1) CIV(0x07, 0xD2);
-            if (m->n_ant) CIV(0x12);
+            switch (C.slow_i++ % 9) {
+            case 0: CIV(0x03); break;
+            case 1: CIV(0x26, 0x00); break;
+            case 2: CIV(0x16, 0x12); break;
+            case 3: CIV(0x16, 0x02); break;
+            case 4:
+                /* Asked for once at the start, but an answer lost on the WiFi
+                 * left them unknown for the whole session -- and without them
+                 * no over is switched to WLAN: it goes out on the radio's own
+                 * microphone, silent. So ask until they are known. */
+                if (m->modin_voice && !C.no_modin && C.modin_off == 0xFF) modin_read(m->modin_voice);
+                if (m->modin_voice && !C.no_modin && C.modin_d1 == 0xFF)  modin_read(m->modin_data);
+                break;
+            case 5: if (m->n_rx > 1) CIV(0x07, 0xD2); break;
+            case 6: if (m->n_ant) CIV(0x12); break;
+            case 7: CIV(0x14, 0x02); CIV(0x14, 0x0A); break;
+            case 8: if (m->tuner) CIV(0x1C, 0x01); break;
+            }
             C.t_poll_slow = t;
         }
     }
@@ -2111,6 +2138,24 @@ void radio_set_gain(int8_t gain)
     CIV_LATER(0x16, 0x02);
 }
 
+/* 0-100 % as the radio's 0000-0255, and read back. */
+static void set_level(uint8_t sub, uint8_t pct)
+{
+    const unsigned v = (pct > 100 ? 100 : pct) * 255u / 100u;
+    CIV_LATER(0x14, sub, bcd(v / 100), bcd(v % 100));
+    CIV_LATER(0x14, sub);
+}
+
+void radio_set_rf_gain(uint8_t pct)  { set_level(0x02, pct); }
+void radio_set_rf_power(uint8_t pct) { set_level(0x0A, pct); }
+
+void radio_set_tuner(bool on)
+{
+    if (!model_now()->tuner) return;
+    CIV_LATER(0x1C, 0x01, on ? 0x01 : 0x00);
+    CIV_LATER(0x1C, 0x01);
+}
+
 void radio_set_rit(int32_t hz)
 {
     int32_t a = hz < 0 ? -hz : hz;
@@ -2197,6 +2242,16 @@ void radio_get_status(radio_status_t *o)
     const model_t *m = model_now();
     o->gain_max   = m->one_preamp_hz && S.f_server >= m->one_preamp_hz ? 1 : m->preamps;
     o->gain_step  = 1;
+    o->has_levels   = true;               /* 14 02 and 14 0A on all of them */
+    o->have_levels  = S.have_rf_gain && S.have_rf_power;
+    o->rf_gain_pct  = (uint8_t)((S.rf_gain  * 100u + 127u) / 255u);
+    o->rf_power_pct = (uint8_t)((S.rf_power * 100u + 127u) / 255u);
+    o->max_w        = m->max_w;
+    strlcpy(o->model, C.radio_name, sizeof o->model);
+    o->f_max        = m->f_max;
+    o->has_tuner    = m->tuner;
+    o->have_tuner   = S.have_tuner;
+    o->tuner_on     = S.tuner != 0;
     o->has_memories = s_mem != NULL && !C.no_mem && m->memories;
     o->n_rx       = m->n_rx;
     o->rx         = S.rx;
