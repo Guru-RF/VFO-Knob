@@ -47,6 +47,7 @@ bool audio_in_take(int16_t *out, size_t samples);
 
 void audio_in_set_gain(uint8_t percent);
 
+/* peak: the loudest sample since the previous call, 0..1 of full scale. */
 typedef struct { uint32_t blocks, starved, overruns; float peak; } audio_in_stats_t;
 void audio_in_stats(audio_in_stats_t *st);
 
