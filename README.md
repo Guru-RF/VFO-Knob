@@ -25,8 +25,7 @@ With an **IC-705** it talks to the radio itself, over WiFi, in Icom's network
 protocol — the one RS-BA1 and wfview use — with receive and transmit audio,
 so knob and radio are a complete station with no computer in between. Its face
 wears Icom's colours, so which radio a knob is for shows at a glance. The same
-firmware knows the IC-7610 — MAIN or SUB and its antennas on a swipe — though
-it has not yet been tried on one.
+firmware runs the IC-7610, with MAIN or SUB and its antennas on a swipe.
 
 With a **FlexRadio** it is one of the radio's MultiFlex stations, over the
 radio's own API: a station of its own, with Opus audio both ways, or the dial
@@ -46,13 +45,15 @@ the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 | | |
 |---|---|
 | **Tune** | Per-digit step selection: tap a digit to set the decade. Acceleration on top, so a flick crosses a band and a slow turn lands on 10 Hz. |
-| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
+| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
-| **Memories** | On the IC-705, swipe down for memory mode: the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). Swipe down again for the VFO, simplex. |
-| **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns. Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
+| **Memories** | On the IC-705, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). VFO again for the VFO, simplex. |
+| **Radios** | Up to four per firmware on the configuration page — an IC-705 and an IC-7610, two FlexRadios, AetherSDR on two computers. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves. Not over the USB cable, which reaches one computer or one radio. |
+| **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns (with a web SDR chosen, BALANCE comes first). Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
+| **Web SDR** | On the Icom, Xiegu and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio: swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card with its addresses comes up; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
@@ -230,12 +231,43 @@ nobody else on the radio the knob does not ask.
 | | |
 |---|---|
 | **The dial** | Tunes the slice. Mode, filter, AGC, RIT and RF.G — the panadapter's RF gain, which the radio's API carries — are edited as on the other radios. |
-| **Swipe down** | **TUNE**, a carrier at the tune power, for an external tuner or to check SWR — PTT stops it, and it stops by itself after 30 s. **ATU**, one cycle of the radio's tuner. **MEM**, the tuner's memories, lit when on; a tap switches them and the menu stays. The menu opens on MEM: TUNE and ATU are a turn away. |
+| **Swipe from the right** | **TUNE**, a carrier at the tune power, for an external tuner or to check SWR — PTT stops it, and it stops by itself after 30 s. **ATU**, one cycle of the radio's tuner. **MEM**, the tuner's memories, lit when on; a tap switches them and the menu stays. The menu opens on MEM: TUNE and ATU are a turn away. |
 | **PTT** | Refused with the reason when the radio will not transmit here: out of band, or another station on the air. |
 
 The radio is given by its IP address on the configuration page, and MultiFlex
 must be enabled on it. Finding the radio by its discovery broadcast, and
 SmartLink for a radio away from home, are still to come.
+
+## Web SDRs
+
+On the Icom, Xiegu and FlexRadio firmwares the knob can listen to a web SDR
+beside the radio — a [KiwiSDR](http://kiwisdr.com/), a Web-888, or an
+[UberSDR](https://ubersdr.org/) through its Kiwi input; all three speak
+KiwiSDR's protocol. Up to four are kept, added on the configuration page with
+their address (`host:port` — **8073** on most KiwiSDRs), a password where the
+receiver has one, and its time-limit password, which lifts the listening limit
+some receivers put on each address. The address is the receiver's own plain
+`http://` one: not an `https://` link through a proxy or a tunnel.
+
+| | |
+|---|---|
+| **Swipe down** | **RX**: turn through **LOCAL** and the receivers by name, tap to listen. The IC-7610 then goes on to MAIN/SUB and the antenna for the radio's side, whichever was chosen: with an SDR the radio still plays in the left ear. The IC-705 goes on to V/M. |
+| **Listening** | The SDR follows the radio: frequency, mode and passband, retuned as the dial turns. The radio is in the left ear and the SDR in the right, both levelled to the same loudness. |
+| **Its S-meter** | A thin blue line just outside the radio's S-meter, on the same scale, and its reading in blue under the radio's, where the dBm is otherwise: **S9+20** against the radio's **S7**. Dots while it connects; a word, in amber, when it cannot — *busy*, *no apps*, *password?*, *day limit*, *no answer*. |
+| **Balance** | First on the swipe from the left while an SDR is chosen; a tap on it goes on to RF GAIN and POWER. From **RADIO**, the radio alone, through **L \| R** to **SDR**, the SDR alone. |
+| **Transmitting** | The SDR goes quiet: it would play the over back a second late, and from a speaker the microphone would hear it. |
+
+**Test**, beside each receiver on the configuration page, logs in and says
+what the receiver calls itself, how many of its channels are in use, and
+whether the password is right. It also says when a receiver's owner lets no
+apps listen: a KiwiSDR can keep its channels for browsers, and a client
+without a waterfall — the knob is one — is cut off after ten seconds. The
+knob tries such a receiver once and then leaves it alone until it is chosen
+again. It waits two minutes when the channels for apps are all in use, and
+half an hour when the day's listening limit has been reached.
+
+The choice is on the radio page too, and in its API: `sdr=local` or `sdr=0`
+to `3`, by the receiver's place in the list, and `balance=-100` to `100`.
 
 ## SvxLink reflectors
 
@@ -296,10 +328,16 @@ AetherSDR runs. Over the cable it is not offered: there the knob finds
 AetherSDR by itself, and the cable's `10.55.42.2` would mean nothing on WiFi,
 the only place the host setting is used.
 
+The radio section is a list: up to four radios, each with a name for the
+dial, and one **In use** — chosen here for the next start, or with a swipe up
+on the knob, which restarts into it at once. (The reflector firmware keeps
+its single reflector.)
+
 With the radio connected, the page opens on its **controls** instead, in the
 knob's own colours: the frequency, typed or stepped, band, mode, filter, AGC,
-the preamp or RF gain, power, the tuner, MAIN/SUB and the antenna, RIT, and the
-knob's volume and mic gain — everything the knob can set on the radio, and
+the preamp or RF gain, power, the tuner, MAIN/SUB and the antenna, RIT, the
+[web SDR](#web-sdrs) and its balance, and the knob's volume and mic gain —
+everything the knob can set on the radio, and
 nothing that transmits. **Config** leads to the settings above, the radio
 staying connected.
 
@@ -310,6 +348,9 @@ anything setting them with a URL:
 GET /api/radio                        the state, as JSON
 GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
     ...&mode=usb&filter=2&agc=mid&rfgain=80&power=50&tuner=on&rit=-120
+    ...&sdr=0&balance=-30             a web SDR beside the radio, "local" for none
+GET /api/radios                       the radios the knob knows, and the one in use
+POST /api/radios/switch  to=1         another in use: the knob restarts into it
 ```
 
 A POST with the same fields as a form does the same. Both need the page's
@@ -400,6 +441,10 @@ cmake -S test/host -B build_host && cmake --build build_host && (cd build_host &
 
 `tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
 paths without a radio.
+
+To try the face's touch with nothing keyed, `-D VFO_PTT_DRY_RUN=1` builds an
+image whose PTT taps are only logged, never sent to the radio; its slab reads
+**PTT TEST**. Never for a release.
 
 ## Recovering a knob
 

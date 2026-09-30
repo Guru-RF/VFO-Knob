@@ -102,9 +102,9 @@ Ticked once the knob has worked with the radio itself, not only built for it.
 
 **Icom**, the icom firmware, over the radio's own LAN:
 - [x] IC-705
-- [x] IC-7610 — MAIN/SUB and the antennas on the swipe down, RF gain and
-      power from the left, its tuner from the right, and the web page's
-      controls
+- [x] IC-7610 — MAIN/SUB and the antennas on the swipe down (after RX),
+      RF gain and power from the left, its tuner from the right, and the web
+      page's controls
 - [ ] IC-7760
 - [ ] IC-9700
 - [ ] IC-R8600 — a receiver: no PTT
@@ -147,6 +147,12 @@ network protocols as well as Icom's: a reference for those clients.
 
 ## Firmware
 
+- [x] **PTT keyed on the lift of a tap.** Acting on the touch, as it did, a
+      swipe up begun on the slab keyed the radio before it could be seen to
+      be a swipe. A tap now keys as the finger lifts without having moved; on
+      the air a touch still unkeys at once. Tried with a dry-run build
+      (`VFO_PTT_DRY_RUN`): swipes up and sideways from the slab keyed nothing,
+      taps all did (2026-09-30).
 - [ ] **Endurance soak.** Nothing has run for 24 h. Watch free internal heap,
       task high-water marks, `hap_drops`, WS closes and audio underruns.
 - [ ] **Tabular-figure font.** Montserrat is proportional, so digits shift
@@ -215,7 +221,8 @@ network protocols as well as Icom's: a reference for those clients.
         6 m, a single one on 2 m and 70 cm). On AetherSDR the AGC is TCI's
         `agc_mode` (off, slow, med, fast), and **RF.G** waits on the upstream
         item above;
-      - [x] **memory mode** on a swipe down: the channel's name, number,
+      - [x] **memory mode**, now V/M at the end of the swipe down (a swipe
+        down of its own at first, briefly a swipe up): the channel's name, number,
         frequency, shift and tone in place of the frequency, the knob stepping
         through the programmed channels of one group (`1A 00` reads them,
         `08 A0`/`08` selects), and a second swipe back to the VFO, simplex
@@ -253,7 +260,8 @@ network protocols as well as Icom's: a reference for those clients.
       - [x] PTT through the interlock, refused with the reason -- out of band,
         or another station on the air -- and another station keying shown,
         never unkeyed;
-      - [x] TUNE, ATU and the tuner's MEM on the swipe;
+      - [x] TUNE, ATU and the tuner's MEM on the swipe from the right (down
+        until the web SDRs took it);
       - [x] a first release (1.9.0), offered in the radio chooser;
       - [ ] as the dial for a station, what the radio does when the knob
         loses power mid-over: the station is still there, so it may stay
@@ -264,6 +272,48 @@ network protocols as well as Icom's: a reference for those clients.
         relay are a much bigger job than the LAN;
       - [ ] the radio's memory channels, and its receive antennas on the
         swipe (`rx_ant_list`).
+- [ ] **More than one radio.** Up to four per firmware (not the reflector's):
+      a list on the configuration page, each with a name, one in use; a swipe
+      up chooses another and the knob restarts into it -- the clients have no
+      restart path -- with or without a link to the one it leaves, never on
+      the air, the boot confirmed first so the restart cannot roll an update
+      back. Not over the USB cable. The IC-705's memory mode moved from the
+      swipe up to V/M at the end of the swipe down.
+      - [x] the list, the dial's RADIO chooser, `/api/radios` and
+        `/api/radios/switch`, the radio page's row; the IC-7610 and the
+        IC-705 in the icom firmware's list (2026-09-30);
+      - [ ] switched on the dial, both ways, and V/M on the IC-705;
+      - [ ] on the multiflex and aethersdr firmwares.
+- [ ] **Web SDRs beside the radio.** For the icom, xiegu and multiflex
+      firmwares (`VFO_HAS_SDR`, `components/sdr_rx`): a KiwiSDR, a Web-888 or
+      an UberSDR's Kiwi input as a second receiver, over KiwiSDR's protocol
+      (WebSocket, `SND` frames of IMA-ADPCM at 12 kHz, resampled to 24).
+      - [x] up to four on the configuration page, each with a Test (its
+        `/status`, a login, and whether its owner lets apps listen); chosen on
+        the swipe down (RX: LOCAL, then the receivers), on the radio page and
+        in the API (`sdr=`, `balance=`), and kept across a restart;
+      - [x] following the radio: frequency, mode and passband;
+      - [x] the radio left and the SDR right, each levelled to the same
+        loudness, BALANCE first on the swipe from the left (then RF GAIN and
+        POWER); the SDR quiet while transmitting;
+      - [x] its S-meter as a thin blue line outside the radio's, and its
+        reading in blue under the radio's in place of the dBm;
+      - [x] both KiwiSDR paths: `/ws/kiwi/<ts>/SND` (KiwiSDR 1.9) and
+        `/<ts>/SND` (the Web-888, older Kiwis), the one that answers
+        remembered; every address a name stands for, in turn
+        (kiwi.on4cdj.be has one that resets);
+      - [x] a Kiwi's limits respected, not dodged: one whose owner gives apps
+        no channels (`ext_api_nchans` 0, ON4CDJ's) cuts a client without a
+        waterfall off after 10 s -- the knob says "no apps allowed" and does
+        not come back until chosen again; app channels full, two minutes;
+        the day's listening limit per address (`ip_limit`), half an hour;
+      - [x] streaming from the Web-888 (81.83.21.23:8077) on the IC-7610
+        firmware, 2026-09-30;
+      - [ ] listened to on the dial: the RX chooser, the balance, the
+        levelling, the mute on transmit;
+      - [ ] the UberSDR's Kiwi input (port 8073 on its own address, not the
+        https tunnel);
+      - [ ] on the multiflex and xiegu firmwares.
 
 ## Known hardware quirks
 
