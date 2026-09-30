@@ -190,6 +190,7 @@ static uint32_t      s_ask_since;
 static volatile int  s_ask_answer;       /* 1 yes, -1 no, 0 none */
 static volatile bool s_ask_knob;         /* the knob turned while asking */
 static volatile bool s_ask_turn;         /* ui_ask_turn(): a turn is the yes */
+static bool          s_ask_restarts;     /* a yes restarts first: see ui.h */
 static volatile uint32_t s_turned_at;    /* when a turn said that yes */
 #define TURN_SPENT_MS 2000   /* ...and the turns after it tune nothing either */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
@@ -1191,18 +1192,29 @@ static int nearest_digit(int x)
     return best;
 }
 
-/* The addresses come up on a long press on the meter arc, timed from press
- * to release. A tap there used to bring them up, and the arc is where a hand
- * reaching for the dial lands: they kept appearing by themselves. */
+/* The addresses come up on a long press on the meter arc. A tap there used
+ * to bring them up, and the arc is where a hand reaching for the dial lands:
+ * they kept appearing by themselves. They come up the moment the press is
+ * long enough, with a click from the motor, so the finger knows it can let
+ * go -- not when it does, which left it guessing. */
 #define NETINFO_HOLD_MS 600
 static uint32_t s_pressed_at;
+static bool          s_press_card;        /* this press may bring the card up */
+static volatile bool s_card_shown;        /* ...and did: the click is owed */
 
-/* Held on for ten seconds, the same press asks for the firmware picker --
- * the setup firmware, with the WiFi kept. Two fingers would have been the
- * obvious sign, but the CST816S reports one touch only; the arc is out of
- * PTT's way, and ten seconds is not something a hand does by accident. */
-#define PICKER_HOLD_MS 10000
-static bool          s_press_arc;         /* this press began on the meter arc */
+/* The firmware picker -- the setup firmware, with the WiFi kept -- is a
+ * second step behind the addresses: with them on screen, a press on the
+ * S-meter or on the addresses themselves, held three seconds, when the motor
+ * buzzes. Two fingers would have been the obvious sign, but the CST816
+ * reports one touch only; two deliberate holds in a row are not something a
+ * hand does by accident, and a turn of the knob must still say yes. Five
+ * seconds was too long: counted by hand, most holds let go at 4 to 4.9 s --
+ * and the question comes up under the finger, where it cannot be seen. With
+ * something wrong -- no link, as on a knob with another radio's firmware --
+ * the warning panel carries the addresses in the card's place, and counts as
+ * the card. */
+#define PICKER_HOLD_MS 3000
+static bool          s_press_picker;      /* this press may ask for the picker */
 static volatile bool s_picker_req;
 
 /* Taps act when the finger lifts, not when it lands -- all but PTT and the
@@ -1217,6 +1229,21 @@ static bool          s_press_tap;         /* this press may still be a tap */
 static bool          s_gestured;          /* ...and this one became a gesture */
 static volatile bool s_swipe;
 
+static bool shown_at(lv_obj_t *o, lv_point_t p)
+{
+    if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return false;
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    return p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2;
+}
+
+/* The addresses on screen: the card, or the warning panel in its place. */
+static bool addresses_up(void)
+{
+    return (s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN)) ||
+           !lv_obj_has_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void netinfo_show(bool on)
 {
     if (!s_netinfo) return;
@@ -1229,6 +1256,18 @@ static void netinfo_show(bool on)
         lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
         s_netinfo_until = 0;
     }
+}
+
+/* AGC and the gain either side of the S-unit readout, where a tap opens
+ * their editors: receive settings, shown only in receive, and like every
+ * editor only with a link. The rest of the arc is the addresses'. */
+static bool aux_spot(lv_point_t p)
+{
+    if (REFLECTOR_FACE || p.y < AUX_TOP || p.y >= 104 || !s_last.link_ok || s_last.tx)
+        return false;
+    const int dx = p.x - CX;
+    return (dx <= -AUX_IN && dx >= -AUX_OUT) ||
+           (dx >= AUX_IN && dx <= AUX_OUT && s_last.have_gain);
 }
 
 /* A tap at p, the finger down for `held` ms. */
@@ -1294,18 +1333,10 @@ static void tap(lv_point_t p, uint32_t held)
         if (p.x > CX + 38) { s_mute_tap = true; return; }
     }
 #endif
-    /* AGC left of the S-unit readout, the gain right of it. Receive settings,
-     * shown only in receive, and like every editor only with a link. */
-    if (!REFLECTOR_FACE && p.y >= AUX_TOP && p.y < 104 && s_last.link_ok && !s_last.tx) {
-        const int dx = p.x - CX;
-        if (dx <= -AUX_IN && dx >= -AUX_OUT) {
-            edit_open(ED_AGC, &s_last);
-            return;
-        }
-        if (dx >= AUX_IN && dx <= AUX_OUT && s_last.have_gain) {
-            edit_open(ED_GAIN, &s_last);
-            return;
-        }
+    /* AGC left of the S-unit readout, the gain right of it. */
+    if (aux_spot(p)) {
+        edit_open(p.x < CX ? ED_AGC : ED_GAIN, &s_last);
+        return;
     }
 
     /* The meter arc: a long press shows the addresses. */
@@ -1347,23 +1378,48 @@ static void tap(lv_point_t p, uint32_t held)
     }
 }
 
-/* Still pressed: ten seconds on the arc asks for the firmware picker, once
- * for the press, and that press is then no tap -- the addresses stay away. */
+/* Still pressed. On the S-meter, as soon as the press is long enough, the
+ * address card comes up and the motor clicks. With the addresses already
+ * up, three seconds ask for the firmware picker, and they make way for the
+ * question. Either once for the press, which is then no tap. */
 static void pressing_cb(lv_event_t *e)
 {
     (void)e;
-    if (!s_press_arc || s_edit != ED_NONE || s_asking) return;
-    if (lv_tick_elaps(s_pressed_at) < PICKER_HOLD_MS) return;
-    s_press_arc  = false;
-    s_press_tap  = false;
-    s_picker_req = true;
+    if (s_edit != ED_NONE || s_asking) return;
+    const uint32_t held = lv_tick_elaps(s_pressed_at);
+    if (s_press_card && held >= NETINFO_HOLD_MS) {
+        s_press_card = false;
+        /* Not for a finger on its way somewhere: a swipe, or a drag. */
+        lv_point_t q = s_press_pt;
+        lv_indev_t *indev = lv_indev_active();
+        if (indev) lv_indev_get_point(indev, &q);
+        if (s_gestured || LV_ABS(q.x - s_press_pt.x) > TAP_SLOP ||
+            LV_ABS(q.y - s_press_pt.y) > TAP_SLOP) return;
+        s_press_tap  = false;
+        netinfo_show(true);
+        s_card_shown = true;
+        return;
+    }
+    if (!s_press_picker || held < PICKER_HOLD_MS) return;
+    s_press_picker = false;
+    s_press_tap    = false;
+    netinfo_show(false);
+    s_picker_req   = true;
 }
 
 static void release_cb(lv_event_t *e)
 {
     (void)e;
     s_released_at = lv_tick_get();
-    s_press_arc = false;
+    /* A long press is rare enough to log, and the touch controller cutting
+     * one short shows only here. */
+    const uint32_t held = lv_tick_elaps(s_pressed_at);
+    if (held >= 2000)
+        ESP_LOGI(TAG, "press at %d,%d%s released after %u ms",
+                 (int)s_press_pt.x, (int)s_press_pt.y,
+                 s_press_picker ? " (towards the picker)" : "", (unsigned)held);
+    s_press_picker = false;
+    s_press_card   = false;
     const bool was_tap = s_press_tap && !s_gestured;
     s_press_tap = false;
     if (!was_tap) return;
@@ -1415,7 +1471,11 @@ static void touch_cb(lv_event_t *e)
     s_pressed_at = lv_tick_get();
     s_press_tap  = false;
     s_gestured   = false;
-    s_press_arc  = p.y < 104;             /* the meter arc, as for the addresses */
+    /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS. */
+    s_press_picker = addresses_up() &&
+                     (p.y < 104 || shown_at(s_netinfo, p) || shown_at(s_warn_panel, p));
+    /* Or, with them not up yet, on the S-meter: see NETINFO_HOLD_MS. */
+    s_press_card = p.y < 104 && !s_press_picker && !aux_spot(p);
 
     /* A question is up: this tap answers it and goes nowhere else. On the
      * panel is yes; anywhere else is no -- the operator was reaching for
@@ -1439,7 +1499,10 @@ static void touch_cb(lv_event_t *e)
          * network task next looks. (The port lock is recursive.) A question
          * the knob answers takes only a no from a tap. */
         const bool yes = on && !s_ask_turn;
-        if (yes) ui_updating_show();
+        if (yes) {
+            if (s_ask_restarts) ui_updating_reboot();
+            else                ui_updating_show();
+        }
         s_ask_answer = yes ? 1 : -1;
         return;
     }
@@ -2073,7 +2136,7 @@ static void build(void)
     lv_obj_add_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
 }
 
-bool ui_ask_update(const char *version, const char *running)
+bool ui_ask_update(const char *version, const char *running, bool restart_first)
 {
     if (!s_scr || !version) return false;
     if (!lvgl_port_lock(200)) return false;
@@ -2088,6 +2151,7 @@ bool ui_ask_update(const char *version, const char *running)
     lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_ask_panel);
+    s_ask_restarts = restart_first;
     s_ask_turn   = false;
     s_ask_knob   = false;
     s_ask_answer = 0;
@@ -2117,6 +2181,13 @@ bool ui_ask_turn(const char *title, const char *hint)
     lvgl_port_unlock();
     ui_note_activity();
     return true;
+}
+
+bool ui_take_card_shown(void)
+{
+    const bool r = s_card_shown;
+    s_card_shown = false;
+    return r;
 }
 
 bool ui_take_picker_request(void)
@@ -2364,8 +2435,9 @@ void ui_update(const ui_state_t *st)
     if (s_edit != ED_NONE) { lvgl_port_unlock(); return; }
 
     /* The address card times out on its own: it covers the frequency, and an
-     * operator who walked away should come back to a working dial. */
-    if (s_netinfo_until && lv_tick_get() > s_netinfo_until) {
+     * operator who walked away should come back to a working dial. Not under
+     * a finger holding on towards the firmware picker. */
+    if (s_netinfo_until && lv_tick_get() > s_netinfo_until && !s_press_picker) {
         lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
         s_netinfo_until = 0;
     }

@@ -172,6 +172,10 @@ void ui_dim_set_minutes(uint16_t dim_minutes, uint16_t blank_minutes);
 void ui_dim_tick(bool transmitting);
 
 void ui_updating_show(void);
+/* The same screen for the moment before a restart that installs at boot:
+ * REBOOTING, into update mode -- no percentage yet, which read as a download
+ * stuck at 0%. The install after the restart shows its progress as usual. */
+void ui_updating_reboot(void);
 void ui_updating_progress(int percent);
 void ui_updating_result(bool ok, const char *message);
 void ui_updating_hide(void);
@@ -183,7 +187,10 @@ void ui_updating_hide(void);
  * so nothing behind it -- PTT least of all -- is touched by answering it; a
  * tap on it in its first 0.8 s is ignored, being aimed at what was there
  * before; and a yes puts the update screen up at once, taking PTT away. */
-bool ui_ask_update(const char *version, const char *running);   /* false: not shown */
+/* `restart_first`: a yes restarts the knob, which installs at boot, so the
+ * screen it puts up says so rather than showing a percentage. */
+bool ui_ask_update(const char *version, const char *running,
+                   bool restart_first);                        /* false: not shown */
 /* 1 = install, -1 = no, 0 = still asking or nothing asked. Each answer is
  * returned once. */
 int  ui_take_update_answer(void);
@@ -194,8 +201,13 @@ int  ui_take_update_answer(void);
  * of nothing say no. Answered through ui_take_update_answer(). */
 bool ui_ask_turn(const char *title, const char *hint);
 
-/* A finger held ten seconds on the meter arc: the operator asks for the
- * firmware picker (the setup firmware). Once per press; consumed here. */
+/* The address card came up under a finger held on the S-meter: the motor
+ * says it can let go. Once per press; consumed here. */
+bool ui_take_card_shown(void);
+
+/* The operator asks for the firmware picker (the setup firmware): with the
+ * addresses on screen, a finger held three seconds on the S-meter or on them.
+ * Once per press; consumed here. */
 bool ui_take_picker_request(void);
 
 /* The setup firmware's screen: a title and a few lines over the whole face,

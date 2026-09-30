@@ -83,6 +83,25 @@ esp_err_t hal_touch_init(void)
     if (esp_lcd_panel_io_tx_param(io, 0xFE, &no_sleep, 1) != ESP_OK)
         ESP_LOGW(TAG, "could not disable auto-sleep");
 
+    /* And out of its two self-resets, 0 disabling each: 0xFB resets the chip
+     * after a spell of touch with no gesture it knows, 0xFC after a long
+     * press -- 5 s and 10 s by the family's datasheet, either of which would
+     * end a finger held still, as the holds that bring up the address card
+     * and the firmware picker are. This board's CST816D (id 182) reads 0 for both
+     * already; they are set anyway, and what was there logged, in case
+     * another batch of the chip starts with the datasheet's values. */
+    const uint8_t off = 0;
+    uint8_t was[2] = { 0xFF, 0xFF }, now[2] = { 0xFF, 0xFF };
+    for (int i = 0; i < 2; i++) {
+        const int reg = 0xFB + i;
+        esp_lcd_panel_io_rx_param(io, reg, &was[i], 1);
+        esp_lcd_panel_io_tx_param(io, reg, &off, 1);
+        esp_lcd_panel_io_rx_param(io, reg, &now[i], 1);
+    }
+    ESP_LOGI(TAG, "self-reset after touch with no gesture: %u s -> %u, "
+                  "after a long press: %u s -> %u (0 = never)",
+             was[0], now[0], was[1], now[1]);
+
     xTaskCreatePinnedToCore(touch_task, "touch", 4096, NULL, 10, NULL, 1);
     ESP_LOGI(TAG, "CST816 up at 0x%02X, polled every %d ms",
              BOARD_I2C_ADDR_TOUCH, TOUCH_POLL_MS);

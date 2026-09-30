@@ -61,6 +61,28 @@ static const char *TAG = "vfo";
 RTC_NOINIT_ATTR static uint32_t s_picker_on_boot;
 static bool     s_picker_accepted;
 
+/* The timer that declares this boot healthy, 20 s in: see boot_ok_cb(). */
+static esp_timer_handle_t s_boot_ok_t;
+
+/* Declare the boot healthy now, on the operator's yes on the dial, which is
+ * proof enough that it works. A freshly installed image is on trial until the
+ * timer says otherwise: restarted before then, the bootloader puts the one
+ * before it back -- a firmware picker accepted 16 s after an install came up
+ * in the old firmware and installed nothing -- and until then it cannot start
+ * another install either. The timer's own task does the flash writes, as it
+ * would have; this waits until the image reads as confirmed, 2 s at most. */
+static void boot_ok_now(void)
+{
+    if (!s_boot_ok_t || !esp_timer_is_active(s_boot_ok_t)) return;   /* said already */
+    esp_timer_stop(s_boot_ok_t);
+    esp_timer_start_once(s_boot_ok_t, 1);
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    for (int i = 0; i < 40 && esp_ota_get_state_partition(run, &st) == ESP_OK &&
+                    st == ESP_OTA_IMG_PENDING_VERIFY; i++)
+        vTaskDelay(pdMS_TO_TICKS(50));
+}
+
 static void log_cpu(void);
 
 #define DRV2605_REG_STATUS 0x00
@@ -467,15 +489,21 @@ static void ui_task(void *arg)
             radio_ptt_toggle();
         }
 
+        /* The address card, up under a finger held on the S-meter: a click
+         * says it can let go. */
+        if (ui_take_card_shown()) haptic(1);   /* strong click */
+
 #if !VFO_RADIO_SETUP
-        /* A finger held ten seconds on the meter arc: the firmware picker? A
-         * turn of the knob says yes, and restarts the knob, which installs it
-         * at boot -- before the radio takes the RAM an install needs, as an
-         * update does. */
+        /* The addresses up, and a finger held three seconds on the S-meter or
+         * on them: the firmware picker? A buzz says it has been asked, since
+         * the question comes up under that finger. A turn of the knob says
+         * yes, and restarts the knob, which installs it at boot -- before the
+         * radio takes the RAM an install needs, as an update does. */
         {
             static bool asking_picker;
             if (ui_take_picker_request() && !asking_picker) {
                 ESP_LOGI(TAG, "firmware picker asked for");
+                haptic(14);                 /* strong buzz: let go, and look */
                 asking_picker = ui_ask_turn("FIRMWARE?", "turn the knob for the picker\n"
                                                          "tap to cancel; WiFi is kept");
             }
@@ -489,7 +517,8 @@ static void ui_task(void *arg)
                         ESP_LOGE(TAG, "picker not started: still transmitting");
                     } else {
                         ESP_LOGW(TAG, "firmware picker accepted -- restarting to install it");
-                        ui_updating_show();
+                        ui_updating_reboot();
+                        boot_ok_now();
                         s_picker_on_boot = PICKER_ON_BOOT;
                         vTaskDelay(pdMS_TO_TICKS(300));
                         esp_restart();
@@ -796,7 +825,7 @@ static bool check_now(ota_status_t *o, int ms)
 
 static bool ask_update(const ota_status_t *o)
 {
-    if (!ui_ask_update(o->available, o->running)) return false;   /* no dial */
+    if (!ui_ask_update(o->available, o->running, false)) return false;   /* no dial */
     /* The dial answers no by itself after ten seconds; this bound only
      * matters if there is no dial to ask on. */
     for (int i = 0; i < 120; i++) {
@@ -814,8 +843,10 @@ static void install_update(void)
     ESP_LOGW(TAG, "installing the update the operator accepted");
     ui_updating_show();
     /* An image still on trial cannot start another update -- esp_ota_begin()
-     * refuses until boot_ok_cb confirms it, 20 s into the boot -- so a yes
-     * given that early waits for it rather than failing. */
+     * refuses until boot_ok_cb confirms it, 20 s into the boot. The yes has
+     * confirmed it; should that not have taken, wait for the timer rather
+     * than fail. */
+    boot_ok_now();
     esp_ota_img_states_t trial;
     for (int i = 0; i < 120 &&
          esp_ota_get_state_partition(esp_ota_get_running_partition(),
@@ -851,6 +882,10 @@ static void install_switch(const char *radio)
 {
     ESP_LOGW(TAG, "installing the %s firmware", radio);
     ui_updating_show();
+    /* Chosen on the dial, so the running image works: confirmed now, where it
+     * used to sit at 0% until the timer did it. The wait is for the timer,
+     * should that not have taken: an image on trial cannot start an install. */
+    boot_ok_now();
     esp_ota_img_states_t trial;
     for (int i = 0; i < 120 &&
          esp_ota_get_state_partition(esp_ota_get_running_partition(),
@@ -913,8 +948,8 @@ static void boot_update_check(void)
  * For a knob with no computer to set it up from: its WiFi from a phone, then
  * the firmware for its radio, chosen on the dial and installed. The WiFi
  * stays for the firmware installed, which finds it where every firmware keeps
- * it, and a radio's firmware comes back here with a finger held ten seconds on
- * its meter arc.
+ * it, and a radio's firmware comes back here from its address card: a finger
+ * held three seconds on the S-meter or the card, and a turn of the knob.
  *
  *  1. The network already stored, if there is one: 25 s to join it.
  *  2. Otherwise the knob's own hotspot, VFOKnob, open. A phone that joins it
@@ -1202,7 +1237,7 @@ RADIO_ONLY_FN static void net_task(void *arg)
                     s_ota_seen = o.checks;          /* nothing to ask */
                 } else if (idle && !ui_edit_active()) {
                     s_ota_seen = o.checks;
-                    asking = ui_ask_update(o.available, o.running);
+                    asking = ui_ask_update(o.available, o.running, true);
                 }
             }
             if (asking) {
@@ -1228,6 +1263,7 @@ RADIO_ONLY_FN static void net_task(void *arg)
                     } else {
                         ESP_LOGW(TAG, "update accepted -- restarting to install "
                                       "it before TCI starts");
+                        boot_ok_now();
                         s_update_on_boot = UPDATE_ON_BOOT;
                         vTaskDelay(pdMS_TO_TICKS(300));
                         esp_restart();
@@ -1589,9 +1625,8 @@ void app_main(void)
      * panics before this leaves the counter raised and edges us toward safe
      * mode on the next attempt. */
     const esp_timer_create_args_t ok = { .callback = boot_ok_cb, .name = "bootok" };
-    esp_timer_handle_t okt;
-    if (esp_timer_create(&ok, &okt) == ESP_OK)
-        esp_timer_start_once(okt, 20 * 1000 * 1000);
+    if (esp_timer_create(&ok, &s_boot_ok_t) == ESP_OK)
+        esp_timer_start_once(s_boot_ok_t, 20 * 1000 * 1000);
 
     bool usb_net_on = false;
     /* USB networking comes up even in SAFE MODE, deliberately.

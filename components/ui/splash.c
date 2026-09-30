@@ -188,6 +188,7 @@ void ui_splash_start(void)
  * Being a separate screen, it also puts PTT out of reach for the duration. */
 static lv_obj_t *s_upd;
 static lv_obj_t *s_upd_arc;
+static lv_obj_t *s_upd_title;
 static lv_obj_t *s_upd_pct;
 static lv_obj_t *s_upd_msg;
 
@@ -218,11 +219,9 @@ void ui_updating_show(void)
         lv_obj_set_style_arc_color(s_upd_arc, RFG_GOLD, LV_PART_INDICATOR);
         lv_obj_set_style_arc_rounded(s_upd_arc, false, LV_PART_INDICATOR);
 
-        lv_obj_t *t = lv_label_create(s_upd);
-        lv_label_set_text(t, "UPDATING");
-        lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(t, RFG_TEXT, 0);
-        lv_obj_align(t, LV_ALIGN_CENTER, 0, -62);
+        s_upd_title = lv_label_create(s_upd);
+        lv_obj_set_style_text_font(s_upd_title, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_upd_title, RFG_TEXT, 0);
 
         s_upd_pct = lv_label_create(s_upd);
         lv_label_set_text(s_upd_pct, "0%");
@@ -236,11 +235,28 @@ void ui_updating_show(void)
         lv_obj_set_style_text_color(s_upd_msg, lv_color_hex(0xFF9A3C), 0);
         lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
     }
+    lv_label_set_text(s_upd_title, "UPDATING");
+    lv_obj_align(s_upd_title, LV_ALIGN_CENTER, 0, -62);
     lv_arc_set_value(s_upd_arc, 0);
     lv_label_set_text(s_upd_pct, "0%");
+    lv_obj_align(s_upd_pct, LV_ALIGN_CENTER, 0, -6);
     lv_label_set_text(s_upd_msg, "Do not unplug");
     lv_obj_set_style_text_color(s_upd_msg, lv_color_hex(0xFF9A3C), 0);
+    lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
     lv_screen_load(s_upd);
+    lvgl_port_unlock();
+}
+
+void ui_updating_reboot(void)
+{
+    ui_updating_show();
+    if (!lvgl_port_lock(200)) return;
+    lv_label_set_text(s_upd_title, "REBOOTING");
+    lv_obj_align(s_upd_title, LV_ALIGN_CENTER, 0, -62);
+    lv_label_set_text(s_upd_pct, LV_SYMBOL_REFRESH);
+    lv_obj_align(s_upd_pct, LV_ALIGN_CENTER, 0, -6);
+    lv_label_set_text(s_upd_msg, "into update mode");
+    lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
     lvgl_port_unlock();
 }
 
