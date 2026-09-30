@@ -110,6 +110,34 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      without one. Changes here apply on the knob's next boot.</p>
 </section>
 
+<section id="slsec" hidden>
+  <h2>SmartLink</h2>
+  <div id="slout">
+    <div class="grid">
+      <div><label>SmartLink email</label><input id="slemail" type="email" autocomplete="username"
+           autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      <div><label>Password</label><div class="pw"><input id="slpass" type="password"
+           autocomplete="current-password" autocapitalize="none" autocorrect="off"
+           spellcheck="false"><button type="button" class="show" data-for="slpass">Show</button></div></div>
+    </div>
+    <button id="sllogin" type="button">Log in to SmartLink</button>
+  </div>
+  <div id="slin" hidden>
+    <div id="slrows"></div>
+    <label class="chk"><input type="checkbox" id="slon"> Offer these radios on the knob</label>
+    <button id="slrefresh" class="ghost" type="button">Refresh the list</button>
+    <button id="sllogout" class="ghost" type="button">Log out</button>
+  </div>
+  <div id="slmsg" class="note"></div>
+  <p class="note">FlexRadio's service for a radio away from home, as SmartSDR and
+     AetherSDR use it. The password goes to FlexRadio's login service and is
+     not kept: the knob keeps the login it is given, until you log out here.
+     Offered on the knob, these radios come after the ones above on the swipe
+     up, marked <b>SmartLink</b> &mdash; the same radio can be there both ways.
+     A radio reachable only by hole punching is listed, but not yet
+     connected to.</p>
+</section>
+
 <section id="sdrsec" hidden>
   <h2 id="sdr">Web SDRs</h2>
   <div id="sdrlist"></div>
@@ -343,7 +371,51 @@ async function load(){
   HOSTLBL = flex || xiegu ? "The radio's IP address" : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
   if (LIST) { $('rlogin').hidden = true; rigsLoad(); }
+  if (flex) slLoad();
   sdrLoad();
+}
+
+/* ---- SmartLink: the FlexRadio firmware's radios away from home ---- */
+let SL=null;
+async function slLoad(){
+  let s; try{ const r=await fetch('/api/smartlink',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
+  $('slsec').hidden=false; slShow(s);
+}
+function slShow(s){
+  SL=s;
+  $('slout').hidden=s.logged_in; $('slin').hidden=!s.logged_in;
+  if(s.email) $('slemail').value=s.email;
+  $('slon').checked=s.enabled;
+  $('slrows').innerHTML=row('Account',esc((s.callsign?s.callsign+' \u00b7 ':'')+s.email))
+    + s.radios.map((x,i)=>row(esc(x.name||x.serial)+' <span class="pill up">SmartLink</span>',
+        esc([x.model,x.status.replace(/_/g,' ')].filter(Boolean).join(' \u00b7 '))
+        + (!x.reachable ? ' \u00b7 hole punching only: not yet'
+           : s.active===x.serial ? ' \u00b7 <b>in use</b>'
+           : ` <button type="button" class="pill up" data-use="${i}">Use now</button>`))).join('');
+  for(const b of $('slrows').querySelectorAll('[data-use]')) b.onclick=()=>slUse(+b.dataset.use);
+  $('slmsg').textContent=s.error||''; $('slmsg').style.color=s.error?'var(--bad)':'var(--dim)';
+}
+async function slPost(url,body){
+  $('slmsg').style.color='var(--dim)'; $('slmsg').textContent='Asking SmartLink\u2026';
+  try{ const r=await fetch(url,{method:'POST',body:new URLSearchParams(body)}); slShow(await r.json()) }
+  catch(e){ $('slmsg').textContent='The knob did not answer'; $('slmsg').style.color='var(--bad)' }
+}
+$('sllogin').onclick=async()=>{
+  const p=$('slpass').value; $('slpass').value='';
+  await slPost('/api/smartlink/login',{email:$('slemail').value.trim(),password:p});
+};
+$('sllogout').onclick=()=>slPost('/api/smartlink/logout',{});
+$('slrefresh').onclick=()=>slPost('/api/smartlink',{refresh:'1'});
+$('slon').onchange=()=>slPost('/api/smartlink',{enabled:$('slon').checked?'1':'0'});
+/* The knob counts the configured radios first, then SmartLink's -- offered
+   only when switched on. */
+async function slUse(i){
+  const x=SL.radios[i], nd=RIGS?RIGS.length:0;
+  if(!confirm(`Switch the knob to ${x.name} through SmartLink? It restarts into it.`)) return;
+  if(!SL.enabled) await slPost('/api/smartlink',{enabled:'1'});
+  const r=await fetch('/api/radios/switch',{method:'POST',body:'to='+(nd+i)});
+  say(r.ok?'Switching to '+x.name+' through SmartLink: the knob restarts':await r.text(),r.ok);
+  if(r.ok) setTimeout(poll,4000);
 }
 
 /* ---- the radios: one in use, a swipe up on the knob for another ---- */
@@ -355,7 +427,10 @@ async function rigsLoad(){
   RIG_USE=s.sel; rigsDirty=false; rigsRender();
 }
 function rigsRender(){
-  const L=$('rlist'); L.innerHTML='';
+  const L=$('rlist');
+  /* A radio found through SmartLink in use: none of these, until one is chosen. */
+  L.innerHTML=RIG_USE<0?'<p class="note">In use: a SmartLink radio (see SmartLink below). '
+    +'Choose one here to use it instead.</p>':'';
   RIGS.forEach((x,i)=>{
     const d=document.createElement('div'); d.className='sdr';
     d.innerHTML=`<label class="chk"><input type="radio" name="ruse"${i===RIG_USE?' checked':''}> In use</label>
@@ -381,7 +456,8 @@ function rigsRender(){
     for(const b of d.querySelectorAll('[data-clr]')) b.onclick=()=>{ x.hasPass=false; x.clrPass=true; rigsDirty=true; rigsRender() };
     for(const b of d.querySelectorAll('[data-myip]')) b.onclick=()=>{ x.host=myIp; rigsDirty=true; rigsRender() };
     d.querySelector('[data-act=rm]').onclick=()=>{
-      RIGS.splice(i,1); RIG_USE=RIG_USE===i?0:RIG_USE>i?RIG_USE-1:RIG_USE; rigsDirty=true; rigsRender() };
+      RIGS.splice(i,1); RIG_USE=RIG_USE<0?RIG_USE:RIG_USE===i?0:RIG_USE>i?RIG_USE-1:RIG_USE;
+      rigsDirty=true; rigsRender() };
     L.appendChild(d);
   });
   $('radd').hidden=RIGS.length>=4; $('rlistnote').hidden=false;

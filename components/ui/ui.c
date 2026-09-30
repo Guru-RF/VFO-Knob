@@ -950,6 +950,16 @@ static void edit_render(void)
                                ? &lv_font_montserrat_28 : &lv_font_montserrat_48, 0);
     lv_label_set_text(s_edit_value, v);
     lv_obj_set_style_text_color(s_edit_value, vcolor, 0);
+    /* The radio chooser says how each is reached: directly, or through a
+     * service -- the same FlexRadio can be both. */
+    if (s_edit == ED_RADIO) {
+        char h[40];
+        snprintf(h, sizeof h, "%s  -  tap to switch",
+                 s_edit_idx < s_last.n_radios_direct ? "LAN" : s_last.radio_via);
+        lv_label_set_text(s_edit_hint, h);
+    } else if (strcmp(lv_label_get_text(s_edit_hint), "turn to choose  -  tap to accept")) {
+        lv_label_set_text(s_edit_hint, "turn to choose  -  tap to accept");
+    }
 }
 
 static int index_of_mode(const char *m)

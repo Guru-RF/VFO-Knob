@@ -252,8 +252,11 @@ function render(){
   $('ritv').textContent=(R.rit>0?'+':'')+R.rit+' Hz';
   /* The radios the knob knows: another is a restart away. */
   const RS=R.radios;$('radiosec').hidden=!(RS&&RS.names.length>1);
-  if(RS&&RS.names.length>1){const key=RS.names.join('|');
-    if($('radios').dataset.k!==key){$('radios').dataset.k=key;btns($('radios'),RS.names.map((n,i)=>[i,n]),switchTo)}
+  if(RS&&RS.names.length>1){
+    /* How each is reached: the same FlexRadio can be there directly and by SmartLink. */
+    const lab=RS.names.map((n,i)=>RS.via&&RS.via[i]&&RS.via[i]!=='LAN'?n+' \u00b7 '+RS.via[i]:n);
+    const key=lab.join('|');
+    if($('radios').dataset.k!==key){$('radios').dataset.k=key;btns($('radios'),lab.map((n,i)=>[i,n]),switchTo)}
     mark($('radios'),RS.sel)}
   /* A web SDR beside the radio: the Icom, Xiegu and FlexRadio firmwares. */
   const S=R.sdr;$('sdrsec').hidden=!S;$('apisdr').hidden=!S;

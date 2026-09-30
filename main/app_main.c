@@ -96,20 +96,38 @@ static volatile bool s_on_usb;
 /* Another radio, chosen with a swipe up: in use from the next boot, and the
  * knob restarts into it at once -- the clients have no restart path. Never
  * while transmitting. The boot is confirmed first: a restart inside its first
- * 20 s would count against the image, and three would mean safe mode. */
+ * 20 s would count against the image, and three would mean safe mode.
+ *
+ * `i` counts the configured radios first, then those the client found for
+ * itself (radio_found_count: SmartLink's). */
 static void switch_radio(int i)
 {
     static net_radio_t r;
-    if (i == net_prov_radio_active() || !net_prov_radio_get(i, &r)) return;
+    const int nd = net_prov_radio_count();
+    const int cur = radio_found_active() >= 0 ? nd + radio_found_active() : net_prov_radio_active();
+    char name[24] = "";
+    if (i == cur) return;
+    if (i < nd) {
+        if (!net_prov_radio_get(i, &r)) return;
+        strlcpy(name, r.name[0] ? r.name : r.host, sizeof name);
+    } else if (!radio_found_get(i - nd, name, sizeof name)) {
+        return;
+    }
     if (radio_on_air()) {
         ESP_LOGW(TAG, "radio not switched: on the air");
         return;
     }
-    const char *name = r.name[0] ? r.name : r.host;
-    ESP_LOGW(TAG, "switching to %s (%s:%u)", name, r.host, (unsigned)r.port);
+    ESP_LOGW(TAG, "switching to %s (%s)", name, i < nd ? r.host : radio_found_via());
     ui_switching(name);
     boot_ok_now();
-    if (net_prov_radio_activate(i) != ESP_OK) {
+    esp_err_t e;
+    if (i < nd) {
+        e = radio_found_use(-1);
+        if (e == ESP_OK) e = net_prov_radio_activate(i);
+    } else {
+        e = radio_found_use(i - nd);
+    }
+    if (e != ESP_OK) {
         ESP_LOGE(TAG, "radio not switched: the choice could not be saved");
         ui_updating_hide();
         return;
@@ -788,12 +806,23 @@ static void ui_task(void *arg)
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
         /* The radios to choose from with a swipe up: not over the cable,
          * which reaches one computer or one radio. */
-        u.n_radios  = s_on_usb ? 0 : (uint8_t)net_prov_radio_count();
-        u.radio_sel = (int8_t)net_prov_radio_active();
-        for (int i = 0; i < u.n_radios && i < UI_RADIOS_MAX; i++) {
-            static net_radio_t r;           /* static: this stack is tight */
-            if (net_prov_radio_get(i, &r))
-                strlcpy(u.radio_name[i], r.name[0] ? r.name : r.host, sizeof u.radio_name[i]);
+        {
+            const int nd = s_on_usb ? 0 : net_prov_radio_count();
+            const int nf = s_on_usb ? 0 : radio_found_count();
+            u.n_radios        = (uint8_t)(nd + nf < UI_RADIOS_MAX ? nd + nf : UI_RADIOS_MAX);
+            u.n_radios_direct = (uint8_t)nd;
+            strlcpy(u.radio_via, radio_found_via(), sizeof u.radio_via);
+            u.radio_sel = (int8_t)(radio_found_active() >= 0 ? nd + radio_found_active()
+                                                             : net_prov_radio_active());
+            for (int i = 0; i < u.n_radios; i++) {
+                static net_radio_t r;       /* static: this stack is tight */
+                if (i < nd) {
+                    if (net_prov_radio_get(i, &r))
+                        strlcpy(u.radio_name[i], r.name[0] ? r.name : r.host, sizeof u.radio_name[i]);
+                } else {
+                    radio_found_get(i - nd, u.radio_name[i], sizeof u.radio_name[i]);
+                }
+            }
         }
 #endif
         ui_update(&u);
@@ -895,6 +924,12 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
         return NULL;                       /* give it a moment to associate */
     }
     if (!net_prov_is_connected()) return NULL;
+    /* A radio the client found itself (SmartLink): no address of ours. */
+    if (radio_found_active() >= 0) {
+        strlcpy(ip, radio_found_via(), iplen);
+        ESP_LOGI(TAG, "--- transport: WiFi (%s) ---", ip);
+        return ip;
+    }
 #if VFO_RADIO_SVXCONNECT
     /* A reflector is named, and its name is looked up by the client itself:
      * an SRV record comes first, and says which host and port to use. */

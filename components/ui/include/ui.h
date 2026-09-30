@@ -20,7 +20,7 @@
 esp_err_t ui_init(void);
 
 #define UI_SDR_MAX 4
-#define UI_RADIOS_MAX 4
+#define UI_RADIOS_MAX 8
 
 typedef struct {
     int64_t  freq_hz;
@@ -73,6 +73,10 @@ typedef struct {
     uint8_t  n_radios;       /* 0 or 1: no chooser */
     char     radio_name[UI_RADIOS_MAX][16];
     int8_t   radio_sel;
+    /* The first n_radios_direct are reached directly, on the LAN; the rest
+     * through radio_via ("SmartLink"): the chooser says which. */
+    uint8_t  n_radios_direct;
+    char     radio_via[12];
     /* A reflector (radio.h): the talkgroup and its name in place of band and
      * frequency, the talker in place of the S-units, lock and mute either
      * side of it, and the audio level on the arc. */

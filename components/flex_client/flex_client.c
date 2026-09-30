@@ -59,6 +59,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_tls.h"
+#include "smartlink.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -68,6 +70,7 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "nvs.h"
+#include <fcntl.h>
 #include "ptt_fsm.h"
 #include "vfo_tune.h"
 
@@ -175,6 +178,7 @@ typedef struct {
 
 typedef enum {
     P_NONE = 0, P_PING, P_GUI, P_BIND, P_UDPPORT, P_SLICE_LIST, P_PAN_CREATE, P_SLICE_CREATE,
+    P_CLIENT_IP,
     P_RFGAIN_INFO, P_RX_STREAM, P_TX_STREAM, P_XMIT_ON,
 } pend_t;
 
@@ -186,6 +190,14 @@ static struct {
     uint16_t   port;
     struct sockaddr_in radio;
     int        fd, ufd;
+    /* By SmartLink: the API over TLS (fd is its socket), and UDP to the
+     * radio's public port -- registered until its first packet, then kept
+     * open with a ping (wan_udp). */
+    bool       wan;
+    esp_tls_t *tls;
+    struct sockaddr_in udp_to;
+    bool       udp_ok, ip_answered;
+    uint32_t   t_udp, t_udp_first;
     uint16_t   uport;
     uint32_t   handle;               /* ours, from the H line */
     char       uuid[40];             /* our station's id, kept in NVS */
@@ -330,6 +342,25 @@ static void set_close_reason(const char *why)
 
 static void session_end(const char *why, bool polite);
 
+/* The API's bytes: on the socket, or through TLS by SmartLink. */
+static bool api_send(const char *b, int n)
+{
+    if (!C.tls) return send(C.fd, b, n, 0) == n;
+    const uint32_t t0 = now_ms();
+    while (n > 0) {
+        const ssize_t k = esp_tls_conn_write(C.tls, b, (size_t)n);
+        if (k == ESP_TLS_ERR_SSL_WANT_WRITE || k == ESP_TLS_ERR_SSL_WANT_READ) {
+            if (now_ms() - t0 > CONNECT_MS) return false;
+            vTaskDelay(1);
+            continue;
+        }
+        if (k <= 0) return false;
+        b += k;
+        n -= (int)k;
+    }
+    return true;
+}
+
 /* Send one command; `what` names the reply's handler. */
 static uint32_t cmd(pend_t what, const char *fmt, ...)
 {
@@ -343,7 +374,7 @@ static uint32_t cmd(pend_t what, const char *fmt, ...)
     va_end(ap);
     if (n >= (int)sizeof b - 1) n = sizeof b - 2;
     b[n++] = '\n';
-    if (send(C.fd, b, n, 0) != n) {
+    if (!api_send(b, n)) {
         session_end("the radio stopped taking commands", false);
         return 0;
     }
@@ -897,8 +928,18 @@ static bool station_here(const char *id)
  * reconnect keeps the choice without asking. */
 static void choose_step(uint32_t t)
 {
-    if (!C.greeted || C.registering || t - C.t_hello < LIST_MS) return;
-    if (C.asking) {
+    if (!C.greeted || C.registering) return;
+    if (C.wan) {
+        /* By SmartLink: registered first -- after `client ip`, which gives
+         * the radio the moment it needs -- and as our own station. The
+         * others on the radio are not listed before registering there, so
+         * the knob does not offer to be the dial for one of them. */
+        if (!C.ip_answered && t - C.t_hello < 3000) return;
+        C.decided = true;
+        C.own = true;
+    } else if (t - C.t_hello < LIST_MS) {
+        return;
+    } else if (C.asking) {
         int8_t a = S.pending_choice;
         if (a < 0 && t - C.t_asked < ASK_MS) return;
         if (a < 0) {
@@ -927,6 +968,9 @@ static void subscribe(void)
     cmd(P_NONE, "sub tx all");
     cmd(P_NONE, "sub meter all");
     cmd(P_NONE, "sub atu all");
+    /* By SmartLink the radio learns our UDP address from the packets
+     * themselves (wan_udp): `client udpport` is for the LAN. */
+    if (C.wan) return;
     /* A byte first, as AetherSDR does, so a stateful firewall on the way
      * lets the radio's packets back in; then the port itself. */
     for (int i = 0; i < 3; i++) {
@@ -1026,15 +1070,18 @@ static void session_end(const char *why, bool polite)
                 if (ids[i]) {
                     int n = snprintf(b, sizeof b, "C%lu|stream remove 0x%08lX\n",
                                      (unsigned long)++C.seq, (unsigned long)ids[i]);
-                    send(C.fd, b, n, 0);
+                    api_send(b, n);
                 }
-            send(C.fd, "\x04", 1, 0);
+            api_send("\x04", 1);
         }
-        close(C.fd);
+        if (C.tls) esp_tls_conn_destroy(C.tls);     /* its socket with it */
+        else       close(C.fd);
+        C.tls = NULL;
     }
     C.tx_stream = 0;                                  /* the codec reads this first */
     if (C.ufd >= 0) close(C.ufd);
     C.fd = C.ufd = -1;
+    C.udp_ok = false;
     C.greeted = C.registered = C.listed = C.creating = C.streams_asked = C.tx_claimed = false;
     C.pan_tamed = C.wf_tamed = false;
     /* Who is on the radio is listed afresh; what we chose to be is kept. */
@@ -1071,8 +1118,83 @@ static void session_end(const char *why, bool polite)
     ESP_LOGW(TAG, "session ended: %s (retry in %lu ms)", why, (unsigned long)C.backoff_ms);
 }
 
+/* By SmartLink: a UDP port first, for the server to tell the radio; then the
+ * brokering and the radio's TLS (sl_open, which blocks for up to 40 s). Not
+ * retried sooner than 5 s, and backing off to a minute: FlexRadio's service
+ * is not ours to hammer. */
+static bool wan_begin(uint32_t t)
+{
+    int u = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    struct sockaddr_in me = { .sin_family = AF_INET };
+    socklen_t ml = sizeof me;
+    if (u < 0 || bind(u, (struct sockaddr *)&me, sizeof me) != 0) {
+        if (u >= 0) close(u);
+        set_close_reason("no UDP socket");
+        C.t_retry = t + 2000;
+        return false;
+    }
+    getsockname(u, (struct sockaddr *)&me, &ml);
+    C.uport = ntohs(me.sin_port);
+    taskENTER_CRITICAL(&S_LOCK);
+    S.link = RADIO_LINK_CONNECTING;
+    taskEXIT_CRITICAL(&S_LOCK);
+    ESP_LOGI(TAG, "connecting through SmartLink (our UDP port %u)", (unsigned)C.uport);
+    sl_link_t l;
+    char why[96];
+    if (sl_open(C.uport, &l, why, sizeof why) != ESP_OK) {
+        close(u);
+        taskENTER_CRITICAL(&S_LOCK);
+        S.link = RADIO_LINK_DOWN;
+        taskEXIT_CRITICAL(&S_LOCK);
+        set_close_reason(why);
+        C.backoff_ms = MAX(C.backoff_ms, 5000);
+        C.t_retry = now_ms() + C.backoff_ms;
+        ESP_LOGW(TAG, "SmartLink: %s (again in %lu s)", why, (unsigned long)(C.backoff_ms / 1000));
+        C.backoff_ms = MIN(C.backoff_ms * 2, 60000);
+        return false;
+    }
+    int fd = -1;
+    esp_tls_get_conn_sockfd(l.tls, &fd);
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    C.tls = l.tls;
+    C.fd = fd;
+    C.ufd = u;
+    C.udp_to = l.udp;
+    C.radio = l.udp;
+    C.udp_ok = false;
+    C.t_udp = C.t_udp_first = 0;
+    C.line_n = 0;
+    C.line_skip = false;
+    C.seq = 1;                                   /* 1 was `wan validate` */
+    C.handle = 0;
+    C.pings_out = 0;
+    C.t_session = C.t_ping = C.t_pong = now_ms();
+    taskENTER_CRITICAL(&S_LOCK);
+    S.link = RADIO_LINK_GREETING;
+    S.connects++;
+    taskEXIT_CRITICAL(&S_LOCK);
+    return true;
+}
+
+/* The radio's UDP by SmartLink: `udp_register` every 50 ms until its first
+ * packet -- a second between them after five -- then `ping` every 5 s, so
+ * the NATs on the way keep the path open. */
+static void wan_udp(uint32_t t)
+{
+    if (!C.wan || !C.handle || C.ufd < 0) return;
+    if (!C.t_udp_first) C.t_udp_first = t;
+    const uint32_t every = C.udp_ok ? 5000 : t - C.t_udp_first < 5000 ? 50 : 1000;
+    if (C.t_udp && t - C.t_udp < every) return;
+    C.t_udp = t;
+    char b[64];
+    const int n = snprintf(b, sizeof b, "client %s handle=0x%lX",
+                           C.udp_ok ? "ping" : "udp_register", (unsigned long)C.handle);
+    sendto(C.ufd, b, n, 0, (struct sockaddr *)&C.udp_to, sizeof C.udp_to);
+}
+
 static bool session_begin(uint32_t t)
 {
+    if (C.wan) return wan_begin(t);
     C.radio.sin_family = AF_INET;
     C.radio.sin_port = htons(C.port);
     if (!inet_aton(C.host, &C.radio.sin_addr)) {
@@ -1175,6 +1297,17 @@ static void on_reply(uint32_t seq, uint32_t code, const char *body, uint32_t t)
     if (what == P_PING) {
         C.pings_out = 0;
         C.t_pong = t;
+        return;
+    }
+    /* By SmartLink, command 1 was `wan validate`: the radio answers it with
+     * 500000B1 and carries on (AetherSDR never reads that answer). */
+    if (C.wan && seq == 1) {
+        ESP_LOGI(TAG, "SmartLink: wan validate answered %08lX", (unsigned long)code);
+        return;
+    }
+    if (what == P_CLIENT_IP) {
+        C.ip_answered = true;
+        ESP_LOGI(TAG, "SmartLink: the radio sees us at %s", code ? "?" : body);
         return;
     }
     /* A 1xxxxxxx code is a warning (the radio does not know our program's
@@ -1293,7 +1426,12 @@ static void on_line(char *l, uint32_t t)
         C.handle = (uint32_t)strtoul(l + 1, NULL, 16);
         C.greeted = true;
         C.t_hello = t;
-        cmd(P_NONE, "sub client all");        /* who is here, before we are anyone */
+        /* By SmartLink the radio takes nothing before `client gui` but
+         * `client ip` (and hangs up on the rest), as AetherSDR found; on
+         * the LAN, who is here, before we are anyone. */
+        C.ip_answered = false;
+        if (C.wan) cmd(P_CLIENT_IP, "client ip");
+        else       cmd(P_NONE, "sub client all");
         break;
     case 'R': {
         char *bar1 = strchr(l, '|');
@@ -1386,7 +1524,8 @@ static void tx_frame(OpusEncoder *enc)
     put32be(pkt + 12, 0x534C0000u | PCC_OPUS);
     memset(pkt + 16, 0, 12);
     struct sockaddr_in to = C.radio;
-    to.sin_port = htons(TX_PORT);
+    if (C.wan) to = C.udp_to;                    /* its public port, by SmartLink */
+    else       to.sin_port = htons(TX_PORT);
     if (sendto(fd, pkt, len, 0, (struct sockaddr *)&to, sizeof to) == (int)len) S.txa_sent++;
     else S.txa_failed++;
 }
@@ -1635,14 +1774,32 @@ static void flex_task(void *arg)
         FD_ZERO(&rs);
         FD_SET(C.fd, &rs);
         FD_SET(C.ufd, &rs);
-        struct timeval tv = { .tv_sec = 0, .tv_usec = LOOP_MS * 1000 };
-        if (select(MAX(C.fd, C.ufd) + 1, &rs, NULL, NULL, &tv) > 0) {
-            if (FD_ISSET(C.ufd, &rs)) {
+        /* TLS may hold bytes already read off the socket: no waiting then. */
+        const bool held = C.tls && esp_tls_get_bytes_avail(C.tls) > 0;
+        struct timeval tv = { .tv_sec = 0, .tv_usec = held ? 0 : LOOP_MS * 1000 };
+        const int sel = select(MAX(C.fd, C.ufd) + 1, &rs, NULL, NULL, &tv);
+        if (sel > 0 || held) {
+            if (sel > 0 && FD_ISSET(C.ufd, &rs)) {
                 int n;
-                while ((n = recv(C.ufd, s_udp, sizeof s_udp, MSG_DONTWAIT)) > 0)
+                while ((n = recv(C.ufd, s_udp, sizeof s_udp, MSG_DONTWAIT)) > 0) {
+                    if (C.wan && !C.udp_ok) {
+                        C.udp_ok = true;
+                        ESP_LOGI(TAG, "SmartLink: the radio's UDP arrives");
+                    }
                     on_udp(s_udp, n, now_ms());
+                }
             }
-            if (FD_ISSET(C.fd, &rs)) {
+            if (C.tls && (held || (sel > 0 && FD_ISSET(C.fd, &rs)))) {
+                for (int i = 0; i < 8 && C.fd >= 0; i++) {
+                    const ssize_t n = esp_tls_conn_read(C.tls, tcp, sizeof tcp);
+                    if (n == ESP_TLS_ERR_SSL_WANT_READ || n == ESP_TLS_ERR_SSL_WANT_WRITE) break;
+                    if (n == 0) { session_end("the radio closed the connection", false); break; }
+                    if (n < 0)  { session_end("connection lost", false); break; }
+                    on_tcp(tcp, (int)n, now_ms());
+                    if (C.fd < 0 || esp_tls_get_bytes_avail(C.tls) <= 0) break;
+                }
+                if (C.fd < 0) continue;
+            } else if (sel > 0 && FD_ISSET(C.fd, &rs)) {
                 const int n = recv(C.fd, tcp, sizeof tcp, MSG_DONTWAIT);
                 if (n == 0) { session_end("the radio closed the connection", false); continue; }
                 if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -1676,6 +1833,7 @@ static void flex_task(void *arg)
             session_end("the station we dial for left", true);
             continue;
         }
+        wan_udp(t);
         choose_step(t);
         if (C.fd < 0) continue;
         setup_step(t);
@@ -1759,6 +1917,12 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
 
     uuid_load();
     pick_load();
+    /* The radio in use: this one by its address, or one by SmartLink. */
+    sl_init();
+    char serial[24];
+    sl_active(serial, sizeof serial);
+    C.wan = serial[0] && sl_enabled();
+    if (C.wan) ESP_LOGI(TAG, "the radio in use is reached through SmartLink (%s)", serial);
     C.line = heap_caps_malloc(LINE_CAP, MALLOC_CAP_SPIRAM);
     C.meters = heap_caps_calloc(N_METERS, sizeof *C.meters, MALLOC_CAP_SPIRAM);
     s_req = xQueueCreate(16, sizeof(req_t));
@@ -1961,4 +2125,57 @@ void radio_get_status(radio_status_t *o)
     strlcpy(o->agc, S.agc, sizeof o->agc);
     strlcpy(o->last_close, S.last_close, sizeof o->last_close);
     taskEXIT_CRITICAL(&S_LOCK);
+}
+
+/* --- SmartLink's radios, beside the configured ones (radio.h) --------- */
+
+int radio_found_count(void)
+{
+    sl_init();
+    return sl_enabled() ? sl_count() : 0;
+}
+
+bool radio_found_get(int i, char *name, size_t cap)
+{
+    sl_init();
+    sl_radio_t r;
+    if (!sl_enabled() || !sl_get(i, &r)) {
+        if (cap) name[0] = 0;
+        return false;
+    }
+    strlcpy(name, r.name[0] ? r.name : r.serial, cap);
+    return true;
+}
+
+const char *radio_found_via(void) { return "SmartLink"; }
+
+int radio_found_active(void)
+{
+    sl_init();                          /* asked before anything else loads it */
+    if (!sl_enabled()) return -1;
+    char a[24];
+    sl_active(a, sizeof a);
+    if (!a[0]) return -1;
+    for (int i = 0; i < sl_count(); i++) {
+        sl_radio_t r;
+        if (sl_get(i, &r) && !strcmp(r.serial, a)) return i;
+    }
+    return -1;
+}
+
+esp_err_t radio_found_use(int i)
+{
+    sl_init();
+    if (i < 0) return sl_set_active("");
+    sl_radio_t r;
+    if (!sl_get(i, &r)) return ESP_ERR_INVALID_ARG;
+    return sl_set_active(r.serial);
+}
+
+/* The configuration page's SmartLink endpoints (webcfg's hook). */
+size_t radio_web_endpoints(const httpd_uri_t **out);
+size_t radio_web_endpoints(const httpd_uri_t **out)
+{
+    sl_init();
+    return sl_web_endpoints(out);
 }

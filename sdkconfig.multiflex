@@ -23,3 +23,15 @@ CONFIG_LWIP_MAX_SOCKETS=16
 # ...and every address its name stands for, to try each in turn. Safe only
 # without SNTP: lwIP's cache then writes them all where SNTP keeps one.
 CONFIG_LWIP_DNS_MAX_HOST_IP=4
+
+# SmartLink (components/flex_client/smartlink.c): a radio reached through
+# FlexRadio's service presents a certificate of its own, self-signed, which
+# the knob pins on first use as AetherSDR does -- so esp-tls must let a
+# connection go without a CA. Every other connection still names one (the
+# certificate bundle), and is still verified.
+CONFIG_ESP_TLS_INSECURE=y
+CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
+# AES in software, as the aethersdr build: the engine's DMA takes its bounce
+# buffers from internal RAM, and with WiFi, Opus and two TLS connections up
+# there is none to spare.
+CONFIG_MBEDTLS_HARDWARE_AES=n

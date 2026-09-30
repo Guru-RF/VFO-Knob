@@ -767,17 +767,35 @@ static esp_err_t portal_404(httpd_req_t *r, httpd_err_code_t err)
  */
 #define RADIOS_URIS 3
 
-/* ,"radios":{"sel":0,"names":[...]} -- for the radio's JSON. */
+/* The one in use, counting the configured radios first and then those the
+ * client found itself (radio.h: SmartLink's). */
+static int radios_sel(void)
+{
+    const int f = radio_found_active();
+    return f >= 0 ? net_prov_radio_count() + f : net_prov_radio_active();
+}
+
+/* ,"radios":{"sel":0,"names":[...],"via":[...]} -- for the radio's JSON:
+ * every radio, and how it is reached ("LAN", "SmartLink"). */
 static size_t radios_names_json(char *j, size_t cap)
 {
-    int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"names\":[", net_prov_radio_active());
-    for (int i = 0; i < net_prov_radio_count() && o > 0 && (size_t)o < cap; i++) {
+    const int nd = net_prov_radio_count(), nf = radio_found_count();
+    int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"names\":[", radios_sel());
+    for (int i = 0; i < nd + nf && o > 0 && (size_t)o < cap; i++) {
         static net_radio_t r;
-        if (!net_prov_radio_get(i, &r)) break;
-        char n[68];
-        json_esc(r.name[0] ? r.name : r.host, n, sizeof n);
+        char nm[24] = "", n[68];
+        if (i < nd) {
+            if (!net_prov_radio_get(i, &r)) break;
+            strlcpy(nm, r.name[0] ? r.name : r.host, sizeof nm);
+        } else if (!radio_found_get(i - nd, nm, sizeof nm)) {
+            break;
+        }
+        json_esc(nm, n, sizeof n);
         o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", n);
     }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "],\"via\":[");
+    for (int i = 0; i < nd + nf && o > 0 && (size_t)o < cap; i++)
+        o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", i < nd ? "LAN" : radio_found_via());
     if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
     return o > 0 && (size_t)o < cap ? (size_t)o : 0;
 }
@@ -786,7 +804,9 @@ static esp_err_t radios_get_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     EXT_RAM_BSS_ATTR static char j[1600];
-    int o = snprintf(j, sizeof j, "{\"sel\":%d,\"list\":[", net_prov_radio_active());
+    /* sel is -1 while a radio the client found (SmartLink) is in use. */
+    int o = snprintf(j, sizeof j, "{\"sel\":%d,\"list\":[",
+                     radio_found_active() >= 0 ? -1 : net_prov_radio_active());
     for (int i = 0; i < net_prov_radio_count() && (size_t)o < sizeof j; i++) {
         EXT_RAM_BSS_ATTR static net_radio_t e;
         if (!net_prov_radio_get(i, &e)) break;
@@ -820,12 +840,15 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         got += k;
     }
     body[got] = 0;
-    long n = 0, use = 0;
+    long n = 0, use = -1;
     if (!field_num(body, "n", &n) || n < 1 || n > NET_PROV_RADIOS) {
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "n: 1 to 4 radios");
         return ESP_FAIL;
     }
     field_num(body, "use", &use);
+    /* use=-1: none chosen here -- the one in use stays, configured or
+     * found; otherwise that configured one, and a found one is given up. */
+    const int cur = net_prov_radio_active();
     int k = 0, in_use = 0;
     for (int i = 0; i < n; i++) {
         net_radio_t *e = &list[k];
@@ -859,7 +882,7 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         snprintf(key, sizeof key, "pass%d", i);
         if (!field(body, key, e->pass, sizeof e->pass) && had)
             strlcpy(e->pass, old.pass, sizeof e->pass);
-        if (i == use) in_use = k;
+        if (use >= 0 ? i == use : was == cur) in_use = k;
         k++;
     }
     if (!k) {
@@ -867,6 +890,7 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         return ESP_FAIL;
     }
     if (net_prov_radios_save(list, k, in_use) != ESP_OK) return httpd_resp_send_500(r);
+    if (use >= 0) radio_found_use(-1);
     return radios_get_h(r);
 }
 
@@ -895,22 +919,33 @@ static esp_err_t radios_switch_h(httpd_req_t *r)
     }
     long to = -1;
     static net_radio_t e;
-    if (!field_num(q, "to", &to) || !net_prov_radio_get((int)to, &e)) {
+    const int nd = net_prov_radio_count();
+    char name[24] = "";
+    /* to counts the configured radios, then those the client found. */
+    if (!field_num(q, "to", &to) ||
+        (to < nd ? !net_prov_radio_get((int)to, &e) : !radio_found_get((int)to - nd, name, sizeof name))) {
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "to=N: a radio in the list");
         return ESP_FAIL;
     }
-    if (to == net_prov_radio_active()) return httpd_resp_sendstr(r, "already in use");
+    if (to < nd) strlcpy(name, e.name[0] ? e.name : e.host, sizeof name);
+    if (to == radios_sel()) return httpd_resp_sendstr(r, "already in use");
     if (radio_on_air()) {
         httpd_resp_set_status(r, "409 Conflict");
         return httpd_resp_sendstr(r, "the radio is transmitting");
     }
-    const char *name = e.name[0] ? e.name : e.host;
-    ESP_LOGW(TAG, "web: switching to %s (%s:%u)", name, e.host, (unsigned)e.port);
+    ESP_LOGW(TAG, "web: switching to %s (%s)", name, to < nd ? e.host : radio_found_via());
     /* As the dial's: the image confirmed and the boot counted healthy first,
      * then the restart, after the answer has gone. */
     ota_mark_valid();
     net_prov_boot_ok();
-    if (net_prov_radio_activate((int)to) != ESP_OK) return httpd_resp_send_500(r);
+    esp_err_t err;
+    if (to < nd) {
+        err = radio_found_use(-1);
+        if (err == ESP_OK) err = net_prov_radio_activate((int)to);
+    } else {
+        err = radio_found_use((int)to - nd);
+    }
+    if (err != ESP_OK) return httpd_resp_send_500(r);
     ui_switching(name);
     httpd_resp_sendstr(r, "switching");
     const esp_timer_create_args_t a = { .callback = switch_cb, .name = "wcswitch" };

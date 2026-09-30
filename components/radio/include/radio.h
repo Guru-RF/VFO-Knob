@@ -241,6 +241,19 @@ void radio_set_tuner(bool on);
  * name ("DIAL FOR", "SHACK-PC"); radio_choose() answers. */
 #define RADIO_CHOICES 6
 bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn);
+
+/* --- radios the client finds for itself -------------------------------
+ * Beside the radios configured on the page, a client may find others -- the
+ * FlexRadio firmware, those of a SmartLink account. The dial's RADIO chooser
+ * and the radio page list them after the configured ones, with how they are
+ * reached (radio_found_via). Choosing one makes it the radio in use from the
+ * next boot, and the caller restarts the knob; choosing a configured radio
+ * gives it up (radio_found_use(-1)). By default a client finds none. */
+int         radio_found_count(void);
+bool        radio_found_get(int i, char *name, size_t cap);
+const char *radio_found_via(void);             /* "SmartLink" */
+int         radio_found_active(void);          /* -1: a configured radio is in use */
+esp_err_t   radio_found_use(int i);
 void radio_choose(uint8_t i);
 
 /* A reflector's talkgroup lock and mute (reflector in the status); no-ops for
