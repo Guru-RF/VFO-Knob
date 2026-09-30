@@ -870,7 +870,8 @@ cmake -S test/host -B build_host && cmake --build build_host && (cd build_host &
 ```
 
 `tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
-paths without a radio. `tools/mock_kiwi.py` is a KiwiSDR or a Web-888 that
+paths without a radio. `--rx-tone 700` answers `audio_start` with a steady
+700 Hz tone as receive audio, to hear the audio path end to end. `tools/mock_kiwi.py` is a KiwiSDR or a Web-888 that
 keeps its owner's limits — the day limit at login or mid-session, idle and
 kick, every answer a login can get and one that comes late, `/status` with
 its uptime and clock, with or without its hourglass —

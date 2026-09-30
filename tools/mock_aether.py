@@ -24,7 +24,8 @@ import sys
 import threading
 import time
 
-from ws_server import OP_CLOSE, OP_PING, OP_PONG, OP_TEXT, WSConn, WSError, serve
+from ws_server import (OP_BIN, OP_CLOSE, OP_PING, OP_PONG, OP_TEXT, WSConn,
+                       WSError, serve)
 
 ARGS = None
 LOCK = threading.Lock()
@@ -164,6 +165,48 @@ def handle_trx(c, trx, on):
         log("  *** TX OFF ***")
 
 
+def start_rx_tone(c, trx):
+    """--rx-tone: answer audio_start with a steady tone as RX audio.
+
+    One binary frame every 20 ms, as AetherSDR streams it: the 64-byte TCI
+    header (receiver, sample_rate, format, codec, crc, length, type,
+    channels, 8 reserved) then int16 stereo, `length` counting real samples.
+    24 kHz int16 stereo, which is what the knob asks for. -12 dBFS.
+    """
+    import math
+    rate, frames = 24000, 480
+    amp = int(32767 * 10 ** (-12 / 20))
+    step = 2 * math.pi * ARGS.rx_tone / rate
+
+    def run():
+        phase, sent = 0.0, 0
+        log(f"  RX tone {ARGS.rx_tone} Hz -> trx {trx}")
+        # Paced by the clock, not by sleeping one frame's worth: macOS
+        # coalesces a background process's timers, and a 20 ms sleep there
+        # took 190. Every wake-up sends however many frames are due.
+        start = time.monotonic()
+        while not c.closed:
+            due = int((time.monotonic() - start) * rate / frames) + 1
+            while sent < due and not c.closed:
+                pcm = bytearray()
+                for _ in range(frames):
+                    v = int(amp * math.sin(phase))
+                    pcm += struct.pack("<hh", v, v)
+                    phase += step
+                hdr = struct.pack("<8I8I", trx, rate, 0, 0, 0, frames * 2, 1,
+                                  2, *([0] * 8))
+                try:
+                    c.send(hdr + bytes(pcm), OP_BIN)
+                except (WSError, OSError):
+                    break
+                sent += 1
+                if sent % 500 == 0:
+                    log(f"  RX tone: {sent} frames sent")
+            time.sleep(frames / rate)
+        log(f"  RX tone stopped after {sent} frames")
+    threading.Thread(target=run, daemon=True).start()
+
+
 def dispatch(c, line):
     line = line.strip().rstrip(";")
     if not line:
@@ -192,6 +235,8 @@ def dispatch(c, line):
             pass
         elif name == "active_slice":
             broadcast("active_slice:0;")
+        elif name == "audio_start" and ARGS.rx_tone and len(a) >= 1:
+            start_rx_tone(c, int(a[0]))
         else:
             log(f"  (ignored {name})")
     except (ValueError, IndexError) as e:
@@ -328,6 +373,8 @@ def main():
                    help="push an unsolicited remote retune every S seconds")
     p.add_argument("--swr", type=float, default=1.3,
                    help="SWR reported in tx_sensors (>2.0 should alarm)")
+    p.add_argument("--rx-tone", type=float, default=0, metavar="HZ",
+                   help="answer audio_start with a tone as RX audio")
     ARGS = p.parse_args()
 
     threading.Thread(target=telemetry, daemon=True).start()
