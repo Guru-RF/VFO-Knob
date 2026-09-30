@@ -11,6 +11,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [FlexRadio](multiflex.md) | `vfo-knob-multiflex` — a MultiFlex station, on the LAN and through SmartLink |
 | [AetherSDR](aethersdr.md) | `vfo-knob-aethersdr` — a dial for AetherSDR, over the USB cable or WiFi |
 | [SvxLink](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
+| [UberSDR](ubersdr.md) | `vfo-knob-ubersdr` — a dial for an UberSDR web receiver: spots, a scanner, SSTV pictures, and a KiwiSDR beside it |
 
 ## The pictures
 

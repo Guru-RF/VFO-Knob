@@ -101,6 +101,19 @@ PALETTES = {
                                 (2.5, 3.0, "#F0302C")],
                       MICZONES=[(-40, -10, "#2A9DF4"), (-10, 0, "#FFB000"),
                                 (0, 10, "#F0302C")]),
+    # The ubersdr firmware's face (ui.c under VFO_RADIO_UBERSDR): UberSDR's
+    # own dark theme, its S-meter red through yellow to green as UberSDR
+    # colours it. It only receives, so its transmit colours are never shown.
+    "ubersdr": dict(BG="#090C12", BG1="#141A25", BG_TX="#2A0C10", ACCENT="#08A2FB",
+                    ACCENT_HI="#4DB4FF", TEXT="#DFE5EE", TEXT2="#8D99AD",
+                    LABEL="#5C6779", SUBTLE="#1A2130", WARN="#F2B544",
+                    DANGER="#F2646A", TX_RED="#F2646A", TX_TEXT="#FFFFFF",
+                    GREEN="#45D69A", DISABLED="#2F3B4E", PWR="#08A2FB",
+                    RXZONES=[(-127, -121, "#F42525"), (-121, -109, "#F48C25"),
+                             (-109,  -97, "#F4F425"), (-97,   -85, "#8CF425"),
+                             (-85,   -73, "#25F425"), (-73,   -53, "#25F425"),
+                             (-53,   -33, "#25F425"), (-33,   -13, "#25F425")],
+                    SWRZONES=SWRZONES, MICZONES=MICZONES),
 }
 
 

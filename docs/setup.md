@@ -83,7 +83,8 @@ guide for that firmware.
 To install another radio's firmware, go back to the list from the knob itself.
 
 1. Hold a finger on the S-meter, at the top of the face, until the knob
-   clicks: the address card comes up. Let go.
+   clicks: the address card comes up — the firmware and its version, then
+   the knob's addresses. Let go.
 
    ![The address card, held up on the S-meter](setup/11-address-card.svg)
 

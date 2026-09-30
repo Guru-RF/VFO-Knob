@@ -3,7 +3,8 @@
 A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
 FlexRadio and the Icom IC-705, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
-over WiFi. And, with its own firmware, a talkgroup knob for SvxLink reflectors.
+over WiFi. And, with firmware of their own, a talkgroup knob for SvxLink
+reflectors and a dial for UberSDR web receivers.
 
 <p align="center">
   <img src="docs/display-rx.svg" width="400" alt="Receiving: the S-meter rises to S9+20 and falls back while its readout follows and the 100 Hz digit ticks; S-units marked around the blue 66 mm body">
@@ -39,6 +40,13 @@ With the **svxconnect** firmware there is no radio at all: the knob is an
 talkgroup, the S-meter shows who is talking, and the built-in microphone and
 the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 
+With the **ubersdr** firmware the knob is a dial for an
+[UberSDR](https://ubersdr.org/) web receiver, over the receiver's own
+protocol: through its tunnel or on the LAN, with its audio on the jack, the
+spots and voices on the band along the bottom, its noise filters and SNR
+beside the S-meter, and its SSTV pictures on the glass. It only receives. See
+[UberSDR](#ubersdr).
+
 ---
 
 ## What it does
@@ -54,8 +62,8 @@ the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 | **Memories** | On the IC-705, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). VFO again for the VFO, simplex. |
 | **Radios** | Up to four per firmware on the configuration page — an IC-705 and an IC-7610, two FlexRadios, AetherSDR on two computers — and, on the FlexRadio firmware, the SmartLink account's. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves; under the name, **LAN** or **SmartLink** says how it is reached. Not over the USB cable, which reaches one computer or one radio. |
 | **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns (with a web SDR chosen, BALANCE comes first). Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
-| **Web SDR** | On the Icom, Xiegu and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio: swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
-| **Network** | Hold a finger on the S-meter until the knob clicks: the card with its addresses comes up; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
+| **Web SDR** | On the Icom, Xiegu and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
+| **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.14.0`, or `… dev` for a build that is not a release) and the knob's addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
@@ -289,6 +297,27 @@ half an hour when the day's listening limit has been reached.
 The choice is on the radio page too, and in its API: `sdr=local` or `sdr=0`
 to `3`, by the receiver's place in the list, and `balance=-100` to `100`.
 
+## UberSDR
+
+The ubersdr firmware (`vfo-knob-ubersdr`) makes the knob a dial for an
+[UberSDR](https://ubersdr.org/): it talks to the receiver over its own
+protocol, as the receiver's web page does, with Opus audio. It reaches it
+through UberSDR's tunnel (`https://<name>.tunnel.ubersdr.org`, over TLS) or on
+your own network, and plays it on the jack. Receive only, in UberSDR's own
+dark theme. Step by step: [the UberSDR guide](docs/ubersdr.md).
+
+<p align="center">
+  <img src="docs/ubersdr/01-face.svg" width="560" alt="The ubersdr face: S6 on 20 m, 14.215.00 USB, SNR 9 dB and the NR4 noise filter either side of the S-meter, the spot LU7YZ heard now on the bottom">
+</p>
+
+| | |
+|---|---|
+| **SNR, FIL** | Either side of the S-meter: the signal's height above the noise in its passband, and the receiver's noise filter — OFF, NR2, RN2 or NR4, whichever it runs — chosen as the knob turns. |
+| **Spots and voices** | Along the bottom, where PTT is on a radio: the one nearest the dial on the band -- the DX cluster's spots and every voice the receiver's detector hears now, named or not (in CW, the CW skimmer's), green while it is heard. A tap puts them all on the dial; tap one and the receiver goes there in its mode. |
+| **SSTV** | Swipe from the right: the receiver's SSTV gallery, newest first, one picture a detent; any tap goes back to the dial. |
+| **A KiwiSDR beside it** | Swipe down for LOCAL or a KiwiSDR (or a Web-888), which follows the UberSDR: the UberSDR left, the KiwiSDR right, BALANCE from the left. |
+| **Its limits** | Without the receiver's password the knob listens as a guest: when the receiver ends a session, the dial asks before starting another, as UberSDR's own page does. |
+
 ## SvxLink reflectors
 
 The svxconnect firmware (`vfo-knob-svxconnect`) turns the knob into a node on
@@ -407,7 +436,7 @@ confirmation is tied to the same "this boot looks healthy" timer that clears the
 boot-loop guard.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-multiflex` and `vfo-knob-svxconnect` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect` and `vfo-knob-ubersdr` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -442,7 +471,7 @@ idf.py -B build_icom -D VFO_RADIO=icom \
        build flash
 ```
 
-So are the multiflex, svxconnect and setup firmwares:
+So are the multiflex, svxconnect, ubersdr and setup firmwares:
 
 ```sh
 idf.py -B build_multiflex -D VFO_RADIO=multiflex \
@@ -450,6 +479,9 @@ idf.py -B build_multiflex -D VFO_RADIO=multiflex \
        build flash
 idf.py -B build_svxconnect -D VFO_RADIO=svxconnect \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.svxconnect" \
+       build flash
+idf.py -B build_ubersdr -D VFO_RADIO=ubersdr \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ubersdr" \
        build flash
 idf.py -B build_setup -D VFO_RADIO=setup \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.setup" \

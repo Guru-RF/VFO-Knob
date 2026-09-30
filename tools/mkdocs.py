@@ -30,6 +30,8 @@ PAD = 44                                  # room around the body for gestures
 W = H = 2 * md.BODY_R + 2 * PAD
 OX = OY = W / 2
 GESTURE = "#E0902A"                       # mkdisplay's ANNOT_HOT: a hand's doing
+VERSION = "1.14.0"                        # what the address card says it runs
+ADDRESSES = "USB   -\nWiFi  192.168.1.40\nsetup  http://192.168.1.40"
 
 
 def esc(s):
@@ -348,13 +350,16 @@ def editor(title, value, size=48, hint="turn to choose  -  tap to accept", colou
             + md.text(180, 232, esc(hint), 14, md.LABEL))
 
 
-def warning(title, net="USB   -\nWiFi  192.168.1.40\nsetup  http://192.168.1.40"):
-    """The warning panel: 268 x 116 in the danger colour, the warning at
-    28 px, the addresses under it at 14 px."""
-    return (f'<rect x="46" y="116" width="268" height="116" rx="18" fill="{md.BG1}" '
+def warning(title, fw, net=ADDRESSES):
+    """The warning panel: 268 x 134 in the danger colour, the warning at
+    28 px, and under it at 14 px the address card's text -- the firmware and
+    its version (`fw`, e.g. "Icom"), then the addresses -- or, fw None, a
+    message in its place."""
+    text = f"{fw} {VERSION}\n{net}" if fw else net
+    return (f'<rect x="46" y="107" width="268" height="134" rx="18" fill="{md.BG1}" '
             f'stroke="{md.DANGER}" stroke-width="2"/>'
-            + md.text(180, 154, esc(title), 28, md.DANGER, 600)
-            + lines(180, 197, net, 14, md.TEXT2, 17))
+            + md.text(180, 145, esc(title), 28, md.DANGER, 600)
+            + lines(180, 199, text, 14, md.TEXT2, 17))
 
 
 def swipe(direction):
@@ -496,7 +501,7 @@ def setup_pictures():
     face = radio_face()
     out["11-address-card"] = knob(
         "setup-11", "A radio firmware: the address card, held up on the S-meter",
-        dimmed(face) + address_card("USB   -\nWiFi  192.168.1.40\nsetup  http://192.168.1.40"),
+        dimmed(face) + address_card(f"Icom {VERSION}\n{ADDRESSES}"),
         tap(180, 40), "hold the S-meter until it clicks")
     out["12-firmware-question"] = knob(
         "setup-12", "Held again three seconds: back to the setup firmware?",
@@ -557,7 +562,7 @@ def icom_pictures():
     out["01-face"] = callouts("icom-01", "The Icom firmware's face", f, left, right)
     out["02-no-link"] = knob("icom-02", "NO LINK: the radio not reached yet",
                              face("icom", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
-                             + warning("NO LINK"))
+                             + warning("NO LINK", "Icom"))
     out["03-tune"] = knob("icom-03", "Turn to tune; tap a digit for its step", f,
                           turn() + tap(236, 172), "tap a digit for the step  \u00b7  turn to tune")
     out["04-mode"] = knob("icom-04", "The mode, chosen on the dial",
@@ -618,7 +623,7 @@ def multiflex_pictures():
                          "tap RF.G  \u00b7  applies as you turn")
     out["06-no-link"] = knob("flex-06", "NO LINK: the radio not reached yet",
                              face("multiflex", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
-                             + warning("NO LINK"))
+                             + warning("NO LINK", "FlexRadio"))
     for k, v in sdr_pictures("multiflex", "flex", R).items():
         out[{"rx": "07-rx", "sdr": "08-sdr", "balance": "09-balance"}[k]] = v
     out["10-tx"] = knob("flex-10", "On the air: SWR, power and the microphone",
@@ -636,11 +641,11 @@ def aethersdr_pictures():
     out["01-face"] = callouts("aether-01", "The AetherSDR firmware's face", f, left, right)
     out["02-flip"] = knob("aether-02", "FLIP USB-C: the plug the wrong way round",
                           face("aethersdr", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
-                          + warning("FLIP USB-C", "No computer on this side of\nthe cable. Turn the USB-C\n"
-                                                  "plug over, or wait for WiFi."))
+                          + warning("FLIP USB-C", None, "No computer on this side of\nthe cable. Turn the USB-C\n"
+                                                        "plug over, or wait for WiFi."))
     out["03-no-link"] = knob("aether-03", "NO LINK: AetherSDR not reached yet",
                              face("aethersdr", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
-                             + warning("NO LINK", "USB   10.55.42.1\nWiFi  -\nsetup  http://10.55.42.1"))
+                             + warning("NO LINK", "AetherSDR", "USB   10.55.42.1\nWiFi  -\nsetup  http://10.55.42.1"))
     out["04-mode"] = knob("aether-04", "The mode, chosen on the dial",
                           f + editor("MODE", "USB"), turn(),
                           "tap the mode  \u00b7  turn  \u00b7  tap the panel")
@@ -679,8 +684,150 @@ def svxconnect_pictures():
     return out
 
 
+# --- the ubersdr firmware -------------------------------------------------------
+
+KIWI = "#8B7CF8"                           # ui.c SDR_HEX for ubersdr: UberSDR's violet
+
+
+def snr_colour(snr):
+    """ui.c: the SNR in UberSDR's colours for it, hsv(0..120, 85%, 96%) from
+    0 to 15 dB."""
+    import colorsys
+    f = max(0.0, min(1.0, snr / 15.0))
+    r, g, b = colorsys.hsv_to_rgb(f * 120 / 360, 0.85, 0.96)
+    return "#%02X%02X%02X" % (round(r * 255), round(g * 255), round(b * 255))
+
+
+def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 14215" "00", active=5,
+              step="1 kHz", nr="NR4", spot=("LU7YZ", "14.215.0 USB  DX 2m  heard 12 dB", "green", "8 on 20m"),
+              kiwi=None, vol="40"):
+    """The ubersdr firmware's face (ui.c, RX_FACE): the S-meter in UberSDR's
+    colours, the SNR where the AGC is, the noise filter where the gain is, no
+    RIT and no microphone, and on the slab the spot or voice nearest the dial:
+    `spot` is (its call or frequency, where and what it is, "green" heard now
+    / "bright" on it / "dim" elsewhere, how many on the band). `kiwi` is a
+    KiwiSDR's level beside it."""
+    md.use_palette("ubersdr")
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>',
+         f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
+         f'stroke="{md.SUBTLE}" stroke-width="{md.BAND}"/>']
+    for lo, hi, col in md.RXZONES:
+        s.append(md.block(md.ARC_ROT + md.smeter_frac(lo) * md.ARC_SPAN,
+                          md.ARC_ROT + md.smeter_frac(hi) * md.ARC_SPAN, col))
+    s.append(cover(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.smeter_frac(dbm)))
+    for d in md.RXNOTCH:
+        s.append(md.notch(md.ARC_ROT + md.smeter_frac(d) * md.ARC_SPAN))
+    for d, ln, _ in md.RXTICKS:
+        col = md.TEXT2 if d == -73 else (md.WARN if d > -73 else md.LABEL)
+        s.append(md.tick(md.ARC_ROT + md.smeter_frac(d) * md.ARC_SPAN, ln, col, 3 if d == -73 else 2))
+    if kiwi is not None:
+        s.append(f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, 174)}" fill="none" '
+                 f'stroke="{md.SUBTLE}" stroke-width="4"/>')
+        s.append(md.block(md.ARC_ROT, md.ARC_ROT + md.smeter_frac(kiwi) * md.ARC_SPAN, KIWI, r=174, band=4))
+        sub, sub_colour = md.smeter_text(kiwi), KIWI
+    else:
+        sub, sub_colour = f"{dbm} dBFS", md.LABEL
+    s += [md.text(180, 83, md.smeter_text(dbm), 20, md.TEXT, 700),
+          md.text(180, 103, esc(sub), 14, sub_colour),
+          md.text(108, 83, "SNR", 14, md.LABEL),
+          md.text(108, 102, f"{snr} dB" if snr is not None else "--", 14,
+                  snr_colour(snr) if snr is not None else md.DISABLED),
+          md.text(252, 83, "FIL", 14, md.LABEL), md.text(252, 102, nr, 14, md.TEXT2),
+          md.text(104, 129, band, 20, md.ACCENT), md.text(180, 129, mode, 20, md.TEXT),
+          md.text(256, 129, filt, 20, md.TEXT2),
+          md.readout(digits, colour=md.TEXT, sep_colour=md.LABEL, underline=active,
+                     after_colour=md.TEXT2, active_colour=md.ACCENT_HI),
+          md.text(124, 227, step, 20, md.ACCENT),
+          md.icon_readout(236, 227, md.speaker, vol, md.TEXT2),
+          f'<rect x="0" y="{md.PTT_TOP}" width="360" height="{360 - md.PTT_TOP}" fill="{md.BG1}"/>',
+          f'<line x1="0" y1="{md.PTT_TOP + 1}" x2="360" y2="{md.PTT_TOP + 1}" '
+          f'stroke="{md.ACCENT}" stroke-width="2"/>']
+    if spot:
+        l1, l2, look, l3 = spot
+        colour = {"green": md.GREEN, "bright": md.TEXT, "dim": md.TEXT2}[look]
+        s += [md.text(180, md.PTT_TOP + 8 + 25, esc(l1), 28, colour, 500, extra=' xml:space="preserve"'),
+              md.text(180, md.PTT_TOP + 44 + 12, esc(l2), 14, md.TEXT2, extra=' xml:space="preserve"'),
+              md.text(180, md.PTT_TOP + 64 + 12, esc(l3), 14, md.LABEL, extra=' xml:space="preserve"')]
+    return "".join(s)
+
+
+def sstv_picture():
+    """A test card where the receiver's picture goes: colour bars over a
+    grey ramp, 260 x 208 as the viewer fits a 320 x 256 picture."""
+    x0, y0, w, h = 50, 76, 260, 208
+    bars = ["#C0C0C0", "#C0C000", "#00C0C0", "#00C000", "#C000C0", "#C00000", "#0000C0", "#101010"]
+    s = [f'<rect x="{x0 + i * w / 8:.1f}" y="{y0}" width="{w / 8 + 0.5:.1f}" height="{h * 0.62:.1f}" '
+         f'fill="{c}"/>' for i, c in enumerate(bars)]
+    for i in range(10):
+        g = int(20 + i * 23)
+        s.append(f'<rect x="{x0 + i * w / 10:.1f}" y="{y0 + h * 0.62:.1f}" width="{w / 10 + 0.5:.1f}" '
+                 f'height="{h * 0.38:.1f}" fill="#{g:02X}{g:02X}{g:02X}"/>')
+    s.append(md.text(180, y0 + h * 0.86, "CQ SSTV", 28, "#FFFFFF", 700))
+    return "".join(s)
+
+
+def sstv_viewer(title="M2  1 / 15", caption="14.230 USB  19:19Z  5 dB"):
+    """ui.c sv_open(): over the whole face, the picture in the middle, what it
+    is above it in the bright accent, where and when under it."""
+    md.use_palette("ubersdr")
+    return (f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>' + sstv_picture()
+            + md.text(180, 59, esc(title), 20, md.ACCENT_HI, extra=' xml:space="preserve"')
+            + md.text(180, 309, esc(caption), 14, md.TEXT2, extra=' xml:space="preserve"'))
+
+
+def ubersdr_pictures():
+    f = uber_face()
+    left = [(64, 64, "S-meter · hold: the addresses"), (84, 77, "SNR"), (84, 123, "band"),
+            (58, 172, "frequency · tap a digit: its step"), (96, 221, "tuning step"),
+            (84, 276, "nearest spot or voice · tap: all"), (112, 300, "where, and what it is")]
+    right = [(204, 77, "S-units, dBFS under"), (282, 77, "FIL · the noise filter"), (204, 123, "mode"),
+             (282, 123, "filter"), (252, 222, "volume"), (228, 322, "how many on the band")]
+    out = {}
+    out["01-face"] = callouts("uber-01", "The UberSDR firmware's face", f, left, right)
+    md.use_palette("ubersdr")
+    out["02-no-link"] = knob("uber-02", "The receiver not reached, and why",
+                             uber_face(dbm=-127, snr=None, spot=None) + warning("RECEIVER FULL", "UberSDR"))
+    out["03-tune"] = knob("uber-03", "Turn to tune; tap a digit for its step", f,
+                          turn() + tap(236, 172), "tap a digit for the step  \u00b7  turn to tune")
+    out["04-filter"] = knob("uber-04", "FIL: the receiver's noise filter",
+                            f + editor("NOISE FILTER", "NR4"), turn(),
+                            "tap FIL  \u00b7  OFF, NR2, RN2, NR4  \u00b7  applies as you turn")
+    out["05-spots"] = knob("uber-05", "The spots and voices on the band, on the dial",
+                           f + editor("SPOT 3 / 8", "LU7YZ", 28, hint="14.215.0 USB  DX 2m  heard 12 dB"),
+                           turn() + tap(180, 280), "tap the spot  \u00b7  turn  \u00b7  tap the panel: there, in its mode")
+    out["06-voice"] = knob("uber-06", "A voice nobody has spotted: by its frequency, in green",
+                           uber_face(dbm=-79, snr=22, digits=" 14268" "00",
+                                     spot=("14.268.0", "USB  voice 22 dB", "green", "8 on 20m")),
+                           "", "a voice heard now: green  \u00b7  a spot: white on it, grey beside it")
+    out["07-mode"] = knob("uber-07", "The mode, by UberSDR's names",
+                          f + editor("MODE", "CWU"), turn(),
+                          "tap the mode  \u00b7  USB LSB CWU CWL AM SAM FM NFM")
+    out["08-rx"] = knob("uber-08", "Swipe down: LOCAL, or a KiwiSDR beside it",
+                        f + editor("RX", "Web-888", 28), swipe_at("down"),
+                        "swipe down  \u00b7  turn to LOCAL or a receiver  \u00b7  tap the panel")
+    out["09-kiwi"] = knob("uber-09", "A KiwiSDR playing beside it: its line and reading in violet",
+                          uber_face(kiwi=-97), "", "the KiwiSDR: the thin violet line, its S-units in violet")
+    out["10-balance"] = knob("uber-10", "BALANCE: the UberSDR left, the KiwiSDR right",
+                             uber_face(kiwi=-97) + editor("BALANCE", "L | R"), swipe_at("right") + turn(),
+                             "swipe from the left  \u00b7  turn: UBER ... L | R ... KIWI")
+    out["11-sstv"] = knob("uber-11", "Swipe from the right: the receiver's SSTV pictures",
+                          f + editor("SSTV", "15 PICTURES", 28, hint="tap to look  -  the knob turns them"),
+                          swipe_at("left"), "swipe from the right  \u00b7  tap the panel")
+    out["12-viewer"] = knob("uber-12", "An SSTV picture: the knob turns to the next",
+                            sstv_viewer(), turn(), "turn: newest first  \u00b7  any tap: back to the dial")
+    out["13-time-up"] = knob("uber-13", "The receiver ended the session: listen again?",
+                             dimmed(uber_face(dbm=-127, snr=None, spot=None))
+                             + chooser("TIME UP", "LISTEN AGAIN"),
+                             tap(180, 188), "tap the panel: a new session")
+    out["14-radio"] = knob("uber-14", "Swipe up: another UberSDR",
+                           f + editor("RADIO", "ON6URE-TEL", 28, hint="tap to switch"),
+                           swipe_at("up"), "swipe up  \u00b7  turn  \u00b7  tap the panel: it restarts into it")
+    return out
+
+
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
-             "aethersdr": aethersdr_pictures, "svxconnect": svxconnect_pictures}
+             "aethersdr": aethersdr_pictures, "svxconnect": svxconnect_pictures,
+             "ubersdr": ubersdr_pictures}
 
 
 def main():
