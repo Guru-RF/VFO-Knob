@@ -701,8 +701,9 @@ static void ui_task(void *arg)
  * "Is the USB netif up?" is the wrong question: it comes up as soon as the
  * cable has power, including a charger with no computer behind it, and
  * esp_netif's DHCP *server* raises no event when it hands out a lease. The
- * only honest test is whether AetherSDR actually answers over the cable. */
-#if CONFIG_VFO_USB_NET
+ * only honest test is whether AetherSDR actually answers over the cable. (Not
+ * the Xiegu's: its radio speaks UDP -- see pick_transport.) */
+#if CONFIG_VFO_USB_NET && !VFO_RADIO_XIEGU
 static bool host_answers(const char *ip, uint16_t port, int timeout_ms)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -730,8 +731,31 @@ static bool host_answers(const char *ip, uint16_t port, int timeout_ms)
 static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
                                   bool *via_usb)
 {
+    /* Started once, whichever way it comes up: a second start would register
+     * the driver and its handlers again. */
+    static bool wifi_started;
 #if CONFIG_VFO_USB_NET
     if (usb_net_host_present()) {
+#if VFO_RADIO_XIEGU
+        /* The radio itself is on the cable -- the knob plugged into its USB
+         * host port, as its network adapter -- at the address the knob's
+         * DHCP server gives it. Its WFSERVER speaks UDP, so there is no TCP
+         * port to knock on first; the client's own retries cover a server
+         * not up yet. WiFi comes up beside the cable when one is set: the
+         * radio has no browser, so the configuration page and the log are
+         * reachable only from the LAN. It stays the default route, the USB
+         * link's priority being below WiFi's; only the radio is on the cable. */
+        if (!wifi_started && cfg->ssid[0]) {
+            wifi_started = true;
+            if (net_prov_wifi_start() != ESP_OK)
+                ESP_LOGE(TAG, "wifi     FAILED beside the cable -- the radio carries on");
+        }
+        const char *radio = usb_net_host();
+        if (!radio) return NULL;
+        ESP_LOGI(TAG, "--- transport: USB cable, the radio at %s ---", radio);
+        *via_usb = true;
+        return radio;
+#else
         if (host_answers(usb_net_host(), cfg->radio_port, 500)) {
             ESP_LOGI(TAG, "--- transport: USB cable (%s) ---", usb_net_host());
             *via_usb = true;
@@ -745,6 +769,7 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
          * websocket task", retrying forever with 9 kB free. Waiting costs
          * nothing; switching costs the link. */
         return NULL;
+#endif
     }
     /* Give the cable until a little after it is due before settling for WiFi. */
     /* With no computer on the S3's side there is nothing to wait for. */
@@ -756,7 +781,6 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * screen says what to do instead. */
     if (!cfg->ssid[0]) return NULL;
     /* Only now is WiFi worth its memory. */
-    static bool wifi_started;
     if (!wifi_started) {
         wifi_started = true;
         esp_err_t werr = net_prov_wifi_start();

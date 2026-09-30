@@ -127,9 +127,18 @@ Ticked once the knob has worked with the radio itself, not only built for it.
       recovers, even in a new session. Measured from a PC with a prototype
       client: sooner at 24 kHz, the knob's rate, than at 48 kHz; sooner with
       silence streamed back to it; no help from a longer latency or from
-      answering its resend requests as wfview does. Next: the radio on a
-      wired USB-C Ethernet adapter instead of its WiFi. If that holds, the
-      firmware should ask for 48 kHz and halve it for the knob's output.
+      answering its resend requests as wfview does. Next: a wired link
+      instead of its WiFi. If that holds, the firmware should ask for
+      48 kHz and halve it for the knob's output.
+      - the knob as the radio's network adapter: the xiegu firmware does
+        USB networking, like the AetherSDR one, plugged into the radio's USB
+        host port (its DHCP server gives the radio 10.55.42.2, where the
+        knob finds its WFSERVER), with WiFi beside it for the configuration
+        page. Tried: on the X6100's port the knob restarts over and over
+        before its start-up finishes -- most likely the port cannot power
+        it (unconfirmed: no boot there got as far as logging why). Needs a
+        knob on its own battery;
+      - or a USB-C Ethernet adapter on the radio (ordered).
 - [ ] X6200 — said to behave the same
 
 wfview's source (`src/radio/`) speaks the Yaesu (SCU-LAN10) and Kenwood

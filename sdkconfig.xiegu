@@ -1,7 +1,21 @@
-# The xiegu firmware: a Xiegu X6100 or X6200 over WiFi (VFO_RADIO=xiegu), through
-# the wfview server built into both.
+# The xiegu firmware: a Xiegu X6100 or X6200 (VFO_RADIO=xiegu), through the
+# wfview server built into both -- over WiFi, or over the knob's own USB-C
+# cable plugged into the radio's USB host port.
 #
-# WiFi only, without the USB networking of sdkconfig.usbnet: the knob reaches
-# the radio over WiFi, and the USB link has no route to it -- the knob is the
-# DHCP server there, on a link with no gateway. Leaving TinyUSB out also frees
-# the internal RAM its buffers take, and keeps the serial console on the cable.
+# On the cable the knob is the radio's network adapter, as it is a computer's
+# in the AetherSDR firmware, and with the same settings (sdkconfig.usbnet
+# says why each one is there): CDC-NCM, and the knob's DHCP server giving
+# the radio 10.55.42.2, where the knob then finds it -- a wired link, since
+# the X6100's receive audio stalls on its WiFi. WiFi joins beside the cable
+# when one is set, the radio having no browser: the configuration page and
+# the log stay on the LAN.
+CONFIG_VFO_USB_NET=y
+CONFIG_TINYUSB_NET_MODE_NCM=y
+CONFIG_ESP_CONSOLE_NONE=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
+# CONFIG_LWIP_DHCPS_ADD_DNS is not set
+# The update downloads' TLS without the AES hardware, whose DMA borrows the
+# internal RAM a USB build is short of.
+CONFIG_MBEDTLS_HARDWARE_AES=n
