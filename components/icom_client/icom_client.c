@@ -647,6 +647,18 @@ static const model_t MODEL_OTHER = {
     .n_rx = 1,
 };
 
+/* The radio's model, as everything reads it: MODEL_OTHER until
+ * radio_start() sets one. The dial and the supervisor ask for the status from
+ * boot, before that -- and when the radio cannot be found it never runs.
+ * Reading a NULL model crashed the knob at every boot with its radio off, in
+ * the status and in the PTT permit it reports; turning the dial would have
+ * too. */
+static const model_t *model_now(void)
+{
+    const model_t *m = S.model;
+    return m ? m : &MODEL_OTHER;
+}
+
 static const model_t *model_for(const char *name)
 {
     for (size_t i = 0; i < sizeof MODELS / sizeof MODELS[0]; i++)
@@ -718,7 +730,7 @@ static void session_end(bool polite, const char *why);
  * microphone still works whenever the radio is keyed at the radio. */
 static const char *modin_name(uint8_t v)
 {
-    const model_t *m = S.model;
+    const model_t *m = model_now();
     return v < m->n_modin_names ? m->modin_names[v] : "?";
 }
 
@@ -736,7 +748,7 @@ static void modin_set(uint16_t which, uint8_t v)
 
 static void modin_to_wlan(void)
 {
-    const model_t *m = S.model;
+    const model_t *m = model_now();
     if (C.modin_switched || C.no_modin || !m->modin_voice) return;
     if (C.modin_off == 0xFF || C.modin_d1 == 0xFF) {
         ESP_LOGW(TAG, "modulation inputs not known: this over is the radio's own microphone");
@@ -758,8 +770,8 @@ static void modin_to_wlan(void)
 static void modin_restore(void)
 {
     if (!C.modin_switched) return;
-    modin_set(S.model->modin_voice, C.modin_off);
-    modin_set(S.model->modin_data, C.modin_d1);
+    modin_set(model_now()->modin_voice, C.modin_off);
+    modin_set(model_now()->modin_data, C.modin_d1);
     C.modin_switched = false;
     s_modin_saved.magic = 0;
 }
@@ -805,7 +817,7 @@ static uint32_t ptt_permit_now(uint32_t t)
                  PERMIT_TX_ENABLE;
     /* A second receiver only listens: an IC-7610 on its SUB transmits on the
      * MAIN's frequency, which the dial is not showing. */
-    if (S.model->n_rx < 2 || (S.have_rx && S.rx == 0)) p |= PERMIT_TRX;
+    if (model_now()->n_rx < 2 || (S.have_rx && S.rx == 0)) p |= PERMIT_TRX;
     if ((S.link == RADIO_LINK_READY || S.link == RADIO_LINK_DEGRADED) &&
         t - S.t_ready_ms >= 500) p |= PERMIT_LINK;
     /* Liveness means CI-V answering, not just control pings: a session can
@@ -866,7 +878,7 @@ static void rx_changed(void)
     CIV(0x16, 0x12);
     CIV(0x16, 0x02);
     CIV(0x21, 0x00);
-    if (S.model->n_ant) CIV(0x12);
+    if (model_now()->n_ant) CIV(0x12);
 }
 
 static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
@@ -918,10 +930,10 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         if (bn >= 2 && b[0] == 0x03) {               /* filter width */
             S.width_idx = (uint8_t)unbcd(b[1]);
             set_edges();
-        } else if (bn >= 4 && b[0] == 0x05 && S.model->modin_voice && !C.modin_switched) {
+        } else if (bn >= 4 && b[0] == 0x05 && model_now()->modin_voice && !C.modin_switched) {
             const uint16_t which = (uint16_t)(b[1] << 8 | b[2]);
-            if (which == S.model->modin_voice) C.modin_off = b[3];   /* modulation inputs */
-            if (which == S.model->modin_data)  C.modin_d1 = b[3];
+            if (which == model_now()->modin_voice) C.modin_off = b[3];   /* modulation inputs */
+            if (which == model_now()->modin_data)  C.modin_d1 = b[3];
             if (!C.modin_logged && C.modin_off != 0xFF && C.modin_d1 != 0xFF) {
                 C.modin_logged = true;
                 ESP_LOGI(TAG, "modulation inputs: %s, data %s",
@@ -936,9 +948,9 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         {
             unsigned raw = level_from(b + 1);
             switch (b[0]) {
-            case 0x02: S.smeter_dbm = -73.0f + calibrate(S.model->cal_s, S.model->n_cal_s, raw);
+            case 0x02: S.smeter_dbm = -73.0f + calibrate(model_now()->cal_s, model_now()->n_cal_s, raw);
                        break;
-            case 0x11: S.tx_fwd_w = CAL(CAL_PO, raw) * S.model->po_scale;
+            case 0x11: S.tx_fwd_w = CAL(CAL_PO, raw) * model_now()->po_scale;
                        if (S.tx_fwd_w > S.tx_peak_w || t - C.t_poll_tx > 400)
                            S.tx_peak_w = S.tx_fwd_w;
                        break;
@@ -968,7 +980,7 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         }
         return;
     case 0x07:                                       /* 07 D2: MAIN or SUB */
-        if (bn >= 2 && b[0] == 0xD2 && b[1] <= 1 && S.model->n_rx > 1) {
+        if (bn >= 2 && b[0] == 0xD2 && b[1] <= 1 && model_now()->n_rx > 1) {
             const bool first = !S.have_rx;
             if (first || b[1] != S.rx) {
                 if (!first) ESP_LOGI(TAG, "on the %s receiver", b[1] ? "SUB" : "MAIN");
@@ -981,10 +993,10 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         }
         return;
     case 0x12:                                       /* 12 <ant> <RX ANT>: antenna */
-        if (bn >= 1 && S.model->n_ant && unbcd(b[0]) < S.model->n_ant) {
+        if (bn >= 1 && model_now()->n_ant && unbcd(b[0]) < model_now()->n_ant) {
             taskENTER_CRITICAL(&S_LOCK);
             S.ant = (uint8_t)unbcd(b[0]);
-            S.ant_rx = S.model->rx_ant && bn >= 2 && b[1] == 0x01;
+            S.ant_rx = model_now()->rx_ant && bn >= 2 && b[1] == 0x01;
             S.have_ant = true;
             taskEXIT_CRITICAL(&S_LOCK);
         }
@@ -1310,7 +1322,7 @@ static void civ_hello(uint32_t t)
     CIV(0x16, 0x12);              /* AGC */
     CIV(0x16, 0x02);              /* preamp */
     CIV(0x1C, 0x00);              /* transmitting? */
-    const model_t *m = S.model;
+    const model_t *m = model_now();
     if (m->n_rx > 1) CIV(0x07, 0xD2);   /* MAIN or SUB */
     if (m->n_ant) CIV(0x12);            /* the antenna */
     if (s_modin_saved.magic == MODIN_MAGIC && m->modin_voice &&
@@ -1664,7 +1676,7 @@ static void rx_ant_task(void)
 {
     if (!C.civ_open || S.link != RADIO_LINK_READY) return;
     if (S.ptt.state != PTT_IDLE || S.tx) return;
-    const model_t *m = S.model;
+    const model_t *m = model_now();
     const int8_t rx = S.pending_rx;
     if (rx >= 0) {
         S.pending_rx = -1;
@@ -1721,7 +1733,7 @@ static void poll_civ(uint32_t t)
              * left them unknown for the whole session -- and without them no
              * over is switched to WLAN: it goes out on the radio's own
              * microphone, silent. So ask until they are known. */
-            const model_t *m = S.model;
+            const model_t *m = model_now();
             if (m->modin_voice && !C.no_modin && C.modin_off == 0xFF) modin_read(m->modin_voice);
             if (m->modin_voice && !C.no_modin && C.modin_d1 == 0xFF)  modin_read(m->modin_data);
             /* Changed on the radio itself. */
@@ -1970,7 +1982,8 @@ int64_t radio_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
         S.t_last_input_ms = t;
     } else if (detents) {
         if (S.tune.step_hz != step_hz) tune_set_step(&S.tune, step_hz);
-        tune_apply(&S.tune, detents, accel_mult, LOOP_MS, S.model->f_min, S.model->f_max);
+        const model_t *m = model_now();
+        tune_apply(&S.tune, detents, accel_mult, LOOP_MS, m->f_min, m->f_max);
         S.t_last_input_ms = t;
     }
     f = S.tune.f_display;
@@ -2071,12 +2084,12 @@ void radio_memory_group(uint8_t group)
 
 void radio_select_rx(uint8_t rx)
 {
-    if (rx < S.model->n_rx) S.pending_rx = (int8_t)rx;
+    if (rx < model_now()->n_rx) S.pending_rx = (int8_t)rx;
 }
 
 void radio_set_antenna(uint8_t ant, bool rx_ant)
 {
-    if (ant < S.model->n_ant) S.pending_ant = (int8_t)(ant | (rx_ant ? 0x10 : 0));
+    if (ant < model_now()->n_ant) S.pending_ant = (int8_t)(ant | (rx_ant ? 0x10 : 0));
 }
 
 /* Not yet on the Icoms: their TUNE and tuner over CI-V. */
@@ -2122,7 +2135,7 @@ void radio_get_status(radio_status_t *o)
     o->have_gain  = S.have_preamp;
     o->gain       = (int8_t)S.preamp;
     o->gain_min   = 0;
-    const model_t *m = S.model;
+    const model_t *m = model_now();
     o->gain_max   = m->one_preamp_hz && S.f_server >= m->one_preamp_hz ? 1 : m->preamps;
     o->gain_step  = 1;
     o->has_memories = s_mem != NULL && !C.no_mem && m->memories;
