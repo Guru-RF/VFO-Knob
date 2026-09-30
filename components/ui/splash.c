@@ -249,14 +249,21 @@ void ui_updating_show(void)
 
 void ui_updating_reboot(void)
 {
+    /* The lock held across the whole of it, and for longer: ui_updating_show()
+     * gives up after 200 ms without it and builds nothing, and writing into
+     * labels it never made hung the UI task in LVGL's NULL check until the
+     * watchdog reset the knob -- a firmware picker accepted with the display
+     * busy. The lock is recursive, so the call below takes it at once. */
+    if (!lvgl_port_lock(1000)) return;
     ui_updating_show();
-    if (!lvgl_port_lock(200)) return;
-    lv_label_set_text(s_upd_title, "REBOOTING");
-    lv_obj_align(s_upd_title, LV_ALIGN_CENTER, 0, -62);
-    lv_label_set_text(s_upd_pct, LV_SYMBOL_REFRESH);
-    lv_obj_align(s_upd_pct, LV_ALIGN_CENTER, 0, -6);
-    lv_label_set_text(s_upd_msg, "into update mode");
-    lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
+    if (s_upd_title) {
+        lv_label_set_text(s_upd_title, "REBOOTING");
+        lv_obj_align(s_upd_title, LV_ALIGN_CENTER, 0, -62);
+        lv_label_set_text(s_upd_pct, LV_SYMBOL_REFRESH);
+        lv_obj_align(s_upd_pct, LV_ALIGN_CENTER, 0, -6);
+        lv_label_set_text(s_upd_msg, "into update mode");
+        lv_obj_align(s_upd_msg, LV_ALIGN_CENTER, 0, 58);
+    }
     lvgl_port_unlock();
 }
 
