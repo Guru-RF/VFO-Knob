@@ -20,6 +20,10 @@ button.go{width:100%;margin-top:14px;padding:13px;border:0;border-radius:10px;ba
 button.go:disabled{opacity:.5}
 a{color:var(--acc)}
 #msg{margin-top:12px;min-height:1.4em}
+.pw{position:relative}
+.pw input{padding-right:78px}
+button.show{position:absolute;right:6px;top:50%;transform:translateY(-50%);padding:8px 12px;
+  border:0;border-radius:8px;background:transparent;color:var(--acc);font:600 15px system-ui,sans-serif}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
 </style></head>
 <body><main>
@@ -36,7 +40,11 @@ shows the firmwares to choose from, on its own dial.</p>
   <label for="ssid">Network</label>
   <input id="ssid" autocomplete="off" autocapitalize="none" spellcheck="false">
   <label for="pass">Password</label>
-  <input id="pass" type="password" autocomplete="off">
+  <div class="pw">
+    <input id="pass" type="password" autocomplete="off" autocapitalize="none"
+           autocorrect="off" spellcheck="false">
+    <button type="button" class="show" id="show" aria-label="Show the password">Show</button>
+  </div>
   <button class="go" id="go">Connect</button>
   <div id="msg"></div>
 </div>
@@ -61,6 +69,15 @@ async function scan(){
   }catch(e){$('list').innerHTML='<p>The knob did not answer. Look again.</p>'}
 }
 $('rescan').onclick=e=>{e.preventDefault();scan()};
+/* The password as typed, on a phone's keyboard; the field keeps the keyboard
+   from capitalising or correcting it, which shown as text it otherwise would. */
+$('show').onclick=()=>{
+  const p=$('pass'),s=p.type==='password';
+  p.type=s?'text':'password';
+  $('show').textContent=s?'Hide':'Show';
+  $('show').setAttribute('aria-label',s?'Hide the password':'Show the password');
+  p.focus();
+};
 async function poll(){
   for(let i=0;i<60;i++){
     await new Promise(r=>setTimeout(r,1000));

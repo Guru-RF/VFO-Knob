@@ -40,6 +40,10 @@ button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
       border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
 label.chk{display:flex;align-items:center;gap:8px;color:var(--fg);font-size:14px;margin:12px 0 0}
 label.chk input{width:auto;margin:0}
+.pw{position:relative}
+.pw input{padding-right:62px}
+button.show,button.show:active{position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  margin:0;padding:3px 10px;background:transparent;color:var(--accent);font-size:12px}
 @media(max-width:520px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -156,8 +160,9 @@ label.chk input{width:auto;margin:0}
   <h2>WiFi</h2>
   <div class="grid">
     <div><label>SSID</label><input id="ssid"></div>
-    <div><label>Password</label><input id="pass" type="password"
-         placeholder="unchanged"></div>
+    <div><label>Password</label><div class="pw"><input id="pass" type="password"
+         placeholder="unchanged" autocapitalize="none" autocorrect="off" spellcheck="false"><button
+         type="button" class="show" data-for="pass">Show</button></div></div>
   </div>
   <p class="note">Used when the knob is powered from a charger rather than a
      computer. Applies on the next boot.</p>
@@ -222,6 +227,14 @@ label.chk input{width:auto;margin:0}
 const $=i=>document.getElementById(i);
 const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const row=(k,v)=>`<div class="row"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+/* A password shown as it is typed. The field keeps a keyboard from
+   capitalising or correcting it, which shown as text it otherwise would. */
+document.querySelectorAll('button.show').forEach(b=>b.onclick=()=>{
+  const p=$(b.dataset.for),s=p.type==='password';
+  p.type=s?'text':'password';
+  b.textContent=s?'Hide':'Show';
+  p.focus();
+});
 
 function hhmmss(s){const h=s/3600|0,m=(s%3600)/60|0;return `${h}h ${m}m ${s%60|0}s`}
 function mhz(hz){return (hz/1e6).toFixed(6)+' MHz'}
