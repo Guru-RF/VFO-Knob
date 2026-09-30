@@ -109,11 +109,12 @@ the range in `radio_get_status()`.
       - [x] the setup firmware (`VFO_RADIO=setup`): the **VFOKnob** hotspot
         with a captive portal for the WiFi, then the firmwares listed from
         `firmware/index.json` on the dial, one installed with the WiFi kept;
-        and from any firmware, ten seconds on the meter arc and a turn of the
-        knob to get back to that list;
-      - [ ] the hotspot and its sign-in page tried from phones, iOS and
-        Android: built, and the list and an install from it tried, but no
-        phone has joined **VFOKnob** yet;
+        and from any firmware, back to that list from the address card: three
+        seconds on the S-meter or the card, a buzz, and a turn of the knob;
+      - [x] the hotspot and its sign-in page from an Android phone: it was
+        sent to the page, and the knob joined the network given there;
+      - [ ] the same from an iPhone, which looks for the portal differently
+        (`hotspot-detect.html`);
       - [ ] the radio's address, and an Icom's login, still come from the
         configuration page after that (a phone will do, at the address the
         arc shows): the sign-in page could ask for them too.
