@@ -1689,19 +1689,18 @@ void app_main(void)
          * needs, so a knob that fell back to WiFi could not open a socket at
          * all -- and could not be updated out of that state either, because
          * the OTA path needs the same memory. The bug blocked its own fix. */
-        /* The svxconnect firmware's supervisor ran with 204 bytes to spare in
-         * 4 kB ([STK] in the log) and overflowed once at boot: it gets 5.
-         * The multiflex firmware's overflowed 4 kB too, and at 5 kB still
-         * came within 84 bytes of the end: it gets 6. */
+        /* The supervisor's stack. 4 kB never was enough: the svxconnect
+         * firmware's ran with 204 bytes to spare and overflowed once at boot;
+         * the multiflex firmware's overflowed, and at 5 kB still came within
+         * 84 bytes of the end; the AetherSDR firmware's ran within 56 bytes
+         * of it ([STK] in the log) and overflowed joining WiFi once its TLS
+         * went to software AES (sdkconfig.usbnet). Joining WiFi runs some of
+         * the WPA code on this stack. Every radio's firmware gets 6 kB. */
 #if VFO_RADIO_SETUP
         /* TLS, for the firmwares' versions, on its own stack. */
         xTaskCreatePinnedToCore(setup_task, "setup", 10240, NULL, 3, NULL, 0);
-#elif VFO_RADIO_MULTIFLEX
-        xTaskCreatePinnedToCore(net_task, "net_sup", 6144, NULL, 3, NULL, 0);
-#elif VFO_RADIO_SVXCONNECT
-        xTaskCreatePinnedToCore(net_task, "net_sup", 5120, NULL, 3, NULL, 0);
 #else
-        xTaskCreatePinnedToCore(net_task, "net_sup", 4096, NULL, 3, NULL, 0);
+        xTaskCreatePinnedToCore(net_task, "net_sup", 6144, NULL, 3, NULL, 0);
 #endif
     }
 
