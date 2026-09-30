@@ -46,6 +46,17 @@
 #define DEFAULT_PORT 4992            /* FlexRadio's API */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_UBERSDR
+#define KEY_HOST     "ubhost"
+#define KEY_RLIST    "ublist"     /* the receivers, one in use: see below */
+#define KEY_RSEL     "ubsel"
+#define KEY_PORT     "ubport"
+#define KEY_USER     "ubuser"     /* unused: an UberSDR has no users */
+#define KEY_PASS     "ubpass"     /* its bypass password, where you have one */
+#define DEFAULT_HOST ""              /* https://<name>.tunnel.ubersdr.org, given on the page */
+#define DEFAULT_PORT 443             /* its tunnel's https; 8080 on a LAN */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_XIEGU
 #define KEY_HOST     "xhost"
 #define KEY_RLIST    "xlist"     /* the radios, one in use: see below */

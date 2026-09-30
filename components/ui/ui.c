@@ -5,6 +5,7 @@
 #include "panel.h"
 #include "net_prov.h"
 
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_lvgl_port.h"
@@ -96,6 +97,31 @@ LV_FONT_DECLARE(font_mic_14);
 #define C_GREEN     lv_color_hex(0xFF8C1A)   /* the meters are orange   */
 #define PWR_HEX     0xFF8C1A                 /* ...Po as well           */
 #define SDR_HEX     0x4DA6FF                 /* a web SDR is blue on every face */
+#elif VFO_RADIO_UBERSDR
+/* --- UberSDR palette -------------------------------------------------------
+ * UberSDR's own dark theme, from its v2 page: ink, its accent blue, its dim
+ * and faint text, and the S-meter from red to green as UberSDR colours it.
+ * A KiwiSDR beside it is in the theme's violet. It only receives: nothing
+ * here is ever drawn in transmit. */
+#define C_BG        lv_color_hex(0x090C12)   /* --bg                    */
+#define C_BG1       lv_color_hex(0x141A25)   /* --surface-2: the slab   */
+#define C_BG_TX     lv_color_hex(0x2A0C10)
+#define C_ACCENT    lv_color_hex(0x08A2FB)   /* --accent                */
+#define C_ACCENT_HI lv_color_hex(0x4DB4FF)   /* --ch                    */
+#define C_TEXT      lv_color_hex(0xDFE5EE)   /* --text                  */
+#define C_TEXT2     lv_color_hex(0x8D99AD)   /* --text-dim              */
+#define C_LABEL     lv_color_hex(0x5C6779)   /* --text-faint            */
+#define C_DISABLED  lv_color_hex(0x2F3B4E)   /* --border-strong         */
+#define C_SUBTLE    lv_color_hex(0x1A2130)   /* --surface-3: the tracks */
+#define C_WARN      lv_color_hex(0xF2B544)   /* --warn                  */
+#define C_DANGER    lv_color_hex(0xF2646A)   /* --bad                   */
+#define C_TX_BORDER lv_color_hex(0xF2646A)
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xDFE5EE)
+#define C_TX_RED    lv_color_hex(0xF2646A)
+#define C_GREEN     lv_color_hex(0x45D69A)   /* --good                  */
+#define PWR_HEX     0x08A2FB
+#define SDR_HEX     0x8B7CF8                 /* --violet: a KiwiSDR beside it */
 #elif VFO_RADIO_SVXCONNECT
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
@@ -163,6 +189,14 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
+/* A receiver's face (the ubersdr firmware): no PTT, no microphone, no RIT.
+ * The slab holds the spots and voices on the band, the AGC's place the SNR,
+ * the gain's the noise filter; a swipe from the right, the SSTV pictures. */
+#if VFO_RX_ONLY
+#define RX_FACE 1
+#else
+#define RX_FACE 0
+#endif
 /* A web SDR beside the radio: blue -- the Icom's and the Maestro's own. */
 #ifndef SDR_HEX
 #if VFO_RADIO_ICOM
@@ -234,6 +268,9 @@ static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
 static lv_obj_t *s_sdr_arc;
 #endif
 static lv_obj_t *s_agc_cap, *s_agc_val, *s_gain_cap, *s_gain_val;
+/* A receiver's slab: the nearest spot or voice, what and where it is, and
+ * how many there are. */
+static lv_obj_t *s_spot_sub, *s_spot_n;
 #if REFLECTOR_FACE
 /* The reflector face's lock and mute, in the talkgroup's row. */
 static lv_obj_t *s_lock_icon, *s_mute_icon;
@@ -525,6 +562,17 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0xFF6A3D },   /* S9 to +20: red over S9 */
     {  -53.0f,  -33.0f, 0xFF4A2E },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0xE8200C },   /* +40 to +60 */
+#elif VFO_RADIO_UBERSDR
+    /* UberSDR's own S-meter colours: hsl(0..120, 90%, 55%) from S1 to S9,
+     * red through yellow to green, and green all the way up from there. */
+    { -127.0f, -121.0f, 0xF42525 },   /* S0 to S1   */
+    { -121.0f, -109.0f, 0xF48C25 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0xF4F425 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0x8CF425 },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0x25F425 },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0x25F425 },   /* S9 to +20  */
+    {  -53.0f,  -33.0f, 0x25F425 },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0x25F425 },   /* +40 to +60 */
 #elif VFO_RADIO_SVXCONNECT
     /* Not an S-meter: the audio level, -60 to 0 dBFS, in SvxConnect's meter
      * colours -- green, then yellow from -12 dB, red in the last 3. */
@@ -574,7 +622,7 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
                ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER, ED_RXSRC,
-               ED_BALANCE, ED_RADIO, ED_VM } edit_t;
+               ED_BALANCE, ED_RADIO, ED_VM, ED_SPOT, ED_SSTV } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int     s_edit_from, s_edit_n;  /* where the receiver's opened; how many */
@@ -591,6 +639,18 @@ static volatile int s_ch_answer = -1;
 /* The last state ui_update() saw, so the editors can open on the current
  * value. The touch callback runs on the LVGL task and cannot ask the client. */
 static ui_state_t s_last;
+/* The spots on the band (ui_set_spots), and the chooser's own copy of them,
+ * which holds still while it is open. */
+EXT_RAM_BSS_ATTR static ui_spot_t s_spots[UI_SPOTS_MAX];
+EXT_RAM_BSS_ATTR static ui_spot_t s_spot_snap[UI_SPOTS_MAX];
+static uint8_t   s_nspots, s_nsnap;
+/* The SSTV viewer (a receiver's face): see sv_open(). */
+static lv_obj_t      *s_sv, *s_sv_img, *s_sv_title, *s_sv_cap, *s_sv_wait;
+static lv_image_dsc_t s_sv_dsc;
+static bool           s_sv_open;
+static int            s_sv_idx;
+static void sv_title(void);
+static void spot_lines(const ui_spot_t *sp, char *l1, size_t n1, char *l2, size_t n2);
 static int32_t s_edit_rit;
 static int8_t  s_edit_gain, s_edit_gmin, s_edit_gmax, s_edit_gstep;
 static int     s_edit_pct;             /* RF GAIN and POWER, 0-100 */
@@ -627,6 +687,13 @@ static const char *AGCS[]  = { "fast","med","slow","off" };
 static const char *MODES[] = { "usb","lsb","cw","cwr","am","fm","digu","digl" };
 static const char *AGCS[]  = { "fast","mid","slow" };
 #define GAIN_CAPTION "PRE"
+#elif VFO_RADIO_UBERSDR
+/* UberSDR's own modes, by its own names. It has no AGC to choose -- its SNR
+ * is shown where the AGC is -- and the gain beside the S-meter is its noise
+ * filter, by name (n_gain_names). */
+static const char *MODES[] = { "usb","lsb","cwu","cwl","am","sam","fm","nfm" };
+static const char *AGCS[]  = { "" };
+#define GAIN_CAPTION "FIL"
 #elif VFO_RADIO_SVXCONNECT
 /* A reflector has no modes, AGC or gain; the tables stay for the editors'
  * sake, which the reflector face never opens. */
@@ -641,8 +708,37 @@ static const char *MODES[] = { "usb","lsb","cw","cwr","am","sam","fm","nfm",
 static const char *AGCS[]  = { "fast","med","slow","off" };
 #define GAIN_CAPTION "RF.G"
 #endif
+#if VFO_RADIO_UBERSDR
+/* Its passbands, by mode: the widths UberSDR allows each (CW +-500 Hz, voice
+ * up to 6 kHz, AM +-6 kHz, FM +-8 kHz). */
+static const int32_t F_SSB[] = { 1800, 2100, 2400, 2700, 3000, 3600, 4200, 5000 };
+static const int32_t F_CW[]  = { 100, 200, 300, 400, 500, 800, 1000 };
+static const int32_t F_AM[]  = { 4000, 6000, 8000, 10000, 12000 };
+static const int32_t F_FM[]  = { 10000, 12000, 16000 };
+static const int32_t *FILTERS = F_SSB;
+static int           N_FILTERS = (int)(sizeof F_SSB / sizeof F_SSB[0]);
+
+static void filters_for(const char *m)
+{
+#define USE(a) do { FILTERS = a; N_FILTERS = (int)(sizeof a / sizeof a[0]); } while (0)
+    if (m && !strncasecmp(m, "cw", 2))                          USE(F_CW);
+    else if (m && (!strcasecmp(m, "am") || !strcasecmp(m, "sam"))) USE(F_AM);
+    else if (m && (!strcasecmp(m, "fm") || !strcasecmp(m, "nfm"))) USE(F_FM);
+    else                                                         USE(F_SSB);
+#undef USE
+}
+
+/* A passband on both sides of the carrier, not one. */
+static bool filter_centred(const char *m)
+{
+    return m && (!strncasecmp(m, "cw", 2) || !strcasecmp(m, "am") || !strcasecmp(m, "sam") ||
+                 !strcasecmp(m, "fm") || !strcasecmp(m, "nfm"));
+}
+#else
 static const int32_t FILTERS[] = { 250, 500, 700, 1000, 1500, 1800, 2100,
                                    2400, 2700, 3000, 3600, 6000 };
+#define N_FILTERS ((int)(sizeof FILTERS / sizeof FILTERS[0]))
+#endif
 /* A radio with filter presets (the IC-705's FIL1-3) is offered those instead
  * of widths: its widths belong to each preset, set on the radio. */
 #define N_PRESETS 3
@@ -651,7 +747,10 @@ static const struct { const char *name; int64_t hz; } BANDS[] = {
     { "160m",  1840000 }, { "80m",   3700000 }, { "60m",   5355000 },
     { "40m",   7100000 }, { "30m",  10130000 }, { "20m",  14100000 },
     { "17m",  18120000 }, { "15m",  21200000 }, { "12m",  24940000 },
-    { "10m",  28400000 }, { "6m",   50200000 },
+    { "10m",  28400000 },
+#if !VFO_RADIO_UBERSDR
+    { "6m",   50200000 },               /* an UberSDR stops at 30 MHz */
+#endif
 #if VFO_RADIO_ICOM
     { "2m",  144300000 }, { "70cm", 432200000 },
 #endif
@@ -764,6 +863,13 @@ static void gain_text(int g, int gmax, char *out, size_t n)
 #endif
 }
 
+/* The gain's name where its steps have one (the ubersdr firmware's filter). */
+static void gain_label(const ui_state_t *st, int g, char *out, size_t n)
+{
+    if (st->n_gain_names && g >= 0 && g < st->n_gain_names) snprintf(out, n, "%s", st->gain_names[g]);
+    else                                                    gain_text(g, st->gain_max, out, n);
+}
+
 /* 145.6375, 438.625: MHz to the 100 Hz digit, which FM channels need and
  * nothing finer. */
 static void mhz_text(int64_t hz, char *out, size_t n)
@@ -858,8 +964,8 @@ static void edit_render(void)
         upcase(AGCS[s_edit_idx], v, sizeof v);
         break;
     case ED_GAIN:
-        title = GAIN_CAPTION;
-        gain_text(s_edit_gain, s_edit_gmax, v, sizeof v);
+        title = s_last.n_gain_names ? "NOISE FILTER" : GAIN_CAPTION;
+        gain_label(&s_last, s_edit_gain, v, sizeof v);
         break;
     case ED_GROUP:
         title = "MEMORY GROUP";
@@ -933,12 +1039,27 @@ static void edit_render(void)
         break;
     case ED_BALANCE:
         title = "BALANCE";
-        /* 0: the radio left and the SDR right; towards an end, that one alone. */
-        if (s_edit_bal <= -100)     snprintf(v, sizeof v, "RADIO");
-        else if (s_edit_bal >= 100) snprintf(v, sizeof v, "SDR");
+        /* 0: the radio left and the SDR right; towards an end, that one alone
+         * -- on a receiver's face, the UberSDR left and a KiwiSDR right. */
+        if (s_edit_bal <= -100)     snprintf(v, sizeof v, "%s", RX_FACE ? "UBER" : "RADIO");
+        else if (s_edit_bal >= 100) snprintf(v, sizeof v, "%s", RX_FACE ? "KIWI" : "SDR");
         else if (s_edit_bal == 0)   snprintf(v, sizeof v, "L | R");
         else if (s_edit_bal < 0)    snprintf(v, sizeof v, LV_SYMBOL_LEFT " %d", -s_edit_bal);
         else                        snprintf(v, sizeof v, "%d " LV_SYMBOL_RIGHT, s_edit_bal);
+        break;
+    case ED_SPOT: {
+        static char t[24];
+        char l2[56];
+        snprintf(t, sizeof t, "SPOT %d / %d", s_edit_idx + 1, (int)s_nsnap);
+        title = t;
+        spot_lines(&s_spot_snap[s_edit_idx], v, sizeof v, l2, sizeof l2);
+        break;
+    }
+    case ED_SSTV:
+        title = "SSTV";
+        if (s_last.n_sstv > 0) snprintf(v, sizeof v, "%d PICTURES", s_last.n_sstv);
+        else                   snprintf(v, sizeof v, "NONE YET");
+        vcolor = s_last.n_sstv > 0 ? C_ACCENT_HI : C_DISABLED;
         break;
     default: return;
     }
@@ -946,7 +1067,7 @@ static void edit_render(void)
     /* A station's name wants more room than a mode or a width. */
     lv_obj_set_style_text_font(s_edit_value,
                                s_edit == ED_CHOICE || s_edit == ED_RADIO || s_edit == ED_VM ||
-                               (s_edit == ED_RXSRC && s_edit_idx)
+                               s_edit == ED_SPOT || s_edit == ED_SSTV || (s_edit == ED_RXSRC && s_edit_idx)
                                ? &lv_font_montserrat_28 : &lv_font_montserrat_48, 0);
     lv_label_set_text(s_edit_value, v);
     lv_obj_set_style_text_color(s_edit_value, vcolor, 0);
@@ -954,9 +1075,19 @@ static void edit_render(void)
      * service -- the same FlexRadio can be both. */
     if (s_edit == ED_RADIO) {
         char h[40];
-        snprintf(h, sizeof h, "%s  -  tap to switch",
-                 s_edit_idx < s_last.n_radios_direct ? "LAN" : s_last.radio_via);
+        /* A receiver is reached however its address says: nothing to add. */
+        if (RX_FACE) snprintf(h, sizeof h, "tap to switch");
+        else         snprintf(h, sizeof h, "%s  -  tap to switch",
+                              s_edit_idx < s_last.n_radios_direct ? "LAN" : s_last.radio_via);
         lv_label_set_text(s_edit_hint, h);
+    } else if (s_edit == ED_SPOT) {
+        /* Where, in what, and what it is: 14.205.0 USB  DX 4m */
+        char l1[24], h[56];
+        spot_lines(&s_spot_snap[s_edit_idx], l1, sizeof l1, h, sizeof h);
+        lv_label_set_text(s_edit_hint, h);
+    } else if (s_edit == ED_SSTV) {
+        lv_label_set_text(s_edit_hint, s_last.n_sstv > 0 ? "tap to look  -  the knob turns them"
+                                                         : "the receiver's gallery is empty");
     } else if (strcmp(lv_label_get_text(s_edit_hint), "turn to choose  -  tap to accept")) {
         lv_label_set_text(s_edit_hint, "turn to choose  -  tap to accept");
     }
@@ -980,7 +1111,7 @@ static int nearest_filter(int32_t w)
 {
     int best = 0;
     int32_t bd = 1 << 30;
-    for (int i = 0; i < NELEM(FILTERS); i++) {
+    for (int i = 0; i < N_FILTERS; i++) {
         int32_t d = FILTERS[i] - w; if (d < 0) d = -d;
         if (d < bd) { bd = d; best = i; }
     }
@@ -1012,6 +1143,9 @@ static void edit_open(edit_t what, const ui_state_t *st)
     case ED_BAND:   s_edit_idx = nearest_band(st->freq_hz); break;
     case ED_MODE:   s_edit_idx = index_of_mode(st->mode);   break;
     case ED_FILTER:
+#if VFO_RADIO_UBERSDR
+        filters_for(st->mode);
+#endif
         s_edit_presets = st->filter_no != 0;
         if (s_edit_presets) {
             s_edit_idx = st->filter_no - 1;
@@ -1060,6 +1194,19 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_edit_idx = st->rxsrc >= 0 && st->rxsrc < st->n_sdr ? st->rxsrc + 1 : 0;
         break;
     case ED_BALANCE: s_edit_bal = st->balance; break;
+    case ED_SPOT: {
+        /* Opened on the spot nearest the dial. */
+        memcpy(s_spot_snap, s_spots, sizeof s_spots[0] * s_nspots);
+        s_nsnap    = s_nspots;
+        s_edit_n   = s_nsnap;
+        s_edit_idx = 0;
+        int64_t best = INT64_MAX;
+        for (int i = 0; i < s_nsnap; i++) {
+            const int64_t d = llabs((int64_t)s_spot_snap[i].hz - st->freq_hz);
+            if (d < best) { best = d; s_edit_idx = i; }
+        }
+        break;
+    }
     case ED_RADIO:
         s_edit_n   = st->n_radios;
         s_edit_idx = st->radio_sel >= 0 && st->radio_sel < st->n_radios ? st->radio_sel : 0;
@@ -1113,6 +1260,14 @@ static void edit_fill(void)
         }
         s_commit.have_filter = true;
         int32_t w = FILTERS[s_edit_idx];
+#if VFO_RADIO_UBERSDR
+        /* UberSDR's edges: 50 Hz off the carrier for a sideband, as its own
+         * defaults are, and centred on it for everything else. */
+        if (filter_centred(s_last.mode)) { s_commit.filt_lo = -w / 2; s_commit.filt_hi = w / 2; }
+        else if (s_edit_lsb)             { s_commit.filt_lo = -w;     s_commit.filt_hi = -50; }
+        else                             { s_commit.filt_lo = 50;     s_commit.filt_hi = w;   }
+        break;
+#endif
         if (s_edit_lsb) { s_commit.filt_lo = -w;  s_commit.filt_hi = -100; }
         else            { s_commit.filt_lo = 100; s_commit.filt_hi =  w;   }
         break;
@@ -1168,6 +1323,11 @@ static void edit_fill(void)
         s_commit.have_vm = true;
         s_commit.vm_mem  = s_edit_idx == 1;
         break;
+    case ED_SPOT:
+        s_commit.have_spot = s_nsnap > 0;
+        s_commit.spot_hz   = s_spot_snap[s_edit_idx].hz;
+        strlcpy(s_commit.spot_mode, s_spot_snap[s_edit_idx].mode, sizeof s_commit.spot_mode);
+        break;
     case ED_ANT: {
         /* Only when turned to: until then the editor follows the radio, and
          * a tap straight through leaves the antenna alone. */
@@ -1204,12 +1364,24 @@ static void edit_publish(void)
     s_have_commit = true;
 }
 
-bool ui_edit_active(void) { return s_edit != ED_NONE; }
+bool ui_edit_active(void) { return s_edit != ED_NONE || s_sv_open; }
 
 void ui_edit_rotate(int32_t detents)
 {
-    if (s_edit == ED_NONE || !detents) return;
+    if ((s_edit == ED_NONE && !s_sv_open) || !detents) return;
     if (!lvgl_port_lock(20)) return;
+    /* The SSTV viewer: the next picture, or the one before. */
+    if (s_sv_open) {
+        int i = s_sv_idx + (detents > 0 ? 1 : -1);
+        if (i >= s_last.n_sstv) i = s_last.n_sstv - 1;
+        if (i < 0) i = 0;
+        if (i != s_sv_idx) {
+            s_sv_idx = i;
+            sv_title();
+        }
+        lvgl_port_unlock();
+        return;
+    }
     switch (s_edit) {
     case ED_BAND:
         s_edit_idx += detents;
@@ -1222,7 +1394,7 @@ void ui_edit_rotate(int32_t detents)
         if (s_edit_idx >= NELEM(MODES)) s_edit_idx = NELEM(MODES) - 1;
         break;
     case ED_FILTER: {
-        const int n = s_edit_presets ? N_PRESETS : NELEM(FILTERS);
+        const int n = s_edit_presets ? N_PRESETS : N_FILTERS;
         s_edit_idx += detents;
         if (s_edit_idx < 0) s_edit_idx = 0;
         if (s_edit_idx >= n) s_edit_idx = n - 1;
@@ -1252,6 +1424,7 @@ void ui_edit_rotate(int32_t detents)
     case ED_RXSRC:
     case ED_RADIO:
     case ED_VM:
+    case ED_SPOT:
     case ED_RX:
     case ED_ANT:
     case ED_MENU:
@@ -1451,13 +1624,158 @@ static bool aux_spot(lv_point_t p)
     if (REFLECTOR_FACE || p.y < AUX_TOP || p.y >= 104 || !s_last.link_ok || s_last.tx)
         return false;
     const int dx = p.x - CX;
-    return (dx <= -AUX_IN && dx >= -AUX_OUT) ||
+    /* A receiver's SNR, where the AGC is, is only a reading. */
+    return (dx <= -AUX_IN && dx >= -AUX_OUT && !RX_FACE) ||
            (dx >= AUX_IN && dx <= AUX_OUT && s_last.have_gain);
+}
+
+/* --- the SSTV viewer (a receiver's face) ---------------------------------- */
+
+static void sv_close(void)
+{
+    if (!s_sv_open) return;
+    s_sv_open = false;
+    lv_obj_add_flag(s_sv, LV_OBJ_FLAG_HIDDEN);
+    lv_image_set_src(s_sv_img, NULL);
+    lv_image_cache_drop(&s_sv_dsc);
+}
+
+static void sv_title(void)
+{
+    char t[24];
+    snprintf(t, sizeof t, "%d / %d", s_sv_idx + 1, (int)s_last.n_sstv);
+    lv_label_set_text(s_sv_title, t);
+    lv_label_set_text(s_sv_wait, "fetching...");
+    lv_obj_remove_flag(s_sv_wait, LV_OBJ_FLAG_HIDDEN);
+    /* The last picture stays, dimmed, until the next is there. */
+    lv_obj_set_style_image_opa(s_sv_img, LV_OPA_30, 0);
+}
+
+static void sv_open(void)
+{
+    if (!s_sv) {
+        /* Over the whole face, black as the receiver's page: the picture in
+         * the middle, what it is above it, where and when under it. */
+        s_sv = lv_obj_create(s_scr);
+        lv_obj_set_size(s_sv, 360, 360);
+        lv_obj_center(s_sv);
+        lv_obj_set_style_bg_color(s_sv, C_BG, 0);
+        lv_obj_set_style_bg_opa(s_sv, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_sv, 0, 0);
+        lv_obj_set_style_radius(s_sv, 0, 0);
+        lv_obj_set_style_pad_all(s_sv, 0, 0);
+        lv_obj_remove_flag(s_sv, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(s_sv, LV_OBJ_FLAG_CLICKABLE);
+        s_sv_img = lv_image_create(s_sv);
+        lv_obj_align(s_sv_img, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_remove_flag(s_sv_img, LV_OBJ_FLAG_CLICKABLE);
+        s_sv_title = lv_label_create(s_sv);
+        lv_obj_set_style_text_font(s_sv_title, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_sv_title, C_ACCENT_HI, 0);
+        lv_obj_align(s_sv_title, LV_ALIGN_CENTER, 0, 52 - CY);
+        s_sv_cap = lv_label_create(s_sv);
+        lv_obj_set_style_text_font(s_sv_cap, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_sv_cap, C_TEXT2, 0);
+        lv_obj_set_width(s_sv_cap, 250);
+        lv_obj_set_style_text_align(s_sv_cap, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(s_sv_cap, LV_LABEL_LONG_DOT);
+        lv_obj_align(s_sv_cap, LV_ALIGN_CENTER, 0, 304 - CY);
+        /* Over a picture, on a pill of its own: grey on a picture could not
+         * be read. */
+        s_sv_wait = lv_label_create(s_sv);
+        lv_obj_set_style_text_font(s_sv_wait, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_sv_wait, C_TEXT, 0);
+        lv_obj_set_style_bg_color(s_sv_wait, C_BG1, 0);
+        lv_obj_set_style_bg_opa(s_sv_wait, LV_OPA_90, 0);
+        lv_obj_set_style_border_color(s_sv_wait, C_ACCENT, 0);
+        lv_obj_set_style_border_width(s_sv_wait, 2, 0);
+        lv_obj_set_style_radius(s_sv_wait, 14, 0);
+        lv_obj_set_style_pad_hor(s_sv_wait, 16, 0);
+        lv_obj_set_style_pad_ver(s_sv_wait, 8, 0);
+        lv_obj_align(s_sv_wait, LV_ALIGN_CENTER, 0, 0);
+    }
+    s_sv_open = true;
+    s_sv_idx  = 0;
+    netinfo_show(false);
+    lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_sv_img, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_sv_cap, "");
+    sv_title();
+    lv_obj_remove_flag(s_sv, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_sv);
+}
+
+int ui_sstv_wanted(void) { return s_sv_open ? s_sv_idx : -1; }
+
+void ui_sstv_show(const uint16_t *px, int w, int h, int idx, const char *title,
+                  const char *caption, bool failed)
+{
+    if (!s_scr || !lvgl_port_lock(50)) return;
+    /* Only the one the knob is on: one it has turned past is let go. */
+    if (s_sv_open && idx == s_sv_idx) {
+        lv_image_set_src(s_sv_img, NULL);
+        lv_image_cache_drop(&s_sv_dsc);
+        if (failed || !px || w <= 0 || h <= 0) {
+            lv_obj_add_flag(s_sv_img, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(s_sv_wait, caption && caption[0] ? caption : "not to be had");
+            lv_obj_remove_flag(s_sv_wait, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(s_sv_cap, "");
+        } else {
+            memset(&s_sv_dsc, 0, sizeof s_sv_dsc);
+            s_sv_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+            s_sv_dsc.header.cf     = LV_COLOR_FORMAT_RGB565;
+            s_sv_dsc.header.w      = (uint32_t)w;
+            s_sv_dsc.header.h      = (uint32_t)h;
+            s_sv_dsc.header.stride = (uint32_t)w * 2;
+            s_sv_dsc.data_size     = (uint32_t)(w * h * 2);
+            s_sv_dsc.data          = (const uint8_t *)px;
+            lv_image_set_src(s_sv_img, &s_sv_dsc);
+            lv_obj_align(s_sv_img, LV_ALIGN_CENTER, 0, 0);
+            lv_obj_set_style_image_opa(s_sv_img, LV_OPA_COVER, 0);
+            lv_obj_remove_flag(s_sv_img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_sv_wait, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(s_sv_cap, caption ? caption : "");
+        }
+        if (title && title[0]) lv_label_set_text(s_sv_title, title);
+    }
+    lvgl_port_unlock();
+}
+
+void ui_set_spots(const ui_spot_t *spots, uint8_t n)
+{
+    if (!lvgl_port_lock(20)) return;
+    if (n > UI_SPOTS_MAX) n = UI_SPOTS_MAX;
+    if (n && spots) memcpy(s_spots, spots, sizeof s_spots[0] * n);
+    s_nspots = spots ? n : 0;
+    lvgl_port_unlock();
+}
+
+/* A spot's two lines: its call -- or, for a voice nobody has named, its
+ * frequency -- and under it where and what it is. */
+static void spot_lines(const ui_spot_t *sp, char *l1, size_t n1, char *l2, size_t n2)
+{
+    char f[16], m[6];
+    snprintf(f, sizeof f, "%lu.%03lu.%lu", (unsigned long)(sp->hz / 1000000),
+             (unsigned long)(sp->hz / 1000 % 1000), (unsigned long)(sp->hz / 100 % 10));
+    upcase(sp->mode, m, sizeof m);
+    if (sp->call[0]) {
+        snprintf(l1, n1, "%.11s", sp->call);
+        snprintf(l2, n2, "%s %s  %.23s", f, m, sp->what);
+    } else {
+        snprintf(l1, n1, "%s", f);
+        snprintf(l2, n2, "%s  %.23s", m, sp->what);
+    }
 }
 
 /* A tap at p, the finger down for `held` ms. */
 static void tap(lv_point_t p, uint32_t held)
 {
+    (void)held;
+    /* The SSTV viewer: any tap, anywhere, and the dial is back. */
+    if (s_sv_open) {
+        sv_close();
+        return;
+    }
     /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
      * selection on the precise one. */
     if (s_edit == ED_CHOICE) {
@@ -1506,6 +1824,12 @@ static void tap(lv_point_t p, uint32_t held)
             s_commit.atu_mem = s_mem_lit;
             s_have_commit = true;
             edit_render();
+            return;
+        }
+        /* SSTV's panel is a door: a tap on it opens the viewer. */
+        if (was == ED_SSTV) {
+            edit_close();
+            if (s_last.n_sstv > 0) sv_open();
             return;
         }
         edit_commit();
@@ -1578,6 +1902,16 @@ static void tap(lv_point_t p, uint32_t held)
         if (mem || REFLECTOR_FACE) return;
         s_active_dig = nearest_digit(p.x);
         s_step_req   = DIG_STEP[s_active_dig];
+        return;
+    }
+    /* A receiver's slab: all the spots and voices, on the dial. */
+    if (RX_FACE && p.y >= PTT_TOP) {
+        if (s_nspots > 0) edit_open(ED_SPOT, &s_last);
+        return;
+    }
+    /* step | volume, on a receiver */
+    if (RX_FACE && p.y >= 208 && p.y < PTT_TOP) {
+        if (p.x > CX) edit_open(ED_VOL, &s_last);
         return;
     }
     /* step | rit | volume | mic */
@@ -1671,7 +2005,7 @@ static void gesture_cb(lv_event_t *e)
     if (!indev) return;
     s_gestured = true;
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (s_edit != ED_NONE || s_asking || s_last.tx) return;
+    if (s_edit != ED_NONE || s_asking || s_last.tx || s_sv_open) return;
     /* Up: another radio, where the knob knows more than one -- with or
      * without a link, since the one in use may be switched off. */
     if (dir == LV_DIR_TOP) {
@@ -1688,6 +2022,11 @@ static void gesture_cb(lv_event_t *e)
         return;
     }
     if (dir == LV_DIR_LEFT) {
+        /* A receiver's: its SSTV pictures, where it keeps them. */
+        if (RX_FACE) {
+            if (s_last.n_sstv >= 0) edit_open(ED_SSTV, &s_last);
+            return;
+        }
         if (s_last.has_tuner && s_last.have_tuner)  edit_open(ED_TUNER, &s_last);
         else if (s_last.has_tune || s_last.has_atu) edit_open(ED_MENU, &s_last);
         return;
@@ -1764,7 +2103,7 @@ static void touch_cb(lv_event_t *e)
     /* PTT keeps acting on the press: the whole slab, with a link, and not
      * while an editor is open, when a tap there accepts the edit. With no
      * link the slab would arm a transmitter we cannot reach. */
-    if (p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
+    if (!RX_FACE && p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
         /* One tap, one toggle. A light touch can flicker -- press, release,
          * press within a single tap -- and on a toggle each extra press
          * undoes the one before: keyed and unkeyed in one tap, which reads as
@@ -2193,7 +2532,7 @@ static void build(void)
 
     /* Either side of it, a caption and the setting under it: the AGC, and
      * the front end's gain. Tapping either opens its editor. */
-    s_agc_cap  = mklabel(&lv_font_montserrat_14, C_LABEL, CX - AUX_DX, 78, "AGC");
+    s_agc_cap  = mklabel(&lv_font_montserrat_14, C_LABEL, CX - AUX_DX, 78, RX_FACE ? "SNR" : "AGC");
     s_agc_val  = mklabel(&lv_font_montserrat_14, C_DISABLED, CX - AUX_DX, 97, "--");
     s_gain_cap = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 78, GAIN_CAPTION);
     s_gain_val = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 97, "--");
@@ -2270,6 +2609,14 @@ static void build(void)
                          LV_SYMBOL_VOLUME_MID " 40");
     s_mic      = mklabel(&font_mic_14,           C_TEXT2,  CX + 104, 222,
                          SYM_MIC " 100");
+    if (RX_FACE) {
+        /* A receiver has no RIT to set and no microphone: the step and the
+         * volume share the row. */
+        lv_obj_add_flag(s_rit, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_mic, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_step_lbl, LV_ALIGN_CENTER, -56, 220 - CY);
+        lv_obj_align(s_vol, LV_ALIGN_CENTER, 56, 222 - CY);
+    }
 
     /* Full width, hard to the bottom edge. The circle clips it to a chord.
      */
@@ -2301,6 +2648,33 @@ static void build(void)
     lv_obj_set_style_pad_all(s_ptt_lbl, 0, 0);
     lv_obj_set_pos(s_ptt_lbl, PTT_LEFT, PTT_TOP + 14);
     lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
+    if (RX_FACE) {
+        /* No PTT: the spot or voice nearest the dial, large, where PTT's
+         * caption is; where and what it is under it; and how many there are
+         * on the band in the narrow chord at the bottom. */
+        lv_obj_set_style_text_color(s_ptt_lbl, C_TEXT, 0);
+        lv_label_set_long_mode(s_ptt_lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_ptt_lbl, 290);
+        lv_obj_set_pos(s_ptt_lbl, CX - 145, PTT_TOP + 8);
+        lv_label_set_text(s_ptt_lbl, "");
+        s_spot_sub = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(s_spot_sub, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_spot_sub, C_TEXT2, 0);
+        lv_obj_set_style_text_align(s_spot_sub, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(s_spot_sub, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_spot_sub, 246);
+        lv_obj_set_pos(s_spot_sub, CX - 123, PTT_TOP + 44);
+        lv_obj_remove_flag(s_spot_sub, LV_OBJ_FLAG_CLICKABLE);
+        lv_label_set_text(s_spot_sub, "");
+        s_spot_n = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(s_spot_n, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_spot_n, C_LABEL, 0);
+        lv_obj_set_style_text_align(s_spot_n, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(s_spot_n, 190);
+        lv_obj_set_pos(s_spot_n, CX - 95, PTT_TOP + 64);
+        lv_obj_remove_flag(s_spot_n, LV_OBJ_FLAG_CLICKABLE);
+        lv_label_set_text(s_spot_n, "");
+    }
 
     /* Editor overlay: hidden until a field is tapped. */
     /* Network address card. Same treatment as the editor panel, and equally
@@ -2361,8 +2735,10 @@ static void build(void)
      * -- but in the danger colour. It used to be said twice, as a label over
      * the readout and again under it, which is worse than saying it once:
      * two copies of "NO LINK" invite a look for two different faults. */
+    /* Tall enough for the card's four lines -- the firmware, then the
+     * addresses -- under the warning. */
     s_warn_panel = lv_obj_create(s_scr);
-    lv_obj_set_size(s_warn_panel, 268, 116);
+    lv_obj_set_size(s_warn_panel, 268, 134);
     lv_obj_align(s_warn_panel, LV_ALIGN_CENTER, 0, -6);
     lv_obj_set_style_radius(s_warn_panel, 18, 0);
     lv_obj_set_style_bg_color(s_warn_panel, C_BG1, 0);
@@ -2721,8 +3097,9 @@ void ui_update(const ui_state_t *st)
     }
 
     /* While an editor is open its panel owns the screen; leave the rest of the
-     * face alone so the value the operator is choosing does not jitter. */
-    if (s_edit != ED_NONE) { lvgl_port_unlock(); return; }
+     * face alone so the value the operator is choosing does not jitter -- nor,
+     * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter. */
+    if (s_edit != ED_NONE || s_sv_open) { lvgl_port_unlock(); return; }
 
     /* The address card times out on its own: it covers the frequency, and an
      * operator who walked away should come back to a working dial. Not under
@@ -2841,10 +3218,25 @@ void ui_update(const ui_state_t *st)
 
     /* Greyed out while the radio has not said -- which for AetherSDR's RF
      * gain is always: its TCI carries none. */
-    upcase(st->agc, tb, 8);
-    set_text(s_agc_val, tb[0] ? tb : "--");
-    set_text_color(s_agc_val, tb[0] ? C_TEXT2 : C_DISABLED);
-    if (st->have_gain) gain_text(st->gain, st->gain_max, tb, sizeof tb);
+    if (RX_FACE) {
+        /* The SNR, in UberSDR's colours for it: red at 0 dB, green from 15. */
+        if (st->have_snr) {
+            snprintf(tb, sizeof tb, "%d dB", (int)lroundf(st->snr_db));
+            float f = st->snr_db / 15.0f;
+            if (f < 0.0f) f = 0.0f;
+            if (f > 1.0f) f = 1.0f;
+            set_text(s_agc_val, tb);
+            set_text_color(s_agc_val, lv_color_hsv_to_rgb((uint16_t)(f * 120.0f), 85, 96));
+        } else {
+            set_text(s_agc_val, "--");
+            set_text_color(s_agc_val, C_DISABLED);
+        }
+    } else {
+        upcase(st->agc, tb, 8);
+        set_text(s_agc_val, tb[0] ? tb : "--");
+        set_text_color(s_agc_val, tb[0] ? C_TEXT2 : C_DISABLED);
+    }
+    if (st->have_gain) gain_label(st, st->gain, tb, sizeof tb);
     set_text(s_gain_val, st->have_gain ? tb : "--");
     set_text_color(s_gain_val, st->have_gain ? C_TEXT2 : C_DISABLED);
     set_text_color(s_gain_cap, st->have_gain ? C_LABEL : C_DISABLED);
@@ -2852,7 +3244,7 @@ void ui_update(const ui_state_t *st)
     /* RIT is always shown so it is always tappable, but greyed at zero: RIT
      * silently non-zero is a classic way to lose a QSO, so when it IS set it
      * has to stand out. */
-    if (REFLECTOR_FACE) {
+    if (REFLECTOR_FACE || RX_FACE) {
         /* no RIT */
     } else if (st->rit_hz) {
         snprintf(tb, sizeof tb, "RIT %+ld", (long)st->rit_hz);
@@ -2996,7 +3388,8 @@ void ui_update(const ui_state_t *st)
         } else
 #endif
         {
-            snprintf(tb, sizeof tb, "%d dBm", (int)sig_pk);
+            /* A receiver's level is its own, in dB below full scale. */
+            snprintf(tb, sizeof tb, RX_FACE ? "%d dBFS" : "%d dBm", (int)sig_pk);
             set_text(s_dbm, tb);
             set_text_color(s_dbm, C_LABEL);
         }
@@ -3153,7 +3546,33 @@ void ui_update(const ui_state_t *st)
         lv_obj_set_style_text_color(s_ptt_lbl,
             st->tx ? lv_color_white() : C_TEXT2, 0);
     }
-    if (st->tx_remote)
+    if (RX_FACE) {
+        /* The spot or voice nearest the dial: green while it is heard, bright
+         * when the dial is on it, dimmer when it is only a pointer. */
+        if (!st->has_spots) {
+            set_text(s_ptt_lbl, "");
+            set_text(s_spot_sub, "");
+            set_text(s_spot_n, "");
+        } else if (!s_nspots) {
+            set_text(s_ptt_lbl, "");
+            set_text(s_spot_sub, "no spots or voices here");
+            set_text_color(s_spot_sub, C_LABEL);
+            set_text(s_spot_n, "");
+        } else {
+            int k = 0;
+            for (int i = 1; i < s_nspots; i++)
+                if (llabs((int64_t)s_spots[i].hz - f) < llabs((int64_t)s_spots[k].hz - f)) k = i;
+            const ui_spot_t *sp = &s_spots[k];
+            char l1[24], l2[56], l3[24];
+            spot_lines(sp, l1, sizeof l1, l2, sizeof l2);
+            set_text(s_ptt_lbl, l1);
+            set_text_color(s_ptt_lbl, sp->heard ? C_GREEN : llabs((int64_t)sp->hz - f) < 500 ? C_TEXT : C_TEXT2);
+            set_text(s_spot_sub, l2);
+            set_text_color(s_spot_sub, C_TEXT2);
+            snprintf(l3, sizeof l3, "%u on %s", (unsigned)s_nspots, band_of(f));
+            set_text(s_spot_n, l3);
+        }
+    } else if (st->tx_remote)
         /* Keyed by the desktop, a foot switch or another client. Our trx:false
          * would only touch our own producer handle, so tapping cannot stop it
          * and the caption must not imply otherwise. */
@@ -3223,6 +3642,8 @@ static void set_level(uint8_t level)
                        : level == LVL_DIM   ? DIM_LOW
                                             : DIM_FULL);
 }
+
+uint32_t ui_last_use(void) { return s_last_use_ms; }
 
 void ui_note_activity(void)
 {

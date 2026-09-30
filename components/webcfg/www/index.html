@@ -104,6 +104,13 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
+  <p class="note" id="ubernote" hidden>The receiver's address as its page has
+     it: <b>https://<i>name</i>.tunnel.ubersdr.org</b> through UberSDR's tunnel,
+     or <b>host:8080</b> on your own network. Its password is the receiver's
+     bypass password, where its owner gave you one: it lifts the session time
+     limit and the busy-receiver limits. Without one the knob listens as a
+     guest, and when the receiver ends the session the dial asks before
+     listening again. Changes here apply on the knob's next boot.</p>
   <p class="note" id="svxnote" hidden>The reflector's name, as SvxLink knows it:
      its SRV record says which host and port to use (<b>be.svx.link</b> is
      <b>reflector.be.svx.link:5300</b>). The port counts only for a name
@@ -142,7 +149,7 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   <h2 id="sdr">Web SDRs</h2>
   <div id="sdrlist"></div>
   <button id="sdradd" class="ghost" type="button">Add a receiver</button>
-  <p class="note">A second receiver beside the radio, following its frequency
+  <p class="note" id="sdrradio">A second receiver beside the radio, following its frequency
      and mode: a KiwiSDR, a Web-888, or an UberSDR through its Kiwi input. On
      the knob, swipe down and turn to <b>LOCAL</b> or a receiver, then tap.
      With one playing, the radio is in the left ear and the SDR in the right,
@@ -150,6 +157,11 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      the left, fades from one to the other. Its S-meter is the thin blue line
      outside the radio's, its reading the blue one under the radio's. The SDR
      is silent while you transmit.</p>
+  <p class="note" id="sdruber" hidden>Beside the UberSDR, a KiwiSDR or a
+     Web-888 following it: swipe down on the knob and turn to <b>LOCAL</b> or a
+     receiver, then tap. With one playing, the UberSDR is in the left ear and
+     the KiwiSDR in the right, both brought to the same loudness;
+     <b>BALANCE</b>, a swipe from the left, fades from one to the other.</p>
   <p class="note">The address is the receiver's own, with its port &mdash;
      <b>host:8073</b> on most KiwiSDRs &mdash; not an https:// link through a
      proxy or a tunnel. The time-limit password, where a receiver has one,
@@ -346,14 +358,17 @@ async function load(){
   const lan = icom || xiegu;              /* the radio itself, with a login */
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
+  const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup';
   LINKNAME = c.link || 'Radio';
   $('rtitle').textContent = icom ? 'IC-705 / IC-7610' : xiegu ? 'X6100 / X6200'
-                          : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : 'AetherSDR';
+                          : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : uber ? 'UberSDR' : 'AetherSDR';
   $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
+  $('ubernote').hidden = !uber;
+  $('sdruber').hidden = !uber; $('sdrradio').hidden = uber;
   $('svxnote').hidden = !SVX;
   for (const id of ['svxstation','svxtg','svxcert']) $(id).hidden = !SVX;
   if (SVX) { document.documentElement.style.setProperty('--accent','#e5a823'); svxLoad(); }
@@ -362,13 +377,14 @@ async function load(){
   $('xiegunote').hidden = !xiegu;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
-  myIp = c.client && !c.client_usb && !lan && !SVX && !flex ? c.client : '';
+  myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !uber ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = lan || SVX || flex || !(c.client && c.client_usb);
+  $('hostusb').hidden = lan || SVX || flex || uber || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
-  LIST = !SVX && c.radio !== 'setup'; LAN = lan;
-  HOSTLBL = flex || xiegu ? "The radio's IP address" : 'Host (IP, or a name ending .local)';
+  LIST = !SVX && c.radio !== 'setup'; LAN = lan; UBER = uber;
+  HOSTLBL = flex || xiegu ? "The radio's IP address" : uber ? 'Address (https://\u2026, or host:port)'
+          : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
   if (LIST) { $('rlogin').hidden = true; rigsLoad(); }
   if (flex) slLoad();
@@ -419,7 +435,15 @@ async function slUse(i){
 }
 
 /* ---- the radios: one in use, a swipe up on the knob for another ---- */
-let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, HOSTLBL='Host';
+let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, UBER=false, HOSTLBL='Host';
+/* An UberSDR's address as its page has it: https:// is its tunnel, on 443;
+   http://host:port a receiver on the LAN. The knob keeps the name and the
+   port, and speaks TLS on 443. */
+function uberAddr(x){
+  const m=/^\s*(https?):\/\/([^\/:\s]+)(?::(\d+))?/i.exec(x.host);
+  if(!m) return;
+  x.host=m[2]; x.port=m[3]||(m[1].toLowerCase()==='https'?'443':'80');
+}
 async function rigsLoad(){
   let s; try{ const r=await fetch('/api/radios',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
   RIGS=s.list.map((x,i)=>({name:x.name,host:x.host,port:String(x.port),user:x.user,pass:'',
@@ -439,6 +463,9 @@ function rigsRender(){
       <div><label>${HOSTLBL}${myIp?` <button type="button" class="pill up" data-myip>my IP ${esc(myIp)}</button>`:''}</label>
         <input data-k="host" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
       <div><label>Port</label><input data-k="port" inputmode="numeric"></div>
+      ${UBER?`<div><label>Password (optional)${x.hasPass?' <button type="button" class="pill down" data-clr>clear</button>':''}</label>
+        <div class="pw"><input data-k="pass" type="password" autocomplete="new-password" autocapitalize="none"
+         autocorrect="off" spellcheck="false"><button type="button" class="show">Show</button></div></div>`:''}
       ${LAN?`<div><label>User name</label><input data-k="user" autocomplete="off" autocapitalize="none"></div>
       <div><label>Password${x.hasPass?' <button type="button" class="pill down" data-clr>clear</button>':''}</label>
         <div class="pw"><input data-k="pass" type="password" autocomplete="new-password" autocapitalize="none"
@@ -448,6 +475,8 @@ function rigsRender(){
     for(const inp of d.querySelectorAll('input[data-k]')){
       const k=inp.dataset.k; inp.value=x[k];
       inp.oninput=()=>{ x[k]=inp.value; rigsDirty=true; if(k==='host'||k==='port') pwHint(d,x) };
+      /* A pasted https://... link: its name, and its port, 443. */
+      if(UBER&&k==='host') inp.onchange=()=>{ uberAddr(x); rigsRender() };
     }
     pwHint(d,x);
     d.querySelector('input[name=ruse]').onchange=()=>{ RIG_USE=i; rigsDirty=true };
@@ -463,7 +492,7 @@ function rigsRender(){
   $('radd').hidden=RIGS.length>=4; $('rlistnote').hidden=false;
 }
 $('radd').onclick=()=>{
-  RIGS.push({name:'',host:'',port:(RIGS[0]&&RIGS[0].port)||'50001',user:'',pass:'',
+  RIGS.push({name:'',host:'',port:(RIGS[0]&&RIGS[0].port)||(UBER?'443':'50001'),user:'',pass:'',
                hasPass:false,clrPass:false,was:-1});
   rigsDirty=true; rigsRender();
   const all=$('rlist').querySelectorAll('input[data-k=host]'); all[all.length-1].focus();
@@ -473,6 +502,7 @@ $('radd').onclick=()=>{
 async function rigsSave(){
   if(!LIST||!RIGS||!rigsDirty) return '';
   const b=new URLSearchParams(); b.append('n',RIGS.length); b.append('use',RIG_USE);
+  if(UBER) RIGS.forEach(uberAddr);
   RIGS.forEach((x,i)=>{ b.append('name'+i,x.name.trim()); b.append('host'+i,x.host.trim());
     b.append('port'+i,x.port); b.append('user'+i,x.user); b.append('was'+i,x.was);
     if(x.pass||x.clrPass) b.append('pass'+i,x.pass) });
@@ -782,6 +812,7 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'xiegu',     name:'Xiegu X6100 / X6200 (LAN)', soon:true},
               {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
+              {id:'ubersdr',   name:'UberSDR (a web receiver)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

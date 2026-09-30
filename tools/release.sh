@@ -130,7 +130,7 @@ python3 - "$TMP/wt/firmware" <<'PY'
 import glob, json, os, sys
 root = sys.argv[1]
 NAMES = {"aethersdr": "AetherSDR", "icom": "Icom", "multiflex": "FlexRadio",
-         "svxconnect": "SvxLink", "setup": "Setup"}
+         "ubersdr": "UberSDR", "svxconnect": "SvxLink", "setup": "Setup"}
 order = list(NAMES)
 out = []
 for m in glob.glob(os.path.join(root, "*", "manifest.json")):

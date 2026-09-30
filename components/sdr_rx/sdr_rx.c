@@ -461,7 +461,8 @@ static const char *kiwi_mode(const char *m, int32_t *lo, int32_t *hi)
 {
     const char *k = "usb";
     if (!strcasecmp(m, "lsb") || !strcasecmp(m, "digl")) k = "lsb";
-    else if (!strcasecmp(m, "cw") || !strcasecmp(m, "cwr")) k = "cw";
+    else if (!strcasecmp(m, "cw") || !strcasecmp(m, "cwr") ||
+             !strcasecmp(m, "cwu") || !strcasecmp(m, "cwl")) k = "cw";      /* UberSDR's names */
     else if (!strcasecmp(m, "am")) k = "am";
     else if (!strcasecmp(m, "sam")) k = "sam";
     else if (!strcasecmp(m, "fm") || !strcasecmp(m, "nfm")) k = "nbfm";

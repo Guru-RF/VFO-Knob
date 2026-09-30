@@ -45,10 +45,15 @@
 #include "esp_psram.h"
 #include "esp_system.h"
 #include "esp_attr.h"
+#include "esp_app_desc.h"
 #include "esp_ota_ops.h"
 /* Web SDRs as a second receiver: the Icom, Xiegu and FlexRadio firmwares. */
 #if VFO_HAS_SDR
 #include "sdr_rx.h"
+#endif
+/* The ubersdr firmware's receiver: spots, voices, SSTV. */
+#if VFO_RADIO_UBERSDR
+#include "uber.h"
 #endif
 #include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
@@ -88,6 +93,32 @@ static void boot_ok_now(void)
 }
 
 static void log_cpu(void);
+
+/* The firmware, as the address card names it: its radio, and its version --
+ * "UberSDR 1.14.0", or "... dev" for a build that is not a release. Which
+ * firmware a knob runs is the first question about it. */
+static void firmware_line(char *out, size_t cap)
+{
+#if VFO_RADIO_ICOM
+    const char *name = "Icom";
+#elif VFO_RADIO_XIEGU
+    const char *name = "Xiegu";
+#elif VFO_RADIO_SVXCONNECT
+    const char *name = "SvxLink";
+#elif VFO_RADIO_MULTIFLEX
+    const char *name = "FlexRadio";
+#elif VFO_RADIO_UBERSDR
+    const char *name = "UberSDR";
+#elif VFO_RADIO_SETUP
+    const char *name = "Setup";
+#else
+    const char *name = "AetherSDR";
+#endif
+    const char *v = esp_app_get_description()->version;
+    if (*v == 'v') v++;
+    const int n = (int)strcspn(v, "-");
+    snprintf(out, cap, "%s %.*s%s", name, n, v, v[n] ? " dev" : "");
+}
 
 /* The link is the USB cable: one computer, or one radio, at its far end. */
 static volatile bool s_on_usb;
@@ -522,6 +553,12 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "tuner -> %s", c.tuner_on ? "in the line" : "out");
                 radio_set_tuner(c.tuner_on);
             }
+#if VFO_RADIO_UBERSDR
+            if (c.have_spot) {
+                ESP_LOGI(TAG, "spot -> %lu Hz %s", (unsigned long)c.spot_hz, c.spot_mode);
+                uber_tune_to(c.spot_hz, c.spot_mode);
+            }
+#endif
 #if VFO_HAS_SDR
             if (c.have_rxsrc) {
                 ESP_LOGI(TAG, "rx -> %s", c.rxsrc < 0 ? "LOCAL" : "web SDR");
@@ -568,6 +605,28 @@ static void ui_task(void *arg)
             }
         }
 
+#if VFO_RADIO_UBERSDR
+        /* Someone at the knob: an UberSDR with an idle timer counts that. */
+        {
+            static uint32_t seen;
+            const uint32_t use = ui_last_use();
+            if (use != seen) {
+                seen = use;
+                uber_activity();
+            }
+        }
+        /* The SSTV viewer: the picture it wants, and the one to show. */
+        {
+            static uint32_t shown;
+            static uber_sstv_t pic;
+            uber_sstv_want(ui_sstv_wanted());
+            if (uber_sstv_get(&pic, shown)) {
+                ui_sstv_show(pic.px, pic.w, pic.h, pic.idx, pic.title, pic.caption, pic.failed);
+                shown = pic.seq;
+                uber_sstv_shown(pic.seq);
+            }
+        }
+#endif
         if (ui_take_ptt_tap()) {
 #if VFO_PTT_DRY_RUN
             /* A test build (-D VFO_PTT_DRY_RUN=1): what would have keyed or
@@ -702,9 +761,11 @@ static void ui_task(void *arg)
         else if (nowms < s_note_until && st.note[0]) warn = st.note;
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
         else if (!(st.link == RADIO_LINK_READY ||
-                   st.link == RADIO_LINK_DEGRADED))    warn = "NO LINK";
+                   st.link == RADIO_LINK_DEGRADED))    warn = st.link_why[0] ? st.link_why : "NO LINK";
         else if (st.slice_locked)                    warn = "VFO LOCKED";
+#if !VFO_RX_ONLY
         else if (!(st.permit & PERMIT_TX_ENABLE))    warn = "TX DISABLED";
+#endif
 
         ui_state_t u = {
             .freq_hz       = st.f_display,
@@ -782,6 +843,10 @@ static void ui_task(void *arg)
             .warn          = warn,
         };
         strlcpy(u.agc, st.agc, sizeof u.agc);
+        u.have_snr = st.have_snr;
+        u.snr_db   = st.snr_db;
+        u.n_gain_names = st.n_gain_names < UI_GAIN_NAMES ? st.n_gain_names : UI_GAIN_NAMES;
+        memcpy(u.gain_names, st.gain_names, sizeof u.gain_names);
         strlcpy(u.mem_name, st.mem_name, sizeof u.mem_name);
         strlcpy(u.tg_name, st.tg_name, sizeof u.tg_name);
         strlcpy(u.talker, st.talker, sizeof u.talker);
@@ -802,6 +867,51 @@ static void ui_task(void *arg)
         u.balance       = sdr_rx_balance();
 #else
         u.rxsrc = -1;
+#endif
+#if VFO_RADIO_UBERSDR
+        /* The slab: the spots and voices on the band, a second at a time or
+         * when they change; the swipe from the right, SSTV. */
+        {
+            static uint32_t spot_seq = 0xFFFFFFFF;
+            static int64_t  spots_at, spots_f;
+            EXT_RAM_BSS_ATTR static uber_spot_t sp[UBER_SPOTS];
+            EXT_RAM_BSS_ATTR static ui_spot_t us[UI_SPOTS_MAX];
+            uint32_t seq = 0;
+            uber_spots(NULL, 0, &seq);
+            const int64_t now = esp_timer_get_time();
+            if (seq != spot_seq || now - spots_at > 1000000 || st.f_display != spots_f) {
+                spot_seq = seq;
+                spots_at = now;
+                spots_f  = st.f_display;
+                const int n = uber_spots(sp, UBER_SPOTS < UI_SPOTS_MAX ? UBER_SPOTS : UI_SPOTS_MAX, NULL);
+                for (int i = 0; i < n; i++) {
+                    strlcpy(us[i].call, sp[i].call, sizeof us[i].call);
+                    us[i].hz = sp[i].hz;
+                    strlcpy(us[i].mode, sp[i].mode, sizeof us[i].mode);
+                    const unsigned a = sp[i].age_s;
+                    char age[12] = "";
+                    if (a >= 3600)   snprintf(age, sizeof age, "%uh", a / 3600);
+                    else if (a >= 60) snprintf(age, sizeof age, "%um", a / 60);
+                    else if (a)      snprintf(age, sizeof age, "%us", a);
+                    us[i].heard = sp[i].heard;
+                    if (sp[i].kind == 'C')
+                        snprintf(us[i].what, sizeof us[i].what, "CW %u wpm %d dB%s%s",
+                                 (unsigned)sp[i].wpm, sp[i].snr, age[0] ? "  " : "", age);
+                    else if (sp[i].kind == 'V')
+                        snprintf(us[i].what, sizeof us[i].what, "voice %d dB", sp[i].snr);
+                    else if (sp[i].heard)
+                        snprintf(us[i].what, sizeof us[i].what, "DX%s%s  heard %d dB",
+                                 age[0] ? " " : "", age, sp[i].snr);
+                    else
+                        snprintf(us[i].what, sizeof us[i].what, "DX%s%s", age[0] ? "  " : "", age);
+                }
+                ui_set_spots(us, (uint8_t)n);
+            }
+            static uber_info_t in;          /* static: this stack is tight */
+            uber_info(&in);
+            u.has_spots = in.spots || in.voice;
+            u.n_sstv    = (int16_t)uber_sstv_count();
+        }
 #endif
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
         /* The radios to choose from with a swipe up: not over the cable,
@@ -935,6 +1045,17 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * an SRV record comes first, and says which host and port to use. */
     strlcpy(ip, cfg->radio_host, iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (reflector %s) ---", cfg->radio_host);
+#elif VFO_RADIO_UBERSDR
+    /* An UberSDR by its name: TLS checks the certificate against it, and its
+     * tunnel finds the receiver by it. The client looks it up itself. */
+    if (!cfg->radio_host[0]) {
+        static bool said;
+        if (!said) ESP_LOGW(TAG, "  no receiver set: see the configuration page");
+        said = true;
+        return NULL;
+    }
+    strlcpy(ip, cfg->radio_host, iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (UberSDR %s) ---", cfg->radio_host);
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -1131,6 +1252,7 @@ static const struct { const char *radio, *name; } FIRMWARES[] = {
     { "aethersdr",  "AetherSDR" },
     { "icom",       "Icom"      },
     { "multiflex",  "FlexRadio" },
+    { "ubersdr",    "UberSDR"   },
     { "svxconnect", "SvxLink"   },
 };
 
@@ -1362,11 +1484,14 @@ RADIO_ONLY_FN static void net_task(void *arg)
                                             "the cable. Turn the USB-C\n"
                                             "plug over%s",
                          cfg->ssid[0] ? ", or wait for WiFi." : ".");
-            else
-                snprintf(info, sizeof info, "USB   %s\nWiFi  %s\nsetup  http://%s",
+            else {
+                char fw[40];
+                firmware_line(fw, sizeof fw);
+                snprintf(info, sizeof info, "%s\nUSB   %s\nWiFi  %s\nsetup  http://%s", fw,
                          usb[0]  ? usb  : "-",
                          wifi[0] ? wifi : "-",
                          usb[0] ? usb : (wifi[0] ? wifi : "-"));
+            }
             ui_set_netinfo(info);
         }
 
@@ -1780,7 +1905,10 @@ void app_main(void)
 
     if (!safe) {
         bring_up("audio-out", audio_out_init);
+#if !VFO_RX_ONLY
+        /* A receiver has no use for the microphone, nor its DMA's RAM. */
         bring_up("mic", audio_in_init);
+#endif
 #if VFO_HAS_SDR
         bring_up("web SDR", sdr_rx_init);
 #endif

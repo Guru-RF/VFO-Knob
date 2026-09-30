@@ -1,0 +1,30 @@
+# The ubersdr firmware: an UberSDR web receiver over its own protocol
+# (VFO_RADIO=ubersdr) -- listened to and tuned, with its spots, its scanner
+# and its SSTV gallery, and a KiwiSDR beside it. It only receives.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the receiver is
+# on the internet, and the USB link has no route there -- the knob is the
+# DHCP server on it, on a link with no gateway. Leaving TinyUSB out also frees
+# the internal RAM its buffers take, and keeps the serial console on the cable.
+
+# Opus in fixed point, as the svxconnect and multiflex firmwares run it.
+CONFIG_OPUS_FLOATING_POINT=n
+
+# The receiver's audio and spots sockets, a request beside them (the SSTV
+# gallery, voice activity), the KiwiSDR's, and the web page's and the log's.
+CONFIG_LWIP_MAX_SOCKETS=16
+# ...and every address a KiwiSDR's name stands for, to try each in turn. Safe
+# only without SNTP: lwIP's cache then writes them all where SNTP keeps one.
+CONFIG_LWIP_DNS_MAX_HOST_IP=4
+
+# AES in software. On the S3 the AES engine works by DMA, and TLS records in
+# PSRAM go through internal bounce buffers, 1600 bytes at a time: with two TLS
+# connections streaming and a picture downloading beside them there is none
+# to spare. Opus at 24-48 kbit/s is nothing to software AES.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# The TCP window stays at lwIP's 5760 bytes. Three times that fetched the
+# SSTV pictures no faster -- a picture's time was mostly its TLS handshake,
+# which the client now makes once for many requests -- and took internal RAM
+# down to 8 kB while they came, the WiFi driver's receive buffers being
+# internal.

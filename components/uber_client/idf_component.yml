@@ -1,0 +1,5 @@
+## Opus: the receiver's audio is an Opus packet every 20 ms. libopus's own
+## API, its scratch memory in PSRAM. Only the ubersdr firmware builds this
+## component.
+dependencies:
+  esphome/micro-opus: "^0.4.1"

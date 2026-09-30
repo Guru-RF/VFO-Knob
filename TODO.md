@@ -153,12 +153,12 @@ broadcast, IQ from the radio and demodulated in the knob:
 - [ ] others on the protocol (Red Pitaya's STEMlab SDR transceivers ...)
 
 **Web SDRs, native**: a receiver firmware of its own, with no radio -- the
-dial tunes a web SDR itself, its S-meter and audio the knob's, over the
-KiwiSDR protocol `components/sdr_rx` already speaks beside a radio:
-- [ ] Web-888
-- [ ] KiwiSDR (its owner's limits kept: a Kiwi that lets no apps listen
-      stays out of reach)
-- [ ] UberSDR, through its Kiwi input
+dial tunes a web SDR itself, its S-meter and audio the knob's:
+- [x] UberSDR -- the ubersdr firmware, over UberSDR's own protocol (see
+      Firmware); ON6URE-TEL through its tunnel, 2026-10-01
+- [ ] Web-888 and KiwiSDR, over the KiwiSDR protocol `components/sdr_rx`
+      already speaks beside a radio (its owner's limits kept: a Kiwi that
+      lets no apps listen stays out of reach)
 
 wfview's source (`src/radio/`) speaks the Yaesu (SCU-LAN10) and Kenwood
 network protocols as well as Icom's: a reference for those clients.
@@ -315,6 +315,50 @@ network protocols as well as Icom's: a reference for those clients.
         IC-705 in the icom firmware's list (2026-09-30);
       - [ ] switched on the dial, both ways, and V/M on the IC-705;
       - [ ] on the multiflex and aethersdr firmwares.
+- [ ] **UberSDR, native.** A firmware of its own, `ubersdr`
+      (`VFO_RADIO=ubersdr`, `components/uber_client`), receive only
+      (`VFO_RX_ONLY`): UberSDR's own protocol, as its v2 page speaks it --
+      `/api/description`, `POST /connection` with a UUID of its own,
+      `wss://…/ws` with Opus behind UberSDR's version-4 header, the spots on
+      `/ws/dxcluster` -- over TLS through the tunnel or in the clear on a LAN.
+      - [x] listening: the description, the session, 50 Opus frames a
+        second at 24 kHz, the S-meter and the SNR from the frames'
+        headers, tuning coalesced to the server's pace, the receiver's
+        clock for the spots' ages (2026-10-01, ON6URE-TEL);
+      - [x] the noise filter (set_dsp): NR4 asked for and confirmed;
+      - [x] spots on the band (cluster and skimmer), aged by the
+        receiver's clock, and the voices its detector hears, named or
+        not, merged with them (a scanner came and went: the user wanted
+        the voices on the slab instead);
+      - [x] the SSTV gallery listed; a picture decoded (PNG, the ROM's
+        inflate) exactly as a desktop decodes it, on the PC; on the knob
+        0.7-2.7 s a picture over one kept-open TLS connection, the next
+        ones fetched ahead into a four-picture cache;
+      - [x] a KiwiSDR beside it: the Web-888 streaming in the right ear;
+      - [x] seen on the glass (2026-10-01): the face, BALANCE (its 0 read
+        "0 >" until the chain was fixed), the SSTV viewer (its "fetching"
+        unreadable over a picture until it got a pill of its own);
+      - [ ] the slab with voices, the spot chooser, TIME UP;
+      - [ ] the session's end (an hour without the password), and the
+        dial's LISTEN AGAIN;
+      - [ ] a receiver on a LAN, in the clear;
+      - [ ] the time a session has left, on the face, for a guest;
+      - [ ] the dial for UberSDR's own page in a browser, both ways: a
+        small browser extension (Chrome and Firefox) on the page's
+        documented API (`static/v2/BRIDGE_API.md`, page API 1.8 in
+        0.1.66) relaying to the knob over WiFi. The dial and the taps
+        tune the tab (`tune`, `mode`, `passband`, `volume`, and `run`
+        for any of its ~35 functions -- noise filter, squelch, VFO A/B);
+        the tab's `tuning`, `signal` (the S-meter it shows, and the SNR)
+        and `spots` topics come back to the knob's face. An extension,
+        not a userscript: an https page may not open ws:// to a LAN
+        address. Beside it, found in the same code and simpler, but one
+        way only (the page sends a controller nothing back): the knob as
+        a class-compliant USB MIDI device for the page's SDR Control
+        panel, which learns any control onto those functions; and the
+        desktop app's TCI server (port 60001) for the aethersdr firmware
+        as it is, once the knob halves its 48 kHz audio (it sends no
+        S-meter, only -127).
 - [ ] **Web SDRs beside the radio.** For the icom, xiegu and multiflex
       firmwares (`VFO_HAS_SDR`, `components/sdr_rx`): a KiwiSDR, a Web-888 or
       an UberSDR's Kiwi input as a second receiver, over KiwiSDR's protocol

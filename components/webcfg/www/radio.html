@@ -104,7 +104,7 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
 <section class="ctl">
   <h2>Receive</h2>
   <div class="two">
-    <div><div class="sub" style="margin:0 0 6px">AGC</div><div id="agcs" class="grid"></div></div>
+    <div id="agcbox"><div class="sub" style="margin:0 0 6px">AGC</div><div id="agcs" class="grid"></div></div>
     <div id="gainbox"><div class="sub" style="margin:0 0 6px" id="gaincap">P.AMP</div><div id="gains" class="grid"></div></div>
   </div>
   <div id="rfgbox" class="slider" hidden><label for="rfg">RF gain</label>
@@ -128,6 +128,17 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
     <span id="ants" class="row"></span></div>
 </section>
 
+<section class="ctl" id="spotsec" hidden>
+  <h2 id="spottitle">Spots and voices</h2>
+  <div id="spots" class="row" style="margin-top:10px"></div>
+  <p class="sub" id="spotnote"></p>
+</section>
+
+<section id="sstvsec" hidden>
+  <h2>SSTV, from the receiver's gallery</h2>
+  <div id="sstv" class="row"></div>
+</section>
+
 <section class="ctl" id="sdrsec" hidden>
   <h2>Web SDR</h2>
   <div class="row"><span class="sub" style="margin:0;min-width:86px">Listen to</span><span id="sdrs" class="row"></span></div>
@@ -138,7 +149,7 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
     <a href="/config#sdr" style="color:var(--accent-hi)">configuration page</a>.</p>
 </section>
 
-<section class="ctl">
+<section class="ctl" id="ritsec">
   <h2>RIT</h2>
   <div class="row"><button data-rit="-100">&minus;100</button><button data-rit="-10">&minus;10</button>
     <span id="ritv" class="sval" style="min-width:90px;text-align:center">0 Hz</span>
@@ -148,7 +159,7 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
 <section>
   <h2>The knob's audio</h2>
   <div class="slider"><label for="vol">Volume</label><input id="vol" type="range" min="0" max="100" step="1"><output id="volv">--</output></div>
-  <div class="slider"><label for="mic">Mic gain</label><input id="mic" type="range" min="0" max="200" step="5"><output id="micv">--</output></div>
+  <div class="slider" id="microw"><label for="mic">Mic gain</label><input id="mic" type="range" min="0" max="200" step="5"><output id="micv">--</output></div>
 </section>
 
 <section class="api">
@@ -178,21 +189,31 @@ const PAL={
  multiflex:{bg:'#000000',panel:'#0c1622',panel2:'#070e17',line:'#1c2a3a',text2:'#c9d2dc',label:'#7d8792',dim:'#3a424c',
        accent:'#2a9df4','accent-hi':'#62bbff',danger:'#f0302c',tx:'#e8262b',meter:'#2a9df4'},
  aethersdr:{bg:'#0f0f1a',panel:'#1a2a3a',panel2:'#121e2b',line:'#26394d',text2:'#8ea8c0',label:'#506070',dim:'#3a4a5a',
-       accent:'#00b4d8','accent-hi':'#00c8f0',danger:'#ff4d4d',tx:'#e01010',meter:'#00b4d8'}};
-const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR'};
-const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',am:'AM',sam:'SAM',fm:'FM',nfm:'NFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
+       accent:'#00b4d8','accent-hi':'#00c8f0',danger:'#ff4d4d',tx:'#e01010',meter:'#00b4d8'},
+ ubersdr:{bg:'#090c12',panel:'#141a25',panel2:'#0f141d',line:'#212a39',text2:'#8d99ad',label:'#5c6779',dim:'#2f3b4e',
+       accent:'#08a2fb','accent-hi':'#4db4ff',danger:'#f2646a',tx:'#f2646a',meter:'#45d69a',ok:'#45d69a'}};
+const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR',ubersdr:'UberSDR'};
+const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',cwu:'CWU',cwl:'CWL',am:'AM',sam:'SAM',fm:'FM',nfm:'NFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
 const MODES={icom:['usb','lsb','cw','cwr','am','fm','rtty','digu','digl'],
   xiegu:['usb','lsb','cw','cwr','am','fm','digu','digl'],
   multiflex:['usb','lsb','cw','am','sam','fm','nfm','digu','digl','rtty'],
-  aethersdr:['usb','lsb','cw','cwr','am','sam','fm','nfm','digu','digl','rtty']};
-const AGCS={icom:['fast','mid','slow'],xiegu:['fast','mid','slow'],multiflex:['fast','med','slow','off'],aethersdr:['fast','med','slow','off']};
-const GAINCAP={icom:'P.AMP',xiegu:'PRE',multiflex:'RF.G',aethersdr:'RF.G'};
+  aethersdr:['usb','lsb','cw','cwr','am','sam','fm','nfm','digu','digl','rtty'],
+  ubersdr:['usb','lsb','cwu','cwl','am','sam','fm','nfm']};
+const AGCS={icom:['fast','mid','slow'],xiegu:['fast','mid','slow'],multiflex:['fast','med','slow','off'],aethersdr:['fast','med','slow','off'],
+  ubersdr:[]};
+const GAINCAP={icom:'P.AMP',xiegu:'PRE',multiflex:'RF.G',aethersdr:'RF.G',ubersdr:'Noise filter'};
+/* An UberSDR only receives: its SNR where the AGC is, its noise filter as the
+ * gain, its passbands by mode, and no RIT or microphone (the knob's ui.c). */
+const RXONLY=r=>r==='ubersdr';
+const UWID=m=>/^cw/.test(m)?[100,200,300,400,500,800,1000]:/^s?am$/.test(m)?[4000,6000,8000,10000,12000]
+  :/fm$/.test(m)?[10000,12000,16000]:[1800,2100,2400,2700,3000,3600,4200,5000];
+const centred=m=>/^cw|^s?am$|fm$/.test(m);
 const BANDS=[['160m',1840000],['80m',3700000],['60m',5355000],['40m',7100000],['30m',10130000],['20m',14100000],
   ['17m',18120000],['15m',21200000],['12m',24940000],['10m',28400000],['6m',50200000],['2m',144300000],['70cm',432200000]];
 const WIDTHS=[1800,2100,2400,2700,3000,3600];
 const STEPS=[[10,'10 Hz'],[100,'100 Hz'],[1000,'1 kHz'],[10000,'10 kHz'],[100000,'100 kHz']];
 let RADIO='icom',R=null,step=1000,touched={};
-const lsbSide=m=>['lsb','cwr','digl'].includes(m);
+const lsbSide=m=>['lsb','cwr','cwl','digl'].includes(m);
 
 function toast(t){const e=$('toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2600)}
 function fmt(hz){const s=String(Math.round(hz)).padStart(7,'0');return s.slice(0,-6)+'.'+s.slice(-6,-3)+'.'+s.slice(-3)}
@@ -207,7 +228,8 @@ function slider(id,out,fmtv,send){const s=$(id);let t=0;
 const busy=id=>Date.now()-(touched[id]||0)<1500;
 
 function sunits(dbm){if(dbm<=-126)return 'S0';if(dbm<=-73)return 'S'+Math.max(0,Math.round((dbm+127)/6));return 'S9+'+Math.round(dbm+73)}
-function gainLabel(g,max){if(RADIO==='multiflex'||RADIO==='aethersdr')return (g>0?'+':'')+g+' dB';
+function gainLabel(g,max){if(R&&R.gain_names&&R.gain_names[g])return R.gain_names[g];
+  if(RADIO==='multiflex'||RADIO==='aethersdr')return (g>0?'+':'')+g+' dB';
   if(g<=0)return 'OFF';if(max<=1)return 'ON';return (RADIO==='xiegu'?'PRE':'P.AMP')+g}
 
 function render(){
@@ -222,7 +244,9 @@ function render(){
   $('rxtag').hidden=!(R.n_rx>1);$('rxtag').textContent=R.rx?'SUB':'MAIN';
   $('txbadge').hidden=!R.tx;
   const pct=Math.max(0,Math.min(1,(R.smeter+127)/114))*100;
-  $('mbar').style.width=(R.tx?0:pct)+'%';$('sval').textContent=ready?(sunits(R.smeter)+'  '+Math.round(R.smeter)+' dBm'):'--';
+  $('mbar').style.width=(R.tx?0:pct)+'%';
+  $('sval').textContent=ready?(sunits(R.smeter)+'  '+Math.round(R.smeter)+(RXONLY(RADIO)?' dBFS':' dBm')
+    +(R.have_snr?'  \u00b7  SNR '+Math.round(R.snr)+' dB':'')):'--';
   $('memtag').hidden=!(R.memories&&R.mem_state>0);
   $('memtag').textContent='MEM '+String(R.mem_group).padStart(2,'0')+'/'+String(R.mem_ch).padStart(2,'0')+(R.mem_name?' '+R.mem_name:'');
   // bands: 2 m and 70 cm only where the radio tunes that high
@@ -231,6 +255,10 @@ function render(){
   const cur=[...bands].reverse().find(b=>Math.abs(R.freq-b[1])<Math.max(500000,b[1]*0.05));mark($('bands'),cur?cur[1]:'');
   mark($('modes'),R.mode);
   if(R.filter){if($('filters').dataset.kind!=='pre'){$('filters').dataset.kind='pre';btns($('filters'),[[1,'FIL1'],[2,'FIL2'],[3,'FIL3']],n=>set({filter:n}))}mark($('filters'),R.filter)}
+  else if(RXONLY(RADIO)){const ws=UWID(R.mode),kind='u'+ws.join(',');
+    if($('filters').dataset.kind!==kind){$('filters').dataset.kind=kind;btns($('filters'),ws.map(w=>[w,w<1000?w+'':(w/1000).toFixed(1)+'k']),w=>
+      set(centred(R.mode)?{lo:-Math.round(w/2),hi:Math.round(w/2)}:lsbSide(R.mode)?{lo:-w,hi:-50}:{lo:50,hi:w}))}
+    const w=R.hi-R.lo;mark($('filters'),ws.reduce((a,b)=>Math.abs(b-w)<Math.abs(a-w)?b:a))}
   else{if($('filters').dataset.kind!=='w'){$('filters').dataset.kind='w';btns($('filters'),WIDTHS.map(w=>[w,(w/1000).toFixed(1)+'k']),w=>{
       const l=lsbSide(R.mode);set(l?{lo:-w,hi:-100}:{lo:100,hi:w})})}
     const w=R.hi-R.lo;mark($('filters'),WIDTHS.reduce((a,b)=>Math.abs(b-w)<Math.abs(a-w)?b:a))}
@@ -258,19 +286,43 @@ function render(){
     const key=lab.join('|');
     if($('radios').dataset.k!==key){$('radios').dataset.k=key;btns($('radios'),lab.map((n,i)=>[i,n]),switchTo)}
     mark($('radios'),RS.sel)}
+  renderUber(R.uber);
   /* A web SDR beside the radio: the Icom, Xiegu and FlexRadio firmwares. */
   const S=R.sdr;$('sdrsec').hidden=!S;$('apisdr').hidden=!S;
   if(S){const items=[['local','LOCAL'],...S.list.map((x,i)=>[i,x.name||x.host])];
     const key=items.map(i=>i[1]).join('|');if($('sdrs').dataset.k!==key){$('sdrs').dataset.k=key;btns($('sdrs'),items,v=>set({sdr:v}))}
     mark($('sdrs'),S.sel<0?'local':S.sel);$('sdrnone').hidden=S.list.length>0;
     const x=S.list[S.sel];
-    $('sdrstate').textContent=S.sel<0||!x?'The radio alone, in both ears.':(x.name||x.host)+': '+S.state+
-      (S.streaming?' \u00b7 '+sunits(S.smeter)+'  '+Math.round(S.smeter)+' dBm \u00b7 the radio left, the SDR right':'');
+    const who=RXONLY(RADIO)?['The UberSDR','the UberSDR']:['The radio','the radio'];
+    $('sdrstate').textContent=S.sel<0||!x?who[0]+' alone, in both ears.':(x.name||x.host)+': '+S.state+
+      (S.streaming?' \u00b7 '+sunits(S.smeter)+'  '+Math.round(S.smeter)+' dBm \u00b7 '+who[1]+' left, the SDR right':'');
     $('balbox').hidden=S.sel<0;
     if(!busy('bal')){$('bal').value=S.balance;$('balv').textContent=balText(S.balance)}}
 }
+/* An UberSDR: the spots and voices on the dial's band -- a tap tunes to
+ * one, in its mode -- and its SSTV gallery, fetched from the receiver. */
+function renderUber(U){
+  $('spotsec').hidden=!U;$('sstvsec').hidden=!(U&&U.sstv&&U.sstv.length);
+  if(!U)return;
+  const band=(BANDS.find(b=>Math.abs(R.freq-b[1])<Math.max(500000,b[1]*0.05))||[''])[0];
+  $('spottitle').textContent='Spots and voices'+(band?' on '+band:'');
+  const age=a=>a>=3600?Math.floor(a/3600)+'h':a>=60?Math.floor(a/60)+'m':a?a+'s':'';
+  /* A voice nobody has named goes by its frequency; one heard now is marked. */
+  const items=U.spots.map(s=>[s.hz+':'+s.mode,(s.call||'voice')+'  '+(s.hz/1e6).toFixed(4)+' '
+    +(ML[s.mode]||s.mode.toUpperCase())+(s.heard?'  \u25cf '+s.snr+' dB':age(s.age)?'  '+age(s.age):'')]);
+  const key=items.map(i=>i[1]).join('|');
+  if($('spots').dataset.k!==key){$('spots').dataset.k=key;
+    btns($('spots'),items,v=>{const [hz,m]=v.split(':');set({freq:hz,mode:m})})}
+  for(const b of $('spots').children)b.classList.toggle('on',Math.abs(+b.dataset.v.split(':')[0]-R.freq)<500);
+  $('spotnote').textContent=U.spots.length?'\u25cf heard now':'No spots or voices on this band just now.';
+  const sk=U.sstv.join('|');
+  if($('sstv').dataset.k!==sk){$('sstv').dataset.k=sk;$('sstv').innerHTML='';
+    for(const f of U.sstv.slice(0,8)){const a=document.createElement('a');a.href=U.url+'/addon/sstv/images/'+f;a.target='_blank';
+      const i=document.createElement('img');i.src=U.url+'/addon/sstv/images/'+f.replace(/\.png$/,'_thumb.jpg');i.loading='lazy';
+      i.alt=f;i.style.cssText='width:150px;border-radius:8px;border:1px solid var(--line)';a.appendChild(i);$('sstv').appendChild(a)}}
+}
 /* As the knob's face has it. */
-const balText=b=>b<=-100?'radio':b>=100?'SDR':b===0?'L | R':b<0?'\u25c0 '+(-b):b+' \u25b6';
+const balText=b=>b<=-100?(RXONLY(RADIO)?'UberSDR':'radio'):b>=100?(RXONLY(RADIO)?'Kiwi':'SDR'):b===0?'L | R':b<0?'\u25c0 '+(-b):b+' \u25b6';
 const pwrText=p=>R&&R.max_w?Math.round(p*R.max_w/100)+' W':p+'%';
 /* Another radio: the knob restarts into it, as a swipe up on it does. */
 async function switchTo(i){
@@ -293,6 +345,10 @@ async function init(){
   btns($('modes'),MODES[RADIO].map(m=>[m,ML[m]]),m=>set({mode:m}));
   btns($('agcs'),AGCS[RADIO].map(a=>[a,a.toUpperCase()]),a=>set({agc:a}));
   $('gaincap').textContent=GAINCAP[RADIO];
+  if(RXONLY(RADIO)){
+    /* Nothing to transmit: no RIT, no microphone, no AGC to choose. */
+    $('ritsec').hidden=true;$('microw').hidden=true;$('agcbox').hidden=true;
+  }
   btns($('steps'),STEPS,s=>{step=s;mark($('steps'),step)});mark($('steps'),step);
   for(const b of document.querySelectorAll('[data-step]'))b.onclick=()=>R&&set({freq:Math.round(R.freq/step)*step+(+b.dataset.step)*step});
   for(const b of document.querySelectorAll('[data-rit]'))b.onclick=()=>R&&set({rit:+b.dataset.rit?Math.max(-9999,Math.min(9999,R.rit+(+b.dataset.rit))):0});

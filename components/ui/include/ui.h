@@ -21,6 +21,7 @@ esp_err_t ui_init(void);
 
 #define UI_SDR_MAX 4
 #define UI_RADIOS_MAX 8
+#define UI_GAIN_NAMES 6
 
 typedef struct {
     int64_t  freq_hz;
@@ -34,6 +35,17 @@ typedef struct {
     char     agc[6];     /* "" = not known */
     bool     have_gain;
     int8_t   gain, gain_min, gain_max, gain_step;
+    /* A gain whose steps have names -- the ubersdr firmware's noise filter,
+     * OFF, NR2, RN2, NR4 -- and, in the AGC's place, the receiver's SNR. */
+    uint8_t  n_gain_names;
+    char     gain_names[UI_GAIN_NAMES][6];
+    bool     have_snr;
+    float    snr_db;
+    /* The ubersdr firmware's slab, where PTT is on a transmitter: the spots
+     * and voices on the band (ui_set_spots), where the receiver has either;
+     * and its SSTV pictures, a swipe from the right (-1: it has no gallery). */
+    bool     has_spots;
+    int16_t  n_sstv;
     /* Memory mode (radio.h): the knob selects channels instead of tuning, and
      * the channel takes the frequency readout's place. mem_state is UI_MEM_*,
      * in the order of radio_mem_state_t. */
@@ -116,6 +128,33 @@ int32_t ui_take_step_request(void);
 /* A tap landed on the PTT pill. Consumed by the caller. */
 bool ui_take_ptt_tap(void);
 
+/* --- a receiver's slab (the ubersdr firmware) ------------------------------
+ * The spots and voices on the dial's band, in frequency order: the slab
+ * shows the one nearest the dial, and a tap on it opens them all on the knob
+ * -- turn to one, tap its panel, and the receiver goes there, in its mode. */
+#define UI_SPOTS_MAX 24
+typedef struct {
+    char     call[12];      /* "" for a voice nobody has named */
+    uint32_t hz;
+    char     mode[5];
+    char     what[24];      /* "DX  4m", "voice 12 dB", "CW 22 wpm 14 dB  1m" */
+    bool     heard;         /* talking now: the receiver hears a voice there */
+} ui_spot_t;
+void ui_set_spots(const ui_spot_t *spots, uint8_t n);
+
+/* When the knob or the glass was last used (lv ticks): what an idle timer
+ * on the far end may want to hear about. */
+uint32_t ui_last_use(void);
+
+/* The SSTV viewer, opened from the swipe from the right: the knob steps
+ * through the receiver's pictures, newest first, and any tap closes it.
+ * ui_sstv_wanted() is the picture it wants (-1 closed); ui_sstv_show() puts
+ * one up -- RGB565, w x h, kept by the caller until the next -- or, failed,
+ * says why in the caption. */
+int  ui_sstv_wanted(void);
+void ui_sstv_show(const uint16_t *px, int w, int h, int idx, const char *title,
+                  const char *caption, bool failed);
+
 /* Memory mode on, or off again: V/M, last on the swipe down, on a radio with
  * memories. Consumed by the caller. (The swipe down chooses what is heard --
  * LOCAL or a web SDR, then a second receiver and the antenna, then V/M; the
@@ -164,6 +203,7 @@ typedef struct {
     bool     have_balance;  int8_t  balance;
     bool     have_radio;    int8_t  radio;      /* another radio: restart into it */
     bool     have_vm;       bool    vm_mem;     /* V/M: memory mode, or the VFO */
+    bool     have_spot;     uint32_t spot_hz;  char spot_mode[5];  /* a spot: tune there */
 } ui_commit_t;
 
 /* Non-zero if the operator accepted an edit, or a live editor moved (live

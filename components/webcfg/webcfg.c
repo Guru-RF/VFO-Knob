@@ -27,6 +27,9 @@
 #if VFO_HAS_SDR
 #include "sdr_rx.h"
 #endif
+#if VFO_RADIO_UBERSDR
+#include "uber.h"
+#endif
 #include "ui.h"
 #include "usb_net.h"
 #include "esp_task_wdt.h"
@@ -1171,12 +1174,55 @@ static void json_str(char *out, size_t cap, const char *s)
     out[o] = 0;
 }
 
+#if VFO_RADIO_UBERSDR
+/* ,"uber":{...} -- the receiver, the spots and voices on the dial's band,
+ * and its SSTV gallery, for the radio page. */
+static size_t uber_json(char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static uber_info_t in;
+    EXT_RAM_BSS_ATTR static uber_spot_t sp[UBER_SPOTS];
+    EXT_RAM_BSS_ATTR static char files[16][72];
+    uber_info(&in);
+    char nm[100], lc[132], url[96];
+    json_esc(in.name, nm, sizeof nm);
+    json_esc(in.location, lc, sizeof lc);
+    uber_base_url(url, sizeof url);
+    int o = snprintf(j, cap, ",\"uber\":{\"name\":\"%s\",\"callsign\":\"%s\",\"location\":\"%s\","
+                     "\"version\":\"%s\",\"session_s\":%d,\"bypassed\":%s,\"url\":\"%s\","
+                     "\"sstv_n\":%d,\"spots\":[",
+                     nm, in.callsign, lc, in.version, in.max_session_s, in.bypassed ? "true" : "false", url,
+                     uber_sstv_count());
+    const int n = uber_spots(sp, UBER_SPOTS, NULL);
+    for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
+        char call[16];
+        json_str(call, sizeof call, sp[i].call);
+        o += snprintf(j + o, cap - o, "%s{\"call\":\"%s\",\"hz\":%lu,\"mode\":\"%s\",\"kind\":\"%c\","
+                      "\"age\":%u,\"snr\":%d,\"wpm\":%u,\"heard\":%s}", i ? "," : "", call,
+                      (unsigned long)sp[i].hz, sp[i].mode, sp[i].kind, (unsigned)sp[i].age_s, sp[i].snr,
+                      (unsigned)sp[i].wpm, sp[i].heard ? "true" : "false");
+    }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "],\"sstv\":[");
+    const int nf = uber_sstv_files(files, 16);
+    for (int i = 0; i < nf && o > 0 && (size_t)o < cap; i++)
+        o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", files[i]);
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
+#endif
+
+/* The radio's JSON: an UberSDR's carries its spots and gallery as well. */
+#if VFO_RADIO_UBERSDR
+#define RADIO_JSON_BYTES 8192
+#else
+#define RADIO_JSON_BYTES 2560
+#endif
+
 static esp_err_t radio_get(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     /* Static: this task serves one request at a time, and both are big. */
     static radio_status_t st;
-    EXT_RAM_BSS_ATTR static char j[2560];
+    EXT_RAM_BSS_ATTR static char j[RADIO_JSON_BYTES];
     radio_get_status(&st);
     static const char *LINK[] = { "DOWN", "CONNECTING", "GREETING", "READY", "DEGRADED" };
     char mode[8], agc[8], model[16], mem[20];
@@ -1208,6 +1254,20 @@ static esp_err_t radio_get(httpd_req_t *r)
         st.has_memories ? "true" : "false", (unsigned)st.mem_state,
         (unsigned)st.mem_group, (unsigned)st.mem_ch, mem);
     size_t o = strlen(j);
+    /* A receiver's SNR, and a gain whose steps have names (the ubersdr
+     * firmware's noise filter). */
+    o += snprintf(j + o, sizeof j - o, ",\"have_snr\":%s,\"snr\":%.1f",
+                  st.have_snr ? "true" : "false", (double)st.snr_db);
+    for (int i = 0; i < st.n_gain_names && i < RADIO_GAIN_NAMES && o < sizeof j - 16; i++) {
+        char gn[8];
+        json_str(gn, sizeof gn, st.gain_names[i]);
+        o += snprintf(j + o, sizeof j - o, "%s\"%s\"", i ? "," : ",\"gain_names\":[", gn);
+    }
+    if (st.n_gain_names && o < sizeof j - 2) o += snprintf(j + o, sizeof j - o, "]");
+    if (o >= sizeof j) o = sizeof j - 1;
+#if VFO_RADIO_UBERSDR
+    o += uber_json(j + o, sizeof j - o);
+#endif
 #if VFO_HAS_SDR
     o += sdr_json(j + o, sizeof j - o);
 #endif

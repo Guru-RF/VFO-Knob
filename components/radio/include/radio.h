@@ -37,6 +37,8 @@ typedef enum {
     RADIO_LINK_DEGRADED,     /* up, but holding back (TCI: after a backlog close) */
 } radio_link_t;
 
+#define RADIO_GAIN_NAMES 6
+
 /* Memory mode, for a radio with memory channels (has_memories). */
 typedef enum {
     RADIO_MEM_OFF = 0,       /* the dial tunes: VFO mode */
@@ -66,6 +68,18 @@ typedef struct {
     char       agc[6];         /* as the radio names it ("fast", "mid"); "" = not known */
     bool       have_gain;      /* the radio reports its gain; nothing to show if not */
     int8_t     gain, gain_min, gain_max, gain_step;
+    /* A gain whose steps have names rather than numbers -- the ubersdr
+     * firmware's noise filter: OFF, NR2, RN2, NR4, as the receiver offers
+     * them -- indexed by gain, from 0. */
+    uint8_t    n_gain_names;
+    char       gain_names[RADIO_GAIN_NAMES][6];
+    /* A receiver's signal-to-noise ratio, where it measures one (the ubersdr
+     * firmware's, in the AGC's place). */
+    bool       have_snr;
+    float      snr_db;
+    /* Why there is no link, in a word or two, where the client knows
+     * ("RECEIVER FULL"); "" = it does not say. */
+    char       link_why[16];
     int32_t    rit_hz;
     /* Memory channels: the group the dial uses, the channel selected, and
      * what the radio holds in it -- a repeater's name, shift and tone. */
