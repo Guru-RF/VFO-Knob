@@ -51,7 +51,7 @@ the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). VFO again for the VFO, simplex. |
-| **Radios** | Up to four per firmware on the configuration page — an IC-705 and an IC-7610, two FlexRadios, AetherSDR on two computers. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves. Not over the USB cable, which reaches one computer or one radio. |
+| **Radios** | Up to four per firmware on the configuration page — an IC-705 and an IC-7610, two FlexRadios, AetherSDR on two computers — and, on the FlexRadio firmware, the SmartLink account's. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves; under the name, **LAN** or **SmartLink** says how it is reached. Not over the USB cable, which reaches one computer or one radio. |
 | **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns (with a web SDR chosen, BALANCE comes first). Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
 | **Web SDR** | On the Icom, Xiegu and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio: swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card with its addresses comes up; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
@@ -235,8 +235,26 @@ nobody else on the radio the knob does not ask.
 | **PTT** | Refused with the reason when the radio will not transmit here: out of band, or another station on the air. |
 
 The radio is given by its IP address on the configuration page, and MultiFlex
-must be enabled on it. Finding the radio by its discovery broadcast, and
-SmartLink for a radio away from home, are still to come.
+must be enabled on it. Finding the radio by its discovery broadcast is still to
+come.
+
+### SmartLink
+
+A radio away from home is reached through FlexRadio's own service, as SmartSDR
+and AetherSDR reach it. Log in under **SmartLink** on the configuration page
+with the account's email address and password: the password goes to
+FlexRadio's login service and is not kept — the knob keeps the login it is
+given, until you log out there. The account's radios are listed, and with
+**Offer these radios on the knob** they come after the configured ones on the
+swipe up, marked **SmartLink** under the name; **LAN** marks the direct ones.
+The same radio can be in the list both ways.
+
+Chosen, the knob restarts into it: SmartLink's server introduces the knob to
+the radio, which it then reaches over TLS. The radio's certificate is its own,
+self-signed; the knob pins it the first time, as AetherSDR does, and refuses a
+different one until you log in again. After that it is the same station as on
+the LAN, Opus audio and PTT included. A radio reachable only by hole punching
+— neither a forwarded port nor UPnP — is listed but not yet connected to.
 
 ## Web SDRs
 
@@ -331,7 +349,9 @@ the only place the host setting is used.
 The radio section is a list: up to four radios, each with a name for the
 dial, and one **In use** — chosen here for the next start, or with a swipe up
 on the knob, which restarts into it at once. (The reflector firmware keeps
-its single reflector.)
+its single reflector.) On the FlexRadio firmware a **SmartLink** section
+below it logs in to FlexRadio's service and lists the account's radios, each
+with **Use now** — see [SmartLink](#smartlink).
 
 With the radio connected, the page opens on its **controls** instead, in the
 knob's own colours: the frequency, typed or stepped, band, mode, filter, AGC,

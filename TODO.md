@@ -142,6 +142,24 @@ Ticked once the knob has worked with the radio itself, not only built for it.
       - or a USB-C Ethernet adapter on the radio (ordered).
 - [ ] X6200 — said to behave the same
 
+**FlexRadio**, the multiflex firmware, over its own API:
+- [x] FLEX-6600 — on the LAN (a routed hop away) and through SmartLink
+
+**OpenHPSDR**, a firmware of its own: the radios that speak the OpenHPSDR
+protocol (1, or 2 for the newer ones) -- UDP on the LAN, discovered by
+broadcast, IQ from the radio and demodulated in the knob:
+- [ ] Hermes Lite 2
+- [ ] Apache Labs ANAN (Hermes, Angelia, Orion)
+- [ ] others on the protocol (Red Pitaya's STEMlab SDR transceivers ...)
+
+**Web SDRs, native**: a receiver firmware of its own, with no radio -- the
+dial tunes a web SDR itself, its S-meter and audio the knob's, over the
+KiwiSDR protocol `components/sdr_rx` already speaks beside a radio:
+- [ ] Web-888
+- [ ] KiwiSDR (its owner's limits kept: a Kiwi that lets no apps listen
+      stays out of reach)
+- [ ] UberSDR, through its Kiwi input
+
 wfview's source (`src/radio/`) speaks the Yaesu (SCU-LAN10) and Kenwood
 network protocols as well as Icom's: a reference for those clients.
 
@@ -268,8 +286,21 @@ network protocols as well as Icom's: a reference for those clients.
         keyed (key from the knob into a dummy load, pull the knob's power);
       - [ ] finding the radio by its discovery broadcast, for a radio on the
         same subnet (it is given by its IP address for now);
-      - [ ] SmartLink, for a radio away from home: its account login and TLS
-        relay are a much bigger job than the LAN;
+      - [x] SmartLink, for a radio away from home (`smartlink.c`, from
+        AetherSDR's SmartLinkClient and WanConnection): the account's password
+        grant, keeping only the refresh token; the server's register, radio
+        list and connect, the server kept open (pinged) while the radio is
+        ours; the radio over TLS, its certificate pinned on first use, `wan
+        validate` with connect_ready's whole handle -- it holds a '|' of its
+        own, and cut there the radio refuses it (500000B1) and hangs up; then
+        `client ip` before `client gui`, nothing else before registering;
+        UDP by `udp_register` and `ping`. Its radios on the swipe up after the
+        configured ones, marked SmartLink. Tried on 2026-09-30 against the
+        account and the FLEX-6600 at Lombardsijde (UPnP ports): connected in
+        8 s from boot, slice, both Opus streams, no audio lost;
+      - [ ] over SmartLink: an over (the user's call, into a dummy load), the
+        dial for another station (its list comes only after registering
+        there), and hole punching (neither a forwarded port nor UPnP);
       - [ ] the radio's memory channels, and its receive antennas on the
         swipe (`rx_ant_list`).
 - [ ] **More than one radio.** Up to four per firmware (not the reflector's):
