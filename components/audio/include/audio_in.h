@@ -61,6 +61,7 @@ bool audio_in_ext(void);
 void audio_in_feed_ext(const int16_t *pcm, size_t n);
 void audio_in_set_ext_hook(void (*hook)(bool active));
 
+/* peak: the loudest sample since the previous call, 0..1 of full scale. */
 typedef struct { uint32_t blocks, starved, overruns; float peak; } audio_in_stats_t;
 void audio_in_stats(audio_in_stats_t *st);
 

@@ -59,7 +59,15 @@ bool audio_in_active(void) { return s_active; }
 bool audio_in_ext(void) { return s_ext; }
 void audio_in_set_ext_hook(void (*hook)(bool active)) { s_ext_hook = hook; }
 void audio_in_set_gain(uint8_t g) { s_gain = g > 200 ? 200 : g; }
-void audio_in_stats(audio_in_stats_t *st) { if (st) *st = s_stats; }
+/* The peak is held from one call to the next, then starts again: the loudest
+ * moment since the last look, not whichever block happened to be last --
+ * which, in speech, is as often the gap between two syllables. */
+void audio_in_stats(audio_in_stats_t *st)
+{
+    if (!st) return;
+    *st = s_stats;
+    s_stats.peak = 0.0f;
+}
 
 /* A receiver's firmware never brings the microphone up (VFO_RX_ONLY), so
  * there is no s_mx: nothing keys there, and a headset only listens. Taking
@@ -204,7 +212,8 @@ static void mic_task(void *arg)
             int32_t a = buf[i] < 0 ? -buf[i] : buf[i];
             if (a > pk) pk = a;
         }
-        s_stats.peak = (float)pk / 32768.0f;
+        const float pkf = (float)pk / 32768.0f;
+        if (pkf > s_stats.peak) s_stats.peak = pkf;
 
         if (xRingbufferSend(s_ring, buf, got, 0) != pdTRUE) s_stats.overruns++;
         else                                                s_stats.blocks++;
