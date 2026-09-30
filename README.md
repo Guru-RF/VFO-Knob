@@ -25,7 +25,8 @@ With an **IC-705** it talks to the radio itself, over WiFi, in Icom's network
 protocol — the one RS-BA1 and wfview use — with receive and transmit audio,
 so knob and radio are a complete station with no computer in between. Its face
 wears Icom's colours, so which radio a knob is for shows at a glance. The same
-firmware runs the IC-7610, with MAIN or SUB and its antennas on a swipe.
+firmware runs the IC-7610, with MAIN or SUB and its antennas on a swipe. See
+[the Icom guide](docs/icom.md).
 
 With a **FlexRadio** it is one of the radio's MultiFlex stations, over the
 radio's own API: a station of its own, with Opus audio both ways, or the dial
@@ -79,7 +80,8 @@ about 40 kB of internal RAM, which this board genuinely needs.
 
 Knobs ship with the **setup firmware**, `vfo-knob-setup`: it puts the knob on
 your WiFi from a phone and installs the firmware for your radio. No computer
-needed.
+needed. Step by step, with the knob's own screens: [the setup guide](docs/setup.md)
+(one guide per firmware in [docs/](docs/README.md)).
 
 1. The knob comes up as an open WiFi network, **VFOKnob**. Join it with a
    phone, and the phone opens the knob's sign-in page by itself (if it does
@@ -114,7 +116,7 @@ the knob says so and carries on as it was.
 ## AetherSDR over the cable
 
 The AetherSDR firmware also runs over the USB-C cable, from the computer
-running AetherSDR:
+running AetherSDR (step by step: [the AetherSDR guide](docs/aethersdr.md)):
 
 1. Plug the knob into the computer running AetherSDR. Windows 10 (version 1903
    or later), Windows 11, macOS and Linux all bring it up as a network adapter
@@ -206,7 +208,7 @@ LAN's range for WiFi.
 
 The multiflex firmware (`vfo-knob-multiflex`) talks to a FLEX-6000 or
 FLEX-8000 itself, over the radio's own API on the LAN — no SmartSDR, no
-AetherSDR, no computer. The knob is one of the radio's MultiFlex stations,
+AetherSDR, no computer. Step by step: [the FlexRadio guide](docs/multiflex.md). The knob is one of the radio's MultiFlex stations,
 beside SmartSDR, AetherSDR or a Maestro, in the Maestro's colours.
 
 <p align="center">
@@ -293,7 +295,8 @@ The svxconnect firmware (`vfo-knob-svxconnect`) turns the knob into a node on
 an SvxLink reflector: protocol 3.0, the reflector's own TLS with a client
 certificate, Opus audio both ways at 16 kHz. It is a port of
 [SVXConnect-CLI](https://github.com/Guru-RF/SVXConnect-CLI)'s reflector client,
-and shares its protocol code, talkgroup manager and codec settings.
+and shares its protocol code, talkgroup manager and codec settings. Step by
+step: [the SvxLink guide](docs/svxconnect.md).
 
 <p align="center">
   <img src="docs/display-svxconnect.svg" width="320" alt="The svxconnect face: ON6URE talking for 14 s on TG 8, 70cm Repeaters, on be.svx.link; the arc at -14 dBFS, the talkgroup unlocked and the sound on">
