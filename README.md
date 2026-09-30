@@ -463,7 +463,8 @@ cmake -S test/host -B build_host && cmake --build build_host && (cd build_host &
 ```
 
 `tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
-paths without a radio.
+paths without a radio. `--rx-tone 700` answers `audio_start` with a steady
+700 Hz tone as receive audio, to hear the audio path end to end.
 
 To try the face's touch with nothing keyed, `-D VFO_PTT_DRY_RUN=1` builds an
 image whose PTT taps are only logged, never sent to the radio; its slab reads
