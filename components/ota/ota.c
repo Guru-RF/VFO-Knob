@@ -248,6 +248,10 @@ static void ota_run(bool install)
     body = NULL;                      /* the TLS session wants the room back */
 
     set_phase(OTA_DOWNLOADING, sw ? "downloading the firmware" : "downloading update");
+    /* Internal RAM is what a download runs short of: say what it starts with. */
+    ESP_LOGI(TAG, "internal RAM free %u, largest DMA block %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
     esp_http_client_config_t hc = {
         .url               = url,
         .crt_bundle_attach = esp_crt_bundle_attach,

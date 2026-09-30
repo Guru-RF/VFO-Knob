@@ -29,3 +29,13 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # server either. With this on, every lease offered the knob itself as DNS, and
 # a PC then sent name lookups down the cable that nothing would ever answer.
 # CONFIG_LWIP_DHCPS_ADD_DNS is not set
+# TLS without the AES hardware. Its DMA cannot read the TLS buffers, which are
+# in PSRAM, so each record it decrypts borrows two 1.6 kB buffers of internal
+# DMA memory -- and this build, with USB networking's ~14 kB of static RAM,
+# has the least internal RAM of all. Mid-download, with WiFi's receive
+# buffers holding the rest, that borrow failed ("esp-aes: Failed to allocate
+# memory") and killed the download at 1-7%, every time; the firmware picker
+# could not reach the setup firmware from this build. Software AES needs no
+# buffers, keeps its tables in flash, and TCI is plain WebSocket: only the
+# update downloads use TLS here.
+CONFIG_MBEDTLS_HARDWARE_AES=n
