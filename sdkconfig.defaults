@@ -107,6 +107,8 @@ CONFIG_LV_DRAW_SW_SUPPORT_AL88=n
 CONFIG_LV_DRAW_SW_SUPPORT_I1=n
 CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_USE_PERF_MONITOR=n
+# The screenshot: console 'x' for tools/snap.py, and /api/screenshot.
+CONFIG_LV_USE_SNAPSHOT=y
 
 # --- OTA: signed images, no Secure Boot ------------------------------------
 # The signature is verified before an update is accepted, but nothing is burned

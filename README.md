@@ -970,6 +970,10 @@ esptool.py -p /dev/ttyUSB0 erase_region 0xe000 0x2000
 or without a cable, `POST /api/bt/update?force=1`: see
 [the headset guide](docs/headset.md#for-developers).
 
+`tools/snap.py` takes a screenshot of the face as a PNG, over the serial
+console of a WiFi-only build (`x` there); the USB build has no console, so its
+configuration page serves the same picture at `/api/screenshot`, as a BMP.
+
 To try the face's touch with nothing keyed, `-D VFO_PTT_DRY_RUN=1` builds an
 image whose PTT taps are only logged, never sent to the radio; its slab reads
 **PTT TEST**. Never for a release.
