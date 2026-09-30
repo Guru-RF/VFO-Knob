@@ -52,6 +52,7 @@ the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705, swipe down for memory mode: the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). Swipe down again for the VFO, simplex. |
+| **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns. Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card with its addresses comes up; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
@@ -294,6 +295,26 @@ computer you are browsing from, one tap to fill in when that is where
 AetherSDR runs. Over the cable it is not offered: there the knob finds
 AetherSDR by itself, and the cable's `10.55.42.2` would mean nothing on WiFi,
 the only place the host setting is used.
+
+With the radio connected, the page opens on its **controls** instead, in the
+knob's own colours: the frequency, typed or stepped, band, mode, filter, AGC,
+the preamp or RF gain, power, the tuner, MAIN/SUB and the antenna, RIT, and the
+knob's volume and mic gain — everything the knob can set on the radio, and
+nothing that transmits. **Config** leads to the settings above, the radio
+staying connected.
+
+The same, for other programs — a logbook reading the frequency and mode, or
+anything setting them with a URL:
+
+```
+GET /api/radio                        the state, as JSON
+GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
+    ...&mode=usb&filter=2&agc=mid&rfgain=80&power=50&tuner=on&rit=-120
+```
+
+A POST with the same fields as a form does the same. Both need the page's
+login (`http://user:password@<knob>/api/radio`), and no setting is taken while
+the radio is on the air.
 
 > **It is HTTP Basic over plain HTTP.** A lock on the door, not a safe — treat
 > the knob as something that belongs on a network you trust.

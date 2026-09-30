@@ -102,8 +102,9 @@ Ticked once the knob has worked with the radio itself, not only built for it.
 
 **Icom**, the icom firmware, over the radio's own LAN:
 - [x] IC-705
-- [ ] IC-7610 — in the icom firmware (MAIN/SUB and the antennas on the
-      swipe), not yet tried on one
+- [x] IC-7610 — MAIN/SUB and the antennas on the swipe down, RF gain and
+      power from the left, its tuner from the right, and the web page's
+      controls
 - [ ] IC-7760
 - [ ] IC-9700
 - [ ] IC-R8600 — a receiver: no PTT
@@ -221,17 +222,19 @@ network protocols as well as Icom's: a reference for those clients.
         (`07`, `0F 10`). The radio cannot be asked which channel or mode it
         is on, so the knob keeps its own and remembers it;
       - [x] a first `icom` release (1.7.0), offered in the radio chooser;
-      - [ ] **IC-7610**, in the same firmware: a model table keyed by the
+      - [x] **IC-7610**, in the same firmware: a model table keyed by the
         name the radio gives (`icom_client.c`), with its CI-V address from the
         radio, 30 kHz-60 MHz, its S-meter and Po scales, and its modulation
         inputs (`1A 05 00 91/92`, LAN = 5; a radio not in the table gets none
         switched). The swipe down chooses MAIN/SUB (`07 D0/D1`, read back with
         `07 D2`) and then ANT1, ANT2, ANT1+RX or ANT2+RX (`12 <ant> <rx>`),
-        never mid-over; PTT is held off on SUB, which only listens. Built, not
-        yet run against the radio: its first login was refused (user or
-        password). To check there: the answers to `07 D2` and `12`, the LAN
-        input's value, whether it transmits on SUB, and one over each on the
-        IC-705 and the IC-7610;
+        never mid-over; PTT is held off on SUB, which only listens. Run
+        against the radio on 2026-09-30: `07 D2` and `12` answer, the
+        modulation inputs read MIC, audio clean at 24 kHz. It answers only
+        about seven CI-V questions sent at once, so the slow poll asks one per
+        220 ms -- its power and tuner were never known before;
+      - [ ] an over from the knob on each of the IC-705 and the IC-7610 into
+        a dummy load: the LAN input switched and put back; PTT refused on SUB;
       - [ ] through a computer: wfview's server speaks the same protocol, so
         the same client should reach a USB-connected radio behind a PC.
 - [ ] **FlexRadio direct, as a MultiFlex station.** A firmware of its own,
