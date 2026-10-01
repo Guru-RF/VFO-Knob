@@ -542,6 +542,17 @@ not the ESP32-S3.** So the firmware leaves its own way back in.
 Port 3333 is also a log stream — the USB build has no console, so it is the only
 way to watch a boot.
 
+### A new knob
+
+`tools/install-setup.sh` puts the setup firmware — what every knob ships with —
+on a knob over its USB-C cable: a new board with Waveshare's demo on it, or any
+knob to be made new again. It erases the whole flash and writes the latest
+release's setup firmware (checked against its manifest), with the bootloader
+and partition table from `build_setup/`. With the plug the wrong way round it
+finds the second chip's CH340 instead and says to turn the plug over; a knob
+running the USB-networked AetherSDR firmware is asked to restart and caught in
+those 6 seconds.
+
 ## Safety
 
 The knob keys a transmitter. Two things are worth knowing:
