@@ -23,6 +23,11 @@ static const char *TAG = "ui";
  * note. font_mic_14 carries the one glyph and falls back to Montserrat 14 for
  * everything else. U+F130 in UTF-8. */
 LV_FONT_DECLARE(font_mic_14);
+/* The PTT slab's, while a Bluetooth headset is connected: its microphone,
+ * live or muted (font_btmic_28.c). */
+LV_FONT_DECLARE(font_btmic_28);
+#define SYM_HS_MIC  "\xEF\x84\xB0"                  /* U+F130 */
+#define SYM_HS_MUTE "\xEF\x84\xB1"                  /* U+F131 */
 #define SYM_MIC "\xEF\x84\xB0"
 
 #if VFO_RADIO_ICOM
@@ -249,6 +254,8 @@ static const int DIG_STEP[N_DIG] = {
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl;
+static lv_obj_t *s_hs_name, *s_hs_mic, *s_hs_raise;  /* the slab while a headset is connected */
+static lv_obj_t *s_hs_bt;                   /* a receiver's: the headset's logo beside the spots */
 static lv_obj_t *s_warn_panel, *s_warn_net;
 
 /* "Update?" -- see ui_ask_update(). */
@@ -2124,6 +2131,9 @@ static void touch_cb(lv_event_t *e)
             s_ptt_tap = true;
             return;
         }
+        /* A headset's button is the PTT while one is connected: the glass
+         * only ever unkeys then, never keys. */
+        if (s_last.headset) return;
         s_ptt_armed = true;
         return;
     }
@@ -2648,6 +2658,44 @@ static void build(void)
     lv_obj_set_style_pad_all(s_ptt_lbl, 0, 0);
     lv_obj_set_pos(s_ptt_lbl, PTT_LEFT, PTT_TOP + 14);
     lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
+    if (!RX_FACE) {
+        /* A Bluetooth headset: its button is the PTT then, and the slab is
+         * the headset's -- its name, and under it its microphone, struck
+         * through in red while it is muted. */
+        s_hs_name = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(s_hs_name, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_hs_name, C_TEXT, 0);
+        lv_obj_set_style_text_align(s_hs_name, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(s_hs_name, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_hs_name, 280);
+        lv_obj_set_pos(s_hs_name, CX - 140, PTT_TOP + 12);
+        lv_obj_remove_flag(s_hs_name, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_hs_name, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_hs_name, "");
+        s_hs_mic = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(s_hs_mic, &font_btmic_28, 0);
+        lv_obj_set_style_text_color(s_hs_mic, C_TEXT2, 0);
+        lv_obj_set_style_text_align(s_hs_mic, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(s_hs_mic, 60);
+        lv_obj_set_pos(s_hs_mic, CX - 30, PTT_TOP + 44);
+        lv_obj_remove_flag(s_hs_mic, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_hs_mic, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_hs_mic, SYM_HS_MIC);
+        /* The boom arm as the PTT, and the headset come with it down: a red
+         * button asks for it up -- nothing keys until it has been. */
+        s_hs_raise = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(s_hs_raise, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_hs_raise, lv_color_white(), 0);
+        lv_obj_set_style_bg_color(s_hs_raise, C_TX_RED, 0);
+        lv_obj_set_style_bg_opa(s_hs_raise, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(s_hs_raise, 18, 0);
+        lv_obj_set_style_pad_hor(s_hs_raise, 18, 0);
+        lv_obj_set_style_pad_ver(s_hs_raise, 6, 0);
+        lv_label_set_text(s_hs_raise, "RAISE BOOM");
+        lv_obj_align(s_hs_raise, LV_ALIGN_TOP_MID, 0, PTT_TOP + 42);
+        lv_obj_remove_flag(s_hs_raise, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_hs_raise, LV_OBJ_FLAG_HIDDEN);
+    }
     if (RX_FACE) {
         /* No PTT: the spot or voice nearest the dial, large, where PTT's
          * caption is; where and what it is under it; and how many there are
@@ -2674,6 +2722,15 @@ static void build(void)
         lv_obj_set_pos(s_spot_n, CX - 95, PTT_TOP + 64);
         lv_obj_remove_flag(s_spot_n, LV_OBJ_FLAG_CLICKABLE);
         lv_label_set_text(s_spot_n, "");
+        /* A Bluetooth headset connected: only its logo, at the right end of
+         * the slab, level with the spot -- the spots keep the slab. */
+        s_hs_bt = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(s_hs_bt, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_hs_bt, C_ACCENT, 0);
+        lv_obj_set_pos(s_hs_bt, CX + 126, PTT_TOP + 12);
+        lv_obj_remove_flag(s_hs_bt, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_hs_bt, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_hs_bt, LV_SYMBOL_BLUETOOTH);
     }
 
     /* Editor overlay: hidden until a field is tapped. */
@@ -3063,6 +3120,33 @@ static void set_text_color(lv_obj_t *o, lv_color_t c)
 {
     if (lv_color_eq(lv_obj_get_style_text_color(o, LV_PART_MAIN), c)) return;
     lv_obj_set_style_text_color(o, c, 0);
+}
+
+/* The slab while a headset is connected: in place of PTT's caption, which the
+ * glass no longer keys. On the air the slab is red, and all of it white. */
+static void vis(lv_obj_t *o, bool on)
+{
+    if (on == !lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return;
+    if (on) lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void headset_slab(const ui_state_t *st)
+{
+    if (s_hs_bt) vis(s_hs_bt, st->headset);
+    if (!s_hs_name) return;
+    const bool on = st->headset;
+    vis(s_ptt_lbl, !on);
+    vis(s_hs_name, on);
+    vis(s_hs_mic, on && !st->headset_raise);
+    vis(s_hs_raise, on && st->headset_raise);
+    if (!on) return;
+    char t[48];
+    snprintf(t, sizeof t, LV_SYMBOL_BLUETOOTH "  %s", st->headset_name[0] ? st->headset_name : "headset");
+    set_text(s_hs_name, t);
+    set_text_color(s_hs_name, st->tx ? lv_color_white() : C_TEXT);
+    set_text(s_hs_mic, st->headset_muted ? SYM_HS_MUTE : SYM_HS_MIC);
+    set_text_color(s_hs_mic, st->tx ? lv_color_white() : st->headset_muted ? C_TX_RED : C_TEXT2);
 }
 
 void ui_update(const ui_state_t *st)
@@ -3546,6 +3630,7 @@ void ui_update(const ui_state_t *st)
         lv_obj_set_style_text_color(s_ptt_lbl,
             st->tx ? lv_color_white() : C_TEXT2, 0);
     }
+    headset_slab(st);
     if (RX_FACE) {
         /* The spot or voice nearest the dial: green while it is heard, bright
          * when the dial is on it, dimmer when it is only a pointer. */

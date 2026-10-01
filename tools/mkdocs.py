@@ -599,6 +599,8 @@ def icom_pictures():
         out[{"rx": "14-rx", "sdr": "15-sdr", "balance": "16-balance"}[k]] = v
     out["17-tx"] = knob("icom-17", "On the air: SWR, power and the microphone",
                         tx_face("icom", swr=1.3, watts=50))
+    out["18-headset"] = knob("icom-18", "A Bluetooth headset: its button is the PTT",
+                             headset_face(f), "", "the headset's button: key, and key off")
     return out
 
 
@@ -629,6 +631,8 @@ def multiflex_pictures():
     out["10-tx"] = knob("flex-10", "On the air: SWR, power and the microphone",
                         tx_face("multiflex", swr=1.2, watts=80, band="20m", mode="USB",
                                 filt="2700", digits=" 14200" "00"))
+    out["11-headset"] = knob("flex-11", "A Bluetooth headset: its button is the PTT",
+                             headset_face(f), "", "the headset's button: key, and key off")
     return out
 
 
@@ -655,6 +659,8 @@ def aethersdr_pictures():
     out["06-tx"] = knob("aether-06", "On the air: SWR, power and the microphone",
                         tx_face("aethersdr", swr=1.3, watts=50, band="40m", mode="LSB",
                                 filt="2800", digits="  7161" "73"))
+    out["07-headset"] = knob("aether-07", "A Bluetooth headset: its button is the PTT",
+                             headset_face(f), "", "the headset's button: key, and key off")
     return out
 
 
@@ -681,6 +687,41 @@ def svxconnect_pictures():
     tx = tx.replace(md.text(180, 103, "microphone", 14, md.GREEN),
                     md.text(180, 103, "microphone", 14, md.TX_TEXT))
     out["03-tx"] = knob("svx-03", "On the air: the microphone on the arc", tx)
+    out["04-headset"] = knob("svx-04", "A Bluetooth headset: its button is the PTT",
+                             headset_face(reflector()), "", "the headset's button: key, and key off")
+    return out
+
+
+# --- a Bluetooth headset (docs/headset.md) -------------------------------------
+
+HEADSET = "Jabra Evolve2 65"
+
+
+def headset_face(face_svg, **slab):
+    """A transmitting firmware's face with a headset connected: the PTT slab
+    is the headset's (mkdisplay headset_slab), in the face's palette -- the
+    one its drawing last set."""
+    return face_svg.replace(md.ptt_slab(md.BG1, "PTT", md.TEXT2), md.headset_slab(HEADSET, **slab))
+
+
+def headset_pictures():
+    R = dict(dbm=-85, band="40m", mode="LSB", filt="FIL2", digits="  7123" "00", active=5,
+             step="1 kHz", agc="MID", gain_cap="P.AMP", gain="OFF")
+    out = {}
+    out["01-connected"] = knob("hs-01", "A headset connected: its name, and its microphone live",
+                               headset_face(face("icom", **R)), "",
+                               "the slab is the headset's  \u00b7  a tap there only unkeys")
+    out["02-muted"] = knob("hs-02", "Its microphone muted: struck through, in red",
+                           headset_face(face("icom", **R), muted=True), "",
+                           "muted: the button does not key")
+    out["03-raise-boom"] = knob("hs-03", "The boom arm as the PTT, and down: RAISE BOOM",
+                                headset_face(face("icom", **R), raise_boom=True), "",
+                                "raise the boom once  \u00b7  then down transmits, up stops")
+    tx = tx_face("icom", swr=1.3, watts=50)
+    out["04-on-the-air"] = knob("hs-04", "On the air through the headset",
+                                tx.replace(md.ptt_slab(md.TX_RED, "TX", "#FFFFFF"),
+                                           md.headset_slab(HEADSET, tx=True)), "",
+                                "the headset's button, or the boom up: back to receive")
     return out
 
 
@@ -700,13 +741,14 @@ def snr_colour(snr):
 
 def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 14215" "00", active=5,
               step="1 kHz", nr="NR4", spot=("LU7YZ", "14.215.0 USB  DX 2m  heard 12 dB", "green", "8 on 20m"),
-              kiwi=None, vol="40"):
+              kiwi=None, vol="40", headset=False):
     """The ubersdr firmware's face (ui.c, RX_FACE): the S-meter in UberSDR's
     colours, the SNR where the AGC is, the noise filter where the gain is, no
     RIT and no microphone, and on the slab the spot or voice nearest the dial:
     `spot` is (its call or frequency, where and what it is, "green" heard now
     / "bright" on it / "dim" elsewhere, how many on the band). `kiwi` is a
-    KiwiSDR's level beside it."""
+    KiwiSDR's level beside it; `headset`, a Bluetooth headset's logo at the
+    slab's right end (ui.c s_hs_bt)."""
     md.use_palette("ubersdr")
     s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>',
          f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
@@ -748,6 +790,8 @@ def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 1421
         s += [md.text(180, md.PTT_TOP + 8 + 25, esc(l1), 28, colour, 500, extra=' xml:space="preserve"'),
               md.text(180, md.PTT_TOP + 44 + 12, esc(l2), 14, md.TEXT2, extra=' xml:space="preserve"'),
               md.text(180, md.PTT_TOP + 64 + 12, esc(l3), 14, md.LABEL, extra=' xml:space="preserve"')]
+    if headset:
+        s.append(md.bluetooth(180 + 126, md.PTT_TOP + 12 + 18, md.ACCENT))
     return "".join(s)
 
 
@@ -822,12 +866,15 @@ def ubersdr_pictures():
     out["14-radio"] = knob("uber-14", "Swipe up: another UberSDR",
                            f + editor("RADIO", "ON6URE-TEL", 28, hint="tap to switch"),
                            swipe_at("up"), "swipe up  \u00b7  turn  \u00b7  tap the panel: it restarts into it")
+    out["15-headset"] = knob("uber-15", "A Bluetooth headset connected: its logo beside the spot",
+                             uber_face(headset=True), "",
+                             "the receiver in the headset  \u00b7  the spots stay")
     return out
 
 
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "svxconnect": svxconnect_pictures,
-             "ubersdr": ubersdr_pictures}
+             "ubersdr": ubersdr_pictures, "headset": headset_pictures}
 
 
 def main():

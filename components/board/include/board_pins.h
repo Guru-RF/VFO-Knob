@@ -82,4 +82,12 @@
 #define BOARD_PIN_PDM_CLK       GPIO_NUM_45
 #define BOARD_PIN_PDM_DATA      GPIO_NUM_46
 
+/* --- the second chip -------------------------------------------------------
+ * The board's other MCU, an ESP32 (ESP32-U4WDH) with classic Bluetooth, on a
+ * UART of its own (Waveshare's schematic: nets ESP32S3_TX and ESP32S3_RX, its
+ * IO18 and IO23). It runs the companion firmware (companion/): a Bluetooth
+ * headset's audio gateway. See components/bt_link. */
+#define BOARD_PIN_COMPANION_TX  GPIO_NUM_38
+#define BOARD_PIN_COMPANION_RX  GPIO_NUM_48
+
 #endif /* BOARD_PINS_H */

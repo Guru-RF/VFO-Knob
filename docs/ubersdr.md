@@ -152,6 +152,15 @@ GET /api/radio/set?freq=14074000        Hz, or MHz with a point (14.074)
 `gain` is the noise filter by its place in the list: 0 off, then the
 receiver's.
 
+## A Bluetooth headset
+
+With the companion firmware on the knob's second chip, a Bluetooth headset
+plays the receiver. Only its logo shows, at the right end of the slab, so the
+spots keep their place. Pairing and the companion firmware:
+[the headset guide](headset.md).
+
+![A Bluetooth headset connected: its logo beside the spot](ubersdr/15-headset.svg)
+
 ## Another firmware
 
 Hold the S-meter for the address card, then hold it again for three seconds

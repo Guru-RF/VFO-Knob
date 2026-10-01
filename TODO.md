@@ -171,6 +171,20 @@ network protocols as well as Icom's: a reference for those clients.
       the air a touch still unkeys at once. Tried with a dry-run build
       (`VFO_PTT_DRY_RUN`): swipes up and sideways from the slab keyed nothing,
       taps all did (2026-09-30).
+- [x] **A Bluetooth headset, through the board's second chip** (2026-10-01).
+      The companion firmware (`companion/`) makes the ESP32 beside the S3 a
+      hands-free audio gateway; `components/bt_link` is the knob's end of the
+      UART between them. The headset is the knob's ear, its microphone and,
+      with its call button or optionally its boom arm, the PTT; the slab shows
+      it, mute in red. Tried with a Jabra Evolve2 65: listening and keying on
+      the IC-705, overs through the SvxLink parrot (TG 9990).
+      - [ ] the companion's updates through the knob: today it goes on the
+        second chip over the USB-C turned over. Its partition table already
+        has two OTA slots: the S3 could carry its image in the release and
+        send it over the link, the companion writing it to the other slot.
+      - [ ] the headset's battery: the Jabra offers Apple's `+XAPL` battery
+        reports (answered with an error today); answering them would put its
+        charge on the configuration page.
 - [ ] **Endurance soak.** Nothing has run for 24 h. Watch free internal heap,
       task high-water marks, `hap_drops`, WS closes and audio underruns.
 - [ ] **Tabular-figure font.** Montserrat is proportional, so digits shift

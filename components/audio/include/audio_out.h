@@ -81,6 +81,12 @@ void audio_out_sdr_mute(bool mute);
 /* -100 the radio alone, 0 radio left and SDR right, +100 the SDR alone. */
 void audio_out_set_balance(int8_t balance);
 
+/* Everything the jack plays, as it plays it -- stereo 16-bit frames at
+ * AUDIO_RATE_HZ, the volume applied -- for a Bluetooth headset
+ * (components/bt_link). Called on the playback task: it must not block. */
+typedef void (*audio_out_tap_t)(const int16_t *stereo, size_t frames);
+void audio_out_set_tap(audio_out_tap_t tap);
+
 typedef struct {
     uint32_t frames, dropped, underruns;
     uint32_t sample_rate, format, channels;

@@ -142,6 +142,17 @@ GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
 POST /api/radios/switch  to=1         another radio: the knob restarts into it
 ```
 
+## A Bluetooth headset
+
+With the companion firmware on the knob's second chip, a Bluetooth headset can
+be the knob's ear and microphone, and its call button the PTT: a press keys,
+the next unkeys. The slab shows the headset instead of PTT — its name, and its
+microphone, struck through in red while the headset has it muted — and the
+knob's own microphone is off. Pairing, the companion firmware and the boom arm
+as the PTT: [the headset guide](headset.md).
+
+![A Bluetooth headset connected: its button is the PTT](multiflex/11-headset.svg)
+
 ## Another firmware
 
 Hold the S-meter for the address card, then hold it again for three seconds

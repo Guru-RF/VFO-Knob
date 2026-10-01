@@ -110,6 +110,13 @@ typedef struct {
     bool     link_ok;
     bool     slice_locked;
     bool     may_key;
+    /* A Bluetooth headset (components/bt_link). While one is connected its
+     * button is the PTT and the glass only unkeys: the slab shows the
+     * headset's name, and its microphone -- red, struck through, while the
+     * headset has it muted. */
+    bool     headset, headset_muted;
+    bool     headset_raise;  /* the boom arm is the PTT, and down: "RAISE BOOM", in red */
+    char     headset_name[24];
     /* Transient banner: AetherSDR's refusal reason, or ours. NULL for none. */
     const char *warn;
 } ui_state_t;

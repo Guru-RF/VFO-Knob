@@ -11,7 +11,8 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [FlexRadio](multiflex.md) | `vfo-knob-multiflex` — a MultiFlex station, on the LAN and through SmartLink |
 | [AetherSDR](aethersdr.md) | `vfo-knob-aethersdr` — a dial for AetherSDR, over the USB cable or WiFi |
 | [SvxLink](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
-| [UberSDR](ubersdr.md) | `vfo-knob-ubersdr` — a dial for an UberSDR web receiver: spots, a scanner, SSTV pictures, and a KiwiSDR beside it |
+| [UberSDR](ubersdr.md) | `vfo-knob-ubersdr` — a dial for an UberSDR web receiver: its spots and voices, SSTV pictures, and a KiwiSDR beside it |
+| [A Bluetooth headset](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, on every firmware but setup |
 
 ## The pictures
 

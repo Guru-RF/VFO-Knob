@@ -57,6 +57,7 @@ beside the S-meter, and its SSTV pictures on the glass. It only receives. See
 | **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
+| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button the PTT. The slab shows the headset, its microphone struck through in red while muted, and a press does not key while it is; optionally the boom arm is the PTT, down to talk. On the UberSDR firmware, only for listening. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). VFO again for the VFO, simplex. |
@@ -367,6 +368,21 @@ names (kept in flash, refreshed daily) and follows its live feed for where each
 talker is. The feed is a second connection to the same host; the knob pauses
 it while it logs in, and it can be switched off on the configuration page.
 
+## A Bluetooth headset
+
+The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
+S3 lacks, and a UART between the two. The companion firmware (`companion/`)
+makes it a headset's audio gateway, as a phone is: hands-free profile,
+wideband speech where the headset has it, the audio passed to and from the
+knob at its own rate. It goes on the second chip once, over the USB-C plugged
+the other way round; pair the headset on the configuration page, and the knob
+calls it whenever it is switched on. Step by step:
+[the headset guide](docs/headset.md).
+
+While a headset is connected its call button is the PTT, the glass only
+unkeys, and the knob unkeys by itself if the headset goes out of reach on the
+air.
+
 ## Configuration page
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
@@ -497,6 +513,13 @@ cmake -S test/host -B build_host && cmake --build build_host && (cd build_host &
 `tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
 paths without a radio.
 
+The companion firmware for the second chip is its own project (target
+`esp32`), flashed over the USB-C the other way round:
+
+```sh
+cd companion && idf.py -B build build && idf.py -B build -p /dev/ttyUSB0 flash
+```
+
 To try the face's touch with nothing keyed, `-D VFO_PTT_DRY_RUN=1` builds an
 image whose PTT taps are only logged, never sent to the radio; its slab reads
 **PTT TEST**. Never for a release.
@@ -542,7 +565,9 @@ The knob keys a transmitter. Two things are worth knowing:
 
 Waveshare ESP32-S3-Knob-Touch-LCD-1.8: ESP32-S3 with 16 MB flash and 8 MB PSRAM,
 360×360 round SH8601 display, CST816 touch, DRV2605L haptics, PCM5100A DAC and a
-PDM microphone. Every GPIO number lives in `components/board/board_pins.h`.
+PDM microphone, and beside the S3 an ESP32-U4WDH (classic Bluetooth, 4 MB flash)
+behind its own CH340 on the other orientation of the USB-C, joined to the S3 by
+a UART (S3 GPIO38/48 to its IO18/23). Every GPIO number lives in `components/board/board_pins.h`.
 
 ## Licence
 

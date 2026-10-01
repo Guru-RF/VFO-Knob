@@ -1,5 +1,6 @@
 #include "webcfg.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,6 +21,7 @@
 
 #include "audio_in.h"
 #include "audio_out.h"
+#include "bt_link.h"
 #include "net_prov.h"
 #include "ota.h"
 #include "ptt_fsm.h"
@@ -1143,6 +1145,96 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  * no radio, nor svxconnect's reflector. */
 #define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT)
 
+/* ------------------------------------------------------ Bluetooth headset */
+
+#if !VFO_RADIO_SETUP
+#define BT_URIS 2
+
+static void bda_text(const uint8_t *b, char *s)
+{
+    snprintf(s, 18, "%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3], b[4], b[5]);
+}
+
+static bool bda_parse(const char *s, uint8_t *b)
+{
+    unsigned v[6];
+    if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return false;
+    for (int i = 0; i < 6; i++) b[i] = (uint8_t)v[i];
+    return true;
+}
+
+/* The headset, and what the last scan found. */
+static esp_err_t bt_get_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    /* This task's stack is tight; internal RAM is the scarce one. */
+    EXT_RAM_BSS_ATTR static bt_link_status_t st;
+    EXT_RAM_BSS_ATTR static btl_found_t found[16];
+    EXT_RAM_BSS_ATTR static char j[3072];
+    bt_link_status(&st);
+    const int nf = bt_link_found(found, 16);
+    char name[72], ver[72], b[18] = "";
+    static const char *const links[]  = { "idle", "connecting", "connected" };
+    static const char *const audios[] = { "", "CVSD 8 kHz", "mSBC 16 kHz" };
+    static const uint8_t none[6];
+    json_esc(st.hs.name, name, sizeof name);
+    json_esc(st.version, ver, sizeof ver);
+    if (memcmp(st.hs.bda, none, 6)) bda_text(st.hs.bda, b);
+    int o = snprintf(j, sizeof j,
+                     "{\"companion\":%s,\"version\":\"%s\",\"link\":\"%s\",\"audio\":\"%s\","
+                     "\"name\":\"%s\",\"bda\":\"%s\",\"remembered\":%s,\"scanning\":%s,"
+                     "\"spk\":%u,\"mic\":%u,\"presses\":%lu,\"mic_frames\":%lu,\"boom\":%s,\"found\":[",
+                     st.companion ? "true" : "false", ver, links[st.hs.link % 3], audios[st.hs.audio % 3],
+                     name, b, st.hs.remembered ? "true" : "false", st.hs.scanning ? "true" : "false",
+                     st.hs.spk, st.hs.mic, (unsigned long)st.presses, (unsigned long)st.up_frames,
+                     bt_link_boom_ptt() ? "true" : "false");
+    for (int i = 0; i < nf && o < (int)sizeof j - 200; i++) {
+        json_esc(found[i].name, name, sizeof name);
+        bda_text(found[i].bda, b);
+        const bool audio = ((found[i].cod >> 8) & 0x1F) == 4;   /* major class: audio/video */
+        o += snprintf(j + o, sizeof j - o, "%s{\"bda\":\"%s\",\"name\":\"%s\",\"rssi\":%d,\"audio\":%s}",
+                      i ? "," : "", b, name, found[i].rssi, audio ? "true" : "false");
+    }
+    snprintf(j + o, sizeof j - o, "]}");
+    return send_json(r, j);
+}
+
+/* do=scan, or do=connect|forget with bda=, or do=disconnect, or do=boom with
+ * on=1|0. */
+static esp_err_t bt_post_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char body[96], act[16] = "", bs[24] = "";
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    field(body, "do", act, sizeof act);
+    field(body, "bda", bs, sizeof bs);
+    uint8_t bda[6];
+    const bool have = bda_parse(bs, bda);
+    if      (!strcmp(act, "scan"))               bt_link_scan(10);
+    else if (!strcmp(act, "connect") && have)    bt_link_connect(bda);
+    else if (!strcmp(act, "disconnect"))         bt_link_disconnect();
+    else if (!strcmp(act, "forget") && have)     bt_link_forget(bda);
+    else if (!strcmp(act, "boom")) {
+        char on[4] = "";
+        field(body, "on", on, sizeof on);
+        bt_link_set_boom_ptt(on[0] == '1');
+    }
+    else return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "do what");
+    ESP_LOGI(TAG, "bluetooth: %s %s", act, bs);
+    return send_json(r, "{\"ok\":true}");
+}
+#else
+#define BT_URIS 0
+#endif
+
 static esp_err_t send_page(httpd_req_t *r, const char *start, const char *end)
 {
     httpd_resp_set_type(r, "text/html");
@@ -1380,7 +1472,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS;
+    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -1438,6 +1530,14 @@ esp_err_t webcfg_start(void)
     };
     for (size_t i = 0; i < sizeof sdr_uris / sizeof sdr_uris[0]; i++)
         httpd_register_uri_handler(s_srv, &sdr_uris[i]);
+#endif
+#if !VFO_RADIO_SETUP
+    static const httpd_uri_t bt_uris[] = {
+        { .uri = "/api/bt", .method = HTTP_GET,  .handler = bt_get_h },
+        { .uri = "/api/bt", .method = HTTP_POST, .handler = bt_post_h },
+    };
+    for (size_t i = 0; i < sizeof bt_uris / sizeof bt_uris[0]; i++)
+        httpd_register_uri_handler(s_srv, &bt_uris[i]);
 #endif
     for (size_t i = 0; i < n_extra; i++) {
         const httpd_uri_t u = { .uri = extra[i].uri, .method = extra[i].method,

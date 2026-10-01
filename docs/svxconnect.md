@@ -72,6 +72,17 @@ flash, refreshed daily) and follows its live feed for where each talker is.
 The feed is a second connection to the same host; it can be switched off on
 the configuration page.
 
+## A Bluetooth headset
+
+With the companion firmware on the knob's second chip, a Bluetooth headset can
+be the knob's ear and microphone, and its call button the PTT: a press keys,
+the next unkeys. The slab shows the headset instead of PTT — its name, and its
+microphone, struck through in red while the headset has it muted — and the
+knob's own microphone is off. Pairing, the companion firmware and the boom arm
+as the PTT: [the headset guide](headset.md).
+
+![A Bluetooth headset connected: its button is the PTT](svxconnect/04-headset.svg)
+
 ## Another firmware
 
 Hold the arc for the address card, then hold it again for three seconds until

@@ -53,8 +53,10 @@ static volatile bool     s_playing;
 static volatile bool     s_kick, s_flush;
 static audio_stats_t     s_stats;
 static int16_t           s_conv[1024];   /* scratch, playback task only */
+static volatile audio_out_tap_t s_tap;
 
 void audio_out_set_volume(uint8_t v) { s_vol = v > 100 ? 100 : v; }
+void audio_out_set_tap(audio_out_tap_t tap) { s_tap = tap; }
 
 void audio_out_stats(audio_stats_t *st) { if (st) *st = s_stats; }
 
@@ -166,6 +168,8 @@ static void mix_block(void)
         out[2 * i]     = sat16(g * (lr * fr[i] + ls * fs[i]));
         out[2 * i + 1] = sat16(g * (rs * fs[i] + rr * fr[i]));
     }
+    const audio_out_tap_t tap = s_tap;
+    if (tap) tap(out, MIX_FRAMES);
     size_t written = 0;
     i2s_channel_write(s_tx, out, sizeof out, &written, portMAX_DELAY);
 }
@@ -228,6 +232,8 @@ static void play_task(void *arg)
                 smp[i] = (int16_t)(((int32_t)smp[i] * g) / 100);
         }
 
+        const audio_out_tap_t tap = s_tap;
+        if (tap) tap(smp, count / 2);
         size_t written = 0;
         i2s_channel_write(s_tx, smp, n, &written, portMAX_DELAY);
         vRingbufferReturnItem(s_ring, p);

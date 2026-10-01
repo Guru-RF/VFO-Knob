@@ -7,8 +7,10 @@
 #include "driver/i2s_pdm.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
 
@@ -35,6 +37,10 @@ static const char *TAG = "mic";
 /* One-pole DC blocker, corner ~19 Hz at 24 kHz. Boosting the element's DC
  * offset along with the speech would spend headroom on nothing. */
 #define MIC_DC_POLE 0.995f
+/* A headset's microphone comes already levelled -- speech near -12 dBFS from
+ * the hands-free profile's coder -- so the operator's 100% leaves it as it
+ * is, and 200% doubles it into the same soft knee. */
+#define EXT_PREGAIN 1.0f
 
 static i2s_chan_handle_t  s_rx;
 static RingbufHandle_t    s_ring;
@@ -44,14 +50,21 @@ static volatile bool      s_dc_reset;
 static volatile uint8_t   s_gain = 100;
 static audio_in_stats_t   s_stats;
 static TaskHandle_t       s_task;
+static SemaphoreHandle_t  s_mx;         /* keying, against the source changing */
+static volatile bool      s_ext;        /* a headset's microphone, not the PDM one */
+static volatile bool      s_pdm_on;     /* the PDM channel is enabled */
+static void             (*s_ext_hook)(bool active);
 
 bool audio_in_active(void) { return s_active; }
+bool audio_in_ext(void) { return s_ext; }
+void audio_in_set_ext_hook(void (*hook)(bool active)) { s_ext_hook = hook; }
 void audio_in_set_gain(uint8_t g) { s_gain = g > 200 ? 200 : g; }
 void audio_in_stats(audio_in_stats_t *st) { if (st) *st = s_stats; }
 
 void audio_in_set_active(bool on)
 {
-    if (on == s_active) return;
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    if (on == s_active) { xSemaphoreGive(s_mx); return; }
     s_active = on;
     if (on) {
         /* Drop anything stale so the over starts with live audio, not with
@@ -62,11 +75,66 @@ void audio_in_set_active(bool on)
             vRingbufferReturnItem(s_ring, p);
         s_priming  = true;
         s_dc_reset = true;
-        i2s_channel_enable(s_rx);
-        ESP_LOGI(TAG, "capture ON");
+        if (!s_ext) {
+            i2s_channel_enable(s_rx);
+            s_pdm_on = true;
+        }
+        if (s_ext_hook) s_ext_hook(true);
+        ESP_LOGI(TAG, "capture ON%s", s_ext ? ": the headset's microphone" : "");
     } else {
-        i2s_channel_disable(s_rx);
+        if (s_pdm_on) {
+            i2s_channel_disable(s_rx);
+            s_pdm_on = false;
+        }
+        if (s_ext_hook) s_ext_hook(false);
         ESP_LOGI(TAG, "capture OFF");
+    }
+    xSemaphoreGive(s_mx);
+}
+
+void audio_in_use_ext(bool on)
+{
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    if (on != s_ext) {
+        s_ext = on;
+        ESP_LOGI(TAG, "microphone: %s", on ? "the headset's" : "the knob's");
+        /* A headset come in the middle of an over takes it over. */
+        if (on && s_active) {
+            if (s_pdm_on) {
+                i2s_channel_disable(s_rx);
+                s_pdm_on = false;
+            }
+            if (s_ext_hook) s_ext_hook(true);
+        }
+    }
+    xSemaphoreGive(s_mx);
+}
+
+void audio_in_feed_ext(const int16_t *pcm, size_t n)
+{
+    if (!s_active || !s_ext || !n) return;
+    EXT_RAM_BSS_ATTR static int16_t buf[512];
+    const float g = EXT_PREGAIN * (float)s_gain / 100.0f;
+    while (n) {
+        const size_t k = n > 512 ? 512 : n;
+        int32_t pk = 0;
+        for (size_t i = 0; i < k; i++) {
+            float v = (float)pcm[i] * g;
+            const float a = fabsf(v);
+            if (a > MIC_KNEE) {
+                const float u   = (a - MIC_KNEE) / (32767.0f - MIC_KNEE);
+                const float lim = MIC_KNEE + (32767.0f - MIC_KNEE) * u / (1.0f + u);
+                v = v < 0.0f ? -lim : lim;
+            }
+            buf[i] = (int16_t)v;
+            const int32_t m = buf[i] < 0 ? -buf[i] : buf[i];
+            if (m > pk) pk = m;
+        }
+        s_stats.peak = (float)pk / 32768.0f;
+        if (xRingbufferSend(s_ring, buf, k * sizeof(int16_t), 0) != pdTRUE) s_stats.overruns++;
+        else                                                               s_stats.blocks++;
+        pcm += k;
+        n -= k;
     }
 }
 
@@ -77,7 +145,7 @@ static void mic_task(void *arg)
     float x1 = 0.0f, y1 = 0.0f;              /* DC blocker state */
 
     for (;;) {
-        if (!s_active) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        if (!s_active || !s_pdm_on) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
 
         size_t got = 0;
         if (i2s_channel_read(s_rx, buf, sizeof buf, &got,
@@ -124,7 +192,8 @@ esp_err_t audio_in_init(void)
 {
     s_ring = xRingbufferCreateWithCaps(MIC_RING_BYTES, RINGBUF_TYPE_BYTEBUF,
                                        MALLOC_CAP_SPIRAM);
-    ESP_RETURN_ON_FALSE(s_ring, ESP_ERR_NO_MEM, TAG, "ring");
+    s_mx   = xSemaphoreCreateMutex();
+    ESP_RETURN_ON_FALSE(s_ring && s_mx, ESP_ERR_NO_MEM, TAG, "ring");
 
     /* PDM receive exists only on I2S0 on the ESP32-S3; the DAC output is
      * pinned to I2S1 for exactly this reason. */

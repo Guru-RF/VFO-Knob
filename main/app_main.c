@@ -19,6 +19,7 @@
 #include "audio_in.h"
 #include "audio_out.h"
 #include "board.h"
+#include "bt_link.h"
 #include "cJSON.h"
 #include "board_pins.h"
 #include "drv2605.h"
@@ -257,6 +258,14 @@ static _Atomic int32_t s_step_hz = 1000;
 /* Set by net_task when there is no computer on the cable, and shown by
  * ui_task in the warning panel; see net_task for when and why. */
 static atomic_bool s_flip_hint;
+/* When the headset's PTT was last refused, its microphone muted (ms): the
+ * banner says so for 3 s. */
+static int64_t s_hs_refused_ms;
+#if !VFO_RADIO_SETUP
+/* The boom arm is the PTT and the headset came with it down: the slab asks
+ * for it up before anything keys. */
+static bool s_hs_raise;
+#endif
 
 #if CONFIG_VFO_USB_NET
 /* How long a cable with a computer on it gets, from boot, to come up as a
@@ -637,6 +646,70 @@ static void ui_task(void *arg)
             radio_ptt_toggle();
 #endif
         }
+#if !VFO_RADIO_SETUP && !VFO_RX_ONLY
+        /* A Bluetooth headset's call button is the PTT while one is
+         * connected: a press keys, the next unkeys. Not with the headset's
+         * microphone muted -- that over would be a dead carrier -- and then
+         * the knob says so, with a radio refusal's three clicks. Unkeying is
+         * never refused. */
+        if (bt_link_take_ptt()) {
+            if (!radio_on_air() && bt_link_headset_muted()) {
+                ESP_LOGW(TAG, "headset PTT refused: its microphone is muted");
+                s_hs_refused_ms = esp_timer_get_time() / 1000;
+                haptic(12);                 /* triple click: refused */
+            } else {
+#if VFO_PTT_DRY_RUN
+                ESP_LOGW(TAG, "headset PTT -- dry run, not sent to the radio");
+#else
+                ESP_LOGI(TAG, "headset PTT");
+                radio_ptt_toggle();
+#endif
+                haptic(26);
+            }
+        }
+        /* The boom arm as the PTT, where the operator chose it (the
+         * configuration page): down -- the microphone live -- transmits, up
+         * -- muted -- stops. Never by itself: a headset that comes, or a knob
+         * that starts, with the boom down waits for it to go up once, and
+         * the slab asks for that, in red. */
+        {
+            static bool armed, was_live;
+            const bool conn = bt_link_headset_connected();
+            const bool live = conn && !bt_link_headset_muted();
+            const bool boom = bt_link_boom_ptt();
+            if (!conn || !boom) armed = false;
+            else if (!live)     armed = true;
+            if (boom && conn && live != was_live) {
+                if (live && armed && !radio_on_air()) {
+#if VFO_PTT_DRY_RUN
+                    ESP_LOGW(TAG, "boom down -- dry run, not sent to the radio");
+#else
+                    ESP_LOGI(TAG, "boom down: PTT");
+                    radio_ptt_key();
+#endif
+                } else if (!live && radio_on_air()) {
+                    ESP_LOGI(TAG, "boom up: unkeyed");
+                    radio_ptt_unkey();
+                }
+            }
+            was_live   = live;
+            s_hs_raise = boom && conn && live && !armed;
+        }
+        /* Keyed with the headset's microphone, and the headset gone -- out of
+         * reach, its battery flat: nobody can unkey from it any more, and the
+         * over would go on in silence. Unkey. */
+        {
+            static bool hs_over;
+            const bool hs = bt_link_headset_audio(), air = radio_on_air();
+            if (!air) hs_over = false;
+            else if (hs) hs_over = true;
+            else if (hs_over) {
+                hs_over = false;
+                ESP_LOGW(TAG, "the headset went away on the air: unkeying");
+                radio_ptt_unkey();
+            }
+        }
+#endif
 
         /* The address card, up under a finger held on the S-meter: a click
          * says it can let go. */
@@ -756,7 +829,9 @@ static void ui_task(void *arg)
             s_note_until = nowms + 3000;
         }
         /* A refusal says why, where the radio gives a reason. */
-        if (nowms < s_warn_until)                    warn = st.tx_why[0] ? st.tx_why
+        if (s_hs_refused_ms && nowms - s_hs_refused_ms < 3000)
+                                                     warn = "HEADSET MUTED";
+        else if (nowms < s_warn_until)               warn = st.tx_why[0] ? st.tx_why
                                                                          : "TX REFUSED";
         else if (nowms < s_note_until && st.note[0]) warn = st.note;
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
@@ -933,6 +1008,17 @@ static void ui_task(void *arg)
                     radio_found_get(i - nd, u.radio_name[i], sizeof u.radio_name[i]);
                 }
             }
+        }
+#endif
+#if !VFO_RADIO_SETUP
+        /* A Bluetooth headset: the slab is its, while one is connected. */
+        {
+            static bt_link_status_t b;      /* static: this stack is tight */
+            bt_link_status(&b);
+            u.headset       = b.companion && b.hs.link == BTL_LINK_CONNECTED;
+            u.headset_muted = u.headset && b.hs.mic == 0;
+            u.headset_raise = u.headset && s_hs_raise;
+            strlcpy(u.headset_name, b.hs.name, sizeof u.headset_name);
         }
 #endif
         ui_update(&u);
@@ -1911,6 +1997,10 @@ void app_main(void)
 #endif
 #if VFO_HAS_SDR
         bring_up("web SDR", sdr_rx_init);
+#endif
+#if !VFO_RADIO_SETUP
+        /* The second chip, for a Bluetooth headset. */
+        bring_up("bt link", bt_link_init);
 #endif
         /* The saved levels, even with no display to carry them. */
         audio_out_set_volume(net_prov_volume());

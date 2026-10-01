@@ -168,6 +168,36 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      exempts you from its session limit. Saved with <b>Save</b> below.</p>
 </section>
 
+<section id="btsec" hidden>
+  <h2>Bluetooth headset</h2>
+  <div id="btrows"></div>
+  <div id="btfound"></div>
+  <button id="btscan" class="ghost" type="button">Find headsets</button>
+  <button id="btoff" class="ghost" type="button" hidden>Disconnect</button>
+  <button id="btforget" class="ghost" type="button" hidden>Forget it</button>
+  <div id="btmsg" class="note"></div>
+  <label class="chk" id="btboomrow"><input type="checkbox" id="btboom"> The boom arm is the PTT</label>
+  <p class="note" id="btboomnote">Lowering the boom &mdash; the headset's microphone live
+     &mdash; transmits; raising it &mdash; muted &mdash; stops. Never by
+     itself: when the headset connects or the knob starts with the boom
+     down, the knob asks for it up first, in red, and only the next time it
+     comes down does it transmit. Applies at once.</p>
+  <p class="note" id="btrxnote" hidden>Put the headset in pairing mode,
+     <b>Find headsets</b>, and tap it in the list. The knob remembers it, and
+     calls it whenever it is switched on, as a phone does. While it is
+     connected, the receiver's audio plays in it as well as on the jack.</p>
+  <p class="note" id="bttxnote">Put the headset in pairing mode, <b>Find headsets</b>, and
+     tap it in the list. The knob remembers it, and calls it whenever it is
+     switched on, as a phone does. While it is connected, the knob's audio
+     plays in it as well as on the jack, its microphone is the one you
+     transmit with &mdash; the knob's own is off &mdash; and its call button
+     is the PTT: a press transmits, the next stops. The PTT slab on the knob
+     shows the headset instead, and its microphone struck through in red
+     while the headset has it muted; a tap there only stops a transmission.
+     If the headset goes out of reach while you transmit, the knob stops
+     transmitting.</p>
+</section>
+
 <section id="svxstation" hidden>
   <h2>Station</h2>
   <div class="grid">
@@ -389,7 +419,54 @@ async function load(){
   if (LIST) { $('rlogin').hidden = true; rigsLoad(); }
   if (flex) slLoad();
   sdrLoad();
+  btLoad();
 }
+
+/* ---- the Bluetooth headset, through the knob's second chip ---- */
+let BT=null, btTimer=0;
+async function btLoad(){
+  let s; try{ const r=await fetch('/api/bt',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
+  /* Only where the second chip runs the companion firmware. */
+  $('btsec').hidden=!s.companion; BT=s;
+  if(s.companion) btShow(s);
+  clearTimeout(btTimer); btTimer=setTimeout(btLoad, s.scanning?1000:3000);
+}
+function btShow(s){
+  const st = s.link==='connected' ? `<span class="pill up">connected</span>`
+           : s.link==='connecting' ? `<span class="pill down">calling…</span>`
+           : `<span class="pill down">${s.bda?'not in reach':'none'}</span>`;
+  $('btrows').innerHTML = row('Headset', (s.bda?esc(s.name||s.bda)+' ':'')+st)
+    + (s.link==='connected' ? row('Audio', s.audio?esc(s.audio):'opening…')
+                             + (UBER ? '' : row('Microphone', s.mic===0 ? '<span class="pill down">muted</span>'
+                                                                       : '<span class="pill up">live</span>')
+                                          + row('Button presses', s.presses)) : '')
+    + row('Companion', esc(s.version));
+  /* A receiver's knob: the headset is for listening, nothing more. */
+  for (const id of ['btboomrow','btboomnote','bttxnote']) $(id).hidden = UBER;
+  $('btrxnote').hidden = !UBER;
+  $('btboom').checked = !!s.boom;
+  $('btoff').hidden = s.link==='idle';
+  $('btforget').hidden = !s.bda;
+  $('btscan').textContent = s.scanning ? 'Looking…' : 'Find headsets';
+  $('btscan').disabled = s.scanning;
+  const list = s.found.filter(x=>x.bda!==s.bda || s.link!=='connected')
+                      .sort((a,b)=>(b.audio-a.audio)||(b.rssi-a.rssi));
+  $('btfound').innerHTML = list.map((x,i)=>row(
+      (x.audio?'\u{1F3A7} ':'')+esc(x.name||x.bda),
+      `${x.rssi>-127?x.rssi+' dBm ':''}<button type="button" class="pill up" data-bt="${i}">Connect</button>`)).join('');
+  for(const b of $('btfound').querySelectorAll('[data-bt]'))
+    b.onclick=()=>btDo('connect', list[+b.dataset.bt].bda, 'Calling '+(list[+b.dataset.bt].name||'it')+'…');
+}
+async function btDo(what, bda, say, more){
+  $('btmsg').textContent = say||'';
+  try{ await fetch('/api/bt',{method:'POST',body:new URLSearchParams(Object.assign(bda?{do:what,bda}:{do:what}, more||{}))}) }
+  catch(e){ $('btmsg').textContent='The knob did not answer'; return }
+  setTimeout(btLoad, 300);
+}
+$('btscan').onclick=()=>btDo('scan', '', 'Looking for ten seconds: the headset in pairing mode.');
+$('btoff').onclick=()=>btDo('disconnect', '', '');
+$('btboom').onchange=e=>btDo('boom', '', e.target.checked?'The boom arm is the PTT.':'The boom arm is not the PTT.', {on:e.target.checked?1:0});
+$('btforget').onclick=()=>{ if(BT && BT.bda && confirm('Forget '+(BT.name||BT.bda)+'?')) btDo('forget', BT.bda, '') };
 
 /* ---- SmartLink: the FlexRadio firmware's radios away from home ---- */
 let SL=null;

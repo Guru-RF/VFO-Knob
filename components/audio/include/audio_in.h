@@ -47,6 +47,19 @@ bool audio_in_take(int16_t *out, size_t samples);
 
 void audio_in_set_gain(uint8_t percent);
 
+/* A Bluetooth headset's microphone in place of the knob's own
+ * (components/bt_link). While one is in use, keying leaves the PDM
+ * microphone off and takes this one instead: mono at TX_AUDIO_RATE_HZ, fed
+ * from the link's task. The hook hears keying start and stop, so that the
+ * headset's microphone is sent only then -- as the knob's own is only live
+ * then. A headset lost in the middle of an over leaves it silent: whoever
+ * keyed through the headset is unkeyed by app_main, not handed the knob's
+ * microphone across the room. */
+void audio_in_use_ext(bool on);
+bool audio_in_ext(void);
+void audio_in_feed_ext(const int16_t *pcm, size_t n);
+void audio_in_set_ext_hook(void (*hook)(bool active));
+
 typedef struct { uint32_t blocks, starved, overruns; float peak; } audio_in_stats_t;
 void audio_in_stats(audio_in_stats_t *st);
 

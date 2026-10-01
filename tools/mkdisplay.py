@@ -340,6 +340,66 @@ def aux(agc, gain_caption, gain, gain_known=True):
             + text(CX + dx, 102, gain if gain_known else "--", 14, g_val))
 
 
+def approx_width(s, size):
+    """Montserrat's advance, roughly -- enough to set an icon beside a
+    centred label the way LVGL lays out the whole line."""
+    w = 0.0
+    for c in s:
+        w += 0.27 if c == " " else 0.62 if c.isdigit() else 0.70 if c.isupper() else 0.56
+    return w * size
+
+
+def bluetooth(x, y, colour, size=20):
+    """Font Awesome's bluetooth-b, the rune LV_SYMBOL_BLUETOOTH draws; (x, y)
+    is the left end of the baseline."""
+    k = size / 20
+    return (f'<path transform="translate({x:.1f},{y - 15 * k:.1f}) scale({k:.3f})" '
+            f'd="M1,4 L9,12 L5,16 L5,0 L9,4 L1,12" fill="none" stroke="{colour}" '
+            f'stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>')
+
+
+def microphone28(cx, top, colour, slash=False, bg="#000000"):
+    """font_btmic_28's microphone (U+F130), or struck through (U+F131),
+    centred on cx with its glyph's top at `top`: microphone() twice over."""
+    s = f'<g transform="translate({cx - 10:.1f},{top:.1f}) scale(2)">{microphone(0, 12, colour)}</g>'
+    if slash:
+        # The stroke cuts the microphone, with a gap of the slab's colour
+        # along it, as Font Awesome's microphone-slash does.
+        s += (f'<line x1="{cx - 15:.1f}" y1="{top - 1:.1f}" x2="{cx + 15:.1f}" y2="{top + 27:.1f}" '
+              f'stroke="{bg}" stroke-width="7" stroke-linecap="round"/>'
+              f'<line x1="{cx - 15:.1f}" y1="{top - 1:.1f}" x2="{cx + 15:.1f}" y2="{top + 27:.1f}" '
+              f'stroke="{colour}" stroke-width="3" stroke-linecap="round"/>')
+    return s
+
+
+def headset_slab(name, muted=False, raise_boom=False, tx=False):
+    """The PTT slab while a Bluetooth headset is connected (ui.c
+    headset_slab): the Bluetooth rune and the headset's name, Montserrat 20,
+    its box's top at PTT_TOP + 12; under it the microphone (font_btmic_28,
+    its box's top at PTT_TOP + 44) -- struck through, in red, while the
+    headset has it muted -- or, with the boom arm as the PTT and the headset
+    come with it down, a red RAISE BOOM button. On the air the slab is red and
+    all of it white."""
+    fill = TX_RED if tx else BG1
+    fg = "#FFFFFF" if tx else TEXT
+    s = (f'<rect x="0" y="{PTT_TOP}" width="360" height="{360 - PTT_TOP}" fill="{fill}"/>'
+         f'<line x1="0" y1="{PTT_TOP + 1}" x2="360" y2="{PTT_TOP + 1}" '
+         f'stroke="{ACCENT}" stroke-width="2"/>')
+    rune, gap = 13, 11                      # the glyph's advance, then two spaces
+    x0 = 180 - (rune + gap + approx_width(name, 20)) / 2
+    base = PTT_TOP + 12 + 18
+    name = name.replace("&", "&amp;").replace("<", "&lt;")
+    s += bluetooth(x0, base, fg) + text(x0 + rune + gap, base, name, 20, fg, anchor="start")
+    if raise_boom:
+        pw, top = approx_width("RAISE BOOM", 20) + 36, PTT_TOP + 42
+        s += (f'<rect x="{180 - pw / 2:.1f}" y="{top}" width="{pw:.1f}" height="34" rx="17" '
+              f'fill="{TX_RED}"/>' + text(180, top + 6 + 18, "RAISE BOOM", 20, "#FFFFFF"))
+    else:
+        col = "#FFFFFF" if tx else TX_RED if muted else TEXT2
+        s += microphone28(180, PTT_TOP + 46, col, muted, fill)
+    return s
+
+
 def ptt_slab(fill, label, text_colour):
     """The slab carries a 2 px accent border along its top edge only. The
     label is Montserrat 28 in a box whose top is PTT_TOP + 14; that font's
