@@ -229,12 +229,14 @@ SDR_BLUE = {"icom": "#5A9BFF", "multiflex": "#62BBFF"}   # ui.c SDR_HEX
 
 def face(pal, dbm=-85, band="40m", mode="LSB", filt="FIL2", digits="  7123" "00",
          active=5, step="100 Hz", agc="MID", gain_cap="P.AMP", gain="OFF",
-         gain_known=True, sub=None, sdr=None, mem=None, rit="RIT 0", vol="40", mic="100"):
+         gain_known=True, sub=None, sdr=None, mem=None, rit="RIT 0", vol="40", mic="100",
+         receiver=False, ghz=False):
     """A radio firmware's receive face at a reading, in its palette (ui.c;
     mkrender's dial, with the options the guides need): `sub` for what is
     under the S-units, `sdr` a web SDR's level -- its thin line outside the
     radio's, and its reading in blue -- and `mem` = (group, name, line) for
-    memory mode."""
+    memory mode. `receiver`: a receiver radio's (the IC-R8600), RECEIVER on
+    the slab and no RIT or microphone; `ghz` the digits from 1 GHz up."""
     md.use_palette(pal)
     s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>',
          f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
@@ -269,7 +271,12 @@ def face(pal, dbm=-85, band="40m", mode="LSB", filt="FIL2", digits="  7123" "00"
         s += [md.text(104, 129, band, 20, md.ACCENT), md.text(180, 129, mode, 20, md.TEXT),
               md.text(256, 129, filt, 20, md.TEXT2),
               md.readout(digits, colour=md.TEXT, sep_colour=md.LABEL, underline=active,
-                         after_colour=md.TEXT2, active_colour=md.ACCENT_HI)]
+                         after_colour=md.TEXT2, active_colour=md.ACCENT_HI, ghz=ghz)]
+    if receiver:
+        s += [md.text(124, 227, step, 20, md.ACCENT),
+              md.icon_readout(236, 227, md.speaker, vol, md.TEXT2),
+              md.ptt_slab(md.BG1, "RECEIVER", md.TEXT2)]
+        return "".join(s)
     s += [md.text(82, 227, step, 20, md.ACCENT),
           md.text(156, 227, rit, 14, md.WARN if rit != "RIT 0" else md.DISABLED),
           md.icon_readout(222, 227, md.speaker, vol, md.TEXT2),
@@ -609,6 +616,23 @@ def icom_pictures():
                         tx_face("icom", swr=1.3, watts=50))
     out["18-headset"] = knob("icom-18", "A Bluetooth headset: its button is the PTT",
                              headset_face(f), "", "the headset's button: key, and key off")
+    # The IC-R8600, a receiver: 2 m FM, then the 23 cm calling frequency in the
+    # GHz digits, then its antennas.
+    rx = dict(agc="MID", gain_cap="P.AMP", gain="ON", receiver=True)
+    r = face("icom", dbm=-79, band="2m", mode="FM", filt="FIL1", digits="145500" "00",
+             active=3, step="100 kHz", **rx)
+    out["19-receiver"] = knob("icom-19", "The IC-R8600: a receiver, nothing to key", r, "",
+                              "RECEIVER: the slab keys nothing")
+    out["20-ghz"] = knob("icom-20", "From 1 GHz: four MHz digits",
+                         face("icom", dbm=-97, band="23cm", mode="USB", filt="FIL2",
+                              digits="12962000", active=6, step="1 kHz", ghz=True, **rx),
+                         turn(), "1296.200.0 MHz  \u00b7  the step from 100 Hz up")
+    out["21-r8600-antenna"] = knob("icom-21", "Swipe down: the IC-R8600's antennas",
+                                   r + editor("ANTENNA", "ANT3"), swipe_at("down"),
+                                   "after RX  \u00b7  ANT1, ANT2, ANT3  \u00b7  tap the panel")
+    out["22-squelch"] = knob("icom-22", "Swipe from the right: the IC-R8600's squelch",
+                             r + editor("SQUELCH", "30%"), swipe_at("left"),
+                             "in every mode  \u00b7  0% is OPEN  \u00b7  applies as you turn")
     return out
 
 

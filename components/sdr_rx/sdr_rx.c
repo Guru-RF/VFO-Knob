@@ -465,7 +465,8 @@ static const char *kiwi_mode(const char *m, int32_t *lo, int32_t *hi)
              !strcasecmp(m, "cwu") || !strcasecmp(m, "cwl")) k = "cw";      /* UberSDR's names */
     else if (!strcasecmp(m, "am")) k = "am";
     else if (!strcasecmp(m, "sam")) k = "sam";
-    else if (!strcasecmp(m, "fm") || !strcasecmp(m, "nfm")) k = "nbfm";
+    else if (!strcasecmp(m, "fm") || !strcasecmp(m, "nfm") ||
+             !strcasecmp(m, "wfm")) k = "nbfm";             /* a Kiwi has no wide FM */
     int32_t l = *lo, h = *hi;
     if (!strcmp(k, "lsb") && l > 0) { const int32_t t = l; l = -h; h = -t; }
     if (!strcmp(k, "cw")) {

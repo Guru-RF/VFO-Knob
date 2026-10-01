@@ -2026,6 +2026,7 @@ void radio_atu_memories(bool on) { if (S.has_atu) request(Q_ATU_MEM, on, 0, NULL
 void radio_set_rf_gain(uint8_t pct)  { (void)pct; }
 void radio_set_rf_power(uint8_t pct) { (void)pct; }
 void radio_set_tuner(bool on)        { (void)on; }
+void radio_set_squelch(uint8_t pct)  { (void)pct; }
 
 bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
 {

@@ -130,6 +130,9 @@ static volatile bool s_on_usb;
 /* The WiFi driver started: once, whoever starts it (pick_transport, or the
  * WiFi setup when no network is known). */
 static bool s_wifi_started;
+/* The radio is a receiver (radio_status_t.rx_only), as of the last status:
+ * nothing on the knob keys it. */
+static bool s_rx_only;
 /* The setup firmware's filling of the SD card with every firmware published:
  * an install stops it first -- one download at a time. */
 static volatile bool s_fill_stop, s_fill_running;
@@ -794,6 +797,10 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "tuner -> %s", c.tuner_on ? "in the line" : "out");
                 radio_set_tuner(c.tuner_on);
             }
+            if (c.have_squelch) {
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "squelch -> %u%%", (unsigned)c.squelch_pct);
+                radio_set_squelch(c.squelch_pct);
+            }
 #if VFO_RADIO_UBERSDR
             if (c.have_spot) {
                 ESP_LOGI(TAG, "spot -> %lu Hz %s", (unsigned long)c.spot_hz, c.spot_mode);
@@ -868,7 +875,7 @@ static void ui_task(void *arg)
             }
         }
 #endif
-        if (ui_take_ptt_tap()) {
+        if (ui_take_ptt_tap() && !s_rx_only) {
 #if VFO_PTT_DRY_RUN
             /* A test build (-D VFO_PTT_DRY_RUN=1): what would have keyed or
              * unkeyed the radio, logged and nothing more. */
@@ -884,7 +891,7 @@ static void ui_task(void *arg)
          * microphone muted -- that over would be a dead carrier -- and then
          * the knob says so, with a radio refusal's three clicks. Unkeying is
          * never refused. */
-        if (bt_link_take_ptt()) {
+        if (bt_link_take_ptt() && !s_rx_only) {
             if (!radio_on_air() && bt_link_headset_muted()) {
                 ESP_LOGW(TAG, "headset PTT refused: its microphone is muted");
                 s_hs_refused_ms = esp_timer_get_time() / 1000;
@@ -912,7 +919,7 @@ static void ui_task(void *arg)
             if (!conn || !boom) armed = false;
             else if (!live)     armed = true;
             if (boom && conn && live != was_live) {
-                if (live && armed && !radio_on_air()) {
+                if (live && armed && !radio_on_air() && !s_rx_only) {
 #if VFO_PTT_DRY_RUN
                     ESP_LOGW(TAG, "boom down -- dry run, not sent to the radio");
 #else
@@ -925,7 +932,7 @@ static void ui_task(void *arg)
                 }
             }
             was_live   = live;
-            s_hs_raise = boom && conn && live && !armed;
+            s_hs_raise = boom && conn && live && !armed && !s_rx_only;
         }
         /* Keyed with the headset's microphone, and the headset gone -- out of
          * reach, its battery flat: nobody can unkey from it any more, and the
@@ -1005,6 +1012,7 @@ static void ui_task(void *arg)
          * out of its 5 kB and crashed it. */
         static radio_status_t st;
         radio_get_status(&st);
+        s_rx_only = st.rx_only;
 #if !VFO_RADIO_SETUP
         ask_choice(&st);        /* the setup firmware asks its own, directly */
 #endif
@@ -1071,10 +1079,11 @@ static void ui_task(void *arg)
                    st.link == RADIO_LINK_DEGRADED))    warn = st.link_why[0] ? st.link_why : "NO LINK";
         else if (st.slice_locked)                    warn = "VFO LOCKED";
 #if !VFO_RX_ONLY
-        else if (!(st.permit & PERMIT_TX_ENABLE))    warn = "TX DISABLED";
+        else if (!st.rx_only && !(st.permit & PERMIT_TX_ENABLE)) warn = "TX DISABLED";
 #endif
 
         ui_state_t u = {
+            .rx_only       = st.rx_only,
             .freq_hz       = st.f_display,
             .step_hz       = atomic_load(&s_step_hz),
             .mode          = st.mode,
@@ -1111,6 +1120,9 @@ static void ui_task(void *arg)
             .has_tuner     = st.has_tuner,
             .have_tuner    = st.have_tuner,
             .tuner_on      = st.tuner_on,
+            .has_squelch   = st.has_squelch,
+            .have_squelch  = st.have_squelch,
+            .squelch_pct   = st.squelch_pct,
             .reflector     = st.reflector,
             .connecting    = (st.link == RADIO_LINK_CONNECTING ||
                               st.link == RADIO_LINK_GREETING),

@@ -158,8 +158,9 @@ typedef struct {
     uint8_t    preamp;               /* 16 02: 0 off, 1 P.AMP1, 2 P.AMP2 */
     bool       have_preamp;
     uint8_t    rf_gain, rf_power;    /* 14 02, 14 0A: 0-255 */
+    uint8_t    squelch;              /* 14 03: 0-255, 0 open */
     uint8_t    tuner;                /* 1C 01: 0 out, 1 in the line, 2 tuning */
-    bool       have_rf_gain, have_rf_power, have_tuner;
+    bool       have_rf_gain, have_rf_power, have_tuner, have_squelch;
     int32_t    filt_lo, filt_hi, rit_hz;
     float      smeter_dbm;
     float      tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
@@ -652,6 +653,10 @@ typedef struct model {
     bool           rx_ant;          /* ...each also with the RX ANT input */
     uint16_t       max_w;           /* RF power's full scale, 14 0A; 0 = say % */
     bool           tuner;           /* an antenna tuner in the line, 1C 01 */
+    /* A receiver: nothing to key, so no PTT, and none of the reads that go
+     * with a transmitter -- 1C 00, RF power, RIT -- which it refuses. */
+    bool           rx_only;
+    bool           squelch;         /* a squelch the dial sets, 14 03 */
 } model_t;
 
 static const char *const MODIN_705[]  = { "MIC", "USB", "MIC+USB", "WLAN" };
@@ -676,6 +681,13 @@ static const model_t MODELS[] = {
       .modin_voice = 0x0091, .modin_data = 0x0092, .modin_lan = 5,
       .modin_names = MODIN_7610, .n_modin_names = 6,
       .n_rx = 2, .n_ant = 2, .rx_ant = true, .max_w = 100, .tuner = true },
+    /* The IC-R8600, a receiver: 10 kHz-3 GHz, one preamp, ANT1-3. Its
+     * memories are not the IC-705's groups; it echoes every command it is
+     * sent, which civ_frame() leaves alone like any echo. */
+    { .name = "IC-R8600", .f_min = 10000, .f_max = 3000000000LL,
+      .preamps = 1,
+      .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
+      .n_rx = 1, .n_ant = 3, .rx_only = true, .squelch = true },
     /* The X6100 and X6200: 0.5-54 MHz behind an IC-705's CI-V, one preamp.
      * Their server has neither the memories nor the modulation inputs. */
     { .name = "X6", .f_min = 500000, .f_max = 54000000,
@@ -720,6 +732,9 @@ static const mode_map_t MODES[] = {
     { "cw",  0x03, 0 }, { "rtty", 0x04, 0 }, { "fm", 0x05, 0 }, { "nfm", 0x05, 0 },
     { "wfm", 0x06, 0 }, { "cwr", 0x07, 0 }, { "rttyr", 0x08, 0 }, { "dv", 0x17, 0 },
     { "digl", 0x00, 1 }, { "digu", 0x01, 1 },
+    /* The IC-R8600's synchronous AM, as it reports it; "sam" set on the
+     * others is their AM, the entry above. */
+    { "sam", 0x11, 0 },
 };
 
 static const char *mode_name(uint8_t mode, uint8_t data)
@@ -861,7 +876,8 @@ static uint32_t ptt_permit_now(uint32_t t)
                  PERMIT_TX_ENABLE;
     /* A second receiver only listens: an IC-7610 on its SUB transmits on the
      * MAIN's frequency, which the dial is not showing. */
-    if (model_now()->n_rx < 2 || (S.have_rx && S.rx == 0)) p |= PERMIT_TRX;
+    if (!model_now()->rx_only && (model_now()->n_rx < 2 || (S.have_rx && S.rx == 0)))
+        p |= PERMIT_TRX;
     if ((S.link == RADIO_LINK_READY || S.link == RADIO_LINK_DEGRADED) &&
         t - S.t_ready_ms >= 500) p |= PERMIT_LINK;
     /* Liveness means CI-V answering, not just control pings: a session can
@@ -1071,11 +1087,12 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         }
         return;
     case 0x14:                                       /* levels: 0000-0255 */
-        if (bn >= 3 && (b[0] == 0x02 || b[0] == 0x0A)) {
+        if (bn >= 3 && (b[0] == 0x02 || b[0] == 0x03 || b[0] == 0x0A)) {
             const unsigned v = unbcd(b[1]) * 100 + unbcd(b[2]);
             const uint8_t level = v > 255 ? 255 : (uint8_t)v;
-            if (b[0] == 0x02) { S.rf_gain  = level; S.have_rf_gain  = true; }
-            else              { S.rf_power = level; S.have_rf_power = true; }
+            if (b[0] == 0x02)      { S.rf_gain  = level; S.have_rf_gain  = true; }
+            else if (b[0] == 0x03) { S.squelch  = level; S.have_squelch  = true; }
+            else                   { S.rf_power = level; S.have_rf_power = true; }
         }
         return;
     default:
@@ -1378,13 +1395,16 @@ static void civ_hello(uint32_t t)
     CIV(0x03);                    /* frequency */
     CIV(0x26, 0x00);              /* mode, data, filter */
     if (!S.mem_mode) CIV(0x1A, 0x03);   /* filter width; refused on a memory */
-    CIV(0x21, 0x00);              /* RIT */
+    const model_t *m = model_now();
+    if (!m->rx_only) CIV(0x21, 0x00);   /* RIT */
     CIV(0x16, 0x12);              /* AGC */
     CIV(0x16, 0x02);              /* preamp */
     CIV(0x14, 0x02);              /* RF gain */
-    CIV(0x14, 0x0A);              /* RF power */
-    CIV(0x1C, 0x00);              /* transmitting? */
-    const model_t *m = model_now();
+    if (m->squelch) CIV(0x14, 0x03);    /* squelch */
+    if (!m->rx_only) {
+        CIV(0x14, 0x0A);          /* RF power */
+        CIV(0x1C, 0x00);          /* transmitting? */
+    }
     if (m->tuner) CIV(0x1C, 0x01);      /* the tuner in the line? */
     if (m->n_rx > 1) CIV(0x07, 0xD2);   /* MAIN or SUB */
     if (m->n_ant) CIV(0x12);            /* the antenna */
@@ -1793,7 +1813,7 @@ static void poll_civ(uint32_t t)
         if (t - C.t_poll_ptt >= 150) { CIV(0x1C, 0x00); C.t_poll_ptt = t; }
     } else {
         if (t - C.t_poll_s >= 100) { CIV(0x15, 0x02); C.t_poll_s = t; }
-        if (t - C.t_poll_ptt >= 1000) { CIV(0x1C, 0x00); C.t_poll_ptt = t; }
+        if (t - C.t_poll_ptt >= 1000 && !model_now()->rx_only) { CIV(0x1C, 0x00); C.t_poll_ptt = t; }
         /* What the operator may change on the radio itself. The preamp is
          * kept per band, so this is also how a band change shows. One
          * question at a time, round about every 2 s: asked all at once, an
@@ -1816,7 +1836,11 @@ static void poll_civ(uint32_t t)
                 break;
             case 5: if (m->n_rx > 1) CIV(0x07, 0xD2); break;
             case 6: if (m->n_ant) CIV(0x12); break;
-            case 7: CIV(0x14, 0x02); CIV(0x14, 0x0A); break;
+            case 7:
+                CIV(0x14, 0x02);
+                if (!m->rx_only) CIV(0x14, 0x0A);
+                if (m->squelch)  CIV(0x14, 0x03);
+                break;
             case 8: if (m->tuner) CIV(0x1C, 0x01); break;
             }
             C.t_poll_slow = t;
@@ -2148,6 +2172,10 @@ static void set_level(uint8_t sub, uint8_t pct)
 
 void radio_set_rf_gain(uint8_t pct)  { set_level(0x02, pct); }
 void radio_set_rf_power(uint8_t pct) { set_level(0x0A, pct); }
+void radio_set_squelch(uint8_t pct)
+{
+    if (model_now()->squelch) set_level(0x03, pct);
+}
 
 void radio_set_tuner(bool on)
 {
@@ -2242,7 +2270,11 @@ void radio_get_status(radio_status_t *o)
     const model_t *m = model_now();
     o->gain_max   = m->one_preamp_hz && S.f_server >= m->one_preamp_hz ? 1 : m->preamps;
     o->gain_step  = 1;
-    o->has_levels   = true;               /* 14 02 and 14 0A on all of them */
+    o->has_levels   = !m->rx_only;        /* 14 02 and 14 0A on all but a receiver */
+    o->has_squelch  = m->squelch;
+    o->have_squelch = S.have_squelch;
+    o->squelch_pct  = (uint8_t)((S.squelch * 100u + 127u) / 255u);
+    o->rx_only      = m->rx_only;
     o->have_levels  = S.have_rf_gain && S.have_rf_power;
     o->rf_gain_pct  = (uint8_t)((S.rf_gain  * 100u + 127u) / 255u);
     o->rf_power_pct = (uint8_t)((S.rf_power * 100u + 127u) / 255u);

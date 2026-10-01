@@ -3,28 +3,51 @@
 `vfo-knob-icom` talks to an Icom radio itself, over the radio's own network
 protocol — the one RS-BA1 and wfview use — with receive and transmit audio:
 the knob and the radio are a complete station, with no computer in between.
-It knows the **IC-705** (its memories, its preamp) and the **IC-7610** (MAIN
-and SUB, its antennas and its tuner). Its face wears Icom's colours.
+It knows the **IC-705** (its memories, its preamp), the **IC-7610** (MAIN
+and SUB, its antennas and its tuner) and the **IC-R8600** receiver (10 kHz to
+3 GHz and its three antennas — and nothing to key). Its face wears Icom's
+colours.
 
 The pictures are the knob's own screens, drawn from the firmware's texts and
 layout (`tools/mkdocs.py`); the orange marks are what your hand does.
 
 ## Before you start: the radio
 
-The knob logs in to the radio as one of its network users.
+The knob logs in to the radio as one of its network users, as RS-BA1, RS-R8600
+and wfview do, and the radio must be on the same network as the knob. Out of
+the box remote control is off on every one of them.
 
-- **IC-705:** *MENU » SET » WLAN Set » Remote Settings* — Network Control
-  **ON**, and a Network User with a name and a password.
-- **IC-7610:** *MENU » SET » Network* — Network Control **ON**, and Network
-  User1 with a name and a password.
+| Radio | On the radio | |
+|---|---|---|
+| **IC-705** | *MENU » SET » WLAN Set* | WLAN **ON**, **Connection Type: Station**, and your WiFi network |
+| | *MENU » SET » WLAN Set » Remote Settings* | **Network Control: ON**, and a **Network User** with a name and a password |
+| **IC-7610** | its **LAN** socket | a network cable to your router or switch |
+| | *MENU » SET » Network* | **Network Control: ON**, and **Network User1** with a name and a password |
+| **IC-R8600** | its **LAN** socket | a network cable to your router or switch |
+| | *MENU » SET » Network* | **Network Control: ON**, and **Network User1** with a name and a password |
 
-The user name is case-sensitive: `ON6URE` and `on6ure` are two users.
+What most often stands in the way:
+
+- **The user name is case-sensitive:** `ON6URE` and `on6ure` are two users.
+- **A fixed address.** Give the radio the same IP address every time — a
+  reservation in your router, or a fixed address in the radio's network
+  settings — and enter that on the knob, not a name: a radio on WiFi that
+  dozes answers its name only some of the time.
+- **The ports.** The knob asks for the radio on its control port, `50001`;
+  the radio then names its serial (CI-V) and audio ports, `50002` and `50003`.
+  All three are UDP, on the radio's own network: leave them as they are, or
+  change the knob's **Port** with the radio's.
+- **One remote client at a time.** With RS-BA1, RS-R8600 or wfview connected,
+  the radio has no room for the knob: close the other one first.
+- **After a restart.** When the knob went away without saying goodbye — the
+  power pulled — the radio keeps that session for a while. The knob waits for
+  it to let go, and shows **NO LINK** until then: a minute or so.
 
 ## Tell the knob where the radio is
 
 Open the knob's configuration page — hold a finger on the S-meter until the
 knob clicks, and browse to the address on the card; user `admin`, password
-`admin` until you change it. Under **IC-705 / IC-7610**:
+`admin` until you change it. Under **IC-705 / IC-7610 / IC-R8600**:
 
 | Field | |
 |---|---|
@@ -48,12 +71,12 @@ Until the radio answers, the knob says so, with its own addresses:
 | **AGC** | the AGC editor | FAST, MID, SLOW |
 | **P.AMP** | the preamp editor | OFF, 1, 2 — or ON where the band has only one |
 | **Band** | the band editor | the band's own frequency, on a tap on the panel |
-| **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, FM, RTTY, DIGU, DIGL |
+| **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, FM, RTTY, DIGU, DIGL — on the IC-R8600 WFM in place of DIGU and DIGL |
 | **Filter** | the filter editor | the radio's FIL1, FIL2, FIL3 |
-| **Frequency** | a digit: the tuning step | the underlined digit is the step |
-| **Step, RIT** | RIT: its editor | RIT in amber when set |
-| **Volume, mic gain** | their editors | the knob's own levels |
-| **PTT** | key, and key off | see [Transmitting](#transmitting) |
+| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 GHz up the digits read MMMM.kkk.h |
+| **Step, RIT** | RIT: its editor | RIT in amber when set; none on the IC-R8600 |
+| **Volume, mic gain** | their editors | the knob's own levels; the IC-R8600 has only the volume |
+| **PTT** | key, and key off | see [Transmitting](#transmitting); on the IC-R8600 **RECEIVER**, nothing to key |
 
 ## Tuning
 
@@ -79,9 +102,9 @@ Tap a part of the face and its editor comes up; turn the knob to choose.
 
 | Swipe | Opens |
 |---|---|
-| **From the left** | RF GAIN, then — a tap on it — POWER, in watts. With a web SDR playing, BALANCE comes first |
-| **From the right** | the IC-7610's TUNER: in the line, or out |
-| **Down** | RX — LOCAL or a web SDR — then, on the IC-7610, MAIN or SUB and the antenna; on the IC-705, V/M |
+| **From the left** | RF GAIN, then — a tap on it — POWER, in watts (not on the IC-R8600). With a web SDR playing, BALANCE comes first |
+| **From the right** | the IC-7610's TUNER: in the line, or out; the IC-R8600's SQUELCH |
+| **Down** | RX — LOCAL or a web SDR — then, on the IC-7610, MAIN or SUB and the antenna; on the IC-R8600 the antenna; on the IC-705, V/M |
 | **Up** | RADIO: another of the knob's radios |
 
 ### RF gain, power and the tuner
@@ -114,6 +137,23 @@ was, to choose another. **VFO** brings the VFO back, simplex.
 |---|---|
 | ![V/M: MEMORY](icom/11-vm.svg) | ![ON0ORA, M40, 438.800 −7.6](icom/12-memory.svg) |
 
+### The IC-R8600, a receiver
+
+The knob tunes the IC-R8600 from 10 kHz to 3 GHz, in its USB, LSB, CW, CW-R,
+AM, FM, WFM and RTTY, with its AGC, its preamp and its filters. From 1 GHz up
+the digits move over — 1296.200.0, a MHz digit more and the 10 Hz one gone —
+and the finest step is 100 Hz. Swipe down, after **RX**, for its antenna:
+ANT1, ANT2 or ANT3. Swipe from the right for its **SQUELCH**, which works in
+every mode, SSB and AM too: 0 % is OPEN, and it applies as the knob turns.
+
+The slab says **RECEIVER**: nothing on the knob keys it — not the glass, not a
+headset's button or its boom arm — and a Bluetooth headset just listens. RIT,
+the microphone, RF gain and power, and memory mode are the transceivers'.
+
+| The receiver | From 1 GHz | ANTENNA | SQUELCH |
+|---|---|---|---|
+| ![RECEIVER on the slab, 145.500 FM](icom/19-receiver.svg) | ![1296.200.0 USB on 23 cm](icom/20-ghz.svg) | ![ANTENNA: ANT3](icom/21-r8600-antenna.svg) | ![SQUELCH 30%](icom/22-squelch.svg) |
+
 ### Another radio
 
 With more than one radio in the list, swipe up: turn to one, tap the panel, and
@@ -132,7 +172,8 @@ With one playing, the radio is in the left ear and the SDR in the right, both
 brought to the same loudness. The SDR's S-meter is the thin blue line outside
 the radio's, its reading the blue one under the radio's; **BALANCE**, first on
 the swipe from the left, fades from one to the other. The SDR is silent while
-you transmit.
+you transmit. A web SDR hears what it covers — a KiwiSDR or an UberSDR up to
+30 MHz — so with the IC-R8600 above that, choose LOCAL.
 
 | RX | Playing | BALANCE |
 |---|---|---|
@@ -160,6 +201,7 @@ anything setting it with a URL:
 GET /api/radio                        the state, as JSON
 GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
     ...&mode=usb&filter=2&agc=mid&rfgain=80&power=50&tuner=on&rit=-120
+    ...&squelch=30                    the IC-R8600's, 0-100 %
 ```
 
 Nothing there transmits, and no setting is taken while the radio is on the air.
@@ -170,7 +212,7 @@ With the companion firmware on the knob's second chip, a Bluetooth headset can
 be the knob's ear and microphone, and its call button the PTT: a press keys,
 the next unkeys. The slab shows the headset instead of PTT — its name, and its
 microphone, struck through in red while the headset has it muted — and the
-knob's own microphone is off. Pairing, the companion firmware and the boom arm
+knob's own microphone is off. On the IC-R8600 the headset just listens. Pairing, the companion firmware and the boom arm
 as the PTT: [the headset guide](headset.md).
 
 ![A Bluetooth headset connected: its button is the PTT](icom/18-headset.svg)

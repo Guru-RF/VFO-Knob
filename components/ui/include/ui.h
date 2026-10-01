@@ -69,6 +69,9 @@ typedef struct {
     uint8_t  rf_gain_pct, rf_power_pct;
     uint16_t max_w;
     bool     has_tuner, have_tuner, tuner_on;
+    /* A squelch (the IC-R8600's): a swipe from the right, without a tuner. */
+    bool     has_squelch, have_squelch;
+    uint8_t  squelch_pct;
     /* Web SDRs as a second receiver (components/sdr_rx): a swipe down chooses
      * LOCAL or one of them; while one plays, the radio is heard left and the
      * SDR right, and BALANCE follows POWER on the swipe from the left. */
@@ -117,6 +120,9 @@ typedef struct {
     bool     headset, headset_muted;
     bool     headset_raise;  /* the boom arm is the PTT, and down: "RAISE BOOM", in red */
     char     headset_name[24];
+    /* A receiver (the IC-R8600): the slab says RECEIVER and keys nothing; a
+     * headset on it just listens. */
+    bool     rx_only;
     /* Transient banner: AetherSDR's refusal reason, or ours. NULL for none. */
     const char *warn;
 } ui_state_t;
@@ -206,6 +212,7 @@ typedef struct {
     bool     have_rf_gain;  uint8_t rf_gain_pct;
     bool     have_rf_power; uint8_t rf_power_pct;
     bool     have_tuner;    bool    tuner_on;
+    bool     have_squelch;  uint8_t squelch_pct;
     bool     have_rxsrc;    int8_t  rxsrc;
     bool     have_balance;  int8_t  balance;
     bool     have_radio;    int8_t  radio;      /* another radio: restart into it */

@@ -15,7 +15,8 @@ headset is connected:
   only ever stops a transmission; it never starts one.
 
 The UberSDR firmware only receives: there the headset is for listening, and
-only its logo shows, beside the spots.
+only its logo shows, beside the spots. So it is with the IC-R8600 receiver on
+the Icom firmware: the slab shows the headset's name, and nothing keys.
 
 The pictures are the knob's own screens, drawn from the firmware's texts and
 layout (`tools/mkdocs.py`).

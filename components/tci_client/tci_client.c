@@ -897,6 +897,7 @@ void radio_atu_memories(bool on) { (void)on; }
 void radio_set_rf_gain(uint8_t pct)  { (void)pct; }
 void radio_set_rf_power(uint8_t pct) { (void)pct; }
 void radio_set_tuner(bool on)        { (void)on; }
+void radio_set_squelch(uint8_t pct)  { (void)pct; }
 
 /* Nothing to ask. */
 bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)

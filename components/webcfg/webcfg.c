@@ -1202,7 +1202,7 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  *   GET /api/radio                          the state, as JSON
  *   GET /api/radio/set?freq=14074000        Hz; 14.074 (a point) is MHz
  *       ...&mode=usb&filter=2&agc=mid&gain=1&rfgain=80&power=50
- *       ...&tuner=on&rx=sub&ant=2&rxant=1&rit=-120&lo=100&hi=2800
+ *       ...&tuner=on&squelch=30&rx=sub&ant=2&rxant=1&rit=-120&lo=100&hi=2800
  *       ...&sdr=0&balance=-30    a web SDR beside it, "local" for none (see
  *                                above: the Icom, Xiegu and FlexRadio ones)
  *   (POST, with the same fields as a form, does the same.)
@@ -1418,6 +1418,11 @@ static esp_err_t radio_get(httpd_req_t *r)
      * firmware's noise filter). */
     o += snprintf(j + o, sizeof j - o, ",\"have_snr\":%s,\"snr\":%.1f",
                   st.have_snr ? "true" : "false", (double)st.snr_db);
+    /* A receiver, and its squelch (the IC-R8600). */
+    o += snprintf(j + o, sizeof j - o, ",\"rx_only\":%s,\"has_squelch\":%s,\"squelch\":%u",
+                  st.rx_only ? "true" : "false",
+                  st.has_squelch && st.have_squelch ? "true" : "false",
+                  (unsigned)st.squelch_pct);
     for (int i = 0; i < st.n_gain_names && i < RADIO_GAIN_NAMES && o < sizeof j - 16; i++) {
         char gn[8];
         json_str(gn, sizeof gn, st.gain_names[i]);
@@ -1487,6 +1492,7 @@ static esp_err_t radio_set(httpd_req_t *r)
     if (field_num(q, "power", &n)) radio_set_rf_power((uint8_t)clampl(n, 0, 100));
     if (field(q, "tuner", v, sizeof v) && v[0])
         radio_set_tuner(strcmp(v, "on") == 0 || strcmp(v, "1") == 0);
+    if (field_num(q, "squelch", &n)) radio_set_squelch((uint8_t)clampl(n, 0, 100));
     if (field(q, "rx", v, sizeof v) && v[0])
         radio_select_rx(strcasecmp(v, "sub") == 0 || strcmp(v, "1") == 0);
     if (field_num(q, "ant", &n) && n >= 1 && n <= 4) {

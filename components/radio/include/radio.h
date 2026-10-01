@@ -96,6 +96,9 @@ typedef struct {
      * choose them in place of memory mode. */
     char       model[16];      /* what the radio calls itself; "" = not said */
     int64_t    f_max;          /* the highest it tunes; 0 = not known */
+    /* A receiver (the IC-R8600): nothing to key -- the slab says RECEIVER,
+     * and neither the glass nor a headset's button or boom arm keys. */
+    bool       rx_only;
     uint8_t    n_rx, rx;       /* receivers (0 or 1 = just the one); 0 MAIN, 1 SUB */
     uint8_t    n_ant, ant;     /* antennas to choose from (0 = no choice); 0 = ANT1 */
     bool       has_rx_ant;     /* ...each also with the RX ANT input */
@@ -115,6 +118,10 @@ typedef struct {
     /* An antenna tuner in the line or out of it (the IC-7610's): a swipe
      * from the right. Not a tune cycle, which transmits (has_atu). */
     bool       has_tuner, have_tuner, tuner_on;
+    /* A squelch the dial sets, 0-100 % (the IC-R8600's, in every mode): a
+     * swipe from the right, where a radio without a tuner has room. */
+    bool       has_squelch, have_squelch;
+    uint8_t    squelch_pct;
     /* Something to say once, for a moment ("ATU FAILED"): shown whenever
      * note_seq moves on. */
     char       note[16];
@@ -248,6 +255,8 @@ void radio_set_rf_gain(uint8_t pct);
 void radio_set_rf_power(uint8_t pct);
 /* The antenna tuner in the line or out of it (has_tuner); transmits nothing. */
 void radio_set_tuner(bool on);
+/* The squelch, 0-100 % (has_squelch); 0 is open. */
+void radio_set_squelch(uint8_t pct);
 
 /* A question the client puts to the operator before it can go on -- the
  * multiflex firmware's at boot: be a station of its own, or the dial for one

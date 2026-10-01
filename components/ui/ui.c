@@ -250,6 +250,11 @@ LV_FONT_DECLARE(font_svx_icons_24);
 static const int DIG_STEP[N_DIG] = {
     1000000, 1000000, 1000000, 100000, 10000, 1000, 100, 10,
 };
+/* From 1 GHz up (the IC-R8600's 3 GHz) the same eight digits read MMMM.kkk.h:
+ * a MHz digit more, and the 10 Hz digit gone. */
+static const int DIG_STEP_GHZ[N_DIG] = {
+    1000000, 1000000, 1000000, 1000000, 100000, 10000, 1000, 100,
+};
 
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
@@ -628,7 +633,7 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
-               ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER, ED_RXSRC,
+               ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER, ED_SQUELCH, ED_RXSRC,
                ED_BALANCE, ED_RADIO, ED_VM, ED_SPOT, ED_SSTV } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
@@ -678,6 +683,8 @@ static bool    s_have_commit;
  * and the gain beside the S-meter is its preamp. */
 static const char *MODES[] = { "usb","lsb","cw","cwr","am","fm","rtty",
                                "digu","digl" };
+/* The IC-R8600's: a receiver has no data modes, and has wide FM. */
+static const char *MODES_RX[] = { "usb","lsb","cw","cwr","am","fm","wfm","rtty" };
 static const char *AGCS[]  = { "fast","mid","slow" };
 #define GAIN_CAPTION "P.AMP"
 #elif VFO_RADIO_MULTIFLEX
@@ -763,9 +770,49 @@ static const struct { const char *name; int64_t hz; } BANDS[] = {
 #endif
 };
 #define NELEM(a) ((int)(sizeof (a) / sizeof (a)[0]))
+
+/* The modes the radio in use has: a receiver's own, on the icom firmware. */
+static const char *const *modes(int *n)
+{
+#if VFO_RADIO_ICOM
+    if (s_last.rx_only) { *n = NELEM(MODES_RX); return MODES_RX; }
+#endif
+    *n = NELEM(MODES);
+    return MODES;
+}
+
 static int   s_dig_x[N_DIG];
 static int   s_active_dig = 5;
 static int32_t s_step_req;
+
+/* The digits' places: MMM.kkk.hh, the sub-kHz pair narrower -- or, from
+ * 1 GHz up, MMMM.kkk.h, the separators one digit along. */
+static bool s_ghz;
+static int  s_underline_dig = -1;
+#define DIG_PITCH 33                      /* a digit's width */
+#define DIG_SMALL 28                      /* ...below 1 kHz */
+#define DIG_SEPW  11                      /* a separator's */
+static void dig_place(bool ghz)
+{
+    const int n_small = ghz ? 1 : 2, sep_a = ghz ? 3 : 2, sep_b = ghz ? 6 : 5;
+    const int total = (N_DIG - n_small) * DIG_PITCH + n_small * DIG_SMALL + 2 * DIG_SEPW;
+    int x = CX - total / 2, sep = 0;
+    for (int i = 0; i < N_DIG; i++) {
+        const int w = i >= N_DIG - n_small ? DIG_SMALL : DIG_PITCH;
+        s_dig_x[i] = x + w / 2;
+        lv_obj_align(s_dig[i], LV_ALIGN_CENTER, s_dig_x[i] - CX, 170 - CY);
+        x += w;
+        if (i == sep_a || i == sep_b) {
+            lv_obj_align(s_sep[sep++], LV_ALIGN_CENTER, x + DIG_SEPW / 2 - CX, 170 - CY);
+            x += DIG_SEPW;
+        }
+    }
+    s_ghz = ghz;
+    s_underline_dig = -1;                 /* under the same step, somewhere new */
+}
+
+static const int *dig_steps(void) { return s_ghz ? DIG_STEP_GHZ : DIG_STEP; }
+
 static bool  s_ptt_tap, s_was_tx;
 static bool  s_ptt_armed;            /* a press on the slab, in receive: see touch_cb */
 /* A PTT press counts only once the finger has been up this long (touch_cb).
@@ -843,6 +890,8 @@ RADIO_ONLY static const char *band_of(int64_t hz)
     if (m >= 50000  && m <= 54000)  return "6m";
     if (m >= 144000 && m <= 148000) return "2m";
     if (m >= 430000 && m <= 440000) return "70cm";
+    if (m >= 1240000 && m <= 1300000) return "23cm";     /* the IC-R8600's */
+    if (m >= 2300000 && m <= 2450000) return "13cm";
     return "--";
 }
 
@@ -959,7 +1008,7 @@ static void edit_render(void)
         break;
     case ED_MODE:
         title = "MODE";
-        upcase(MODES[s_edit_idx], v, 8);
+        { int n; upcase(modes(&n)[s_edit_idx], v, 8); }
         break;
     case ED_FILTER:
         title = "FILTER";
@@ -1030,6 +1079,11 @@ static void edit_render(void)
         title = "TUNER";
         snprintf(v, sizeof v, "%s", s_edit_idx ? "ON" : "OFF");
         vcolor = s_edit_idx ? C_ACCENT_HI : C_DISABLED;
+        break;
+    case ED_SQUELCH:
+        title = "SQUELCH";
+        if (s_edit_pct) snprintf(v, sizeof v, "%d%%", s_edit_pct);
+        else            snprintf(v, sizeof v, "OPEN");
         break;
     case ED_RXSRC:
         title = "RX";
@@ -1102,8 +1156,10 @@ static void edit_render(void)
 
 static int index_of_mode(const char *m)
 {
-    for (int i = 0; i < NELEM(MODES); i++)
-        if (m && strcasecmp(MODES[i], m) == 0) return i;
+    int n;
+    const char *const *ms = modes(&n);
+    for (int i = 0; i < n; i++)
+        if (m && strcasecmp(ms[i], m) == 0) return i;
     return 0;
 }
 
@@ -1223,6 +1279,7 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_edit_idx = st->mem_state != UI_MEM_OFF;
         break;
     case ED_RFGAIN: s_edit_pct = st->rf_gain_pct;  break;
+    case ED_SQUELCH: s_edit_pct = st->squelch_pct; break;
     case ED_POWER:  s_edit_pct = st->rf_power_pct; break;
     case ED_TUNER:
         s_edit_idx = st->tuner_on ? 1 : 0;
@@ -1243,7 +1300,7 @@ static bool edit_live(edit_t e)
 {
     return e == ED_FILTER || e == ED_AGC || e == ED_GAIN || e == ED_RIT ||
            e == ED_VOL || e == ED_MIC || e == ED_RFGAIN || e == ED_POWER ||
-           e == ED_TUNER || e == ED_BALANCE;
+           e == ED_TUNER || e == ED_SQUELCH || e == ED_BALANCE;
 }
 
 /* What the open editor's value asks of the radio, into s_commit. */
@@ -1257,7 +1314,7 @@ static void edit_fill(void)
         break;
     case ED_MODE:
         s_commit.have_mode = true;
-        strlcpy(s_commit.mode, MODES[s_edit_idx], sizeof s_commit.mode);
+        { int n; strlcpy(s_commit.mode, modes(&n)[s_edit_idx], sizeof s_commit.mode); }
         break;
     case ED_FILTER: {
         if (s_edit_presets) {
@@ -1313,6 +1370,10 @@ static void edit_fill(void)
     case ED_TUNER:
         s_commit.have_tuner = true;
         s_commit.tuner_on   = s_edit_idx == 1;
+        break;
+    case ED_SQUELCH:
+        s_commit.have_squelch = true;
+        s_commit.squelch_pct  = (uint8_t)s_edit_pct;
         break;
     case ED_RXSRC:
         s_commit.have_rxsrc = true;
@@ -1398,7 +1459,7 @@ void ui_edit_rotate(int32_t detents)
     case ED_MODE:
         s_edit_idx += detents;
         if (s_edit_idx < 0) s_edit_idx = 0;
-        if (s_edit_idx >= NELEM(MODES)) s_edit_idx = NELEM(MODES) - 1;
+        { int n; modes(&n); if (s_edit_idx >= n) s_edit_idx = n - 1; }
         break;
     case ED_FILTER: {
         const int n = s_edit_presets ? N_PRESETS : N_FILTERS;
@@ -1419,6 +1480,7 @@ void ui_edit_rotate(int32_t detents)
         break;
     case ED_RFGAIN:
     case ED_POWER:
+    case ED_SQUELCH:
         s_edit_pct += detents;
         if (s_edit_pct < 0)   s_edit_pct = 0;
         if (s_edit_pct > 100) s_edit_pct = 100;
@@ -1908,7 +1970,7 @@ static void tap(lv_point_t p, uint32_t held)
     if (p.y >= 144 && p.y < 212) {
         if (mem || REFLECTOR_FACE) return;
         s_active_dig = nearest_digit(p.x);
-        s_step_req   = DIG_STEP[s_active_dig];
+        s_step_req   = dig_steps()[s_active_dig];
         return;
     }
     /* A receiver's slab: all the spots and voices, on the dial. */
@@ -1917,7 +1979,7 @@ static void tap(lv_point_t p, uint32_t held)
         return;
     }
     /* step | volume, on a receiver */
-    if (RX_FACE && p.y >= 208 && p.y < PTT_TOP) {
+    if ((RX_FACE || s_last.rx_only) && p.y >= 208 && p.y < PTT_TOP) {
         if (p.x > CX) edit_open(ED_VOL, &s_last);
         return;
     }
@@ -2035,6 +2097,7 @@ static void gesture_cb(lv_event_t *e)
             return;
         }
         if (s_last.has_tuner && s_last.have_tuner)  edit_open(ED_TUNER, &s_last);
+        else if (s_last.has_squelch && s_last.have_squelch) edit_open(ED_SQUELCH, &s_last);
         else if (s_last.has_tune || s_last.has_atu) edit_open(ED_MENU, &s_last);
         return;
     }
@@ -2132,8 +2195,8 @@ static void touch_cb(lv_event_t *e)
             return;
         }
         /* A headset's button is the PTT while one is connected: the glass
-         * only ever unkeys then, never keys. */
-        if (s_last.headset) return;
+         * only ever unkeys then, never keys. A receiver has nothing to key. */
+        if (s_last.headset || s_last.rx_only) return;
         s_ptt_armed = true;
         return;
     }
@@ -2563,29 +2626,17 @@ static void build(void)
     s_mode = mklabel(&lv_font_montserrat_20, C_TEXT,   CX,      122, "USB");
     s_filt = mklabel(&lv_font_montserrat_20, C_TEXT2,  CX + 76, 122, "0");
 
-    const int PITCH = 33, SMALL = 28, SEPW = 11;
-    int total = 6 * PITCH + 2 * SMALL + 2 * SEPW;
-    int x = CX - total / 2;
-    int sep = 0;
-    for (int i = 0; i < N_DIG; i++) {
-        bool small = (i >= 6);
-        int w = small ? SMALL : PITCH;
-        s_dig_x[i] = x + w / 2;
-        /* The 100 Hz and 10 Hz digits were montserrat_28 AND dimmed, which
-         * together made them unreadable. Same size as the rest now; only the
-         * colour marks them as below the tuning step. */
-        s_dig[i] = mklabel(&lv_font_montserrat_48,
-                           C_TEXT, s_dig_x[i], 170, "0");
-        x += w;
-        if (i == 2 || i == 5) {
-            s_sep[sep++] = mklabel(&lv_font_montserrat_48, C_LABEL,
-                                   x + SEPW / 2, 170, ".");
-            x += SEPW;
-        }
-    }
+    /* The 100 Hz and 10 Hz digits were montserrat_28 AND dimmed, which
+     * together made them unreadable. Same size as the rest now; only the
+     * colour marks them as below the tuning step. Placed by dig_place(). */
+    for (int i = 0; i < N_DIG; i++)
+        s_dig[i] = mklabel(&lv_font_montserrat_48, C_TEXT, CX, 170, "0");
+    for (int i = 0; i < 2; i++)
+        s_sep[i] = mklabel(&lv_font_montserrat_48, C_LABEL, CX, 170, ".");
+    dig_place(false);
 
     s_underline = lv_obj_create(s_scr);
-    lv_obj_set_size(s_underline, PITCH - 9, 3);
+    lv_obj_set_size(s_underline, DIG_PITCH - 9, 3);
     lv_obj_set_style_bg_color(s_underline, C_ACCENT, 0);
     lv_obj_set_style_border_width(s_underline, 0, 0);
     lv_obj_set_style_radius(s_underline, 2, 0);
@@ -3144,10 +3195,11 @@ static void headset_slab(const ui_state_t *st)
     if (s_hs_bt) vis(s_hs_bt, st->headset);
     if (!s_hs_name) return;
     const bool on = st->headset;
+    /* A headset on a receiver just listens: its name, and no microphone. */
     vis(s_ptt_lbl, !on);
     vis(s_hs_name, on);
-    vis(s_hs_mic, on && !st->headset_raise);
-    vis(s_hs_raise, on && st->headset_raise);
+    vis(s_hs_mic, on && !st->headset_raise && !st->rx_only);
+    vis(s_hs_raise, on && st->headset_raise && !st->rx_only);
     if (!on) return;
     char t[48];
     snprintf(t, sizeof t, LV_SYMBOL_BLUETOOTH "  %s", st->headset_name[0] ? st->headset_name : "headset");
@@ -3240,6 +3292,16 @@ void ui_update(const ui_state_t *st)
         set_text_color(s_mem_big, st->tx ? C_TX_TEXT : C_TEXT);
     }
 
+    /* Across 1 GHz the digits move over, the step staying where it was --
+     * 10 Hz, which has no digit up there, becoming 100 Hz. */
+    const bool ghz = f >= 1000000000LL;
+    if (ghz != s_ghz && !mem) {
+        int step = dig_steps()[s_active_dig];
+        dig_place(ghz);
+        if (ghz && step < 100) s_step_req = step = 100;
+        for (int i = N_DIG - 1; i >= 0; i--)
+            if (dig_steps()[i] == step) { s_active_dig = i; break; }
+    }
     int mhz = (int)(f / 1000000);
     int khz = (int)((f / 1000) % 1000);
     int hz  = (int)((f % 1000) / 10);
@@ -3249,6 +3311,14 @@ void ui_update(const ui_state_t *st)
         (hz / 10) % 10,   hz % 10,
     };
     int lead = (mhz >= 100) ? 0 : (mhz >= 10) ? 1 : 2;
+    if (s_ghz) {
+        const int dd[N_DIG] = {
+            (mhz / 1000) % 10, (mhz / 100) % 10, (mhz / 10) % 10, mhz % 10,
+            (khz / 100) % 10,  (khz / 10) % 10,  khz % 10,        hz / 10,
+        };
+        memcpy(d, dd, sizeof d);
+        lead = 0;
+    }
 
     for (int i = 0; i < N_DIG && !mem; i++) {
         char b[2] = { (char)('0' + d[i]), 0 };
@@ -3260,7 +3330,6 @@ void ui_update(const ui_state_t *st)
                                            : C_TEXT;
         set_text_color(s_dig[i], st->tx ? C_TX_TEXT : c);
     }
-    static int s_underline_dig = -1;
     if (s_underline_dig != s_active_dig) {
         s_underline_dig = s_active_dig;
         lv_obj_align(s_underline, LV_ALIGN_CENTER,
@@ -3347,6 +3416,16 @@ void ui_update(const ui_state_t *st)
         set_text_color(s_rit, C_DISABLED);
     }
 
+    /* A receiver radio (the IC-R8600) has no RIT and no microphone either:
+     * the step and the volume share the row, as on a receiver's face. */
+    static bool rx_row;
+    if (!RX_FACE && !REFLECTOR_FACE && st->rx_only != rx_row) {
+        rx_row = st->rx_only;
+        vis(s_rit, !rx_row);
+        vis(s_mic, !rx_row);
+        lv_obj_align(s_step_lbl, LV_ALIGN_CENTER, rx_row ? -56 : -98, 220 - CY);
+        lv_obj_align(s_vol, LV_ALIGN_CENTER, rx_row ? 56 : 42, 222 - CY);
+    }
     snprintf(tb, sizeof tb, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
     set_text(s_vol, tb);
     snprintf(tb, sizeof tb, SYM_MIC " %u", (unsigned)s_micgain);
@@ -3665,7 +3744,10 @@ void ui_update(const ui_state_t *st)
             snprintf(l3, sizeof l3, "%u on %s", (unsigned)s_nspots, band_of(f));
             set_text(s_spot_n, l3);
         }
-    } else if (st->tx_remote)
+    } else if (st->rx_only)
+        /* A receiver: the slab says so, dimmed, and keys nothing. */
+        set_text(s_ptt_lbl, "RECEIVER");
+    else if (st->tx_remote)
         /* Keyed by the desktop, a foot switch or another client. Our trx:false
          * would only touch our own producer handle, so tapping cannot stop it
          * and the caption must not imply otherwise. */

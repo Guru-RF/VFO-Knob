@@ -271,17 +271,20 @@ def cycling_digit(x, y, size, colour, digits, dur, weight=700):
 
 def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
             colour=TEXT, sep_colour=LABEL, underline=None, after_colour=None,
-            active_colour=None):
+            active_colour=None, ghz=False):
     """Eight digits: three MHz with leading blanks, three kHz, two Hz.
     PITCH 33 for the first six, 28 for the Hz pair, separators 11 wide.
-    Digits after the active one "will roll" and are drawn in after_colour;
-    the active one itself, when it is not animated, in active_colour."""
+    From 1 GHz (ghz) four MHz, three kHz and the 100 Hz digit, the
+    separators one along (ui.c dig_place). Digits after the active one
+    "will roll" and are drawn in after_colour; the active one itself, when it
+    is not animated, in active_colour."""
     PITCH, SMALL, SEPW, FS = 33, 28, 11, 44
-    total = 6 * PITCH + 2 * SMALL + 2 * SEPW
+    n_small, seps = (1, (3, 6)) if ghz else (2, (2, 5))
+    total = (8 - n_small) * PITCH + n_small * SMALL + 2 * SEPW
     x = CX - total / 2
     out, xs = [], [0] * 8
     for i in range(8):
-        w = SMALL if i >= 6 else PITCH
+        w = SMALL if i >= 8 - n_small else PITCH
         cx = x + w / 2
         xs[i] = cx
         ch = digits[i]
@@ -293,7 +296,7 @@ def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
                  else after_colour if late else colour)
             out.append(text(cx, 186, ch, FS, c, 700))
         x += w
-        if i in (2, 5):
+        if i in seps:
             out.append(text(x + SEPW / 2, 186, ".", FS, sep_colour))
             x += SEPW
     if underline is not None:
