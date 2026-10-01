@@ -70,6 +70,9 @@ it was made still offers every firmware there is by then. The last entry is
 
 The knob downloads the image, checks its signature, installs it and restarts
 into it. It keeps the WiFi settings: the new firmware joins the same network.
+With an SD card in the knob, the image is put on the card on its way in, and a
+firmware already there installs from the card in a few seconds — see
+[The SD card](#the-sd-card).
 
 | Installing | Done |
 |---|---|
@@ -94,15 +97,16 @@ To install another radio's firmware, go back to the list from the knob itself.
 
    ![FIRMWARE? turn the knob for the picker](setup/12-firmware-question.svg)
 
-3. The knob restarts, installs the setup firmware over WiFi and shows the
-   list again, the WiFi settings kept.
+3. The knob restarts, installs the setup firmware — from its SD card, or
+   over WiFi — and shows the list again, the WiFi settings kept.
 
    ![REBOOTING into update mode](setup/13-rebooting.svg)
 
 With something wrong — **NO LINK**, say, on a knob with another radio's
 firmware — the warning panel shows the addresses in the card's place: hold
-that until the knob buzzes. It needs WiFi: on the USB cable the knob says
-**Needs WiFi** and carries on as it was.
+that until the knob buzzes. Without the setup firmware on its SD card it needs
+WiFi: on the USB cable the knob then says **Needs WiFi** and carries on as it
+was.
 
 Each firmware keeps its own settings, so going back to one later finds its
 radio, its login and its choices as they were.
@@ -124,6 +128,23 @@ cable is the way.
 
 The configuration page lists them under **WiFi**: add one there, give one a
 new password, or remove one.
+
+## The SD card
+
+The knob keeps a copy of its firmwares on its microSD card. The setup
+firmware fills it with every one published, in the background while it shows
+the list, and every install puts its image there too; a firmware already on
+the card installs from it in a few seconds, its checksum and signature
+checked as for a download. So:
+
+- switching firmware is quick, and going back to the setup firmware works
+  without any network at all;
+- with the update server out of reach, the setup firmware lists what is on
+  the card, **From the SD card**, and installs from it.
+
+Everything of the knob's is in one folder on the card, `VFO-KNOB`; nothing
+else on it is touched. A knob without a card works as before, downloading
+each time.
 
 ## If something is not right
 

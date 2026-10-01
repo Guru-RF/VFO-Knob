@@ -414,6 +414,19 @@ void net_prov_tick(void)
     if (s_wifis_dirty) wifis_write();
 }
 
+bool net_prov_take_once(const char *key)
+{
+    nvs_handle_t h;
+    uint8_t v = 0;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    if (nvs_get_u8(h, key, &v) == ESP_OK) {
+        nvs_erase_key(h, key);
+        nvs_commit(h);
+    }
+    nvs_close(h);
+    return v == 1;
+}
+
 static void load_or_seed(void)
 {
     nvs_handle_t h;
@@ -523,6 +536,12 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         sta_try(0);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         s_ap_clients++;
+        /* What the hotspot's page has to reach the phone with: the WiFi
+         * driver takes each transmit buffer from internal RAM as it sends,
+         * and short of it the page never arrives -- the phone shows it blank. */
+        ESP_LOGI(TAG, "hotspot: a phone on it; free internal %u, largest %u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
         if (s_ap_clients > 0) s_ap_clients--;
         /* The last phone gone from the hotspot: the known networks again --

@@ -457,6 +457,16 @@ If an update fails to boot, the bootloader rolls back to the previous slot. The
 confirmation is tied to the same "this boot looks healthy" timer that clears the
 boot-loop guard.
 
+**The SD card.** The knob keeps its firmwares on its microSD card, in one
+folder, `VFO-KNOB` (components/sd_cache). Every install takes the image from
+the card when it holds the one wanted — its sha256 against the manifest, then
+the signature as for any image — and otherwise downloads onto the card first
+and installs from there, the copy kept. The setup firmware fills the card with
+every firmware published while it shows its list, and with no update server
+in reach lists and installs what the card holds; a radio's firmware goes back
+to the setup firmware from the card without a network. Without a card,
+everything downloads as before.
+
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
 `vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect` and `vfo-knob-ubersdr` — and each has its own update
 channel, `firmware/<radio>/`,
@@ -554,7 +564,14 @@ way to watch a boot.
 on a knob over its USB-C cable: a new board with Waveshare's demo on it, or any
 knob to be made new again. It erases the whole flash and writes the latest
 release's setup firmware (checked against its manifest), with the bootloader
-and partition table from `build_setup/`. With the plug the wrong way round it
+and partition table from `build_setup/`, and a one-time mark that has the
+setup firmware empty the microSD card as it first starts — the demo's
+pictures off it. Only then: no knob ever empties its card by itself. Then
+every firmware published goes down the cable onto the card
+(`tools/knob-card.py`), each kept only with its manifest's sha256, so the new
+knob installs its radio's in seconds; they are fetched once into
+`~/.cache/vfo-knob`, so a row of knobs downloads them once. The knob restarts
+when they are on, and shows WIFI SETUP. With the plug the wrong way round it
 finds the second chip's CH340 instead and says to turn the plug over; a knob
 running the USB-networked AetherSDR firmware is asked to restart and caught in
 those 6 seconds.

@@ -14,12 +14,16 @@
 #include <inttypes.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
+#include <strings.h>
 
 #include "audio_in.h"
 #include "audio_out.h"
 #include "board.h"
 #include "bt_link.h"
+#include "mbedtls/sha256.h"
+#include "sd_cache.h"
 #include "cJSON.h"
 #include "board_pins.h"
 #include "drv2605.h"
@@ -126,6 +130,9 @@ static volatile bool s_on_usb;
 /* The WiFi driver started: once, whoever starts it (pick_transport, or the
  * WiFi setup when no network is known). */
 static bool s_wifi_started;
+/* The setup firmware's filling of the SD card with every firmware published:
+ * an install stops it first -- one download at a time. */
+static volatile bool s_fill_stop, s_fill_running;
 
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
 /* Another radio, chosen with a swipe up: in use from the next boot, and the
@@ -387,6 +394,181 @@ void haptic_hook(uint8_t effect, uint8_t prio)
     haptic(effect);
 }
 
+#if VFO_RADIO_SETUP
+/* --- the firmwares onto the SD card, through the cable ----------------------
+ *
+ * tools/install-setup.sh's, as it provisions a knob: every firmware published,
+ * pushed down the USB cable onto the card while the knob is in setup -- no
+ * network needed where knobs are made. On the console, a line each way:
+ *
+ *   @card begin                          -> @card ready | @card none | @card closed
+ *   @card put <radio> <size> <manifest>  and the image's <size> bytes
+ *                                        -> @card ok <radio> | @card bad <radio> <why>
+ *   @card index <size>                   and the index's bytes -> @card ok index
+ *   @card end                            -> @card done <n>
+ *
+ * The bytes go CARD_BLOCK at a time, each block answered "@card k <bytes so
+ * far>" before the next is sent: the console's driver drops what its receive
+ * buffer cannot hold -- there is no flow control on the line -- and a block
+ * always fits in it, however long the card takes over the one before. The
+ * manifest is the release's, on one line; an image is kept only with its
+ * sha256. The log is quiet meanwhile: the line is the script's.
+ *
+ * Only on the start the script's flashing gives the knob, the one that empties
+ * the card (card_console_task); "@card closed" on any other. That receive
+ * buffer is internal RAM -- the driver's ring, 16 kB -- and so is the session's
+ * stack: kept beside the WiFi, they left the hotspot too little to send its
+ * page, and phones showed it blank. */
+#define CARD_BLOCK   8192
+#define CARD_RX_RING (2 * CARD_BLOCK)
+#define CARD_STACK   6144                 /* FAT and a sha256 on it */
+#define CARD_WAIT_US (180 * 1000000LL)    /* for the script, or for its retry */
+static volatile bool s_card_ready;      /* provisioning's emptying of it done */
+static bool s_flashed_now;              /* tools/install-setup.sh wrote the knob just now */
+
+/* A reply, on a line of its own: what the host reads first may be the end
+ * of a log line the USB FIFO held while nobody was listening. */
+static void card_say(const char *fmt, ...)
+{
+    char l[160] = "\n";
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(l + 1, sizeof l - 2, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    n += 1;
+    if (n > (int)sizeof l - 2) n = (int)sizeof l - 2;
+    l[n++] = '\n';
+    l[n] = 0;
+    /* The way the log goes out, which is flushed: the driver's own write
+     * left a short line in the chip until more came after it. */
+    fputs(l, stdout);
+    fflush(stdout);
+}
+
+/* A line, without its end; false after `ms` of nothing. */
+static bool card_line(char *buf, size_t cap, int ms)
+{
+    size_t n = 0;
+    for (;;) {
+        uint8_t c;
+        if (usb_serial_jtag_read_bytes(&c, 1, pdMS_TO_TICKS(ms)) != 1) return false;
+        if (c == '\n') break;
+        if (c != '\r' && n + 1 < cap) buf[n++] = (char)c;
+    }
+    buf[n] = 0;
+    return true;
+}
+
+static bool card_bytes(uint8_t *dst, size_t n)
+{
+    for (size_t got = 0; got < n; ) {
+        const int k = usb_serial_jtag_read_bytes(dst + got, n - got, pdMS_TO_TICKS(5000));
+        if (k <= 0) return false;
+        got += (size_t)k;
+    }
+    return true;
+}
+
+/* One image off the line onto the card: true when it was kept. Its bytes are
+ * read to the last whatever happens, or the line is out of step; *lost when
+ * they stopped coming. */
+static bool card_put(const char *radio, size_t size, const char *manifest, uint8_t *buf, size_t cap,
+                     bool *lost, const char **why)
+{
+    char sha[72] = "";
+    cJSON *m = cJSON_Parse(manifest);
+    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(m, "sha256"));
+    if (s) strlcpy(sha, s, sizeof sha);
+    cJSON_Delete(m);
+    FILE *f = size && sha[0] && sdc_room(radio, size) ? sdc_image_create(radio) : NULL;
+    *why = !sha[0] ? "no sha256 in its manifest" : "no room on the card";
+    mbedtls_sha256_context c;
+    mbedtls_sha256_init(&c);
+    mbedtls_sha256_starts(&c, 0);
+    bool wrote = f != NULL;
+    for (size_t got = 0; got < size; ) {
+        const size_t k = size - got > cap ? cap : size - got;
+        if (!card_bytes(buf, k)) {
+            *lost = true;
+            *why  = "the line went quiet";
+            wrote = false;
+            break;
+        }
+        if (wrote && fwrite(buf, 1, k, f) != k) {
+            wrote = false;
+            *why  = "the card would not take it";
+        }
+        mbedtls_sha256_update(&c, buf, k);
+        got += k;
+        card_say("@card k %u", (unsigned)got);    /* the next block, please */
+    }
+    uint8_t d[32];
+    char hex[65];
+    mbedtls_sha256_finish(&c, d);
+    mbedtls_sha256_free(&c);
+    for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", d[i]);
+    if (f && fclose(f) != 0) wrote = false;
+    if (wrote && strcasecmp(hex, sha)) {
+        wrote = false;
+        *why  = "its sha256 is not the manifest's";
+    }
+    if (wrote && sdc_image_commit(radio, manifest) != ESP_OK) {
+        wrote = false;
+        *why  = "the card would not keep it";
+    }
+    if (!wrote) sdc_image_discard(radio);
+    return wrote;
+}
+
+/* True when the script said it was done. */
+static bool card_session(void)
+{
+    EXT_RAM_BSS_ATTR static char    line[1024];
+    EXT_RAM_BSS_ATTR static uint8_t buf[CARD_BLOCK];
+    esp_log_level_set("*", ESP_LOG_NONE);
+    for (int i = 0; i < 300 && !s_card_ready; i++) vTaskDelay(pdMS_TO_TICKS(100));
+    if (!sdc_mount()) {
+        card_say("@card none");
+        esp_log_level_set("*", ESP_LOG_INFO);
+        return true;
+    }
+    card_say("@card ready");
+    int kept = 0;
+    bool done = false;
+    while (card_line(line, sizeof line, 20000)) {
+        char radio[17];
+        unsigned long size = 0;
+        int at = 0;
+        if (sscanf(line, "@card put %16s %lu %n", radio, &size, &at) == 2 && at > 0) {
+            bool lost = false;
+            const char *why = "";
+            if (card_put(radio, size, line + at, buf, sizeof buf, &lost, &why)) {
+                kept++;
+                card_say("@card ok %s", radio);
+            } else {
+                card_say("@card bad %s %s", radio, why);
+            }
+            if (lost) break;
+        } else if (sscanf(line, "@card index %lu", &size) == 1) {
+            /* One block: an index is a few hundred bytes. */
+            if (size >= sizeof buf || !card_bytes(buf, size)) break;
+            buf[size] = 0;
+            card_say(sdc_index_save((const char *)buf) == ESP_OK ? "@card ok index" : "@card bad index");
+        } else if (!strcmp(line, "@card end")) {
+            card_say("@card done %d", kept);
+            done = true;
+            break;
+        }
+    }
+    sdc_unmount();
+    esp_log_level_set("*", ESP_LOG_INFO);
+    ESP_LOGW(TAG, "provisioning: %d firmware%s onto the SD card through the cable", kept, kept == 1 ? "" : "s");
+    sdc_log_state();
+    return done;
+}
+#endif
+
 /* Serial console. Touch does not exist yet, and every PTT fault path needs
  * exercising long before a real transmitter is involved. */
 static void console_task(void *arg)
@@ -422,6 +604,15 @@ static void console_task(void *arg)
         case 'r': ui_cycle_rotation();
                   ESP_LOGI(TAG, "rotation -> %u degrees", ui_rotation() * 90u);
                   break;
+#if VFO_RADIO_SETUP
+        case '@': {
+            /* tools/install-setup.sh's "@card begin", too late: only on the
+             * start right after it wrote the knob (card_console_task). */
+            char l[16] = "@";
+            if (card_line(l + 1, sizeof l - 1, 1000) && !strcmp(l, "@card begin")) card_say("@card closed");
+            break;
+        }
+#endif
         case 's': {
             radio_status_t st; radio_get_status(&st);
             ESP_LOGI(TAG, "ptt=%s rung=%u reason=%s permit=0x%03X%s "
@@ -437,6 +628,44 @@ static void console_task(void *arg)
         }
     }
 }
+
+#if VFO_RADIO_SETUP
+/* The console of the start right after tools/install-setup.sh wrote the knob:
+ * the SD card's session, with the receive buffer a block needs, until the
+ * script says it is done -- then a restart, the knob's first real start with
+ * its internal RAM in one piece: given back after the session instead, the
+ * buffer's hole was soon in pieces under the WiFi, and with 35 kB free there
+ * was no 8 kB left for the install task's stack ("Download failed" on the
+ * dial). Should the script not come, or not come back to try again, for three
+ * minutes: the buffer and this stack go back to the WiFi, and the usual
+ * console takes over. */
+static void card_console_task(void *arg)
+{
+    (void)arg;
+    usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    cfg.rx_buffer_size = CARD_RX_RING;
+    if (usb_serial_jtag_driver_install(&cfg) == ESP_OK) {
+        int64_t until = esp_timer_get_time() + CARD_WAIT_US;
+        while (esp_timer_get_time() < until) {
+            uint8_t ch;
+            char l[16] = "@";
+            if (usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(200)) != 1 || ch != '@') continue;
+            if (!card_line(l + 1, sizeof l - 1, 1000) || strcmp(l, "@card begin")) continue;
+            if (card_session()) {
+                ESP_LOGW(TAG, "provisioning: done, restarting");
+                vTaskDelay(pdMS_TO_TICKS(500));   /* the script's last answer out first */
+                esp_restart();
+            }
+            until = esp_timer_get_time() + CARD_WAIT_US;
+        }
+        usb_serial_jtag_driver_uninstall();
+    }
+    ESP_LOGI(TAG, "provisioning: the SD card's console closed; free internal %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
+    vTaskDelete(NULL);
+}
+#endif
 
 /* The dial's memory states are the radio's, in the same order. */
 _Static_assert((int)UI_MEM_OFF == (int)RADIO_MEM_OFF &&
@@ -1254,6 +1483,8 @@ static void install_switch(const char *radio)
 {
     ESP_LOGW(TAG, "installing the %s firmware", radio);
     ui_updating_show();
+    s_fill_stop = true;
+    for (int i = 0; i < 40 && s_fill_running; i++) vTaskDelay(pdMS_TO_TICKS(250));
     /* Chosen on the dial, so the running image works: confirmed now, where it
      * used to sit at 0% until the timer did it. The wait is for the timer,
      * should that not have taken: an image on trial cannot start an install. */
@@ -1267,7 +1498,8 @@ static void install_switch(const char *radio)
     ota_status_t o;
     ota_get_status(&o);
     const uint32_t before = o.checks;
-    if (ota_start_switch(radio) == ESP_OK) {
+    const esp_err_t se = ota_start_switch(radio);
+    if (se == ESP_OK) {
         do {
             vTaskDelay(pdMS_TO_TICKS(250));
             ota_get_status(&o);
@@ -1279,6 +1511,11 @@ static void install_switch(const char *radio)
             esp_restart();
         }
         ESP_LOGE(TAG, "firmware switch failed: %s", o.message);
+    } else {
+        /* Not started: its task's 8 kB stack is internal RAM, in one piece. */
+        ESP_LOGE(TAG, "firmware switch did not start: %s (free internal %u, largest %u)",
+                 esp_err_to_name(se), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     }
     ui_updating_result(false, "Download failed");
     vTaskDelay(pdMS_TO_TICKS(2500));
@@ -1381,30 +1618,72 @@ static void setup_wifi_page(void)
  * The list is the release server's (firmware/index.json, written by
  * tools/release.sh), not this build's: a radio whose firmware is published
  * after this one was made is offered too. */
+/* Every firmware published onto the SD card, in the background while the
+ * list is up -- this one too, for the way back to it from a radio's. */
+#define FILL_MAX (UI_CHOICES + 2)
+static char s_fill[FILL_MAX][16];
+static int  s_nfill;
+
+static void card_fill_task(void *arg)
+{
+    (void)arg;
+    int ok = 0;
+    for (int i = 0; i < s_nfill && !s_fill_stop; i++)
+        if (ota_cache(s_fill[i], &s_fill_stop) == ESP_OK) ok++;
+    ESP_LOGI(TAG, "SD card: %d of %d firmwares on it%s", ok, s_nfill, s_fill_stop ? " (stopped)" : "");
+    sdc_log_state();
+    s_fill_running = false;
+    vTaskDelete(NULL);
+}
+
 static void setup_pick(void)
 {
     static char titles[UI_CHOICES][12], names[UI_CHOICES][24], radios[UI_CHOICES][16];
+    static bool filling;
     for (;;) {
         ui_setup_show("FIRMWARE", "Looking up\nthe firmwares...");
         uint8_t n = 0;
         char *idx = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
-        if (idx && ota_fetch_index(idx, 4096) == ESP_OK) {
+        /* No update server: what the SD card holds, from its copy of the
+         * index -- it installs from the card. */
+        bool card = false;
+        esp_err_t ie = idx ? ota_fetch_index(idx, 4096) : ESP_ERR_NO_MEM;
+        if (ie != ESP_OK && idx && ota_card_index(idx, 4096) == ESP_OK) {
+            ie   = ESP_OK;
+            card = true;
+        }
+        if (ie == ESP_OK) {
             cJSON *root = cJSON_Parse(idx);
             const cJSON *f;
+            if (!card) s_nfill = 0;
             cJSON_ArrayForEach(f, cJSON_GetObjectItem(root, "firmwares")) {
                 const char *r  = cJSON_GetStringValue(cJSON_GetObjectItem(f, "radio"));
                 const char *nm = cJSON_GetStringValue(cJSON_GetObjectItem(f, "name"));
                 const char *v  = cJSON_GetStringValue(cJSON_GetObjectItem(f, "version"));
+                if (!card && r && s_nfill < FILL_MAX) strlcpy(s_fill[s_nfill++], r, sizeof s_fill[0]);
                 /* Not this one: it is what is running. */
                 if (!r || !v || strcmp(r, "setup") == 0 || n >= UI_CHOICES - 1) continue;
+                char cv[16];
+                if (card && !ota_card_has(r, cv, sizeof cv)) continue;
                 strlcpy(titles[n], "INSTALL", sizeof titles[n]);
-                snprintf(names[n], sizeof names[n], "%s %s", nm && *nm ? nm : r, v);
+                snprintf(names[n], sizeof names[n], "%s %s", nm && *nm ? nm : r, card ? cv : v);
                 strlcpy(radios[n], r, sizeof radios[n]);
                 n++;
             }
             cJSON_Delete(root);
+            if (card) ESP_LOGW(TAG, "no update server: the SD card's firmwares");
         }
         free(idx);
+        if (!card && n && !filling && !s_fill_running) {
+            /* Its stack in PSRAM: TLS and the card, never the flash. The
+             * install that stops it needs 8 kB of internal RAM in one piece. */
+            EXT_RAM_BSS_ATTR static StackType_t fill_stack[8192];
+            static StaticTask_t fill_tcb;
+            filling        = true;
+            s_fill_stop    = false;
+            s_fill_running = xTaskCreateStaticPinnedToCore(card_fill_task, "cardfill", sizeof fill_stack,
+                                                           NULL, 2, fill_stack, &fill_tcb, 0) != NULL;
+        }
         if (!n) {
             ESP_LOGW(TAG, "no firmware index: the radios this build knows");
             for (size_t i = 0; i < sizeof FIRMWARES / sizeof FIRMWARES[0] && n < UI_CHOICES - 1; i++) {
@@ -1426,7 +1705,8 @@ static void setup_pick(void)
         radios[n++][0] = 0;
         /* The chooser first: the text then goes under its panel. */
         ui_ask_choice(titles, names, n, 0);
-        ui_setup_show("FIRMWARE", "Turn to your radio,\nthen tap to install.");
+        ui_setup_show("FIRMWARE", card ? "From the SD card:\nturn to your radio,\nthen tap to install."
+                                       : "Turn to your radio,\nthen tap to install.");
         int a;
         while ((a = ui_take_choice()) < 0) {
             net_prov_tick();
@@ -1442,6 +1722,17 @@ static void setup_task(void *arg)
     (void)arg;
     const vfo_cfg_t *cfg = net_prov_cfg();
     ui_setup_show("VFO-KNOB", "Starting");
+    /* Provisioned just now (tools/install-setup.sh): the SD card emptied --
+     * the board's demo off it -- this once, and never otherwise. The script
+     * then puts the firmwares on it, through the cable (card_session). */
+    if (s_flashed_now) {
+        ui_setup_show("VFO-KNOB", "Emptying the\nSD card");
+        const esp_err_t e = sdc_format();
+        ESP_LOGW(TAG, "provisioning: the SD card %s",
+                 e == ESP_OK ? "emptied" : e == ESP_ERR_NOT_FOUND ? "is not there" : esp_err_to_name(e));
+        ui_setup_show("VFO-KNOB", "Starting");
+    }
+    s_card_ready = true;
     if (net_prov_wifi_start() != ESP_OK) {
         ui_setup_show("VFO-KNOB", "WiFi would not start.");
         vTaskDelete(NULL);
@@ -1571,6 +1862,16 @@ RADIO_ONLY_FN static void net_task(void *arg)
     bool started = false;
 
     for (;;) {
+        /* The firmware picker asked for, and the setup firmware on the SD
+         * card: back to it without a network. Without, it waits for WiFi. */
+        static bool picker_card;
+        if (s_picker_accepted && !picker_card) {
+            picker_card = true;
+            if (ota_card_has("setup", NULL, 0)) {
+                s_picker_accepted = false;
+                install_switch("setup");          /* returns only if it failed */
+            }
+        }
         if (wifi_setup()) {
             vTaskDelay(pdMS_TO_TICKS(250));
             continue;
@@ -2058,6 +2359,10 @@ void app_main(void)
     return;
 #else
     bring_up("nvs", net_prov_init);
+#if VFO_RADIO_SETUP
+    /* tools/install-setup.sh's one-time mark in the settings it wrote. */
+    s_flashed_now = net_prov_take_once("sdwipe");
+#endif
     /* net_prov_init() brings up esp_netif, so the log server can bind now. */
     netlog_start();
     /* Configuration page. Started before the transport is chosen so it is
@@ -2203,6 +2508,10 @@ void app_main(void)
      * the right thing to have, so this is conditional rather than compiled out. */
     if (usb_net_on)
         ESP_LOGI(TAG, "console off: USB pads belong to USB networking");
+#if VFO_RADIO_SETUP
+    else if (s_flashed_now)
+        xTaskCreatePinnedToCore(card_console_task, "console", CARD_STACK, NULL, 2, NULL, 0);
+#endif
     else
         xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 2, NULL, 0);
     if (have_ui)

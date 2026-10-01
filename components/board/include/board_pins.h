@@ -90,4 +90,14 @@
 #define BOARD_PIN_COMPANION_TX  GPIO_NUM_38
 #define BOARD_PIN_COMPANION_RX  GPIO_NUM_48
 
+/* The microSD card (TF-018): 4-bit SDMMC, 10 kOhm pull-ups on the board, no
+ * card detect. Waveshare's demo keeps its pictures on it; the knob, its
+ * firmware images (components/sd_cache). */
+#define BOARD_PIN_SD_CLK  GPIO_NUM_4
+#define BOARD_PIN_SD_CMD  GPIO_NUM_3
+#define BOARD_PIN_SD_D0   GPIO_NUM_5
+#define BOARD_PIN_SD_D1   GPIO_NUM_6
+#define BOARD_PIN_SD_D2   GPIO_NUM_42
+#define BOARD_PIN_SD_D3   GPIO_NUM_2
+
 #endif /* BOARD_PINS_H */

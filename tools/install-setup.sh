@@ -4,8 +4,10 @@
 # knob ships with -- it asks for the WiFi from a phone, then for the firmware
 # of the knob's radio (docs/setup.md).
 #
-#   tools/install-setup.sh             the latest release's setup firmware
+#   tools/install-setup.sh             the latest release's setup firmware, and
+#                                      every firmware onto the SD card
 #   tools/install-setup.sh --local     this tree's build_setup/ instead (a test)
+#   tools/install-setup.sh --no-card   the SD card left as it is
 #   tools/install-setup.sh -p PORT     a serial port of your choosing
 #
 # Linux, with ESP-IDF 5.5 (for esptool; found through $IDF_PATH or in
@@ -23,19 +25,29 @@
 #
 # The whole flash is erased -- the demo, its settings, anything the knob
 # kept -- before the bootloader, the partition table and the setup firmware
-# are written. Then it restarts into the setup firmware.
+# are written, with a one-time mark in its settings (NVS "vfo"/"sdwipe") that
+# has the setup firmware empty the microSD card as it first starts: the demo's
+# pictures off it, room for the firmwares it keeps there. Only then -- no
+# knob ever empties its card by itself. Then every firmware published goes
+# down the cable onto the card (tools/knob-card.py), so a new knob installs
+# its radio's in seconds, and needs no network to go back to the setup
+# firmware; and the knob restarts, as its owner will first see it. The
+# firmwares are fetched once into ~/.cache/vfo-knob and checked against their
+# release's sha256: a row of knobs downloads them only once.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-FW_URL="https://raw.githubusercontent.com/Guru-RF/VFO-Knob/firmware/firmware/setup"
 BUILD=build_setup
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/vfo-knob/firmware"
 LOCAL=0
+CARD=1
 PORT=""
 
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
     case "$1" in
         --local)    LOCAL=1 ;;
+        --no-card)  CARD=0 ;;
         -p|--port)  PORT="${2:?a port after $1}"; shift ;;
         -h|--help)  usage 0 ;;
         *)          echo "What is $1?" >&2; usage 2 ;;
@@ -93,6 +105,11 @@ one -- and run this again."
     fi
 fi
 [ -e "$PORT" ] || fail "No such port: $PORT"
+# Its name by its serial number: the one it comes back under after restarts.
+BYID=""
+for l in /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*; do
+    [ -e "$l" ] && [ "$(readlink -f "$l")" = "$(readlink -f "$PORT")" ] && BYID="$l"
+done
 [ -w "$PORT" ] || fail "$PORT is not yours to write: add yourself to its group
 ($(stat -c %G "$PORT")) and log in again."
 say "The knob's ESP32-S3: $PORT"
@@ -121,18 +138,28 @@ if [ ! -f "$BUILD/bootloader/bootloader.bin" ] || [ ! -f "$BUILD/partition_table
         $targets >"$TMP/build.log" 2>&1 || { tail -20 "$TMP/build.log"; fail "The build failed."; }
 fi
 
+# Every firmware published, the setup firmware with them: into the cache
+# when it does not have them yet, each against its manifest's sha256.
+say "The firmwares, from the release ..."
+python tools/knob-card.py fetch "$CACHE" "$TMP/plan.json" || fail "Could not fetch the firmwares."
+
 if [ "$LOCAL" = 1 ]; then
     APP="$BUILD/vfo-knob-setup.bin"
     WHAT="this tree's build ($(git describe --tags --dirty 2>/dev/null || echo '?'))"
 else
-    say "Fetching the released setup firmware ..."
-    curl -fsSL "$FW_URL/manifest.json" -o "$TMP/manifest.json" || fail "Could not fetch $FW_URL/manifest.json"
-    read -r FILE SHA VER < <(python -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m["file"], m["sha256"], m["version"])' "$TMP/manifest.json")
-    curl -fsSL "$FW_URL/$FILE" -o "$TMP/$FILE" || fail "Could not fetch $FW_URL/$FILE"
-    [ "$(sha256sum "$TMP/$FILE" | cut -d' ' -f1)" = "$SHA" ] || fail "$FILE does not match its manifest's sha256."
-    APP="$TMP/$FILE"
+    read -r APP VER < <(python -c 'import json,sys
+for x in json.load(open(sys.argv[1]))["images"]:
+    if x["radio"] == "setup": print(x["image"], x["version"])' "$TMP/plan.json")
+    [ -n "${APP:-}" ] || fail "The release has no setup firmware."
     WHAT="setup $VER, the latest release"
 fi
+
+# The mark that has the setup firmware empty the card, this once: a settings
+# partition with that one key in it, made by ESP-IDF's own tool.
+NVSGEN="${IDF_PATH:-$HOME/esp/esp-idf}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
+printf 'key,type,encoding,value\nvfo,namespace,,\nsdwipe,data,u8,1\n' >"$TMP/mark.csv"
+python "$NVSGEN" generate "$TMP/mark.csv" "$TMP/mark.bin" 0x6000 >"$TMP/mark.log" 2>&1 ||
+    { cat "$TMP/mark.log"; fail "Could not make the settings partition."; }
 
 # --- on it -----------------------------------------------------------------------
 
@@ -141,12 +168,30 @@ if ! python -m esptool --chip esp32s3 -p "$PORT" -b 921600 --before default_rese
         write_flash --erase-all --flash_mode dio --flash_freq 80m --flash_size keep \
         0x0 "$BUILD/bootloader/bootloader.bin" \
         0x8000 "$BUILD/partition_table/partition-table.bin" \
+        0x9000 "$TMP/mark.bin" \
         0x20000 "$APP" >"$TMP/flash.log" 2>&1; then
     tr '\r' '\n' <"$TMP/flash.log" | grep -v "([0-9]* %)$" | tail -15
     fail "esptool failed: see above. Unplug the knob, plug it in again, and run this again."
 fi
 tr '\r' '\n' <"$TMP/flash.log" | grep -E "^(Chip is|MAC|Wrote|Hash of data)" | uniq
 
-say "Done. The knob starts the setup firmware: WIFI SETUP on its screen.
-Join the network VFOKnob with a phone, and choose your WiFi on the page
-that opens; then the knob lists the firmwares on its dial."
+# --- the firmwares onto its SD card ---------------------------------------------
+
+if [ "$CARD" = 1 ]; then
+    say "The knob starts, and empties its SD card; then the firmwares go onto it ..."
+    # The emptying first, undisturbed: opening the port could restart the
+    # knob, and the card must not be half-emptied. Then the port, as it comes
+    # back after the restart esptool gave it.
+    sleep 15
+    P="${BYID:-$PORT}"
+    for _ in $(seq 1 40); do
+        [ -e "$P" ] && break
+        sleep 0.5
+    done
+    python tools/knob-card.py push "$P" "$TMP/plan.json" ||
+        fail "The SD card did not get every firmware: run this again, or install them over WiFi from the knob."
+fi
+
+say "Done. The knob restarts and shows WIFI SETUP: join the network VFOKnob
+with a phone, and choose your WiFi on the page that opens; then it lists the
+firmwares on its dial."

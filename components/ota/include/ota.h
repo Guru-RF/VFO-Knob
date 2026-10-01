@@ -82,6 +82,24 @@ esp_err_t ota_fetch_version(const char *radio, char *ver, size_t cap);
  * published after it was built. */
 esp_err_t ota_fetch_index(char *buf, size_t cap);
 
+/* The knob's microSD card (components/sd_cache). Every install takes the
+ * image from it when it holds the one wanted, its sha256 checked, and
+ * otherwise puts the download on it first and installs from there, the copy
+ * kept; a switch with no update server in reach takes the card's own. */
+
+/* The latest of a radio's firmware onto the card, unless it is there: the
+ * setup firmware fills the card with every one. TLS on the caller's stack,
+ * which wants 8 kB; `stop` set ends a download early. */
+esp_err_t ota_cache(const char *radio, volatile bool *stop);
+
+/* The index, as the card last kept it: for a setup firmware whose update
+ * server is out of reach. */
+esp_err_t ota_card_index(char *buf, size_t cap);
+
+/* That radio's firmware is on the card -- switching to it needs no network
+ * -- and its version, into `ver` when given. */
+bool ota_card_has(const char *radio, char *ver, size_t cap);
+
 /* The radio this firmware is for: its image is vfo-knob-<radio>, and it
  * follows the update channel of that name. */
 const char *ota_radio(void);
