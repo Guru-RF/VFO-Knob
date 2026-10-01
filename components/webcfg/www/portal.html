@@ -28,8 +28,8 @@ button.show{position:absolute;right:6px;top:50%;transform:translateY(-50%);paddi
 </style></head>
 <body><main>
 <h1>VFO-Knob</h1>
-<p>Choose the WiFi network the knob should join. Once it is on it, the knob
-shows the firmwares to choose from, on its own dial.</p>
+<p>Choose the WiFi network the knob should join. <span id="after">Once it is
+on it, the knob shows the firmwares to choose from, on its own dial.</span></p>
 
 <div class="card">
   <div id="list"><p>Looking for networks&hellip;</p></div>
@@ -84,7 +84,9 @@ async function poll(){
     let j;
     try{ j=await (await fetch('/api/join')).json() }catch(e){ continue }
     if(j.state==='ok'){
-      $('msg').innerHTML='<span class="ok">Connected to '+esc(j.ssid)+'.</span> Now choose the firmware on the knob\'s dial: turn to it, tap to install. You can put the phone away.';
+      $('msg').innerHTML='<span class="ok">Connected to '+esc(j.ssid)+'.</span> '+(SETUP
+        ? 'Now choose the firmware on the knob\'s dial: turn to it, tap to install. You can put the phone away.'
+        : 'The knob keeps it with the networks it knows, and goes back to its radio. You can put the phone away.');
       return;
     }
     if(j.state==='failed'){
@@ -106,6 +108,13 @@ $('go').onclick=async()=>{
   }catch(e){}
   poll();
 };
+/* The setup firmware lists the firmwares next; a radio's firmware, with none
+   of its networks in reach, goes back to its radio. */
+let SETUP=true;
+fetch('/api/join').then(r=>r.json()).then(j=>{
+  SETUP=j.setup!==false;
+  if(!SETUP) $('after').textContent='None of the networks it knows is in reach; it keeps this one beside them.';
+}).catch(()=>{});
 scan();
 </script>
 </body></html>

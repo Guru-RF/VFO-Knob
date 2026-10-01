@@ -509,6 +509,14 @@ def setup_pictures():
         turn(), "hold again 3 s until it buzzes, then turn")
     out["13-rebooting"] = knob("setup-13", "Yes: the knob restarts into the setup firmware",
                                update_screen("REBOOTING", "⟳", "into update mode"))
+    # A radio's firmware, taken where none of its networks reaches (app_main.c
+    # wifi_setup), in that firmware's own colours.
+    md.use_palette("icom")
+    out["14-away"] = knob("setup-14", "A radio's firmware with none of its networks in reach",
+                          setup_screen("WIFI SETUP", "None of its networks\nis in reach. Join\n"
+                                                     "VFOKnob with your\nphone to add one,\n"
+                                                     "or wait: it keeps looking."))
+    md.use_palette("aethersdr")
     return out
 
 

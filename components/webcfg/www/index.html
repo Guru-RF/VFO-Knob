@@ -263,14 +263,15 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
 
 <section>
   <h2>WiFi</h2>
-  <div class="grid">
-    <div><label>SSID</label><input id="ssid"></div>
-    <div><label>Password</label><div class="pw"><input id="pass" type="password"
-         placeholder="unchanged" autocapitalize="none" autocorrect="off" spellcheck="false"><button
-         type="button" class="show" data-for="pass">Show</button></div></div>
-  </div>
-  <p class="note">Used when the knob is powered from a charger rather than a
-     computer. Applies on the next boot.</p>
+  <div id="wlist"></div>
+  <button id="wadd" class="ghost" type="button">Add a network</button>
+  <p class="note">Up to four networks &mdash; home, and a phone's hotspot, say.
+     The knob joins whichever is in reach, the one it joined last first. With
+     none of them in reach it puts up its own network, <b>VFOKnob</b>, as when
+     it was new: join that with a phone to add one, and the knob goes on. Used
+     when the knob is powered from a charger rather than a computer. Saved with
+     <b>Save</b> below; tried when the knob next looks for a network, on the
+     next boot at the latest.</p>
 </section>
 
 <section>
@@ -374,7 +375,7 @@ async function refresh(){
 
 async function load(){
   const c=await (await fetch('/api/config')).json();
-  $('host').value=c.host; $('port').value=c.port; $('ssid').value=c.ssid;
+  $('host').value=c.host; $('port').value=c.port; wifiLoad();
   $('vol').value=c.vol;   $('mic').value=c.mic;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
   $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||'';
@@ -587,6 +588,53 @@ async function rigsSave(){
   return r.ok ? '' : await r.text();
 }
 
+/* ---- WiFi: the networks the knob knows, the one joined last first ---- */
+let WIFIS=null, wifiDirty=false, WIFIMAX=4, WIFINOW='';
+async function wifiLoad(){
+  let s; try{ const r=await fetch('/api/wifi',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
+  WIFIS=s.list.map(x=>({ssid:x.ssid,pass:'',hasPass:x.pass,clrPass:false}));
+  WIFIMAX=s.max||4; WIFINOW=s.now||''; wifiDirty=false; wifiRender();
+}
+function wifiRender(){
+  const L=$('wlist'); L.innerHTML=WIFIS.length?'':'<p class="note">None yet.</p>';
+  WIFIS.forEach((x,i)=>{
+    const d=document.createElement('div'); d.className='sdr';
+    d.innerHTML=`<div class="grid">
+      <div><label>Network${x.ssid&&x.ssid===WIFINOW?' <span class="pill up">connected</span>':''}</label>
+        <input data-k="ssid" maxlength="32" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      <div><label>Password${x.hasPass?' <button type="button" class="pill down" data-clr>clear</button>':''}</label>
+        <div class="pw"><input data-k="pass" type="password" maxlength="64" autocomplete="new-password"
+         autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="${x.hasPass?'unchanged':'none'}"><button
+         type="button" class="show">Show</button></div></div>
+      </div>
+      <div class="sdrrow"><button type="button" class="ghost" data-act="rm">Remove</button></div>`;
+    for(const inp of d.querySelectorAll('input[data-k]')){
+      const k=inp.dataset.k; inp.value=x[k];
+      inp.oninput=()=>{ x[k]=inp.value; wifiDirty=true };
+    }
+    for(const b of d.querySelectorAll('button.show')) b.onclick=()=>{
+      const p=b.previousElementSibling, s=p.type==='password'; p.type=s?'text':'password'; b.textContent=s?'Hide':'Show'; p.focus() };
+    for(const b of d.querySelectorAll('[data-clr]')) b.onclick=()=>{ x.hasPass=false; x.clrPass=true; wifiDirty=true; wifiRender() };
+    d.querySelector('[data-act=rm]').onclick=()=>{ WIFIS.splice(i,1); wifiDirty=true; wifiRender() };
+    L.appendChild(d);
+  });
+  $('wadd').hidden=WIFIS.length>=WIFIMAX;
+}
+$('wadd').onclick=()=>{
+  WIFIS.push({ssid:'',pass:'',hasPass:false,clrPass:false}); wifiDirty=true; wifiRender();
+  const all=$('wlist').querySelectorAll('input[data-k=ssid]'); all[all.length-1].focus();
+};
+/* A password goes along only when typed, or cleared: otherwise the knob keeps
+   the one it has for that network. */
+async function wifiSave(){
+  if(!WIFIS||!wifiDirty) return '';
+  const keep=WIFIS.filter(x=>x.ssid.trim()), b=new URLSearchParams();
+  b.append('n',keep.length);
+  keep.forEach((x,i)=>{ b.append('ssid'+i,x.ssid.trim()); if(x.pass||x.clrPass) b.append('pass'+i,x.pass) });
+  const r=await fetch('/api/wifi',{method:'POST',body:b});
+  return r.ok ? '' : await r.text();
+}
+
 /* ---- web SDRs, beside the radio: the Icom, Xiegu and FlexRadio firmwares ---- */
 let SDRS=null, sdrDirty=false;
 async function sdrLoad(){
@@ -738,8 +786,7 @@ $('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
   /* With a list of radios the one in use is saved with the list, below. */
-  for(const k of [...(LIST?[]:['host','port']),'ssid','vol','mic','user','otah','dim','blank']) b.append(k,$(k).value);
-  if($('pass').value) b.append('pass',$('pass').value);
+  for(const k of [...(LIST?[]:['host','port']),'vol','mic','user','otah','dim','blank']) b.append(k,$(k).value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);
     if($('rpass').value) b.append('rpass',$('rpass').value);
@@ -759,6 +806,8 @@ $('save').onclick=async()=>{
     if(e) say('Radios not saved: '+e,false);
     const e2=await sdrSave();
     if(e2) say('Web SDRs not saved: '+e2,false);
+    const e3=await wifiSave();
+    if(e3) say('WiFi networks not saved: '+e3,false);
   }
   if(r.ok) $('rpass').value='';
   if(r.ok && $('webpass').value){

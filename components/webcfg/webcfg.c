@@ -666,14 +666,14 @@ static esp_err_t reboot_post(httpd_req_t *r)
 
 /* ------------------------------------------------------------------ page */
 
-#if VFO_RADIO_SETUP
 #define PORTAL_URIS 3
 /* ------------------------------------------------------------ the portal */
 
-/* The setup firmware's WiFi setup, for a phone on the knob's own hotspot:
- * open, since the phone has nothing to log in with yet, and there only while
- * the hotspot is up. On the network the knob then joins, it is gone and the
- * page is the usual one, behind its login. */
+/* WiFi setup, for a phone on the knob's own hotspot -- the setup firmware's,
+ * and any firmware's with none of its networks in reach: open, since the
+ * phone has nothing to log in with yet, and there only while the hotspot is
+ * up. On the network the knob then joins, it is gone and the page is the
+ * usual one, behind its login. */
 extern const char portal_html_start[] asm("_binary_portal_html_start");
 extern const char portal_html_end[]   asm("_binary_portal_html_end");
 
@@ -734,8 +734,15 @@ static esp_err_t join_get(httpd_req_t *r)
     const net_join_t s = net_prov_join_state(ssid, sizeof ssid, why, sizeof why);
     json_esc(ssid, es, sizeof es);
     json_esc(why, ew, sizeof ew);
-    snprintf(buf, sizeof buf, "{\"state\":\"%s\",\"ssid\":\"%s\",\"why\":\"%s\"}",
-             ST[s], es, ew);
+    /* The page says what comes next: the firmware list on the setup
+     * firmware's dial, or the radio, carrying on. */
+#if VFO_RADIO_SETUP
+    static const char *const after = "true";
+#else
+    static const char *const after = "false";
+#endif
+    snprintf(buf, sizeof buf, "{\"state\":\"%s\",\"ssid\":\"%s\",\"why\":\"%s\",\"setup\":%s}",
+             ST[s], es, ew, after);
     return send_json(r, buf);
 }
 
@@ -751,9 +758,70 @@ static esp_err_t portal_404(httpd_req_t *r, httpd_err_code_t err)
     /* iOS wants a body, not only the redirect, to see a portal. */
     return httpd_resp_sendstr(r, "The knob's WiFi setup");
 }
-#else
-#define PORTAL_URIS 0
-#endif
+
+/* ------------------------------------------------------------ the WiFi list */
+
+#define WIFI_URIS 2
+
+/* The networks the knob knows, the one joined last first; whether each has a
+ * password, never the password. */
+static esp_err_t wifi_get_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char buf[640], e[70];
+    size_t o = (size_t)snprintf(buf, sizeof buf, "{\"list\":[");
+    for (int i = 0; i < net_prov_wifi_count() && o < sizeof buf - 100; i++) {
+        net_wifi_t w;
+        if (!net_prov_wifi_get(i, &w)) break;
+        json_esc(w.ssid, e, sizeof e);
+        o += (size_t)snprintf(buf + o, sizeof buf - o, "%s{\"ssid\":\"%s\",\"pass\":%s}",
+                              i ? "," : "", e, w.pass[0] ? "true" : "false");
+    }
+    json_esc(net_prov_wifi_now(), e, sizeof e);
+    snprintf(buf + o, sizeof buf - o, "],\"now\":\"%s\",\"max\":%d}", e, NET_PROV_WIFIS);
+    return send_json(r, buf);
+}
+
+/* n, then ssidN and passN for each: a password not in the form is the one the
+ * knob has for that network, as everywhere on the page. */
+static esp_err_t wifi_post_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char body[1536];
+    EXT_RAM_BSS_ATTR static net_wifi_t list[NET_PROV_WIFIS];
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    long n = 0;
+    field_num(body, "n", &n);
+    n = clampl(n, 0, NET_PROV_WIFIS);
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        char key[8];
+        net_wifi_t w = { 0 };
+        snprintf(key, sizeof key, "ssid%d", i);
+        if (!field(body, key, w.ssid, sizeof w.ssid) || !w.ssid[0]) continue;
+        snprintf(key, sizeof key, "pass%d", i);
+        if (!field(body, key, w.pass, sizeof w.pass)) {
+            for (int j = 0; j < net_prov_wifi_count(); j++) {
+                net_wifi_t old;
+                if (net_prov_wifi_get(j, &old) && !strcmp(old.ssid, w.ssid)) {
+                    strlcpy(w.pass, old.pass, sizeof w.pass);
+                    break;
+                }
+            }
+        }
+        list[k++] = w;
+    }
+    if (net_prov_wifis_save(list, k) != ESP_OK) return httpd_resp_send_500(r);
+    return send_json(r, "{\"ok\":true}");
+}
 
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
 /* ------------------------------------------------------------- the radios
@@ -1446,13 +1514,11 @@ static esp_err_t radio_set(httpd_req_t *r)
 
 static esp_err_t root_get(httpd_req_t *r)
 {
-#if VFO_RADIO_SETUP
     if (net_prov_ap_active()) {
         httpd_resp_set_type(r, "text/html");
         httpd_resp_set_hdr(r, "Cache-Control", "no-store");
         return httpd_resp_send(r, portal_html_start, portal_html_end - portal_html_start - 1);
     }
-#endif
     REQUIRE_AUTH(r);
 #if RADIO_PAGE
     /* The radio's controls while it is connected; the configuration page,
@@ -1472,7 +1538,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
+    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + WIFI_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -1544,16 +1610,18 @@ esp_err_t webcfg_start(void)
                                 .handler = radio_endpoint, .user_ctx = (void *)&extra[i] };
         httpd_register_uri_handler(s_srv, &u);
     }
-#if VFO_RADIO_SETUP
+    /* The hotspot's page's endpoints, which answer only while the hotspot is
+     * up; and the WiFi list, behind the page's login like the rest. */
     static const httpd_uri_t portal[] = {
         { .uri = "/api/scan", .method = HTTP_GET,  .handler = scan_get },
         { .uri = "/api/join", .method = HTTP_POST, .handler = join_post },
         { .uri = "/api/join", .method = HTTP_GET,  .handler = join_get },
+        { .uri = "/api/wifi", .method = HTTP_GET,  .handler = wifi_get_h },
+        { .uri = "/api/wifi", .method = HTTP_POST, .handler = wifi_post_h },
     };
     for (size_t i = 0; i < sizeof portal / sizeof portal[0]; i++)
         httpd_register_uri_handler(s_srv, &portal[i]);
     httpd_register_err_handler(s_srv, HTTPD_404_NOT_FOUND, portal_404);
-#endif
 
     ESP_LOGI(TAG, "configuration page on http://<device>/ (port 80)");
     return ESP_OK;

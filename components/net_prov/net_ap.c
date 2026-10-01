@@ -1,4 +1,5 @@
-/* The setup firmware's hotspot: an open network a phone can join, a DHCP
+/* The knob's hotspot -- the setup firmware's, and any firmware's with none of
+ * its WiFi networks in reach: an open network a phone can join, a DHCP
  * server that names the knob as both the DNS server and the captive portal
  * (option 114), and a DNS server that answers every name with the knob's own
  * address. A phone that joins asks whether it is online (generate_204,
@@ -127,7 +128,13 @@ void net_prov_ap_stop(void)
 int net_prov_scan(net_prov_net_t *out, int max)
 {
     wifi_scan_config_t sc = { .show_hidden = false };
-    if (esp_wifi_scan_start(&sc, true) != ESP_OK) return 0;
+    if (esp_wifi_scan_start(&sc, true) != ESP_OK) {
+        /* The station in the middle of trying a known network, as a phone
+         * comes onto the hotspot: stop it, and look again. */
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(300));
+        if (esp_wifi_scan_start(&sc, true) != ESP_OK) return 0;
+    }
     uint16_t n = 0;
     esp_wifi_scan_get_ap_num(&n);
     if (!n) return 0;

@@ -123,6 +123,9 @@ static void firmware_line(char *out, size_t cap)
 
 /* The link is the USB cable: one computer, or one radio, at its far end. */
 static volatile bool s_on_usb;
+/* The WiFi driver started: once, whoever starts it (pick_transport, or the
+ * WiFi setup when no network is known). */
+static bool s_wifi_started;
 
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
 /* Another radio, chosen with a swipe up: in use from the next boot, and the
@@ -1061,9 +1064,6 @@ static bool host_answers(const char *ip, uint16_t port, int timeout_ms)
 static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
                                   bool *via_usb)
 {
-    /* Started once, whichever way it comes up: a second start would register
-     * the driver and its handlers again. */
-    static bool wifi_started;
 #if CONFIG_VFO_USB_NET
     if (usb_net_host_present()) {
 #if VFO_RADIO_XIEGU
@@ -1075,8 +1075,8 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
          * radio has no browser, so the configuration page and the log are
          * reachable only from the LAN. It stays the default route, the USB
          * link's priority being below WiFi's; only the radio is on the cable. */
-        if (!wifi_started && cfg->ssid[0]) {
-            wifi_started = true;
+        if (!s_wifi_started && cfg->ssid[0]) {
+            s_wifi_started = true;
             if (net_prov_wifi_start() != ESP_OK)
                 ESP_LOGE(TAG, "wifi     FAILED beside the cable -- the radio carries on");
         }
@@ -1110,9 +1110,10 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * empty SSID every five seconds, on memory the board is short of. The
      * screen says what to do instead. */
     if (!cfg->ssid[0]) return NULL;
-    /* Only now is WiFi worth its memory. */
-    if (!wifi_started) {
-        wifi_started = true;
+    /* Only now is WiFi worth its memory. Started once, whichever way it comes
+     * up: a second start would register the driver and its handlers again. */
+    if (!s_wifi_started) {
+        s_wifi_started = true;
         esp_err_t werr = net_prov_wifi_start();
         if (werr != ESP_OK)
             ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",
@@ -1427,7 +1428,10 @@ static void setup_pick(void)
         ui_ask_choice(titles, names, n, 0);
         ui_setup_show("FIRMWARE", "Turn to your radio,\nthen tap to install.");
         int a;
-        while ((a = ui_take_choice()) < 0) vTaskDelay(pdMS_TO_TICKS(100));
+        while ((a = ui_take_choice()) < 0) {
+            net_prov_tick();
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
         if (!radios[a][0]) return;                /* the WiFi, again */
         install_switch(radios[a]);                /* returns only if it failed */
     }
@@ -1463,6 +1467,102 @@ static void setup_task(void *arg)
 #define RADIO_ONLY_FN
 #endif
 
+/* --- no WiFi in reach: the knob's own hotspot ------------------------------
+ *
+ * The setup firmware's WiFi setup, in every firmware: with none of the
+ * knob's networks joined WIFI_SETUP_AFTER_US after WiFi started -- or none
+ * known at all -- up come the VFOKnob hotspot and its page, and WIFI SETUP
+ * over the face. The station goes on trying the networks it knows meanwhile,
+ * whenever no phone is on the hotspot. A known network in reach, or one given
+ * on the phone -- kept beside the others -- and the hotspot goes, the face
+ * comes back, and the radio after it. Never while the cable is the way. */
+#define WIFI_SETUP_AFTER_US (25 * 1000 * 1000)
+#define WIFI_SETUP_AP       "VFOKnob"
+
+/* True while the WiFi setup is up: the net task waits on it. */
+RADIO_ONLY_FN static bool wifi_setup(void)
+{
+    static bool       on;
+    static int64_t    down_since, done_at;
+    static net_join_t shown;
+    const int64_t     now = esp_timer_get_time();
+    char ssid[33], why[48], msg[160];
+
+    net_prov_tick();
+    bool cable = s_on_usb;
+#if CONFIG_VFO_USB_NET
+    /* A computer on the cable is the way -- or, until it is due, may be. */
+    cable = cable || usb_net_host_present();
+    if (!on && atomic_load(&s_cable) != CABLE_NONE && now < USB_GRACE_US) return false;
+#endif
+    if (!on) {
+        if (cable || net_prov_is_connected()) {
+            down_since = 0;
+            return false;
+        }
+        if (!down_since) down_since = now;
+        const bool none = net_prov_wifi_count() == 0;
+        if (!none && (!s_wifi_started || now - down_since < WIFI_SETUP_AFTER_US)) return false;
+        if (!s_wifi_started) {
+            s_wifi_started = true;
+            if (net_prov_wifi_start() != ESP_OK) {
+                ESP_LOGE(TAG, "wifi     FAILED: no WiFi setup either");
+                return false;
+            }
+        }
+        if (net_prov_ap_start(WIFI_SETUP_AP) != ESP_OK) return false;
+        on      = true;
+        shown   = NET_JOIN_IDLE;
+        done_at = 0;
+        ESP_LOGW(TAG, "%s: WiFi setup on the knob's own network, " WIFI_SETUP_AP,
+                 none ? "no WiFi network known" : "none of the knob's WiFi networks in reach");
+        ui_setup_show("WIFI SETUP", none
+            ? "Join the WiFi network\n" WIFI_SETUP_AP "\nwith your phone, then\nchoose your network on\nthe page that opens."
+            : "None of its networks\nis in reach. Join\n" WIFI_SETUP_AP " with your\nphone to add one,\nor wait: it keeps looking.");
+        return true;
+    }
+    if (cable) {
+        /* A computer came onto the cable after all. */
+        net_prov_ap_stop();
+        ui_setup_hide();
+        on = false;
+        down_since = 0;
+        return false;
+    }
+    const net_join_t js = net_prov_join_state(ssid, sizeof ssid, why, sizeof why);
+    if (js != shown) {
+        shown = js;
+        if (js == NET_JOIN_TRYING) {
+            snprintf(msg, sizeof msg, "Joining\n%s", ssid);
+            ui_setup_show("WIFI SETUP", msg);
+        } else if (js == NET_JOIN_FAILED) {
+            snprintf(msg, sizeof msg, "Could not join\n%s:\n%s\nTry again on the phone.", ssid, why);
+            ui_setup_show("WIFI SETUP", msg);
+        } else if (js == NET_JOIN_OK) {
+            net_prov_join_keep();
+            snprintf(msg, sizeof msg, "Connected to\n%s", ssid);
+            ui_setup_show("WIFI SETUP", msg);
+            done_at = now + 8000000;        /* the phone's page says so first */
+        }
+    }
+    if (net_prov_is_connected() && !done_at) {
+        /* One of the networks it knows, in reach after all. */
+        snprintf(msg, sizeof msg, "Connected to\n%s", net_prov_wifi_now());
+        ui_setup_show("WIFI SETUP", msg);
+        done_at = now + 2000000;
+    }
+    if (done_at && now >= done_at) {
+        net_prov_ap_stop();
+        ui_setup_hide();
+        on = false;
+        down_since = 0;
+        done_at = 0;
+        ESP_LOGI(TAG, "WiFi setup done: on \"%s\"", net_prov_wifi_now());
+        return false;
+    }
+    return true;
+}
+
 RADIO_ONLY_FN static void net_task(void *arg)
 {
     (void)arg;
@@ -1471,6 +1571,10 @@ RADIO_ONLY_FN static void net_task(void *arg)
     bool started = false;
 
     for (;;) {
+        if (wifi_setup()) {
+            vTaskDelay(pdMS_TO_TICKS(250));
+            continue;
+        }
         if (!started) {
             /* No restart here, however long this takes. Nothing has been lost
              * yet, and pick_transport() already re-runs the whole choice on

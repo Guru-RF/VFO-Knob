@@ -2964,6 +2964,14 @@ void ui_setup_show(const char *title, const char *text)
     ui_note_activity();
 }
 
+void ui_setup_hide(void)
+{
+    if (!s_setup || !s_scr || !lvgl_port_lock(200)) return;
+    lv_obj_add_flag(s_setup, LV_OBJ_FLAG_HIDDEN);
+    lvgl_port_unlock();
+    ui_note_activity();
+}
+
 int ui_take_update_answer(void)
 {
     const int a = s_ask_answer;

@@ -298,6 +298,9 @@ bool ui_take_picker_request(void);
 /* The setup firmware's screen: a title and a few lines over the whole face,
  * under the dial's questions and editors. */
 void ui_setup_show(const char *title, const char *text);
+/* Gone again, the face under it: a radio's firmware sets up its WiFi this way
+ * too, when none of its networks is in reach, and goes back to its radio. */
+void ui_setup_hide(void);
 /* From the knob task: the knob turned, so an open question is answered --
  * no, or yes to ui_ask_turn(). True when the turn is spent on that yes and
  * must not tune. */

@@ -112,6 +112,11 @@ it was made still shows every firmware there is then. A knob that already knows
 a network joins it and goes straight to the list; the list's last entry,
 **WIFI**, brings the hotspot back to set up another.
 
+The knob keeps up to four networks — home, and a phone's hotspot, say — and
+joins whichever is in reach. Taken where none of them is, any firmware puts
+up **VFOKnob** again after about 25 seconds, with **WIFI SETUP** on its face,
+to add one from a phone; it keeps looking for the ones it knows meanwhile.
+
 **Back to the list, from any firmware:** hold a finger on the S-meter until the
 knob clicks and the address card comes up, and let go. Then hold the S-meter
 (or the card) again, for three seconds, until the knob buzzes. The dial asks
@@ -386,7 +391,8 @@ air.
 ## Configuration page
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
-WiFi credentials, audio levels, access credentials, and firmware updates.
+the WiFi networks (up to four), audio levels, access credentials, and firmware
+updates.
 
 Opened over WiFi, the host field offers a green **my IP** — the address of the
 computer you are browsing from, one tap to fill in when that is where

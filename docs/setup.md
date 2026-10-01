@@ -107,6 +107,24 @@ that until the knob buzzes. It needs WiFi: on the USB cable the knob says
 Each firmware keeps its own settings, so going back to one later finds its
 radio, its login and its choices as they were.
 
+## Another network, later
+
+The knob keeps up to four WiFi networks — home, and a phone's hotspot, say —
+and joins whichever is in reach, the one it joined last first. A network
+chosen on the phone's page is added to them, not put in their place.
+
+Take the knob where none of them reaches, and whichever firmware it runs puts
+up **VFOKnob** again after about 25 seconds, with **WIFI SETUP** on its face:
+join it with your phone and choose a network, as above, and the knob goes on
+with its radio. It keeps looking for the networks it knows meanwhile, so back
+home it simply joins again. Not over the cable: with a computer on it, the
+cable is the way.
+
+![None of its networks is in reach: join VFOKnob with your phone to add one](setup/14-away.svg)
+
+The configuration page lists them under **WiFi**: add one there, give one a
+new password, or remove one.
+
 ## If something is not right
 
 | The knob says | What to do |
@@ -115,4 +133,5 @@ radio, its login and its choices as they were.
 | **Could not join** *network*: **network not found** | The network is out of reach, or a 5 GHz-only one: the knob uses 2.4 GHz. |
 | **None found. Is the network online? Trying again.** | The knob is on the network but cannot reach the update server; it keeps trying. |
 | **WiFi would not start.** | Power the knob off and on again. |
+| **WIFI SETUP**: **None of its networks is in reach** (a radio's firmware) | Join **VFOKnob** with your phone and add the network where the knob is now, or take it back within reach of one it knows. |
 | **Needs WiFi** (from a radio's firmware) | The way back to the list is over WiFi: set up WiFi on that firmware's page, or use **Set up again**. |

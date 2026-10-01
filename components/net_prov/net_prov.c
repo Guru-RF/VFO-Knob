@@ -13,6 +13,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "lwip/netdb.h"
 #include "mdns.h"
 #include "nvs.h"
@@ -127,6 +128,18 @@ static uint8_t  s_join_fails;
  * scanning the channels for it takes the hotspot off the air, and the phone
  * with it. */
 static volatile bool s_hold;
+
+/* The WiFi networks the knob knows, the one joined last first; and the one
+ * the station is trying, a couple of times before the next. Read on the
+ * event loop's task, written from the page's: s_wlock for the copies. */
+EXT_RAM_BSS_ATTR static net_wifi_t s_wifis[NET_PROV_WIFIS];
+static int          s_nwifis, s_try;
+static uint8_t      s_try_fails;
+static portMUX_TYPE s_wlock = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_wmx;             /* the NVS write of them */
+static volatile bool s_wifis_dirty;         /* reordered on the event task: net_prov_tick() writes */
+static volatile int s_ap_clients;           /* phones on the hotspot */
+static char s_now[33];                      /* the network joined, while it is */
 
 static const char *reason_text(uint8_t r)
 {
@@ -291,6 +304,116 @@ esp_err_t net_prov_radio_activate(int i)
     return radios_write();
 }
 
+/* --- the WiFi networks ------------------------------------------------- */
+
+/* The list, and its first where every firmware before it kept the one
+ * network. Not on the event loop's task: its stack is 2.3 kB. */
+static esp_err_t wifis_write(void)
+{
+    EXT_RAM_BSS_ATTR static net_wifi_t copy[NET_PROV_WIFIS];
+    if (s_wmx) xSemaphoreTake(s_wmx, portMAX_DELAY);
+    taskENTER_CRITICAL(&s_wlock);
+    const int n = s_nwifis;
+    memcpy(copy, s_wifis, sizeof copy);
+    s_wifis_dirty = false;
+    taskEXIT_CRITICAL(&s_wlock);
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        if (n) nvs_set_blob(h, "wifis", copy, (size_t)n * sizeof copy[0]);
+        else   nvs_erase_key(h, "wifis");
+        nvs_set_str(h, "ssid", n ? copy[0].ssid : "");
+        nvs_set_str(h, "pass", n ? copy[0].pass : "");
+        err = nvs_commit(h);
+        nvs_close(h);
+    }
+    strlcpy(s_cfg.ssid, n ? copy[0].ssid : "", sizeof s_cfg.ssid);
+    strlcpy(s_cfg.pass, n ? copy[0].pass : "", sizeof s_cfg.pass);
+    if (s_wmx) xSemaphoreGive(s_wmx);
+    return err;
+}
+
+/* The list -- and, leading it, the network under "ssid": the one joined or
+ * given last, a firmware from before the list included. */
+static void wifis_load(void)
+{
+    nvs_handle_t h;
+    s_nwifis = 0;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof s_wifis;
+        if (nvs_get_blob(h, "wifis", s_wifis, &len) == ESP_OK && len % sizeof s_wifis[0] == 0)
+            s_nwifis = (int)(len / sizeof s_wifis[0]);
+        nvs_close(h);
+    }
+    for (int i = 0; i < s_nwifis; i++) {
+        s_wifis[i].ssid[sizeof s_wifis[i].ssid - 1] = 0;
+        s_wifis[i].pass[sizeof s_wifis[i].pass - 1] = 0;
+    }
+    if (s_cfg.ssid[0] && (!s_nwifis || strcmp(s_wifis[0].ssid, s_cfg.ssid) ||
+                          strcmp(s_wifis[0].pass, s_cfg.pass))) {
+        int at = -1;
+        for (int i = 0; i < s_nwifis; i++)
+            if (!strcmp(s_wifis[i].ssid, s_cfg.ssid)) at = i;
+        if (at < 0) at = s_nwifis < NET_PROV_WIFIS ? s_nwifis++ : NET_PROV_WIFIS - 1;
+        memmove(&s_wifis[1], &s_wifis[0], (size_t)at * sizeof s_wifis[0]);
+        strlcpy(s_wifis[0].ssid, s_cfg.ssid, sizeof s_wifis[0].ssid);
+        strlcpy(s_wifis[0].pass, s_cfg.pass, sizeof s_wifis[0].pass);
+    }
+    if (s_nwifis) {
+        strlcpy(s_cfg.ssid, s_wifis[0].ssid, sizeof s_cfg.ssid);
+        strlcpy(s_cfg.pass, s_wifis[0].pass, sizeof s_cfg.pass);
+    }
+}
+
+int net_prov_wifi_count(void) { return s_nwifis; }
+const char *net_prov_wifi_now(void) { return s_connected ? s_now : ""; }
+
+bool net_prov_wifi_get(int i, net_wifi_t *out)
+{
+    bool ok = false;
+    taskENTER_CRITICAL(&s_wlock);
+    if (i >= 0 && i < s_nwifis && out) {
+        *out = s_wifis[i];
+        ok = true;
+    }
+    taskEXIT_CRITICAL(&s_wlock);
+    return ok;
+}
+
+esp_err_t net_prov_wifis_save(const net_wifi_t *list, int n)
+{
+    if (n < 0 || n > NET_PROV_WIFIS || (n && !list)) return ESP_ERR_INVALID_ARG;
+    taskENTER_CRITICAL(&s_wlock);
+    for (int i = 0; i < n; i++) s_wifis[i] = list[i];
+    s_nwifis = n;
+    s_try = 0;
+    taskEXIT_CRITICAL(&s_wlock);
+    ESP_LOGI(TAG, "%d WiFi network%s known", n, n == 1 ? "" : "s");
+    return wifis_write();
+}
+
+esp_err_t net_prov_wifi_add(const char *ssid, const char *pass)
+{
+    if (!ssid || !ssid[0]) return ESP_ERR_INVALID_ARG;
+    taskENTER_CRITICAL(&s_wlock);
+    int at = -1;
+    for (int i = 0; i < s_nwifis; i++)
+        if (!strcmp(s_wifis[i].ssid, ssid)) at = i;
+    if (at < 0) at = s_nwifis < NET_PROV_WIFIS ? s_nwifis++ : NET_PROV_WIFIS - 1;
+    memmove(&s_wifis[1], &s_wifis[0], (size_t)at * sizeof s_wifis[0]);
+    strlcpy(s_wifis[0].ssid, ssid, sizeof s_wifis[0].ssid);
+    strlcpy(s_wifis[0].pass, pass ? pass : "", sizeof s_wifis[0].pass);
+    s_try = 0;
+    taskEXIT_CRITICAL(&s_wlock);
+    ESP_LOGI(TAG, "WiFi \"%s\" added: %d known", ssid, s_nwifis);
+    return wifis_write();
+}
+
+void net_prov_tick(void)
+{
+    if (s_wifis_dirty) wifis_write();
+}
+
 static void load_or_seed(void)
 {
     nvs_handle_t h;
@@ -348,22 +471,71 @@ static void load_or_seed(void)
     if (s_boots > 1) ESP_LOGW(TAG, "boot #%u since last healthy run", s_boots);
 
     radios_load();
+    wifis_load();
 
     /* Never log the passphrase, only whether one is present. */
-    ESP_LOGI(TAG, "ssid=\"%s\" psk=%s host=%s:%u user=%s",
-             s_cfg.ssid, s_cfg.pass[0] ? "set" : "EMPTY",
+    ESP_LOGI(TAG, "ssid=\"%s\" psk=%s (%d network%s known) host=%s:%u user=%s",
+             s_cfg.ssid, s_cfg.pass[0] ? "set" : "EMPTY", s_nwifis, s_nwifis == 1 ? "" : "s",
              s_cfg.radio_host, (unsigned)s_cfg.radio_port,
              s_cfg.radio_user[0] ? s_cfg.radio_user : "-");
+}
+
+/* The station at network i of the list, asked to join it. */
+static void sta_try(int i)
+{
+    wifi_config_t wc = { 0 };
+    taskENTER_CRITICAL(&s_wlock);
+    if (i >= s_nwifis) i = 0;
+    s_try = i;
+    if (s_nwifis) {
+        memcpy(wc.sta.ssid, s_wifis[i].ssid, sizeof s_wifis[i].ssid);
+        memcpy(wc.sta.password, s_wifis[i].pass, sizeof wc.sta.password);
+    }
+    taskEXIT_CRITICAL(&s_wlock);
+    if (!wc.sta.ssid[0]) return;
+    esp_wifi_set_config(WIFI_IF_STA, &wc);
+    esp_wifi_connect();
+}
+
+/* Joined: that network to the front, where the next boot tries it first --
+ * and where a firmware from before the list finds it. */
+static void wifi_joined(void)
+{
+    net_wifi_t w;
+    taskENTER_CRITICAL(&s_wlock);
+    const int i = s_try;
+    const bool move = i > 0 && i < s_nwifis;
+    if (move) {
+        w = s_wifis[i];
+        memmove(&s_wifis[1], &s_wifis[0], (size_t)i * sizeof w);
+        s_wifis[0] = w;
+    }
+    s_try = 0;
+    if (move) s_wifis_dirty = true;
+    taskEXIT_CRITICAL(&s_wlock);
 }
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        s_try_fails = 0;
+        sta_try(0);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        s_ap_clients++;
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
+        if (s_ap_clients > 0) s_ap_clients--;
+        /* The last phone gone from the hotspot: the known networks again --
+         * after a network given on it failed, too. */
+        if (!s_ap_clients && !s_connected && !s_hold && s_join != NET_JOIN_TRYING) {
+            if (s_join == NET_JOIN_FAILED) s_join = NET_JOIN_IDLE;
+            sta_try(s_try);
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *d = data;
+        const bool was = s_connected;
         s_connected = false;
+        s_now[0] = 0;
         xEventGroupClearBits(s_events, BIT_GOT_IP);
         if (s_join == NET_JOIN_TRYING) {
             if (++s_join_fails >= 4) {
@@ -377,23 +549,40 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             esp_wifi_connect();
             return;
         }
-        if (s_hold || s_join == NET_JOIN_FAILED) return;
+        /* A phone on the hotspot: stand still, or the station's scans take
+         * the hotspot off the air under it. */
+        if (s_hold || s_join == NET_JOIN_FAILED || (net_prov_ap_active() && s_ap_clients > 0))
+            return;
         /* Reconnect forever: this is a shack appliance, not a phone. Back off a
-         * little so a wrong passphrase does not spin the radio flat out. */
+         * little so a wrong passphrase does not spin the radio flat out. Each
+         * known network gets two tries, the one that was up a few more, then
+         * the next: whichever is in reach answers. */
+        if (was) s_try_fails = 0;
+        int next = s_try;
+        if (++s_try_fails >= (was ? 4 : 2) && s_nwifis > 1) {
+            next = (s_try + 1) % s_nwifis;
+            s_try_fails = 0;
+        }
         int delay = s_retries < 5 ? 500 : 5000;
         if (s_retries < 1000) s_retries++;
-        ESP_LOGW(TAG, "disconnected (attempt %d), retrying in %d ms",
-                 s_retries, delay);
+        ESP_LOGW(TAG, "disconnected from \"%.32s\" (reason %u, attempt %d); %s in %d ms",
+                 (const char *)d->ssid, d->reason, s_retries,
+                 next != s_try ? "the next network" : "again", delay);
         vTaskDelay(pdMS_TO_TICKS(delay));
-        esp_wifi_connect();
+        sta_try(next);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         s_connected = true;
         s_retries   = 0;
         ESP_LOGI(TAG, "got ip " IPSTR " gw " IPSTR,
                  IP2STR(&e->ip_info.ip), IP2STR(&e->ip_info.gw));
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+            strlcpy(s_now, (const char *)ap.ssid, sizeof s_now);
         xEventGroupSetBits(s_events, BIT_GOT_IP);
+        s_try_fails = 0;
         if (s_join == NET_JOIN_TRYING) s_join = NET_JOIN_OK;
+        else wifi_joined();
     }
 }
 
@@ -424,11 +613,9 @@ net_join_t net_prov_join_state(char *ssid, size_t sn, char *why, size_t wn)
 esp_err_t net_prov_join_keep(void)
 {
     if (s_join != NET_JOIN_OK) return ESP_ERR_INVALID_STATE;
-    vfo_cfg_t c = s_cfg;
-    strlcpy(c.ssid, s_join_ssid, sizeof c.ssid);
-    strlcpy(c.pass, s_join_pass, sizeof c.pass);
     s_join = NET_JOIN_IDLE;
-    return net_prov_save_cfg(&c);
+    /* Beside the ones known, not instead: home, and a phone's hotspot. */
+    return net_prov_wifi_add(s_join_ssid, s_join_pass);
 }
 
 void net_prov_hold_station(bool hold)
@@ -445,6 +632,7 @@ esp_err_t net_prov_init(void)
         err = nvs_flash_init();
     }
     ESP_RETURN_ON_ERROR(err, TAG, "nvs");
+    s_wmx = xSemaphoreCreateMutex();
     load_or_seed();
 
     /* The TCP/IP stack and the default event loop are prerequisites for ANY
@@ -506,11 +694,12 @@ bool net_prov_is_connected(void)    { return s_connected; }
 esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
 {
     if (!cfg) return ESP_ERR_INVALID_ARG;
+    /* A network given the old way, one at a time: to the list. */
+    if (cfg->ssid[0] && (strcmp(cfg->ssid, s_cfg.ssid) || strcmp(cfg->pass, s_cfg.pass)))
+        net_prov_wifi_add(cfg->ssid, cfg->pass);
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
     if (err != ESP_OK) return err;
-    nvs_set_str(h, "ssid", cfg->ssid);
-    nvs_set_str(h, "pass", cfg->pass);
     nvs_set_str(h, KEY_HOST, cfg->radio_host);
     nvs_set_u16(h, KEY_PORT, cfg->radio_port);
     nvs_set_str(h, KEY_USER, cfg->radio_user);
@@ -518,7 +707,13 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
     err = nvs_commit(h);
     nvs_close(h);
     if (err == ESP_OK) {
+        /* The network is the list's to say. */
+        char ssid[33], pass[65];
+        memcpy(ssid, s_cfg.ssid, sizeof ssid);
+        memcpy(pass, s_cfg.pass, sizeof pass);
         s_cfg = *cfg;
+        memcpy(s_cfg.ssid, ssid, sizeof ssid);
+        memcpy(s_cfg.pass, pass, sizeof pass);
         /* The endpoint given this way is the radio in use: the list follows. */
         if (s_nradios > 0) {
             net_radio_t *r = &s_radios[s_radio_sel];

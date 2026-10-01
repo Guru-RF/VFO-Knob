@@ -15,7 +15,7 @@
 #include "esp_err.h"
 
 typedef struct {
-    char     ssid[33];
+    char     ssid[33];         /* the WiFi network joined last: the list's first */
     char     pass[65];
     char     radio_host[64];   /* IP, or a name -- ".local" resolves via mDNS */
     uint16_t radio_port;
@@ -51,8 +51,30 @@ esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active);
 esp_err_t net_prov_radio_activate(int i);
 
 /* Written by the HTTP configuration page. Takes effect on the next boot: the
- * transport is chosen once at startup and the TCI client has no restart path. */
+ * transport is chosen once at startup and the TCI client has no restart path.
+ * Its ssid and pass, when they differ from the network joined last, are added
+ * to the networks (below), as a configuration page from before the list
+ * gives them. */
 esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg);
+
+/* The WiFi networks the knob knows -- up to NET_PROV_WIFIS: home and a
+ * phone's hotspot, say -- the one joined last first. The station tries them
+ * in turn until one answers, and whichever does goes to the front. The first
+ * is also kept where every firmware before the list kept its one network, so
+ * that one still finds it. */
+#define NET_PROV_WIFIS 4
+typedef struct { char ssid[33]; char pass[65]; } net_wifi_t;
+int       net_prov_wifi_count(void);
+/* The network the station is on, or "". */
+const char *net_prov_wifi_now(void);
+bool      net_prov_wifi_get(int i, net_wifi_t *out);
+/* The whole list, as the configuration page gives it. */
+esp_err_t net_prov_wifis_save(const net_wifi_t *list, int n);
+/* One more, or a new password for one known: to the front. */
+esp_err_t net_prov_wifi_add(const char *ssid, const char *pass);
+/* Now and then, from a task with room on its stack: writes the list when the
+ * network joined has moved to its front. */
+void      net_prov_tick(void);
 
 /* Credentials for the HTTP configuration page, default admin/admin. */
 const char *net_prov_web_user(void);
@@ -92,7 +114,7 @@ bool net_prov_is_connected(void);
  * Writes a dotted-quad into `out`. */
 esp_err_t net_prov_resolve(char *out, size_t out_len);
 
-/* --- the setup firmware's WiFi setup (net_ap.c) ---------------------------
+/* --- the knob's own hotspot, for WiFi setup (net_ap.c) ----------------------
  * A hotspot a phone can join, which sends it to the knob's page by itself (a
  * captive portal: DNS answers every name with the knob, DHCP names it as the
  * portal). The station stays up beside it. Needs net_prov_wifi_start() first. */
@@ -114,7 +136,9 @@ net_join_t net_prov_join_state(char *ssid, size_t sn, char *why, size_t wn);
 esp_err_t  net_prov_join_keep(void);
 
 /* While the hotspot is up, stop chasing the stored network: scanning the
- * channels for it takes the hotspot off the air, and the phone with it. */
+ * channels for it takes the hotspot off the air, and the phone with it. Even
+ * without this, the station stands still while a phone is on the hotspot,
+ * and takes up the known networks again when the last one leaves. */
 void net_prov_hold_station(bool hold);
 
 #endif /* NET_PROV_H */

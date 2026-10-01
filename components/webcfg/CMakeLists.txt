@@ -1,10 +1,8 @@
 # The chosen radio's client: see VFO_RADIO in the top-level CMakeLists.txt.
 idf_build_get_property(radio_client VFO_RADIO_CLIENT)
-# The setup firmware's WiFi setup page, for a phone on its hotspot.
-set(_pages "www/index.html" "www/radio.html")
-if(radio_client STREQUAL "setup_client")
-    list(APPEND _pages "www/portal.html")
-endif()
+# The WiFi setup page, for a phone on the knob's hotspot: the setup
+# firmware's, and every firmware's with none of its networks in reach.
+set(_pages "www/index.html" "www/radio.html" "www/portal.html")
 idf_component_register(
     SRCS "webcfg.c"
     INCLUDE_DIRS "include"
