@@ -51,6 +51,7 @@ typedef struct {
      * in the order of radio_mem_state_t. */
     bool     has_memories;
     uint8_t  mem_state, mem_group, mem_ch;
+    bool     mem_band;       /* the group is the band (the IC-9700): its name shown, no choice */
     char     mem_name[17];
     int8_t   mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t  mem_offset_hz;
@@ -123,6 +124,9 @@ typedef struct {
     /* A receiver (the IC-R8600): the slab says RECEIVER and keys nothing; a
      * headset on it just listens. */
     bool     rx_only;
+    /* Where the radio tunes, 0 = not known: the band editor offers only the
+     * bands inside (the IC-9700's 2 m, 70 cm and 23 cm). */
+    int64_t  f_min, f_max;
     /* Transient banner: AetherSDR's refusal reason, or ours. NULL for none. */
     const char *warn;
 } ui_state_t;

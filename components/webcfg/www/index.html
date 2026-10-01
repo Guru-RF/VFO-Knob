@@ -88,10 +88,10 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   <p class="note" id="icomnote" hidden>The radio's own network user. On the
      IC-705: <b>MENU &raquo; SET &raquo; WLAN Set &raquo; Remote Settings</b> &mdash;
      Network Control ON, and a Network User with this name and password. On the
-     IC-7610 and the IC-R8600: <b>MENU &raquo; SET &raquo; Network</b> &mdash;
-     Network Control ON, and Network User1 with this name and password. The
-     IC-R8600 is a receiver: the knob never keys it. The knob reaches the radio
-     over WiFi, and applies changes here on its next boot.</p>
+     IC-7610, the IC-9700 and the IC-R8600: <b>MENU &raquo; SET &raquo; Network</b>
+     &mdash; Network Control ON, and Network User1 with this name and password.
+     The IC-R8600 is a receiver: the knob never keys it. The knob reaches the
+     radio over WiFi, and applies changes here on its next boot.</p>
   <p class="note" id="flexnote" hidden>The radio's IP address: the knob joins
      it as a MultiFlex station of its own, with its own slice, beside SmartSDR,
      AetherSDR or a Maestro. MultiFlex must be enabled on the radio. The knob
@@ -394,7 +394,7 @@ async function load(){
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup';
   LINKNAME = c.link || 'Radio';
-  $('rtitle').textContent = icom ? 'IC-705 / IC-7610 / IC-R8600' : xiegu ? 'X6100 / X6200'
+  $('rtitle').textContent = icom ? 'Icom radios' : xiegu ? 'X6100 / X6200'
                           : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : uber ? 'UberSDR' : 'AetherSDR';
   $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
@@ -935,7 +935,7 @@ $('upload').onclick = async()=>{
  * The knob says which it runs; installing another is a deliberate switch,
  * which the knob accepts only when the upload names that radio. */
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
-              {id:'icom',      name:'Icom IC-705 / IC-7610 / IC-R8600 (LAN)'},
+              {id:'icom',      name:'Icom IC-705 / IC-7610 / IC-9700 / IC-R8600 (LAN)'},
               {id:'xiegu',     name:'Xiegu X6100 / X6200 (LAN)', soon:true},
               {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},

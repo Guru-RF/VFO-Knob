@@ -1084,6 +1084,8 @@ static void ui_task(void *arg)
 
         ui_state_t u = {
             .rx_only       = st.rx_only,
+            .f_min         = st.f_min,
+            .f_max         = st.f_max,
             .freq_hz       = st.f_display,
             .step_hz       = atomic_load(&s_step_hz),
             .mode          = st.mode,
@@ -1098,6 +1100,7 @@ static void ui_task(void *arg)
             .has_memories  = st.has_memories,
             .mem_state     = st.mem_state,
             .mem_group     = st.mem_group,
+            .mem_band      = st.mem_band,
             .mem_ch        = st.mem_ch,
             .mem_duplex    = st.mem_duplex,
             .mem_offset_hz = st.mem_offset_hz,

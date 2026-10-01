@@ -86,6 +86,8 @@ typedef struct {
     bool       has_memories;
     uint8_t    mem_state;      /* radio_mem_state_t */
     uint8_t    mem_group, mem_ch;
+    bool       mem_band;       /* the group is the band the radio is on (the
+                                  IC-9700's): none to choose on the dial */
     char       mem_name[17];   /* "" if it has none */
     int8_t     mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t    mem_offset_hz;
@@ -95,7 +97,7 @@ typedef struct {
      * the receiver the radio has selected; a radio with either has the swipe
      * choose them in place of memory mode. */
     char       model[16];      /* what the radio calls itself; "" = not said */
-    int64_t    f_max;          /* the highest it tunes; 0 = not known */
+    int64_t    f_min, f_max;   /* where it tunes; 0 = not known */
     /* A receiver (the IC-R8600): nothing to key -- the slab says RECEIVER,
      * and neither the glass nor a headset's button or boom arm keys. */
     bool       rx_only;

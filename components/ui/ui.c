@@ -767,6 +767,7 @@ static const struct { const char *name; int64_t hz; } BANDS[] = {
 #endif
 #if VFO_RADIO_ICOM
     { "2m",  144300000 }, { "70cm", 432200000 },
+    { "23cm", 1296200000 },             /* the IC-9700's and the IC-R8600's */
 #endif
 };
 #define NELEM(a) ((int)(sizeof (a) / sizeof (a)[0]))
@@ -951,14 +952,17 @@ static void shift_text(int8_t dup, int32_t hz, char *out, size_t n)
 /* What the memory face says: a channel, or why there is none yet. */
 RADIO_ONLY static void mem_texts(const ui_state_t *st, char *big, size_t nb, char *small, size_t ns)
 {
+    /* The IC-9700's group is the band it is on: named so. */
     if (st->mem_state == UI_MEM_READING) {
         snprintf(big, nb, "MEMORIES");
-        snprintf(small, ns, "reading group %02u", (unsigned)st->mem_group);
+        if (st->mem_band) snprintf(small, ns, "reading the %s ones", band_of(st->freq_hz));
+        else              snprintf(small, ns, "reading group %02u", (unsigned)st->mem_group);
         return;
     }
     if (st->mem_state == UI_MEM_EMPTY) {
         snprintf(big, nb, "NO MEMORIES");
-        snprintf(small, ns, "in group %02u", (unsigned)st->mem_group);
+        if (st->mem_band) snprintf(small, ns, "on %s", band_of(st->freq_hz));
+        else              snprintf(small, ns, "in group %02u", (unsigned)st->mem_group);
         return;
     }
     char f[24], sh[32] = "", tn[16] = "", t[24];
@@ -1181,11 +1185,19 @@ static int nearest_filter(int32_t w)
     return best;
 }
 
+/* A band the radio tunes: all of them, until it has said where it tunes. */
+static bool band_ok(int i)
+{
+    return (!s_last.f_min || BANDS[i].hz >= s_last.f_min) &&
+           (!s_last.f_max || BANDS[i].hz <= s_last.f_max);
+}
+
 static int nearest_band(int64_t hz)
 {
     int best = 0;
-    int64_t bd = (int64_t)1 << 60;
+    int64_t bd = (int64_t)1 << 62;
     for (int i = 0; i < NELEM(BANDS); i++) {
+        if (!band_ok(i)) continue;
         int64_t d = BANDS[i].hz - hz; if (d < 0) d = -d;
         if (d < bd) { bd = d; best = i; }
     }
@@ -1452,9 +1464,13 @@ void ui_edit_rotate(int32_t detents)
     }
     switch (s_edit) {
     case ED_BAND:
-        s_edit_idx += detents;
-        if (s_edit_idx < 0) s_edit_idx = 0;
-        if (s_edit_idx >= NELEM(BANDS)) s_edit_idx = NELEM(BANDS) - 1;
+        /* Over the bands the radio tunes, the others skipped. */
+        for (int k = detents > 0 ? detents : -detents; k > 0; k--) {
+            int j = s_edit_idx + (detents > 0 ? 1 : -1);
+            while (j >= 0 && j < NELEM(BANDS) && !band_ok(j)) j += detents > 0 ? 1 : -1;
+            if (j < 0 || j >= NELEM(BANDS)) break;
+            s_edit_idx = j;
+        }
         break;
     case ED_MODE:
         s_edit_idx += detents;
@@ -1961,7 +1977,11 @@ static void tap(lv_point_t p, uint32_t held)
      * A reflector's talkgroup is chosen with the dial, not an editor. */
     if (p.y >= 104 && p.y < 140) {
         if (REFLECTOR_FACE) return;
-        if      (p.x < CX - 38) edit_open(mem ? ED_GROUP : ED_BAND, &s_last);
+        if      (p.x < CX - 38) {
+            /* No group to choose where it is the band (the IC-9700): change
+             * the band in VFO mode. */
+            if (!(mem && s_last.mem_band)) edit_open(mem ? ED_GROUP : ED_BAND, &s_last);
+        }
         else if (p.x > CX + 38) edit_open(ED_FILTER, &s_last);
         else                    edit_open(ED_MODE,   &s_last);
         return;
@@ -3354,7 +3374,9 @@ void ui_update(const ui_state_t *st)
     set_text(s_mute_icon, st->muted ? SYM_MUTED : SYM_SOUND);
     set_text_color(s_mute_icon, st->muted ? C_DANGER : C_LABEL);
 #else
-    if (mem) {
+    if (mem && st->mem_band) {
+        set_text(s_band, band_of(f));          /* the IC-9700's group is its band */
+    } else if (mem) {
         char g[8];
         snprintf(g, sizeof g, "G%02u", (unsigned)st->mem_group);
         set_text(s_band, g);

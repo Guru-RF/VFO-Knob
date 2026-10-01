@@ -4,7 +4,8 @@
 protocol — the one RS-BA1 and wfview use — with receive and transmit audio:
 the knob and the radio are a complete station, with no computer in between.
 It knows the **IC-705** (its memories, its preamp), the **IC-7610** (MAIN
-and SUB, its antennas and its tuner) and the **IC-R8600** receiver (10 kHz to
+and SUB, its antennas and its tuner), the **IC-9700** (2 m, 70 cm and 23 cm,
+each band's power in its own watts) and the **IC-R8600** receiver (10 kHz to
 3 GHz and its three antennas — and nothing to key). Its face wears Icom's
 colours.
 
@@ -22,6 +23,8 @@ the box remote control is off on every one of them.
 | **IC-705** | *MENU » SET » WLAN Set* | WLAN **ON**, **Connection Type: Station**, and your WiFi network |
 | | *MENU » SET » WLAN Set » Remote Settings* | **Network Control: ON**, and a **Network User** with a name and a password |
 | **IC-7610** | its **LAN** socket | a network cable to your router or switch |
+| | *MENU » SET » Network* | **Network Control: ON**, and **Network User1** with a name and a password |
+| **IC-9700** | its **LAN** socket | a network cable to your router or switch |
 | | *MENU » SET » Network* | **Network Control: ON**, and **Network User1** with a name and a password |
 | **IC-R8600** | its **LAN** socket | a network cable to your router or switch |
 | | *MENU » SET » Network* | **Network Control: ON**, and **Network User1** with a name and a password |
@@ -47,7 +50,7 @@ What most often stands in the way:
 
 Open the knob's configuration page — hold a finger on the S-meter until the
 knob clicks, and browse to the address on the card; user `admin`, password
-`admin` until you change it. Under **IC-705 / IC-7610 / IC-R8600**:
+`admin` until you change it. Under **Icom radios**:
 
 | Field | |
 |---|---|
@@ -70,7 +73,7 @@ Until the radio answers, the knob says so, with its own addresses:
 | **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
 | **AGC** | the AGC editor | FAST, MID, SLOW |
 | **P.AMP** | the preamp editor | OFF, 1, 2 — or ON where the band has only one |
-| **Band** | the band editor | the band's own frequency, on a tap on the panel |
+| **Band** | the band editor | the band's own frequency, on a tap on the panel — only the bands the radio has: on the IC-9700 2 m, 70 cm and 23 cm |
 | **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, FM, RTTY, DIGU, DIGL — on the IC-R8600 WFM in place of DIGU and DIGL |
 | **Filter** | the filter editor | the radio's FIL1, FIL2, FIL3 |
 | **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 GHz up the digits read MMMM.kkk.h |
@@ -102,9 +105,9 @@ Tap a part of the face and its editor comes up; turn the knob to choose.
 
 | Swipe | Opens |
 |---|---|
-| **From the left** | RF GAIN, then — a tap on it — POWER, in watts (not on the IC-R8600). With a web SDR playing, BALANCE comes first |
+| **From the left** | RF GAIN, then — a tap on it — POWER, in watts: the band's, on the IC-9700 (100 W on 2 m, 75 on 70 cm, 10 on 23 cm). Not on the IC-R8600. With a web SDR playing, BALANCE comes first |
 | **From the right** | the IC-7610's TUNER: in the line, or out; the IC-R8600's SQUELCH |
-| **Down** | RX — LOCAL or a web SDR — then, on the IC-7610, MAIN or SUB and the antenna; on the IC-R8600 the antenna; on the IC-705, V/M |
+| **Down** | RX — LOCAL or a web SDR — then, on the IC-7610, MAIN or SUB and the antenna; on the IC-R8600 the antenna; on the IC-705 and the IC-9700, V/M |
 | **Up** | RADIO: another of the knob's radios |
 
 ### RF gain, power and the tuner
@@ -126,12 +129,16 @@ On SUB the knob does not key the radio: SUB only listens.
 |---|---|
 | ![VFO: SUB](icom/09-vfo.svg) | ![ANTENNA: ANT1+RX](icom/10-antenna.svg) |
 
-### Memory mode (IC-705)
+### Memory mode (IC-705, IC-9700)
 
 Swipe down to **V/M** and choose **MEMORY**: the frequency readout becomes the
 channel — its name, number, frequency, shift and tone — and the knob steps
 through the programmed channels of one group. Tap the group, where the band
 was, to choose another. **VFO** brings the VFO back, simplex.
+
+On the IC-9700 the group is the band the radio is on — its 2 m, 70 cm or
+23 cm channels — and its name stands where the group's number would: to reach
+another band's channels, change band in VFO mode first.
 
 | V/M | A channel |
 |---|---|
@@ -185,6 +192,11 @@ you transmit. A web SDR hears what it covers — a KiwiSDR or an UberSDR up to
 lifts from a tap — a swipe that starts on it never keys — and on the air a
 touch unkeys at once. The face turns red: SWR across the left half, forward
 power in watts across the right, the microphone on the thin inner ring.
+
+The knob's audio reaches the radio over the network: for each over the knob
+switches the radio's modulation input to it — WLAN on the IC-705, LAN on the
+IC-7610 and the IC-9700 — and back to what it was after. Nothing to set on the
+radio for that.
 
 ![On the air: SWR 1.3, 50 W of 100](icom/17-tx.svg)
 

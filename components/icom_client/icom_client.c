@@ -244,6 +244,7 @@ typedef struct {
     char     name[17];
 } mem_t;
 static mem_t *s_mem;                 /* MEM_CHANNELS of them, PSRAM */
+static bool   s_mem_restored;        /* the dial's memory state, read from NVS */
 
 /* While one of our overs has them switched to the network, the operator's
  * values are kept here too. RTC_NOINIT survives a crash or a watchdog reset,
@@ -648,10 +649,16 @@ typedef struct model {
     const char *const *modin_names; /* by value, for the log */
     uint8_t        n_modin_names;
     bool           memories;        /* groups of channels over 1A 00 */
+    /* ...the IC-9700's: a group per band, the one it is on -- 1 2 m, 2 70 cm,
+     * 3 23 cm -- of channels 1-99, in a layout of its own (on_memory). */
+    bool           mem_by_band;
     uint8_t        n_rx;            /* receivers: MAIN and SUB, 07 D0/D1/D2 */
     uint8_t        n_ant;           /* antennas to choose from, 12 */
     bool           rx_ant;          /* ...each also with the RX ANT input */
     uint16_t       max_w;           /* RF power's full scale, 14 0A; 0 = say % */
+    /* ...from 400 MHz and from 1 GHz, where it differs: the IC-9700's 75 W
+     * on 70 cm and 10 W on 23 cm. 0 = max_w there too. */
+    uint16_t       max_w_uhf, max_w_shf;
     bool           tuner;           /* an antenna tuner in the line, 1C 01 */
     /* A receiver: nothing to key, so no PTT, and none of the reads that go
      * with a transmitter -- 1C 00, RF power, RIT -- which it refuses. */
@@ -688,6 +695,20 @@ static const model_t MODELS[] = {
       .preamps = 1,
       .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
       .n_rx = 1, .n_ant = 3, .rx_only = true, .squelch = true },
+    /* The IC-9700: 2 m, 70 cm and 23 cm, an antenna for each -- nothing to
+     * choose -- and one preamp. 100 W on 2 m, 75 W on 70 cm, 10 W on 23 cm:
+     * POWER and the meter read in the band's watts. Its modulation inputs
+     * are the IC-7610's under other numbers (wfview's rig file; read back
+     * from the radio: MIC). Its memories are a group per band. It refuses
+     * 07 D2, so the dial works whichever band the radio has selected, MAIN
+     * or SUB. */
+    { .name = "IC-9700", .f_min = 144000000, .f_max = 1300000000,
+      .preamps = 1,
+      .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 10,
+      .modin_voice = 0x0115, .modin_data = 0x0116, .modin_lan = 5,
+      .modin_names = MODIN_7610, .n_modin_names = 6,
+      .memories = true, .mem_by_band = true,
+      .n_rx = 1, .max_w = 100, .max_w_uhf = 75, .max_w_shf = 10 },
     /* The X6100 and X6200: 0.5-54 MHz behind an IC-705's CI-V, one preamp.
      * Their server has neither the memories nor the modulation inputs. */
     { .name = "X6", .f_min = 500000, .f_max = 54000000,
@@ -713,6 +734,21 @@ static const model_t *model_now(void)
 {
     const model_t *m = S.model;
     return m ? m : &MODEL_OTHER;
+}
+
+/* RF power's full scale on the band the radio is on. */
+static uint16_t max_w_at(const model_t *m, int64_t f)
+{
+    if (m->max_w_shf && f >= 1000000000LL) return m->max_w_shf;
+    if (m->max_w_uhf && f >= 400000000LL)  return m->max_w_uhf;
+    return m->max_w;
+}
+
+/* The Po meter, times CAL_PO's 10 W: the band's full scale where it varies. */
+static float po_scale_now(void)
+{
+    const model_t *m = model_now();
+    return m->max_w_uhf ? max_w_at(m, S.f_server) / 10.0f : m->po_scale;
 }
 
 static const model_t *model_for(const char *name)
@@ -922,6 +958,7 @@ static void on_freq(int64_t f, uint32_t t)
 }
 
 static void on_memory(const uint8_t *p, size_t n);
+static void mem_nvs(bool save);
 
 /* The radio works its other receiver now, chosen on the dial or on the radio:
  * all the dial shows is that one's, the frequency first -- the radio's to say
@@ -1017,7 +1054,7 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
             switch (b[0]) {
             case 0x02: S.smeter_dbm = -73.0f + calibrate(model_now()->cal_s, model_now()->n_cal_s, raw);
                        break;
-            case 0x11: S.tx_fwd_w = CAL(CAL_PO, raw) * model_now()->po_scale;
+            case 0x11: S.tx_fwd_w = CAL(CAL_PO, raw) * po_scale_now();
                        if (S.tx_fwd_w > S.tx_peak_w || t - C.t_poll_tx > 400)
                            S.tx_peak_w = S.tx_fwd_w;
                        break;
@@ -1316,6 +1353,16 @@ static void on_control(const uint8_t *d, int n, uint32_t t)
         if (!m->memories) {
             C.no_mem = true;
             C.mem_scan = -1;
+        } else if (s_mem && !s_mem_restored) {
+            /* Back in memory mode if that is where the dial was, on this
+             * radio: the radio is still on the channel, so nothing needs
+             * sending. Once per start, under the model's own keys. */
+            s_mem_restored = true;
+            mem_nvs(false);
+            if (S.mem_mode) {
+                S.mem_state = RADIO_MEM_READING;
+                C.mem_sent  = S.mem_ch;
+            }
         }
         if (!m->modin_voice) C.no_modin = true;
         return;
@@ -1506,20 +1553,38 @@ static void send_tx_audio(bool mic)
  * The radio cannot be asked which channel, or even which mode, it is on, so
  * the dial keeps its own: the group, the channel and whether it is in memory
  * mode are remembered (NVS) and put back after a restart. */
+/* The IC-9700's memory group: the band it is on -- 1 2 m, 2 70 cm, 3 23 cm;
+ * 0 off its bands. It has no command to choose another. */
+static uint8_t band_group(int64_t f)
+{
+    if (f >= 144000000LL && f <= 148000000LL)   return 1;
+    if (f >= 420000000LL && f <= 450000000LL)   return 2;
+    if (f >= 1240000000LL && f <= 1300000000LL) return 3;
+    return 0;
+}
+
+/* The first channel of a group: the IC-705 counts from 00, the IC-9700 from 01. */
+static int16_t mem_first(void) { return model_now()->mem_by_band ? 1 : 0; }
+
+/* The dial's memory state, kept per firmware -- and, for the IC-9700, under
+ * keys of its own: its channel and mode are not the IC-705's, and its group
+ * is the band it is on. Read once the radio has said which it is. */
 static void mem_nvs(bool save)
 {
+    const bool b = model_now()->mem_by_band;
+    const char *k_ch = b ? "bmch" : "mch", *k_mode = b ? "bmmode" : "mmode";
     nvs_handle_t h;
     if (nvs_open(MEM_NVS_NS, save ? NVS_READWRITE : NVS_READONLY, &h) != ESP_OK) return;
     if (save) {
-        nvs_set_u8(h, "mgrp", C.mem_group);
-        nvs_set_u8(h, "mch", S.mem_ch);
-        nvs_set_u8(h, "mmode", S.mem_mode);
+        if (!b) nvs_set_u8(h, "mgrp", C.mem_group);
+        nvs_set_u8(h, k_ch, S.mem_ch);
+        nvs_set_u8(h, k_mode, S.mem_mode);
         nvs_commit(h);
     } else {
         uint8_t v;
-        if (nvs_get_u8(h, "mgrp", &v) == ESP_OK && v < 100) C.mem_group = v;
-        if (nvs_get_u8(h, "mch", &v) == ESP_OK && v < MEM_CHANNELS) S.mem_ch = v;
-        if (nvs_get_u8(h, "mmode", &v) == ESP_OK) S.mem_mode = v != 0;
+        if (!b && nvs_get_u8(h, "mgrp", &v) == ESP_OK && v < 100) C.mem_group = v;
+        if (nvs_get_u8(h, k_ch, &v) == ESP_OK && v < MEM_CHANNELS) S.mem_ch = v;
+        if (nvs_get_u8(h, k_mode, &v) == ESP_OK) S.mem_mode = v != 0;
     }
     nvs_close(h);
 }
@@ -1558,7 +1623,8 @@ static void mem_put(uint8_t ch, bool enter, uint32_t t)
 {
     if (enter) {
         CIV(0x08);                                   /* memory mode */
-        CIV(0x08, 0xA0, bcd(C.mem_group));           /* the dial's group */
+        if (!model_now()->mem_by_band)
+            CIV(0x08, 0xA0, bcd(C.mem_group));       /* the dial's group */
     }
     CIV(0x08, bcd(ch / 100), bcd(ch % 100));
     C.mem_sent  = ch;
@@ -1606,27 +1672,36 @@ static void mem_next(void)
 
 static void on_memory(const uint8_t *p, size_t n)
 {
-    if (n < 5 || !s_mem) return;
-    const unsigned grp = unbcd(p[0]) * 100 + unbcd(p[1]);
-    const unsigned ch  = unbcd(p[2]) * 100 + unbcd(p[3]);
+    /* The IC-705's: a two-byte group, then the channel, the select byte and
+     * from 5 on the channel; its name at 99, after a second VFO's. The
+     * IC-9700's (wfview's rig file): a one-byte group -- its band -- so all
+     * of it one byte earlier, and the name at 51, nothing between. A blank
+     * channel is answered with the select byte alone, FF: 4 bytes there. */
+    const bool b = model_now()->mem_by_band;
+    if (n < (b ? 4u : 5u) || !s_mem) return;
+    const uint8_t *q = b ? p - 1 : p;                /* q[k]: the IC-705's offset k */
+    const unsigned grp = b ? unbcd(p[0]) : unbcd(p[0]) * 100 + unbcd(p[1]);
+    const unsigned ch  = unbcd(q[2]) * 100 + unbcd(q[3]);
+    const size_t   len_min = b ? 67 : 115;
+    const uint8_t *name = b ? p + 51 : p + 99;
     if (grp != C.mem_group || ch >= MEM_CHANNELS) return;
 
     mem_t m = { 0 };
-    if (n >= 115 && p[4] != 0xFF) {
+    if (n >= len_min && q[4] != 0xFF) {
         /* Offsets from the payload's start: 5 frequency, 13 duplex and tone
          * mode, 15 the tone, 18 the tone squelch's, 25 the offset (100 Hz,
-         * least significant first), 99 the name. */
-        const uint8_t tm = p[13] & 0x0F;             /* 1 TONE, 2 TSQL */
-        const uint8_t *tf = tm == 2 ? p + 18 : p + 15;
+         * least significant first). */
+        const uint8_t tm = q[13] & 0x0F;             /* 1 TONE, 2 TSQL */
+        const uint8_t *tf = tm == 2 ? q + 18 : q + 15;
         m.used      = true;
-        m.hz        = freq_from(p + 5);
-        m.duplex    = (p[13] >> 4) == 1 ? -1 : (p[13] >> 4) == 2 ? 1 : 0;
-        m.offset_hz = (int32_t)(unbcd(p[25]) + 100 * unbcd(p[26]) + 10000 * unbcd(p[27])) * 100;
+        m.hz        = freq_from(q + 5);
+        m.duplex    = (q[13] >> 4) == 1 ? -1 : (q[13] >> 4) == 2 ? 1 : 0;
+        m.offset_hz = (int32_t)(unbcd(q[25]) + 100 * unbcd(q[26]) + 10000 * unbcd(q[27])) * 100;
         if (tm == 1 || tm == 2)
             m.tone_dhz = (uint16_t)(unbcd(tf[0]) * 10000 + unbcd(tf[1]) * 100 + unbcd(tf[2]));
         int len = 0;
         for (int i = 0; i < 16; i++) {
-            const char c = (char)p[99 + i];
+            const char c = (char)name[i];
             m.name[i] = (c >= 0x20 && c < 0x7F) ? c : ' ';
             if (m.name[i] != ' ') len = i + 1;
         }
@@ -1641,16 +1716,22 @@ static void on_memory(const uint8_t *p, size_t n)
     if ((int)ch == C.mem_scan) mem_next();
 }
 
+static void mem_set_group(uint8_t g);
+
 static void mem_enter(uint32_t t)
 {
     S.mem_mode = true;
-    if (C.mem_loaded) {
+    /* The IC-9700's group is the band it is on: another band, another read. */
+    const uint8_t g = model_now()->mem_by_band ? band_group(S.f_server) : 0;
+    if (g && g != C.mem_group) {
+        mem_set_group(g);                   /* reads it, and selects when read */
+    } else if (C.mem_loaded) {
         mem_go(t);
     } else {
         S.mem_state = RADIO_MEM_READING;
         C.mem_select_due = true;
     }
-    if (C.mem_scan < 0) mem_read_from(0);           /* catch edits on the radio */
+    if (C.mem_scan < 0) mem_read_from(mem_first());  /* catch edits on the radio */
     mem_nvs(true);
 }
 
@@ -1685,7 +1766,7 @@ static void mem_set_group(uint8_t g)
     memset(s_mem, 0, MEM_CHANNELS * sizeof *s_mem);
     S.mem_ch = 0;                          /* the old channel was another group's */
     taskEXIT_CRITICAL(&S_LOCK);
-    mem_read_from(0);
+    mem_read_from(mem_first());
     if (S.mem_mode) {
         S.mem_state = RADIO_MEM_READING;
         C.mem_select_due = true;
@@ -1712,9 +1793,13 @@ static void mem_task(uint32_t t)
         else      mem_leave();
     }
 
-    /* Read the group, one channel at a time, never while transmitting. */
-    if (!C.mem_loaded && C.mem_scan < 0 && t - S.t_ready_ms >= MEM_SETTLE_MS)
-        mem_read_from(0);
+    /* Read the group, one channel at a time, never while transmitting -- on
+     * the IC-9700, the band it is on. */
+    if (!C.mem_loaded && C.mem_scan < 0 && t - S.t_ready_ms >= MEM_SETTLE_MS) {
+        const uint8_t g = model_now()->mem_by_band ? band_group(S.f_server) : 0;
+        if (g) C.mem_group = g;
+        if (g || !model_now()->mem_by_band) mem_read_from(mem_first());
+    }
     if (C.mem_scan >= 0 && !keyed &&
         (!C.t_mem_req || t - C.t_mem_req >= MEM_REQ_MS)) {
         if (C.t_mem_req && ++C.mem_tries >= 3) {
@@ -1723,8 +1808,11 @@ static void mem_task(uint32_t t)
         }
         if (C.mem_scan >= 0) {
             const unsigned ch = (unsigned)C.mem_scan;
-            CIV(0x1A, 0x00, bcd(C.mem_group / 100), bcd(C.mem_group % 100),
-                bcd(ch / 100), bcd(ch % 100));
+            if (model_now()->mem_by_band)
+                CIV(0x1A, 0x00, bcd(C.mem_group), bcd(ch / 100), bcd(ch % 100));
+            else
+                CIV(0x1A, 0x00, bcd(C.mem_group / 100), bcd(C.mem_group % 100),
+                    bcd(ch / 100), bcd(ch % 100));
             C.t_mem_req = t ? t : 1;
         }
     }
@@ -2053,16 +2141,9 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     S.model = &MODEL_OTHER;
     C.mem_scan = -1;
     C.mem_sent = -1;
+    /* Read from NVS once the radio has said which it is (its capabilities):
+     * the IC-9700 keeps its own. */
     s_mem = heap_caps_calloc(MEM_CHANNELS, sizeof *s_mem, MALLOC_CAP_SPIRAM);
-    if (s_mem) {
-        /* Back in memory mode if that is where the dial was: the radio is
-         * still on the channel, so nothing needs sending. */
-        mem_nvs(false);
-        if (S.mem_mode) {
-            S.mem_state = RADIO_MEM_READING;
-            C.mem_sent  = S.mem_ch;
-        }
-    }
 
     s_later = xQueueCreate(16, sizeof(civ_msg_t));
     ESP_RETURN_ON_FALSE(s_later, ESP_ERR_NO_MEM, TAG, "queue");
@@ -2211,7 +2292,8 @@ void radio_memory_mode(bool on)
 
 void radio_memory_group(uint8_t group)
 {
-    if (s_mem && group < 100) S.pending_group = group;
+    /* Not on the IC-9700: its group is the band it is on. */
+    if (s_mem && group < 100 && !model_now()->mem_by_band) S.pending_group = group;
 }
 
 void radio_select_rx(uint8_t rx)
@@ -2278,8 +2360,9 @@ void radio_get_status(radio_status_t *o)
     o->have_levels  = S.have_rf_gain && S.have_rf_power;
     o->rf_gain_pct  = (uint8_t)((S.rf_gain  * 100u + 127u) / 255u);
     o->rf_power_pct = (uint8_t)((S.rf_power * 100u + 127u) / 255u);
-    o->max_w        = m->max_w;
+    o->max_w        = max_w_at(m, S.f_server);
     strlcpy(o->model, C.radio_name, sizeof o->model);
+    o->f_min        = m->f_min;
     o->f_max        = m->f_max;
     o->has_tuner    = m->tuner;
     o->have_tuner   = S.have_tuner;
@@ -2295,6 +2378,7 @@ void radio_get_status(radio_status_t *o)
     o->have_ant   = S.have_ant;
     o->mem_state  = S.mem_mode ? S.mem_state : RADIO_MEM_OFF;
     o->mem_group  = C.mem_group;
+    o->mem_band   = m->mem_by_band;
     o->mem_ch     = S.mem_ch;
     if (S.mem_mode && s_mem && s_mem[S.mem_ch].used) {
         const mem_t *m = &s_mem[S.mem_ch];

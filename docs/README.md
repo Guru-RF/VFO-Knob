@@ -7,7 +7,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | Guide | Firmware |
 |---|---|
 | [Setup](setup.md) | `vfo-knob-setup` — what every knob ships with: WiFi from a phone, then the firmware for your radio |
-| [Icom](icom.md) | `vfo-knob-icom` — the IC-705, the IC-7610 and the IC-R8600 receiver, over the radio's own LAN |
+| [Icom](icom.md) | `vfo-knob-icom` — the IC-705, the IC-7610, the IC-9700 and the IC-R8600 receiver, over the radio's own LAN |
 | [FlexRadio](multiflex.md) | `vfo-knob-multiflex` — a MultiFlex station, on the LAN and through SmartLink |
 | [AetherSDR](aethersdr.md) | `vfo-knob-aethersdr` — a dial for AetherSDR, over the USB cable or WiFi |
 | [SvxLink](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |

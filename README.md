@@ -1,7 +1,7 @@
 # VFO-Knob
 
 A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
-FlexRadio and the Icom IC-705, IC-7610 and IC-R8600, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
+FlexRadio and the Icom IC-705, IC-7610, IC-9700 and IC-R8600, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
 over WiFi. And, with firmware of their own, a talkgroup knob for SvxLink
 reflectors and a dial for UberSDR web receivers.
@@ -26,8 +26,9 @@ With an **IC-705** it talks to the radio itself, over WiFi, in Icom's network
 protocol — the one RS-BA1 and wfview use — with receive and transmit audio,
 so knob and radio are a complete station with no computer in between. Its face
 wears Icom's colours, so which radio a knob is for shows at a glance. The same
-firmware runs the IC-7610, with MAIN or SUB and its antennas on a swipe, and
-the IC-R8600 receiver, 10 kHz to 3 GHz, which it never keys. The guide says
+firmware runs the IC-7610, with MAIN or SUB and its antennas on a swipe, the
+IC-9700 on 2 m, 70 cm and 23 cm, and the IC-R8600 receiver, 10 kHz to 3 GHz,
+which it never keys. The guide says
 how to set each radio up for it: see [the Icom guide](docs/icom.md).
 
 With a **FlexRadio** it is one of the radio's MultiFlex stations, over the
@@ -61,8 +62,8 @@ beside the S-meter, and its SSTV pictures on the glass. It only receives. See
 | **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button the PTT. The slab shows the headset, its microphone struck through in red while muted, and a press does not key while it is; optionally the boom arm is the PTT, down to talk. On the UberSDR firmware, only for listening. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
-| **Memories** | On the IC-705, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another). VFO again for the VFO, simplex. |
-| **Radios** | Up to four per firmware on the configuration page — an IC-705, an IC-7610 and an IC-R8600, two FlexRadios, AetherSDR on two computers — and, on the FlexRadio firmware, the SmartLink account's. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves; under the name, **LAN** or **SmartLink** says how it is reached. Not over the USB cable, which reaches one computer or one radio. |
+| **Memories** | On the IC-705 and the IC-9700, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another; on the IC-9700 the group is the band it is on). VFO again for the VFO, simplex. |
+| **Radios** | Up to four per firmware on the configuration page — an IC-705, an IC-7610, an IC-9700 and an IC-R8600, two FlexRadios, AetherSDR on two computers — and, on the FlexRadio firmware, the SmartLink account's. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves; under the name, **LAN** or **SmartLink** says how it is reached. Not over the USB cable, which reaches one computer or one radio. |
 | **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns (with a web SDR chosen, BALANCE comes first). Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
 | **Web SDR** | On the Icom, Xiegu and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.14.0`, or `… dev` for a build that is not a release) and the knob's addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
@@ -286,7 +287,7 @@ some receivers put on each address. The address is the receiver's own plain
 
 | | |
 |---|---|
-| **Swipe down** | **RX**: turn through **LOCAL** and the receivers by name, tap to listen. The IC-7610 then goes on to MAIN/SUB and the antenna for the radio's side, whichever was chosen: with an SDR the radio still plays in the left ear. The IC-R8600 goes on to its antenna, the IC-705 to V/M. |
+| **Swipe down** | **RX**: turn through **LOCAL** and the receivers by name, tap to listen. The IC-7610 then goes on to MAIN/SUB and the antenna for the radio's side, whichever was chosen: with an SDR the radio still plays in the left ear. The IC-R8600 goes on to its antenna, the IC-705 and the IC-9700 to V/M. |
 | **Listening** | The SDR follows the radio: frequency, mode and passband, retuned as the dial turns. The radio is in the left ear and the SDR in the right, both levelled to the same loudness. |
 | **Its S-meter** | A thin blue line just outside the radio's S-meter, on the same scale, and its reading in blue under the radio's, where the dBm is otherwise: **S9+20** against the radio's **S7**. Dots while it connects; a word, in amber, when it cannot — *busy*, *no apps*, *password?*, *day limit*, *no answer*. |
 | **Balance** | First on the swipe from the left while an SDR is chosen; a tap on it goes on to RF GAIN and POWER. From **RADIO**, the radio alone, through **L \| R** to **SDR**, the SDR alone. |
