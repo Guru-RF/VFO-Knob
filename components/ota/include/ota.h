@@ -84,12 +84,14 @@ esp_err_t ota_fetch_index(char *buf, size_t cap);
 
 /* The knob's microSD card (components/sd_cache). Every install takes the
  * image from it when it holds the one wanted, its sha256 checked, and
- * otherwise puts the download on it first and installs from there, the copy
- * kept; a switch with no update server in reach takes the card's own. */
+ * otherwise downloads it straight in and then puts a copy on the card -- the
+ * two never side by side, which TLS's hardware AES did not survive; a switch
+ * with no update server in reach takes the card's own. */
 
 /* The latest of a radio's firmware onto the card, unless it is there: the
- * setup firmware fills the card with every one. TLS on the caller's stack,
- * which wants 8 kB; `stop` set ends a download early. */
+ * setup firmware fills the card with every one. Into PSRAM first, then onto
+ * the card. TLS on the caller's stack, which wants 8 kB; `stop` set ends a
+ * download early. */
 esp_err_t ota_cache(const char *radio, volatile bool *stop);
 
 /* The index, as the card last kept it: for a setup firmware whose update

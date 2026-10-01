@@ -70,7 +70,7 @@ it was made still offers every firmware there is by then. The last entry is
 
 The knob downloads the image, checks its signature, installs it and restarts
 into it. It keeps the WiFi settings: the new firmware joins the same network.
-With an SD card in the knob, the image is put on the card on its way in, and a
+With an SD card in the knob, a copy of the image is kept on it, and a
 firmware already there installs from the card in a few seconds — see
 [The SD card](#the-sd-card).
 

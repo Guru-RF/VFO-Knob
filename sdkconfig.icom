@@ -12,3 +12,10 @@ CONFIG_LWIP_MAX_SOCKETS=16
 # ...and every address its name stands for, to try each in turn. Safe only
 # without SNTP: lwIP's cache then writes them all where SNTP keeps one.
 CONFIG_LWIP_DNS_MAX_HOST_IP=4
+
+# AES in software, as every other firmware now: the engine's DMA takes its
+# bounce buffers from internal RAM, 1600 bytes at a time, and with the
+# Bluetooth headset's link beside WiFi there was none to spare -- an update
+# died at 27% on "esp-aes: Failed to allocate memory", downloading straight
+# into flash. Only the update downloads use TLS here.
+CONFIG_MBEDTLS_HARDWARE_AES=n

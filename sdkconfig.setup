@@ -5,3 +5,9 @@
 # WiFi only, without the USB networking of sdkconfig.usbnet: the hotspot and
 # the station are the whole of its networking, and leaving TinyUSB out keeps
 # the serial console on the cable.
+
+# AES in software, as every radio's firmware: the engine's DMA takes its
+# bounce buffers from internal RAM, 1600 bytes at a time, and filling the SD
+# card in the background, they could not be had ("esp-aes: Failed to allocate
+# memory") and downloads died a few per cent in.
+CONFIG_MBEDTLS_HARDWARE_AES=n

@@ -460,8 +460,8 @@ boot-loop guard.
 **The SD card.** The knob keeps its firmwares on its microSD card, in one
 folder, `VFO-KNOB` (components/sd_cache). Every install takes the image from
 the card when it holds the one wanted — its sha256 against the manifest, then
-the signature as for any image — and otherwise downloads onto the card first
-and installs from there, the copy kept. The setup firmware fills the card with
+the signature as for any image — and otherwise downloads it straight in, as
+without a card, and then keeps a copy on the card. The setup firmware fills the card with
 every firmware published while it shows its list, and with no update server
 in reach lists and installs what the card holds; a radio's firmware goes back
 to the setup firmware from the card without a network. Without a card,

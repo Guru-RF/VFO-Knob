@@ -200,11 +200,45 @@ out:
     return err;
 }
 
+/* Whether `n` bytes hash to the sha256 given (hex), a piece at a time. */
+static bool sha_is(const uint8_t *data, size_t n, const char *sha_hex)
+{
+    mbedtls_sha256_context c;
+    mbedtls_sha256_init(&c);
+    mbedtls_sha256_starts(&c, 0);
+    for (size_t at = 0; at < n; at += 8192)
+        mbedtls_sha256_update(&c, data + at, n - at < 8192 ? n - at : 8192);
+    uint8_t d[32];
+    char hex[65];
+    mbedtls_sha256_finish(&c, d);
+    mbedtls_sha256_free(&c);
+    for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", d[i]);
+    return strcasecmp(hex, sha_hex) == 0;
+}
+
+/* An image onto the card with its manifest, the card mounted -- or nothing
+ * left there. */
+static esp_err_t card_write(const char *radio, const uint8_t *img, size_t size, const char *manifest)
+{
+    if (!sdc_room(radio, size)) return ESP_ERR_NO_MEM;
+    FILE *f = sdc_image_create(radio);
+    if (!f) return ESP_FAIL;
+    esp_err_t err = fwrite(img, 1, size, f) == size ? ESP_OK : ESP_FAIL;
+    if (fclose(f) != 0) err = ESP_FAIL;
+    if (err == ESP_OK) err = sdc_image_commit(radio, manifest);
+    if (err != ESP_OK) sdc_image_discard(radio);
+    return err;
+}
+
 /* An image downloaded onto the card, its sha256 checked against the
- * manifest's as it comes, and put in place with that manifest -- or nothing
- * left on the card. The progress to pct_end; `stop` ends it early. */
+ * manifest's -- or nothing left on the card. Into PSRAM first, and onto the
+ * card only once its connection is closed, the card mounted only then: the
+ * two at once failed, as TLS's hardware AES and the card's DMA each take
+ * internal DMA RAM for their bounce buffers a little at a time, and the AES
+ * went without ("esp-aes: Failed to allocate memory") a few per cent in.
+ * `stop` ends it early. */
 static esp_err_t download_to_card(const char *url, const char *radio, const char *sha_hex,
-                                  const char *manifest, int pct_end, volatile bool *stop)
+                                  const char *manifest, volatile bool *stop)
 {
     esp_http_client_config_t hc = {
         .url               = url,
@@ -215,27 +249,21 @@ static esp_err_t download_to_card(const char *url, const char *radio, const char
     esp_http_client_handle_t h = esp_http_client_init(&hc);
     if (!h) return ESP_ERR_NO_MEM;
     esp_http_client_set_header(h, "User-Agent", "VFO-Knob");
-    enum { CHUNK = 8192 };
-    uint8_t *buf = heap_caps_malloc(CHUNK, MALLOC_CAP_SPIRAM);
-    FILE *f = NULL;
-    mbedtls_sha256_context c;
-    mbedtls_sha256_init(&c);
-    esp_err_t err = buf ? esp_http_client_open(h, 0) : ESP_ERR_NO_MEM;
-    if (err != ESP_OK) goto out;
-    const int64_t total = esp_http_client_fetch_headers(h);
-    if (esp_http_client_get_status_code(h) != 200 || total <= 0) {
-        err = ESP_ERR_INVALID_RESPONSE;
-        goto out;
+    uint8_t *img = NULL;
+    int64_t total = 0, got = 0;
+    esp_err_t err = esp_http_client_open(h, 0);
+    if (err == ESP_OK) {
+        total = esp_http_client_fetch_headers(h);
+        if (esp_http_client_get_status_code(h) != 200 || total <= 0 || total > 4 * 1024 * 1024)
+            err = ESP_ERR_INVALID_RESPONSE;
+        else if (!(img = heap_caps_malloc((size_t)total, MALLOC_CAP_SPIRAM)))
+            err = ESP_ERR_NO_MEM;
     }
-    if (!sdc_room(radio, (size_t)total) || !(f = sdc_image_create(radio))) {
-        err = ESP_ERR_NO_MEM;
-        goto out;
-    }
-    mbedtls_sha256_starts(&c, 0);
-    int64_t got = 0, moved = esp_timer_get_time();
-    while (got < total) {
+    int64_t moved = esp_timer_get_time();
+    while (err == ESP_OK && got < total) {
         if (stop && *stop) { err = ESP_ERR_INVALID_STATE; break; }
-        const int n = esp_http_client_read(h, (char *)buf, CHUNK);
+        const int n = esp_http_client_read(h, (char *)img + got,
+                                           (int)(total - got < 8192 ? total - got : 8192));
         /* No data yet is not an error -- esp_https_ota reads on through it
          * too -- unless nothing comes for half a minute. */
         if (n == -ESP_ERR_HTTP_EAGAIN && esp_timer_get_time() - moved < 30000000) continue;
@@ -246,32 +274,38 @@ static esp_err_t download_to_card(const char *url, const char *radio, const char
             break;
         }
         moved = esp_timer_get_time();
-        if (fwrite(buf, 1, (size_t)n, f) != (size_t)n) { err = ESP_FAIL; break; }
-        mbedtls_sha256_update(&c, buf, (size_t)n);
         got += n;
-        if (pct_end) {
-            portENTER_CRITICAL(&s_lock);
-            s_st.percent = (int)(got * pct_end / total);
-            portEXIT_CRITICAL(&s_lock);
-        }
     }
-    if (fclose(f) != 0 && err == ESP_OK) err = ESP_FAIL;
-    f = NULL;
-    if (err == ESP_OK) {
-        uint8_t d[32];
-        char hex[65];
-        mbedtls_sha256_finish(&c, d);
-        for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", d[i]);
-        err = strcasecmp(hex, sha_hex) ? ESP_ERR_INVALID_CRC : sdc_image_commit(radio, manifest);
-    }
-out:
-    if (f) fclose(f);
-    if (err != ESP_OK) sdc_image_discard(radio);
-    mbedtls_sha256_free(&c);
-    free(buf);
     esp_http_client_close(h);
     esp_http_client_cleanup(h);
+    if (err == ESP_OK && !sha_is(img, (size_t)total, sha_hex)) err = ESP_ERR_INVALID_CRC;
+    if (err == ESP_OK) {
+        if (sdc_mount()) {
+            err = card_write(radio, img, (size_t)total, manifest);
+            sdc_unmount();
+        } else {
+            err = ESP_ERR_NOT_FOUND;
+        }
+    }
+    free(img);
     return err;
+}
+
+/* The image just installed, from its update slot onto the card, the card not
+ * mounted: for the next time. After the download, never beside it -- see
+ * download_to_card(). */
+static void card_keep(const char *radio, size_t size, const char *sha_hex, const char *manifest)
+{
+    const esp_partition_t *part = esp_ota_get_boot_partition();
+    if (!part || !size || size > part->size || !sdc_mount()) return;
+    set_phase(OTA_DOWNLOADING, "a copy onto the SD card");
+    uint8_t *img = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+    esp_err_t err = img ? esp_partition_read(part, 0, img, size) : ESP_ERR_NO_MEM;
+    if (err == ESP_OK && !sha_is(img, size, sha_hex)) err = ESP_ERR_INVALID_CRC;
+    if (err == ESP_OK) err = card_write(radio, img, size, manifest);
+    free(img);
+    sdc_unmount();
+    ESP_LOGI(TAG, "SD card: a copy of %s: %s", radio, esp_err_to_name(err));
 }
 
 /* The card's manifest for a radio says the same image as the server's -- or,
@@ -340,6 +374,7 @@ static void ota_run(bool install)
      * otherwise be taken from internal RAM first. */
     const size_t cap = 2048;
     char *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    char *keep = NULL;                /* the manifest, for the SD card's copy */
     if (!body) body = malloc(cap);
     if (!body) { set_phase(OTA_FAILED, "out of memory"); goto done; }
 
@@ -411,32 +446,25 @@ static void ota_run(bool install)
     }
     snprintf(url, sizeof url, "%s%s", base, file);
 
-    /* The SD card: the image if it has this one, its sha256 checked -- else
-     * downloaded onto it first and installed from it, the copy kept for the
-     * next time. Without a card, or room on it, straight in as ever. */
+    /* The SD card: the image if it has this one, its sha256 checked, and
+     * installed from it. Else downloaded straight in as ever, and a copy put
+     * on the card after, for the next time -- not downloaded onto the card
+     * and installed from there, which ran TLS and the card side by side:
+     * see download_to_card(). */
     char sha[72] = "";
+    const char *radio = sw ? s_switch : ota_radio();
     json_string_field(body, "sha256", sha, sizeof sha);
     if (sha[0] && sdc_mount()) {
-        const char *radio = sw ? s_switch : ota_radio();
-        bool have = false, fetched = false;
+        bool have = false;
         if (card_has(radio, sha, NULL, 0)) {
             set_phase(OTA_CHECKING, "checking the SD card's copy");
             have = sdc_image_ok(radio, sha);
             if (!have) ESP_LOGW(TAG, "the SD card's %s does not match its manifest", radio);
         }
-        if (!have && !from_card) {
-            set_phase(OTA_DOWNLOADING, sw ? "downloading the firmware" : "downloading update");
-            ESP_LOGI(TAG, "internal RAM free %u, largest DMA block %u",
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-            const esp_err_t e = download_to_card(url, radio, sha, body, 80, NULL);
-            have = fetched = e == ESP_OK;
-            if (!have) ESP_LOGW(TAG, "not onto the SD card (%s): straight in", esp_err_to_name(e));
-        }
         if (have) {
             free(body);
             body = NULL;
-            const esp_err_t e = install_from_card(radio, want, fetched ? 80 : 0);
+            const esp_err_t e = install_from_card(radio, want, 0);
             sdc_unmount();
             if (e == ESP_OK)
                 set_phase(OTA_DONE_REBOOT_NEEDED, "update installed; reboot to run it");
@@ -452,6 +480,9 @@ static void ota_run(bool install)
         set_phase(OTA_FAILED, "no route to the update server");
         goto done;
     }
+    /* The manifest, for the card's copy; in PSRAM, as small as it is. */
+    if (sha[0] && (keep = heap_caps_malloc(strlen(body) + 1, MALLOC_CAP_SPIRAM)))
+        strcpy(keep, body);
     free(body);
     body = NULL;                      /* the TLS session wants the room back */
 
@@ -505,9 +536,11 @@ static void ota_run(bool install)
         set_phase(OTA_FAILED, "update rejected -- bad signature or bad image");
         goto done;
     }
+    if (keep && total > 0) card_keep(radio, (size_t)total, sha, keep);
     set_phase(OTA_DONE_REBOOT_NEEDED, "update installed; reboot to run it");
 
 done:
+    free(keep);
     free(body);
     s_switch[0] = 0;
     portENTER_CRITICAL(&s_lock);
@@ -764,17 +797,18 @@ esp_err_t ota_cache(const char *radio, volatile bool *stop)
     json_string_field(body, "version", ver, sizeof ver);
     if (e == ESP_OK && !sdc_mount()) e = ESP_ERR_NOT_FOUND;
     if (e == ESP_OK) {
-        if (card_has(radio, sha, NULL, 0)) {
+        const bool have = card_has(radio, sha, NULL, 0);
+        sdc_unmount();                    /* not through the download: its RAM is TLS's */
+        if (have) {
             ESP_LOGI(TAG, "SD card: %s %s, already", radio, ver);
         } else {
             snprintf(url, sizeof url, "%s%s", base, file);
             const int64_t t = esp_timer_get_time();
-            e = download_to_card(url, radio, sha, body, 0, stop);
+            e = download_to_card(url, radio, sha, body, stop);
             ESP_LOGI(TAG, "SD card: %s %s %s in %lld s", radio, ver,
                      e == ESP_OK ? "fetched" : esp_err_to_name(e),
                      (long long)((esp_timer_get_time() - t) / 1000000));
         }
-        sdc_unmount();
     }
     free(body);
     return e;
