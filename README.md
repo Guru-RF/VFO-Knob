@@ -336,7 +336,7 @@ The face is the radio face, read differently:
 | | |
 |---|---|
 | **The dial** | Steps through the switchable talkgroups, one a detent. The talkgroup's name, from the reflector's portal, is where the frequency is — looping when it is long — with the reflector under it; `TG n` is where band and mode are. |
-| **Lock** | Left of the talkgroup: no switching, by the dial or by a busier talkgroup. |
+| **Lock** | Left of the talkgroup: no busier talkgroup takes you away, no quiet spell drops you to monitoring, and the others are not heard. The dial still switches, and the talkgroup it turns to is locked in its turn. |
 | **Mute** | Right of it: the speaker off, the talkgroup still selected, who is talking still shown. |
 | **Meter** | The received audio in dBFS, and in transmit the microphone. Above it, who is talking — with where they are, when the reflector publishes it — or who spoke last and how long ago. |
 | **PTT** | Tap to key, tap to unkey, as on the radios. The reflector's own announcement of your callsign confirms the key; on a busy talkgroup it refuses you the floor and the knob says so with the refusal click. |

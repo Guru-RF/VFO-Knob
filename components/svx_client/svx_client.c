@@ -521,12 +521,15 @@ static void tgm_start(void)
     tgm_init(&C.tgm, &C.cfg, &cb);
 }
 
-/* The dial: detents through the switchable list, all of a turn at once. */
+/* The dial: detents through the switchable list, all of a turn at once. The
+ * lock does not stop it: the lock holds you where you put yourself, against a
+ * busier talkgroup and the drop to monitoring when it is quiet -- and the dial
+ * is you, so the talkgroup it turns to is the one held, locked as the last. */
 static void dial(int32_t d)
 {
     const svx_config *c = &C.cfg;
     if (!d || !c->n_switchable) return;
-    if (tgm_locked(&C.tgm) || C.ptt.state != PTT_IDLE) return;
+    if (C.ptt.state != PTT_IDLE) return;
     int idx = -1;
     for (int i = 0; i < c->n_switchable; i++)
         if (c->switchable[i].id == tgm_selected(&C.tgm)) { idx = i; break; }

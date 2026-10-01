@@ -35,7 +35,7 @@ The radio face, read differently:
 |---|---|---|
 | **The arc** | hold: the address card | the received audio in dBFS, and in transmit the microphone |
 | **Who is talking** | — | with where they are when the reflector publishes it, or who spoke last and how long ago |
-| **Lock** | on, off | no switching, by the dial or by a busier talkgroup |
+| **Lock** | on, off | the talkgroup stays: no busier talkgroup takes you away, no quiet spell drops you to monitoring, and the others are not heard. The dial still switches, and the talkgroup it turns to is locked in its turn |
 | **Talkgroup** | — | `TG n`, its name from the reflector's portal where the frequency is, the reflector under it |
 | **Mute** | on, off | the speaker off; the talkgroup still selected, who is talking still shown |
 | **Link** | — | **connected**, **connecting** or **disconnected** |
