@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-setup",
-  "version": "1.17.0",
-  "file": "vfo-knob-setup-1.17.0.bin",
-  "sha256": "17416b5120f4952ce105d8836e978f30bbf3ec87ff7199eb30133a0dcb906f20",
+  "version": "1.18.0",
+  "file": "vfo-knob-setup-1.18.0.bin",
+  "sha256": "b23df9d96c00a43be8809a55fe9de3803ce3abb565ac4643eb3c34de381641e7",
   "size": 1904640
 }
