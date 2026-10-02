@@ -141,6 +141,10 @@ typedef struct {
     uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
     uint32_t   chronos, txa_sent, txa_failed, txa_skipped, txa_max_us;
     uint32_t   rx_packets, rx_lost, rx_concealed, dec_max_us;
+    /* The receive audio's 10 s report (flex_task): the longest gap between
+     * its packets arriving, between two passes of this task's loop, and
+     * between two of the codec's -- which tells the network from the knob. */
+    uint32_t   rx_gap_max, rx_last, loop_gap_max, codec_gap_max;
     char       last_close[48];
     ptt_fsm_t  ptt;
     uint32_t   pending_key, pending_unkey, pending_toggle;
@@ -510,6 +514,8 @@ static void on_udp(const uint8_t *p, int n, uint32_t t)
         uint8_t item[1 + OPUS_MAX];
         item[0] = (w0 >> 16) & 0xF;                   /* the packet count, for losses */
         memcpy(item + 1, pay, pn);
+        if (S.rx_last && !S.audio_suspend && t - S.rx_last > S.rx_gap_max) S.rx_gap_max = t - S.rx_last;
+        S.rx_last = t;
         S.rx_packets++;
         if (xRingbufferSend(s_rxq, item, 1 + pn, 0) != pdTRUE) S.rx_lost++;
     }
@@ -1553,7 +1559,11 @@ static void codec_task(void *arg)
     uint8_t last = 0;
     bool    have_last = false;
     int64_t next_tx = 0;
+    uint32_t pass = 0;
     for (;;) {
+        const uint32_t pnow = now_ms();
+        if (pass && pnow - pass > S.codec_gap_max) S.codec_gap_max = pnow - pass;
+        pass = pnow;
         const bool keyed = S.ptt.state == PTT_REQ_ON || S.ptt.state == PTT_ON;
         const bool voice = keyed && S.kind == KIND_VOICE && C.tx_stream;
         size_t n = 0;
@@ -1761,8 +1771,28 @@ static void flex_task(void *arg)
     C.t_retry = now_ms();
     static char tcp[1460];
 
+    uint32_t loop_last = 0, rep_at = 0, rep_pkts = 0, rep_full = 0, rep_conc = 0;
     for (;;) {
         uint32_t t = now_ms();
+        if (loop_last && t - loop_last > S.loop_gap_max) S.loop_gap_max = t - loop_last;
+        loop_last = t;
+        /* Robotic or gappy receive audio: the network, or the knob? Packets
+         * that stop arriving for half a second, with this loop and the codec
+         * running on, are the network's; a loop or codec that stalls is the
+         * knob's (and the UDP mailbox, 16 packets, overflows behind it). */
+        if (!rep_at) rep_at = t + 10000;
+        if ((int32_t)(t - rep_at) >= 0) {
+            rep_at = t + 10000;
+            if (S.rx_packets != rep_pkts)
+                ESP_LOGI(TAG, "rx audio, 10 s: %lu packets, arriving %lu ms apart at most; "
+                         "this loop %lu ms, the codec %lu ms; %lu ring full, %lu concealed; decode %lu us",
+                         (unsigned long)(S.rx_packets - rep_pkts), (unsigned long)S.rx_gap_max,
+                         (unsigned long)S.loop_gap_max, (unsigned long)S.codec_gap_max,
+                         (unsigned long)(S.rx_lost - rep_full), (unsigned long)(S.rx_concealed - rep_conc),
+                         (unsigned long)S.dec_max_us);
+            rep_pkts = S.rx_packets; rep_full = S.rx_lost; rep_conc = S.rx_concealed;
+            S.rx_gap_max = S.loop_gap_max = S.codec_gap_max = S.dec_max_us = 0;
+        }
         if (C.fd < 0) {
             if ((int32_t)(t - C.t_retry) >= 0) session_begin(t);
             ptt_step(t);

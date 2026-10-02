@@ -860,6 +860,13 @@ esp_err_t net_prov_wifi_start(void)
 
     wifi_init_config_t ic = WIFI_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(esp_wifi_init(&ic), TAG, "wifi init");
+    /* The driver's own copy of the station's settings stays in RAM: the knob
+     * keeps its networks in its own namespace and sets them at every start.
+     * In flash, esp_wifi_set_config() writes NVS whenever a setting differs,
+     * and on a knob whose NVS had filled up -- switched through several
+     * firmwares -- that write failed, and with it the whole WiFi start: no
+     * network, and no hotspot to set one up (2026-10-02). */
+    ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "storage");
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(

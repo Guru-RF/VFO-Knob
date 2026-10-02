@@ -1672,9 +1672,12 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     if (!s_wifi_started) {
         s_wifi_started = true;
         esp_err_t werr = net_prov_wifi_start();
-        if (werr != ESP_OK)
+        if (werr != ESP_OK) {
             ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",
                      esp_err_to_name(werr));
+            /* Said on the glass, or the face just shows NO LINK for ever. */
+            ui_setup_show("NO WIFI", "The knob's WiFi\nwould not start.\nRestart the knob.");
+        }
         return NULL;                       /* give it a moment to associate */
     }
     if (!net_prov_is_connected()) return NULL;
@@ -2145,6 +2148,7 @@ RADIO_ONLY_FN static bool wifi_setup(void)
             s_wifi_started = true;
             if (net_prov_wifi_start() != ESP_OK) {
                 ESP_LOGE(TAG, "wifi     FAILED: no WiFi setup either");
+                ui_setup_show("NO WIFI", "The knob's WiFi\nwould not start.\nRestart the knob.");
                 return false;
             }
         }
