@@ -169,7 +169,6 @@ static void load(void)
     P.key = nvs_load(h, "key");
     P.csr = nvs_load(h, "csr");
     P.crt = nvs_load(h, "crt");
-    P.ca  = nvs_load(h, "ca");
     size_t n = sizeof P.csr_for - 1;
     if (nvs_get_blob(h, "csrfor", P.csr_for, &n) == ESP_OK) P.csr_for[n] = 0;
     n = sizeof P.refused;
@@ -177,10 +176,23 @@ static void load(void)
     uint8_t pend = 0;
     P.pending = nvs_get_u8(h, "pending", &pend) == ESP_OK && pend;
     nvs_get_i64(h, "reqtime", &P.requested);
+    /* The CA bundle is kept in memory only (svx_pki_store_ca): the reflector
+     * sends it before every TLS start, and it is no trust anchor. A copy an
+     * older firmware stored goes, once -- some 3 kB, and room the
+     * certificate needs in a shared NVS that had filled up (2026-10-02:
+     * "cannot store crt: ESP_ERR_NVS_NOT_ENOUGH_SPACE"). */
+    size_t ca_n = 0;
+    const bool old_ca = nvs_get_blob(h, "ca", NULL, &ca_n) == ESP_OK;
     nvs_close(h);
-    ESP_LOGI(TAG, "key %s, request %s, certificate %s, CA bundle %s%s",
+    if (old_ca && nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_erase_key(h, "ca") == ESP_OK && nvs_commit(h) == ESP_OK)
+            ESP_LOGI(TAG, "the stored CA bundle erased (%u bytes): it is kept in memory now",
+                     (unsigned)ca_n);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "key %s, request %s, certificate %s%s",
              P.key ? "yes" : "no", P.csr ? "yes" : "no", P.crt ? "yes" : "no",
-             P.ca ? "yes" : "no", P.pending ? "; a request is pending" : "");
+             P.pending ? "; a request is pending" : "");
 }
 
 static void load_job(void *p)
@@ -464,12 +476,11 @@ void svx_pki_store_ca(const char *pem)
     size_t n = strlen(pem);
     if (n > CA_MAX) { ESP_LOGW(TAG, "CA bundle of %u bytes not kept", (unsigned)n); return; }
     LOCK();
+    /* In memory only: it comes again with every connection (load()). */
     if (!P.ca || strcmp(P.ca, pem) != 0) {
-        if (save_str("ca", pem) == ESP_OK) {
-            free(P.ca);
-            P.ca = dup_psram(pem, n);
-            ESP_LOGI(TAG, "CA bundle stored (%u bytes)", (unsigned)n);
-        }
+        free(P.ca);
+        P.ca = dup_psram(pem, n);
+        ESP_LOGI(TAG, "CA bundle kept (%u bytes, in memory)", (unsigned)n);
     }
     UNLOCK();
 }

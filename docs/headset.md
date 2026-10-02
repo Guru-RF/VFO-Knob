@@ -9,14 +9,16 @@ headset is connected:
   hands-free profile carries it: 16 kHz with a wideband headset, 8 kHz with
   an older one;
 - its microphone is the one you transmit with, and the knob's own is off;
-- its call button is the PTT: a press transmits, the next one stops;
-- the PTT slab on the face is the headset's: its name, and its microphone,
-  struck through in red while the headset has it muted. A tap on the slab
-  only ever stops a transmission; it never starts one.
+- its call button is a PTT: a press transmits, the next one stops. The slab
+  keys as it always does, too;
+- its logo shows at the right end of the PTT slab, which keeps its caption;
+  the logo turns red while the headset has its microphone muted, and then
+  neither the button nor the slab keys.
 
 The UberSDR firmware only receives: there the headset is for listening, and
-only its logo shows, beside the spots. So it is with the IC-R8600 receiver on
-the Icom firmware: the slab shows the headset's name, and nothing keys.
+its logo shows beside the spots, never in red, since nothing keys. So it is
+with the IC-R8600 receiver on the Icom firmware: the slab says **RECEIVER**,
+with the logo at its end, and nothing keys.
 
 The Telephone firmware opens the headset's audio for its calls only, as a
 mobile phone does. The audio opens when a call rings in, so the ring plays in
@@ -135,27 +137,33 @@ lets it go until it calls again or you connect it; **Forget it** unpairs it.
 
 ## On the knob
 
+On every firmware a connected headset shows only its logo, at the right end
+of the slab, and the slab keeps its caption — **PTT**, **TX**, **----** —
+as without a headset (the Telephone's slab is the call's:
+[its guide](phone.md#a-bluetooth-headset)). The logo is in the face's own
+colour; red while the headset has its microphone muted (not on a receiver,
+where nothing keys); and white on the air, when the slab is red.
+
 | A headset connected | Its microphone muted |
 |---|---|
-| ![A headset connected: its name, and its microphone live](headset/01-connected.svg) | ![Its microphone muted: struck through, in red](headset/02-muted.svg) |
+| ![A headset connected: its logo at the slab's end](headset/01-connected.svg) | ![Its microphone muted: the logo in red](headset/02-muted.svg) |
 
 The headset hears what the jack plays, the knob's volume applied, and its
 own volume buttons on top. Its mute is read from the microphone gain it
 reports — 0 while muted, as the Jabras do; a headset that does not report it
-always shows its microphone live.
+never turns the logo red.
 
 ## Transmitting
 
-The headset's call button keys, and the next press unkeys. While the headset
-has its microphone muted, a press does not key — an over would be a dead
-carrier — and the knob clicks three times and says **HEADSET MUTED**.
-Unkeying is never refused.
+The headset's call button keys, and the next press unkeys; a tap on the slab
+does the same, as without a headset. While the headset has its microphone
+muted, neither keys — an over would be a dead carrier — and the knob clicks
+three times and says **HEADSET MUTED**. Unkeying is never refused.
 
 ![On the air through the headset](headset/04-on-the-air.svg)
 
 If the headset goes out of reach, or its battery runs flat, while you
-transmit, the knob unkeys: nobody could unkey from the headset any more. On
-the knob, a tap on the slab stops a transmission too.
+transmit, the knob unkeys: nobody could unkey from the headset any more.
 
 ## The boom arm as the PTT
 
@@ -167,9 +175,9 @@ stops.
 ![RAISE BOOM: the boom arm as the PTT, and down](headset/03-raise-boom.svg)
 
 Never by itself: when the headset connects, or the knob starts, with the boom
-down, the slab says **RAISE BOOM** in red, and nothing transmits until the
-boom has been up once. The call button works as above all the while. The
-option is the knob's, whichever firmware it runs.
+down, the slab says **RAISE BOOM** in red, under its caption, and nothing
+transmits until the boom has been up once. The call button works as above all
+the while. The option is the knob's, whichever firmware it runs.
 
 ## From a computer
 

@@ -6,8 +6,8 @@
 
 /* The microphone and the microphone struck through (U+F130, U+F131) from the
  * Font Awesome 5 Free copy LVGL bundles for its own symbols (SIL OFL 1.1), for
- * the PTT slab while a Bluetooth headset is connected: its microphone, live or
- * muted. Regenerate with the options above rather than edit. */
+ * the telephone's mute: the knob's microphone, live or muted. Regenerate with
+ * the options above rather than edit. */
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"

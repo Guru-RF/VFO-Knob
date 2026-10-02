@@ -799,24 +799,21 @@ def phone_pictures():
 
 # --- a Bluetooth headset (docs/headset.md) -------------------------------------
 
-HEADSET = "Jabra Evolve2 65"
-
-
 def headset_face(face_svg, **slab):
     """A transmitting firmware's face with a headset connected: the PTT slab
-    is the headset's (mkdisplay headset_slab), in the face's palette -- the
-    one its drawing last set."""
-    return face_svg.replace(md.ptt_slab(md.BG1, "PTT", md.TEXT2), md.headset_slab(HEADSET, **slab))
+    keeps its caption, the headset's logo at its right end (mkdisplay
+    headset_slab), in the face's palette -- the one its drawing last set."""
+    return face_svg.replace(md.ptt_slab(md.BG1, "PTT", md.TEXT2), md.headset_slab(**slab))
 
 
 def headset_pictures():
     R = dict(dbm=-85, band="40m", mode="LSB", filt="FIL2", digits="  7123" "00", active=5,
              step="1 kHz", agc="MID", gain_cap="P.AMP", gain="OFF")
     out = {}
-    out["01-connected"] = knob("hs-01", "A headset connected: its name, and its microphone live",
+    out["01-connected"] = knob("hs-01", "A headset connected: its logo at the slab's end",
                                headset_face(face("icom", **R)), "",
-                               "the slab is the headset's  \u00b7  a tap there only unkeys")
-    out["02-muted"] = knob("hs-02", "Its microphone muted: struck through, in red",
+                               "its button is the PTT  \u00b7  a tap on the slab only unkeys")
+    out["02-muted"] = knob("hs-02", "Its microphone muted: the logo in red",
                            headset_face(face("icom", **R), muted=True), "",
                            "muted: the button does not key")
     out["03-raise-boom"] = knob("hs-03", "The boom arm as the PTT, and down: RAISE BOOM",
@@ -825,7 +822,7 @@ def headset_pictures():
     tx = tx_face("icom", swr=1.3, watts=50)
     out["04-on-the-air"] = knob("hs-04", "On the air through the headset",
                                 tx.replace(md.ptt_slab(md.TX_RED, "TX", "#FFFFFF"),
-                                           md.headset_slab(HEADSET, tx=True)), "",
+                                           md.headset_slab("TX", tx=True)), "",
                                 "the headset's button, or the boom up: back to receive")
     return out
 
@@ -896,7 +893,7 @@ def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 1421
               md.text(180, md.PTT_TOP + 44 + 12, esc(l2), 14, md.TEXT2, extra=' xml:space="preserve"'),
               md.text(180, md.PTT_TOP + 64 + 12, esc(l3), 14, md.LABEL, extra=' xml:space="preserve"')]
     if headset:
-        s.append(md.bluetooth(180 + 126, md.PTT_TOP + 12 + 18, md.ACCENT))
+        s.append(md.headset_logo(md.ACCENT, md.BG1))
     return "".join(s)
 
 

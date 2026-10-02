@@ -1071,14 +1071,27 @@ static void ui_task(void *arg)
         }
 #endif
         if (ui_take_ptt_tap() && !s_rx_only) {
-#if VFO_PTT_DRY_RUN
-            /* A test build (-D VFO_PTT_DRY_RUN=1): what would have keyed or
-             * unkeyed the radio, logged and nothing more. */
-            ESP_LOGW(TAG, "PTT tapped -- dry run, not sent to the radio");
-#else
-            ESP_LOGI(TAG, "PTT tapped");
-            radio_ptt_toggle();
+#if !VFO_RADIO_PHONE && !VFO_RADIO_SETUP && !VFO_RX_ONLY
+            /* With a headset connected, its microphone is the one on the air:
+             * the glass keys as its button does, and not while that
+             * microphone is muted -- that over would be a dead carrier --
+             * with the same three clicks. Unkeying is never refused. */
+            if (!radio_on_air() && bt_link_headset_muted()) {
+                ESP_LOGW(TAG, "PTT refused: the headset's microphone is muted");
+                s_hs_refused_ms = esp_timer_get_time() / 1000;
+                haptic(12);                 /* triple click: refused */
+            } else
 #endif
+            {
+#if VFO_PTT_DRY_RUN
+                /* A test build (-D VFO_PTT_DRY_RUN=1): what would have keyed
+                 * or unkeyed the radio, logged and nothing more. */
+                ESP_LOGW(TAG, "PTT tapped -- dry run, not sent to the radio");
+#else
+                ESP_LOGI(TAG, "PTT tapped");
+                radio_ptt_toggle();
+#endif
+            }
         }
 #if VFO_RADIO_PHONE
         /* A telephone: a headset's button only ever hangs up, and its mute
@@ -1559,14 +1572,13 @@ static void ui_task(void *arg)
         }
 #endif
 #if !VFO_RADIO_SETUP
-        /* A Bluetooth headset: the slab is its, while one is connected. */
+        /* A Bluetooth headset: its logo on the slab, while one is connected. */
         {
             static bt_link_status_t b;      /* static: this stack is tight */
             bt_link_status(&b);
             u.headset       = b.companion && b.hs.link == BTL_LINK_CONNECTED;
             u.headset_muted = u.headset && b.hs.mic == 0;
             u.headset_raise = u.headset && s_hs_raise;
-            strlcpy(u.headset_name, b.hs.name, sizeof u.headset_name);
         }
 #endif
         ui_update(&u);

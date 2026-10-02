@@ -354,13 +354,27 @@ def approx_width(s, size):
     return w * size
 
 
-def bluetooth(x, y, colour, size=20):
-    """Font Awesome's bluetooth-b, the rune LV_SYMBOL_BLUETOOTH draws; (x, y)
-    is the left end of the baseline."""
-    k = size / 20
-    return (f'<path transform="translate({x:.1f},{y - 15 * k:.1f}) scale({k:.3f})" '
-            f'd="M1,4 L9,12 L5,16 L5,0 L9,4 L1,12" fill="none" stroke="{colour}" '
-            f'stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>')
+def bluetooth(x, y, colour, bg):
+    """LV_SYMBOL_BLUETOOTH as Montserrat 20 has it: Font Awesome's bluetooth,
+    the rune cut out of a rounded shield 15 x 21 px; (x, y) is the left end
+    of the label's baseline, its box's top 18 px above. The rune is `bg`,
+    the colour under the glyph, which shows through it on the device."""
+    l, t = x + 1, y - 18                    # the shield's box
+    cx, cy = l + 7.5, t + 10.5
+    return (f'<path d="M{cx},{t} C{cx + 5.5},{t} {l + 15},{cy - 8} {l + 15},{cy} '
+            f'C{l + 15},{cy + 8} {cx + 5.5},{t + 21} {cx},{t + 21} '
+            f'C{cx - 5.5},{t + 21} {l},{cy + 8} {l},{cy} '
+            f'C{l},{cy - 8} {cx - 5.5},{t} {cx},{t}Z" fill="{colour}"/>'
+            f'<path transform="translate({cx - 4:.1f},{t + 2.5:.1f})" '
+            f'd="M0,4 L7.5,11.5 L4,15.5 L4,0 L7.5,4 L0,11.5" fill="none" stroke="{bg}" '
+            f'stroke-width="1.5"/>')
+
+
+def headset_logo(colour, bg):
+    """A Bluetooth headset connected (ui.c s_hs_bt): its logo, Montserrat 20,
+    its box's top left at (CX + 126, PTT_TOP + 12) -- the slab's right end,
+    on every face. `bg` is the slab's colour under it."""
+    return bluetooth(CX + 126, PTT_TOP + 12 + 18, colour, bg)
 
 
 def microphone28(cx, top, colour, slash=False, bg="#000000"):
@@ -377,31 +391,22 @@ def microphone28(cx, top, colour, slash=False, bg="#000000"):
     return s
 
 
-def headset_slab(name, muted=False, raise_boom=False, tx=False):
+def headset_slab(label="PTT", muted=False, raise_boom=False, tx=False):
     """The PTT slab while a Bluetooth headset is connected (ui.c
-    headset_slab): the Bluetooth rune and the headset's name, Montserrat 20,
-    its box's top at PTT_TOP + 12; under it the microphone (font_btmic_28,
-    its box's top at PTT_TOP + 44) -- struck through, in red, while the
-    headset has it muted -- or, with the boom arm as the PTT and the headset
-    come with it down, a red RAISE BOOM button. On the air the slab is red and
-    all of it white."""
-    fill = TX_RED if tx else BG1
-    fg = "#FFFFFF" if tx else TEXT
-    s = (f'<rect x="0" y="{PTT_TOP}" width="360" height="{360 - PTT_TOP}" fill="{fill}"/>'
-         f'<line x1="0" y1="{PTT_TOP + 1}" x2="360" y2="{PTT_TOP + 1}" '
-         f'stroke="{ACCENT}" stroke-width="2"/>')
-    rune, gap = 13, 11                      # the glyph's advance, then two spaces
-    x0 = 180 - (rune + gap + approx_width(name, 20)) / 2
-    base = PTT_TOP + 12 + 18
-    name = name.replace("&", "&amp;").replace("<", "&lt;")
-    s += bluetooth(x0, base, fg) + text(x0 + rune + gap, base, name, 20, fg, anchor="start")
+    headset_slab): its own caption, as without a headset, and the headset's
+    logo at its right end -- the accent; red while the headset has its
+    microphone muted, which the knob will not key; white on the slab gone
+    red on the air. With the boom arm as the PTT and the headset come with
+    it down, a red RAISE BOOM button under the caption, its top at
+    PTT_TOP + 48."""
+    if tx:
+        s = ptt_slab(TX_RED, label, "#FFFFFF") + headset_logo("#FFFFFF", TX_RED)
+    else:
+        s = ptt_slab(BG1, label, TEXT2) + headset_logo(DANGER if muted else ACCENT, BG1)
     if raise_boom:
-        pw, top = approx_width("RAISE BOOM", 20) + 36, PTT_TOP + 42
+        pw, top = approx_width("RAISE BOOM", 20) + 36, PTT_TOP + 48
         s += (f'<rect x="{180 - pw / 2:.1f}" y="{top}" width="{pw:.1f}" height="34" rx="17" '
               f'fill="{TX_RED}"/>' + text(180, top + 6 + 18, "RAISE BOOM", 20, "#FFFFFF"))
-    else:
-        col = "#FFFFFF" if tx else TX_RED if muted else TEXT2
-        s += microphone28(180, PTT_TOP + 46, col, muted, fill)
     return s
 
 

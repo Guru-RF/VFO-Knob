@@ -116,12 +116,11 @@ typedef struct {
     bool     slice_locked;
     bool     may_key;
     /* A Bluetooth headset (components/bt_link). While one is connected its
-     * button is the PTT and the glass only unkeys: the slab shows the
-     * headset's name, and its microphone -- red, struck through, while the
-     * headset has it muted. */
+     * button is the PTT and the glass only unkeys: the slab keeps its
+     * caption, and shows the headset's logo at its right end -- red while
+     * the headset has its microphone muted. */
     bool     headset, headset_muted;
     bool     headset_raise;  /* the boom arm is the PTT, and down: "RAISE BOOM", in red */
-    char     headset_name[24];
     /* A receiver (the IC-R8600): the slab says RECEIVER and keys nothing; a
      * headset on it just listens. */
     bool     rx_only;

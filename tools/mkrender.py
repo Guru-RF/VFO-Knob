@@ -282,7 +282,12 @@ def phone_dial(R):
         s.append(f'<circle cx="180" cy="180" r="178" fill="none" stroke="{D.GREEN}" '
                  f'stroke-width="4"/>')
     if P["headset"]:                            # only its logo: the slab is the call's
-        s.append(D.bluetooth(180 + 126, D.PTT_TOP + 12 + 18, D.ACCENT))
+        # White on the red slab -- HANG UP, DECLINE -- as on the air; red
+        # between calls while the headset has its microphone muted, which
+        # `muted` is with a headset (ui.c headset_slab).
+        red = call in (1, 2, 3)
+        s.append(D.headset_logo("#FFFFFF" if red else D.DANGER if P["muted"] else D.ACCENT,
+                                D.TX_RED if red else D.BG1))
     # The keypad, over everything above the slab: the number -- eight
     # characters in the big type, more in the smaller -- the backspace, keys.
     if kp is not None:

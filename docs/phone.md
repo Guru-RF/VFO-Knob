@@ -159,8 +159,9 @@ A call you missed shows under the arc, in red, until you open the history.
 ## A Bluetooth headset
 
 With a headset paired ([A Bluetooth headset](headset.md)), it is the knob's ear
-and microphone during calls. Its logo shows at the slab's right end, and the
-slab stays the call's:
+and microphone during calls. Its logo shows at the slab's right end — white on
+the red slab of a call, red between calls while the headset has its
+microphone muted — and the slab stays the call's:
 - **The call is only in the headset,** its microphone live: the jack stays
   silent while a headset is connected. If the headset goes during a call, the
   call comes back to the jack, with the knob's microphone muted.
