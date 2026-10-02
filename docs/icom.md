@@ -9,6 +9,13 @@ each band's power in its own watts) and the **IC-R8600** receiver (10 kHz to
 3 GHz and its three antennas — and nothing to key). Its face wears Icom's
 colours.
 
+It also knows three radios it has not yet been tried on, built from wfview's
+descriptions of them: the **IC-7300MK2** (HF, 6 m and 4 m), the **IC-7760**
+(MAIN and SUB, 200 W) and the **IC-905** (2 m to 6 cm, and
+3 cm with its CX-10G, each band's power in its own watts). Until someone has
+used one with the knob, the knob does not switch their modulation input and
+does not read their memories; see [Not yet tried](#not-yet-tried).
+
 The pictures are the knob's own screens, drawn from the firmware's texts and
 layout (`tools/mkdocs.py`); the orange marks are what your hand does.
 
@@ -28,6 +35,8 @@ the box remote control is off on every one of them.
 | | *MENU » SET » Network* | **Network Control: ON**, and **Network User1** with a name and a password |
 | **IC-R8600** | its **LAN** socket | a network cable to your router or switch |
 | | *MENU » SET » Network* | **Network Control: ON**, and **Network User1** with a name and a password |
+| **IC-7300MK2, IC-7760, IC-905** | their **LAN** socket | a network cable to your router or switch |
+| | the radio's network settings (as on the IC-7610; not yet checked here) | **Network Control: ON**, and a network user with a name and a password |
 
 What most often stands in the way:
 
@@ -73,10 +82,10 @@ Until the radio answers, the knob says so, with its own addresses:
 | **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
 | **AGC** | the AGC editor | FAST, MID, SLOW |
 | **P.AMP** | the preamp editor | OFF, 1, 2 — or ON where the band has only one |
-| **Band** | the band editor | the band's own frequency, on a tap on the panel — only the bands the radio has: on the IC-9700 2 m, 70 cm and 23 cm |
+| **Band** | the band editor | the band's own frequency, on a tap on the panel — only the bands the radio has: on the IC-9700 2 m, 70 cm and 23 cm; on the IC-7300MK2 HF to 4 m; on the IC-905 2 m to 3 cm |
 | **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, FM, RTTY, DIGU, DIGL — on the IC-R8600 WFM in place of DIGU and DIGL |
 | **Filter** | the filter editor | the radio's FIL1, FIL2, FIL3 |
-| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 GHz up the digits read MMMM.kkk.h |
+| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 GHz up the digits read MMMM.kkk.h, and from 10 GHz (the IC-905's 3 cm) the first of them reads 10: 10368.200.0 |
 | **Step, RIT** | RIT: its editor | RIT in amber when set; none on the IC-R8600 |
 | **Volume, mic gain** | their editors | the knob's own levels; the IC-R8600 has only the volume |
 | **PTT** | key, and key off | see [Transmitting](#transmitting); on the IC-R8600 **RECEIVER**, nothing to key |
@@ -196,12 +205,37 @@ power in watts across the right, the microphone on the thin inner ring.
 The knob's audio reaches the radio over the network: for each over the knob
 switches the radio's modulation input to it — WLAN on the IC-705, LAN on the
 IC-7610 and the IC-9700 — and back to what it was after. Nothing to set on the
-radio for that.
+radio for that, on those four. On the IC-7300MK2, the IC-7760 and the IC-905
+the knob does not switch it yet: set **DATA OFF MOD** (and **DATA MOD**, for the
+data modes) to **LAN** on the radio, or the over goes out on the radio's own
+microphone.
 
 ![On the air: SWR 1.3, 50 W of 100](icom/17-tx.svg)
 
 Nothing vibrates on the air — the motor sits beside the microphone and would be
 heard — and the radio's own transmit time-out is the backstop: set it.
+
+## Not yet tried
+
+The IC-7300MK2, the IC-7760 and the IC-905 come from wfview's descriptions of
+them, checked against its source, not from the radios themselves. Tuning,
+modes, filters, AGC, preamps, the meters and PTT should work as on the radios
+above. Until someone has used one with the knob:
+
+- the knob does **not switch the modulation input**: set it to LAN on the radio
+  (see [Transmitting](#transmitting)). It does read it, and its log says what
+  the radio's DATA OFF MOD and DATA MOD are set to;
+- the knob does **not read the memories**, so there is no memory mode;
+- on the IC-7300MK2 the tuner, squelch and RX ANT input are not offered, and
+  on the IC-7760 the antennas and the tuner: they switch relays;
+- the IC-905 has no RIT, so its face has no RIT either; its 0.5 W on 3 cm
+  shows as % rather than watts, and its SWR reads only from 1 W forward: on
+  13 and 6 cm above about half power, on 3 cm not at all;
+- on the IC-7760, if the radio will not say whether MAIN or SUB is selected,
+  the knob does not key at all rather than key the wrong receiver.
+
+The knob's log says what the radio refused, which is what is needed to finish
+the job: if you have one of these radios, a session's log is very welcome.
 
 ## From a computer
 

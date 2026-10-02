@@ -22,7 +22,11 @@
 #include "audio_out.h"
 #include "board.h"
 #include "bt_link.h"
+#if VFO_RADIO_PHONE
+#include "phone_client.h"
+#endif
 #include "mbedtls/sha256.h"
+#include "nvs.h"
 #include "sd_cache.h"
 #include "cJSON.h"
 #include "board_pins.h"
@@ -45,6 +49,7 @@
 #include "esp_chip_info.h"
 #include "esp_core_dump.h"
 #include "esp_heap_caps.h"
+#include "freertos/idf_additions.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_psram.h"
@@ -77,6 +82,8 @@ static bool     s_picker_accepted;
 
 /* The timer that declares this boot healthy, 20 s in: see boot_ok_cb(). */
 static esp_timer_handle_t s_boot_ok_t;
+/* ...and it has: this image is confirmed. */
+static volatile bool s_boot_ok;
 
 /* Declare the boot healthy now, on the operator's yes on the dial, which is
  * proof enough that it works. A freshly installed image is on trial until the
@@ -109,7 +116,9 @@ static void firmware_line(char *out, size_t cap)
 #elif VFO_RADIO_XIEGU
     const char *name = "Xiegu";
 #elif VFO_RADIO_SVXCONNECT
-    const char *name = "SvxLink";
+    const char *name = "SVXConnect";
+#elif VFO_RADIO_PHONE
+    const char *name = "Telephone";
 #elif VFO_RADIO_MULTIFLEX
     const char *name = "FlexRadio";
 #elif VFO_RADIO_UBERSDR
@@ -133,11 +142,15 @@ static bool s_wifi_started;
 /* The radio is a receiver (radio_status_t.rx_only), as of the last status:
  * nothing on the knob keys it. */
 static bool s_rx_only;
+#if VFO_RADIO_PHONE
+static bool s_call_ringing;       /* the telephone rings: buzzed, with the ring */
+static volatile bool s_in_call;   /* calling, ringing or talking: the dial is the volume */
+#endif
 /* The setup firmware's filling of the SD card with every firmware published:
  * an install stops it first -- one download at a time. */
 static volatile bool s_fill_stop, s_fill_running;
 
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
 /* Another radio, chosen with a swipe up: in use from the next boot, and the
  * knob restarts into it at once -- the clients have no restart path. Never
  * while transmitting. The boot is confirmed first: a restart inside its first
@@ -356,6 +369,13 @@ static void encoder_task(void *arg)
             ui_edit_rotate(detents);
             continue;
         }
+#if VFO_RADIO_PHONE
+        /* In a call the dial is the volume; the favourites wait for it to end. */
+        if (s_in_call) {
+            ui_volume_turn(detents);
+            continue;
+        }
+#endif
 
         tune.step_hz = atomic_load(&s_step_hz);
         uint8_t mult = accel_update(&accel, detents, now_ms);
@@ -709,6 +729,156 @@ static void ask_choice(const radio_status_t *st)
     ui_ask_choice(titles, names, n, st->choice_default);
 }
 
+/* Sound that a flash write would hold up: an over, or on the telephone any
+ * call at all -- a ring and a ringback play too. */
+static bool audio_busy(void)
+{
+#if VFO_RADIO_PHONE
+    radio_status_t st;
+    radio_get_status(&st);
+    return st.call != RADIO_CALL_IDLE && st.call != RADIO_CALL_ENDED;
+#else
+    return radio_on_air();
+#endif
+}
+
+#if VFO_RADIO_PHONE
+/* A probe, for now: what holds the audio up. One sentinel per core wakes
+ * every 10 ms above every task of ours and says so when it woke over 60 ms
+ * late. Core 1's also keeps 640 ms of the run time of the tasks that matter,
+ * so a hold the playback reports (audio_out's hook) comes with who ran
+ * meanwhile. A tap in a call held the jack's audio for as long as the finger
+ * was down (2026-10-01), with neither core held. Run times are read task by
+ * task: uxTaskGetSystemState() measures every stack, interrupts off. */
+static const char *const PROBE_NAMES[] = {
+    "IDLE0", "IDLE1", "taskLVGL", "audio", "mic", "enc_input", "ui",
+    "phone", "btlink", "wifi", "tiT", "sys_evt", "ipc0", "ipc1", "esp_timer",
+};
+#define PROBE_N    (sizeof PROBE_NAMES / sizeof PROBE_NAMES[0])
+#define PROBE_RING 64
+typedef struct {
+    int64_t  at;
+    uint32_t run[PROBE_N];
+    uint8_t  lvgl_prio;            /* taskLVGL's priority then: above 4, lent */
+} probe_row_t;
+static TaskHandle_t  s_probe_h[PROBE_N];
+static probe_row_t  *s_probe_ring;
+static unsigned      s_probe_head;               /* the next row written */
+static volatile bool s_hold_due;
+static const char   *s_hold_where;
+static int64_t       s_hold_since, s_hold_us, s_hold_gap;
+static uint32_t      s_hold_done;
+
+static void probe_hold(const char *where, int64_t since_us, int64_t held_us,
+                       uint32_t dma_done, int64_t dma_gap_us)
+{
+    if (s_hold_due) return;                      /* one at a time */
+    s_hold_where = where;
+    s_hold_since = since_us;
+    s_hold_us    = held_us;
+    s_hold_done  = dma_done;
+    s_hold_gap   = dma_gap_us;
+    s_hold_due   = true;
+}
+
+static void probe_read(probe_row_t *r)
+{
+    r->at = esp_timer_get_time();
+    for (unsigned i = 0; i < PROBE_N; i++) {
+        TaskStatus_t st;
+        if (!s_probe_h[i]) { r->run[i] = 0; continue; }
+        vTaskGetInfo(s_probe_h[i], &st, pdFALSE, eRunning);
+        r->run[i] = st.ulRunTimeCounter;
+        if (i == 2) r->lvgl_prio = (uint8_t)st.uxCurrentPriority;   /* taskLVGL */
+    }
+}
+
+/* Who ran from the row nearest before `since` until now, longest first. */
+static void probe_report(char *line, size_t cap, int len, int64_t since)
+{
+    const probe_row_t *base = NULL;
+    uint8_t lvgl_top = 0;
+    for (unsigned k = 1; k <= PROBE_RING; k++) {
+        const probe_row_t *r = &s_probe_ring[(s_probe_head + PROBE_RING - k) % PROBE_RING];
+        if (!r->at) break;
+        base = r;
+        if (r->lvgl_prio > lvgl_top) lvgl_top = r->lvgl_prio;
+        if (r->at <= since) break;
+    }
+    if (!base) return;
+    probe_row_t now;
+    probe_read(&now);
+    if (now.lvgl_prio > lvgl_top) lvgl_top = now.lvgl_prio;
+    if (len < (int)cap)
+        len += snprintf(line + len, cap - len, "; LVGL up to priority %u", (unsigned)lvgl_top);
+    uint32_t d[PROBE_N];
+    for (unsigned i = 0; i < PROBE_N; i++) d[i] = now.run[i] - base->run[i];
+    if (len < (int)cap)
+        len += snprintf(line + len, cap - len, "; in %lld ms ran",
+                        (long long)((now.at - base->at) / 1000));
+    for (int k = 0; k < 8; k++) {
+        unsigned best = PROBE_N;
+        for (unsigned i = 0; i < PROBE_N; i++)
+            if (d[i] >= 3000 && (best == PROBE_N || d[i] > d[best])) best = i;
+        if (best == PROBE_N) break;
+        if (len < (int)cap)
+            len += snprintf(line + len, cap - len, " %s %lu", PROBE_NAMES[best],
+                            (unsigned long)(d[best] / 1000));
+        d[best] = 0;
+    }
+}
+
+static void probe_task(void *arg)
+{
+    const int core = (int)(intptr_t)arg;
+    if (core == 1) {
+        s_probe_ring = heap_caps_calloc(PROBE_RING, sizeof *s_probe_ring, MALLOC_CAP_SPIRAM);
+        if (s_probe_ring) audio_out_set_hold_hook(probe_hold);
+    }
+    int64_t t_prev = esp_timer_get_time(), t_said = 0, t_names = 0;
+    char line[256];
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        const int64_t t = esp_timer_get_time();
+        const int64_t held = t - t_prev;
+        t_prev = t;
+        if (core == 1 && s_probe_ring) {
+            /* The tasks come up after this one: looked for once a second. */
+            if (t - t_names > 1000000) {
+                t_names = t;
+                for (unsigned i = 0; i < PROBE_N; i++) {
+                    if (s_probe_h[i]) continue;
+                    if (i < 2) s_probe_h[i] = xTaskGetIdleTaskHandleForCore((BaseType_t)i);
+                    else       s_probe_h[i] = xTaskGetHandle(PROBE_NAMES[i]);
+                }
+            }
+            if (s_hold_due) {
+                int len = snprintf(line, sizeof line, "%s held %lld ms", s_hold_where,
+                                   (long long)(s_hold_us / 1000));
+                if (s_hold_where[0] == 'j')
+                    len += snprintf(line + len, sizeof line - len,
+                                    ": %lu DMA buffers done, longest DMA gap %lld ms",
+                                    (unsigned long)s_hold_done, (long long)(s_hold_gap / 1000));
+                probe_report(line, sizeof line, len, s_hold_since);
+                ESP_LOGW("probe", "%s", line);
+                s_hold_due = false;
+            }
+        }
+        if (held > 60000 && t - t_said > 5000000) {
+            t_said = t;
+            int len = snprintf(line, sizeof line, "core %d held %lld ms", core,
+                               (long long)(held / 1000));
+            if (core == 1 && s_probe_ring) probe_report(line, sizeof line, len, t - held);
+            ESP_LOGW("probe", "%s", line);
+        }
+        if (core == 1 && s_probe_ring) {
+            probe_read(&s_probe_ring[s_probe_head]);
+            s_probe_head = (s_probe_head + 1) % PROBE_RING;
+        }
+    }
+}
+#endif
+
 static void ui_task(void *arg)
 {
     (void)arg;
@@ -716,6 +886,10 @@ static void ui_task(void *arg)
     for (;;) {
         vTaskDelayUntil(&next, pdMS_TO_TICKS(50));   /* 20 Hz is plenty */
 
+        {
+            char line[128];
+            if (ui_take_note(line, sizeof line)) ESP_LOGI("ui", "%s", line);
+        }
         int32_t req = ui_take_step_request();
         if (req) {
             atomic_store(&s_step_hz, req);
@@ -824,7 +998,7 @@ static void ui_task(void *arg)
                     radio_memory_mode(c.vm_mem);
                 }
             }
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
             if (c.have_radio) switch_radio(c.radio);
 #endif
             if (!c.live) haptic(7);         /* soft bump: value committed */
@@ -837,8 +1011,25 @@ static void ui_task(void *arg)
          * as they change, and save them once they have settled; the save is
          * debounced because NVS wear is real and the knob turns fast. */
         {
+            /* Two mic gains, the knob's own microphone's and a headset's:
+             * the face shows and turns the one in use, and a headset come or
+             * gone swaps them -- what the face had saved first, as the
+             * outgoing one's. The other one is net_prov's, where the page
+             * may have set it meanwhile. */
             static uint8_t applied_vol = 0xFF, applied_mic = 0xFF;
             static int64_t changed_at;
+            static int     hs_was = -1;
+            const bool hs = bt_link_headset_connected();
+            if ((int)hs != hs_was) {
+                if (hs_was >= 0) {
+                    const uint8_t m = ui_mic_gain();
+                    net_prov_set_audio(ui_volume(), hs_was ? net_prov_mic_gain() : m,
+                                       hs_was ? m : net_prov_mic_gain_headset());
+                    changed_at = esp_timer_get_time();
+                }
+                hs_was = hs;
+                ui_set_levels(0xFF, hs ? net_prov_mic_gain_headset() : net_prov_mic_gain());
+            }
             const uint8_t vol = ui_volume(), mic = ui_mic_gain();
             if (vol != applied_vol || mic != applied_mic) {
                 audio_out_set_volume(vol);
@@ -847,8 +1038,12 @@ static void ui_task(void *arg)
                 applied_mic = mic;
                 changed_at  = esp_timer_get_time();
             }
-            if (changed_at && esp_timer_get_time() - changed_at > 2000000) {
-                net_prov_save_audio(vol, mic);  /* no-op when unchanged */
+            net_prov_set_audio(vol, hs ? net_prov_mic_gain() : mic, hs ? mic : net_prov_mic_gain_headset());
+            /* Into flash once they have settled -- and never on the air: a
+             * flash write stops the audio's interrupts for up to ~100 ms, a
+             * hole in a call or an over (heard as one, 2026-10-01). */
+            if (changed_at && esp_timer_get_time() - changed_at > 2000000 && !audio_busy()) {
+                net_prov_flush_audio();          /* no-op when unchanged */
                 changed_at = 0;
             }
         }
@@ -885,7 +1080,91 @@ static void ui_task(void *arg)
             radio_ptt_toggle();
 #endif
         }
-#if !VFO_RADIO_SETUP && !VFO_RX_ONLY
+#if VFO_RADIO_PHONE
+        /* A telephone: a headset's button only ever hangs up, and its mute
+         * mutes the call -- the client reads that itself. No boom arm as a
+         * PTT. A call coming in buzzes, with the ring, every three seconds. */
+        if (bt_link_take_ptt()) {
+            /* A call ringing in: the headset's button answers it. Otherwise
+             * it hangs up -- a call up, or one being made. */
+            if (s_call_ringing) {
+                ESP_LOGI(TAG, "headset button: answer");
+                phone_answer();
+            } else {
+                ESP_LOGI(TAG, "headset button: hang up");
+                radio_ptt_unkey();
+            }
+        }
+        switch (ui_take_call_req()) {
+        case 1: ESP_LOGI(TAG, "slab: answer");  phone_answer(); break;
+        case 2: ESP_LOGI(TAG, "slab: decline"); phone_hangup(); break;
+        default: break;
+        }
+        /* The keypad: a number to call, keys in a call, clicks out of one. */
+        {
+            char num[24];
+            if (ui_take_dial(num, sizeof num)) {
+                ESP_LOGI(TAG, "keypad: calling %s", num);
+                if (!phone_dial(num)) haptic(12);        /* refused: not registered */
+            }
+            for (char k; (k = ui_take_dtmf()) != 0;) phone_dtmf(k);
+            if (ui_take_key_clicks()) haptic(7);
+            /* The history to the face whenever it changes; looked at once
+             * the face has shown it. */
+            static uint32_t hist_seq = UINT32_MAX;
+            const uint32_t hs = phone_history_seq();
+            if (hs != hist_seq) {
+                phone_call_t *pc = heap_caps_malloc(sizeof *pc * PHONE_HIST_MAX, MALLOC_CAP_SPIRAM);
+                ui_call_t    *uc = heap_caps_malloc(sizeof *uc * UI_CALLS_MAX, MALLOC_CAP_SPIRAM);
+                if (pc && uc) {
+                    int n = phone_history(pc, PHONE_HIST_MAX);
+                    if (n > UI_CALLS_MAX) n = UI_CALLS_MAX;
+                    for (int i = 0; i < n; i++) {
+                        strlcpy(uc[i].number, pc[i].number, sizeof uc[i].number);
+                        strlcpy(uc[i].name, pc[i].name, sizeof uc[i].name);
+                        uc[i].when = pc[i].when;
+                        uc[i].secs = pc[i].secs;
+                        uc[i].kind = pc[i].kind;        /* PHONE_CALL_* is UI_CALL_* */
+                    }
+                    /* Not taken -- the face busy drawing, as it is the
+                     * moment a call ends -- it goes again next time round. */
+                    if (ui_set_calls(uc, (uint8_t)n)) hist_seq = hs;
+                }
+                free(pc);
+                free(uc);
+            }
+            if (ui_take_calls_seen()) phone_history_seen();
+        }
+        {
+            /* A call ringing in, felt as a phone's: the motor driven flat out
+             * on the ring's own rhythm -- 400 ms, 200 rest, 400, then two
+             * seconds -- as the face breathes green (ui.c). Not the clicks'
+             * effects: short by design, at the 1.3 V the clicks are tuned to.
+             * For the ring the coin motor gets its own 3 V, and the clicks
+             * their voltage back after. */
+            const uint8_t RING_RATED = 0x89;        /* 2.9 V: the overdrive clamp */
+            static bool     ringing, on;
+            static uint32_t t0;
+            const uint32_t nowb = (uint32_t)(esp_timer_get_time() / 1000);
+            if (s_call_ringing && !ringing) {
+                ringing = true;
+                on = false;
+                t0 = nowb;
+                drv2605_rtp_begin_at(&s_drv, RING_RATED);
+            } else if (!s_call_ringing && ringing) {
+                ringing = false;
+                drv2605_rtp_end(&s_drv);
+            }
+            if (ringing) {
+                const uint32_t p = (nowb - t0) % 3000;
+                const bool want = p < 400 || (p >= 600 && p < 1000);
+                if (want != on) {
+                    on = want;
+                    drv2605_rtp_write(&s_drv, want ? 0x7F : 0);
+                }
+            }
+        }
+#elif !VFO_RADIO_SETUP && !VFO_RX_ONLY
         /* A Bluetooth headset's call button is the PTT while one is
          * connected: a press keys, the next unkeys. Not with the headset's
          * microphone muted -- that over would be a dead carrier -- and then
@@ -1013,6 +1292,17 @@ static void ui_task(void *arg)
         static radio_status_t st;
         radio_get_status(&st);
         s_rx_only = st.rx_only;
+#if VFO_RADIO_PHONE
+        s_call_ringing = st.call == RADIO_CALL_IN;
+        s_in_call = st.call == RADIO_CALL_OUT || st.call == RADIO_CALL_IN || st.call == RADIO_CALL_UP;
+        /* A call lights the screen from here, the moment it rings, with the
+         * motor's buzz and the green face: net_sup, which counts a call as
+         * use too, comes round only every two seconds, and a tap on the dark
+         * face meanwhile -- to see who is calling -- answers or declines.
+         * No LVGL lock, and a backlight already lit is not written again. */
+        if (s_in_call) ui_note_activity();
+        ui_set_meters(phone_meters());
+#endif
 #if !VFO_RADIO_SETUP
         ask_choice(&st);        /* the setup firmware asks its own, directly */
 #endif
@@ -1084,6 +1374,7 @@ static void ui_task(void *arg)
 
         ui_state_t u = {
             .rx_only       = st.rx_only,
+            .no_rit        = st.no_rit,
             .f_min         = st.f_min,
             .f_max         = st.f_max,
             .freq_hz       = st.f_display,
@@ -1175,6 +1466,16 @@ static void ui_task(void *arg)
         strlcpy(u.talker_info, st.talker_info, sizeof u.talker_info);
         strlcpy(u.last_talker, st.last_talker, sizeof u.last_talker);
         strlcpy(u.server, st.server, sizeof u.server);
+        /* A telephone's call (the phone firmware; zeros on the others). */
+        u.call    = st.call;
+        u.call_ms = st.call_ms;
+        u.call_hd = st.call_hd;
+        u.n_fav   = st.n_fav;
+        u.n_missed = st.n_missed;
+        strlcpy(u.call_why, st.call_why, sizeof u.call_why);
+        strlcpy(u.peer, st.peer, sizeof u.peer);
+        strlcpy(u.peer_num, st.peer_num, sizeof u.peer_num);
+        strlcpy(u.fav_num, st.fav_num, sizeof u.fav_num);
 #if VFO_HAS_SDR
         u.n_sdr = (uint8_t)sdr_count();
         for (int i = 0; i < u.n_sdr && i < UI_SDR_MAX; i++) {
@@ -1235,7 +1536,7 @@ static void ui_task(void *arg)
             u.n_sstv    = (int16_t)uber_sstv_count();
         }
 #endif
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
         /* The radios to choose from with a swipe up: not over the cable,
          * which reaches one computer or one radio. */
         {
@@ -1371,7 +1672,12 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
         ESP_LOGI(TAG, "--- transport: WiFi (%s) ---", ip);
         return ip;
     }
-#if VFO_RADIO_SVXCONNECT
+#if VFO_RADIO_PHONE
+    /* The telephone's SIP account is its own (the configuration page's
+     * Telephone section): the client looks its server up itself. */
+    strlcpy(ip, "SIP", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (SIP) ---");
+#elif VFO_RADIO_SVXCONNECT
     /* A reflector is named, and its name is looked up by the client itself:
      * an SRV record comes first, and says which host and port to use. */
     strlcpy(ip, cfg->radio_host, iplen);
@@ -1469,6 +1775,10 @@ static void install_update(void)
                                      &trial) == ESP_OK &&
          trial == ESP_OTA_IMG_PENDING_VERIFY; i++)
         vTaskDelay(pdMS_TO_TICKS(250));
+    /* The check that found it may still be on the worker, looking up the
+     * second chip's firmware after it -- 8 s a stalled read, and once more
+     * on a new connection: an install starts once it is done. */
+    for (int i = 0; i < 120 && ota_busy(); i++) vTaskDelay(pdMS_TO_TICKS(250));
     ota_status_t o;
     ota_get_status(&o);
     const uint32_t before = o.checks;
@@ -1592,7 +1902,8 @@ static const struct { const char *radio, *name; } FIRMWARES[] = {
     { "icom",       "Icom"      },
     { "multiflex",  "FlexRadio" },
     { "ubersdr",    "UberSDR"   },
-    { "svxconnect", "SvxLink"   },
+    { "svxconnect", "SVXConnect" },
+    { "phone",      "Telephone" },
 };
 
 static void setup_wifi_page(void)
@@ -1675,6 +1986,10 @@ static void setup_pick(void)
                 const char *r  = cJSON_GetStringValue(cJSON_GetObjectItem(f, "radio"));
                 const char *nm = cJSON_GetStringValue(cJSON_GetObjectItem(f, "name"));
                 const char *v  = cJSON_GetStringValue(cJSON_GetObjectItem(f, "version"));
+                /* The second chip's firmware is no radio's, and is never in
+                 * this list (tools/release.sh): should it ever be, it is
+                 * neither offered nor installed here. */
+                if (r && strcmp(r, "companion") == 0) continue;
                 if (!card && r && s_nfill < FILL_MAX) strlcpy(s_fill[s_nfill++], r, sizeof s_fill[0]);
                 /* Not this one: it is what is running. */
                 if (!r || !v || strcmp(r, "setup") == 0 || n >= UI_CHOICES - 1) continue;
@@ -1685,6 +2000,11 @@ static void setup_pick(void)
                 strlcpy(radios[n], r, sizeof radios[n]);
                 n++;
             }
+            /* The second chip's firmware onto the card too, under its own
+             * key: the radio's firmware installed from here finds it there
+             * and hands it to the chip. This firmware never sends it. */
+            if (!card && cJSON_GetObjectItem(root, "companion") && s_nfill < FILL_MAX)
+                strlcpy(s_fill[s_nfill++], "companion", sizeof s_fill[0]);
             cJSON_Delete(root);
             if (card) ESP_LOGW(TAG, "no update server: the SD card's firmwares");
         }
@@ -1869,6 +2189,343 @@ RADIO_ONLY_FN static bool wifi_setup(void)
     return true;
 }
 
+/* --- the second chip's firmware --------------------------------------------
+ *
+ * The one update the knob installs without asking (ota.h, bt_link.h): the
+ * second chip's firmware, a release newer than the chip's, sent at a quiet
+ * moment. ota.c finds it -- with the knob's own check, or on the SD card --
+ * and fetches it into PSRAM: in the boot window, before the radio's client
+ * starts and takes the internal RAM a download needs, or later beside the
+ * session while there is RAM to spare. bt_link sends it. What the knob
+ * remembers of each keeps one that failed from coming back: never after a
+ * real failure, and no more than BT_UPD_TRIES restarts into it after
+ * harmless ones -- the power gone during its trial, a knob that restarted
+ * and never said KEEP. */
+
+/* The record (bt_link_upd_record_t) in NVS, btlink/comp, a few writes a
+ * release: from the supervisor alone, its stack internal, and never during
+ * an over or a call -- a flash write holds the audio up. */
+typedef struct __attribute__((packed)) {
+    uint8_t sha8[8];
+    uint8_t tries, result, why;
+    char    ver[16];
+} comp_disk_t;
+/* The supervisor's alone, in PSRAM: internal RAM is what a download, and
+ * the radio's own TLS, run short of. */
+EXT_RAM_BSS_ATTR static bt_link_upd_record_t s_comp_rec;
+static bool     s_comp_have, s_comp_dirty;
+EXT_RAM_BSS_ATTR static uint32_t s_comp_dones, s_comp_seq;   /* bt_link's counters, as last seen */
+EXT_RAM_BSS_ATTR static int64_t  s_comp_fetched_at;          /* the last fetch of its image asked for */
+
+static const char *hex16(char out[17], const uint8_t b[8])
+{
+    for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", b[i]);
+    return out;
+}
+
+RADIO_ONLY_FN static void comp_record_load(void)
+{
+    nvs_handle_t h;
+    comp_disk_t  d;
+    size_t       n = sizeof d;
+    if (nvs_open("btlink", NVS_READONLY, &h) != ESP_OK) return;
+    const bool ok = nvs_get_blob(h, "comp", &d, &n) == ESP_OK && n == sizeof d;
+    nvs_close(h);
+    if (!ok) return;
+    memset(&s_comp_rec, 0, sizeof s_comp_rec);
+    memcpy(s_comp_rec.sha8, d.sha8, sizeof d.sha8);
+    s_comp_rec.tries  = d.tries;
+    s_comp_rec.result = d.result;
+    s_comp_rec.why    = d.why;
+    memcpy(s_comp_rec.ver, d.ver, sizeof d.ver);
+    s_comp_have = true;
+    bt_link_update_record(&s_comp_rec);
+    char a[17];
+    ESP_LOGI(TAG, "second chip: the knob remembers %s [%s]: the chip restarted into it %u time%s%s",
+             s_comp_rec.ver, hex16(a, s_comp_rec.sha8), (unsigned)d.tries, d.tries == 1 ? "" : "s",
+             d.result ? "; never to go again" : "");
+}
+
+/* bt_link's results, as they come: each restart of the chip into an image is
+ * a try of it; a keep forgets it; a result no retry mends keeps it from ever
+ * going again. A new image's first try, or its end, takes the record over.
+ * Said to bt_link at once, to NVS when it may be written. */
+static void comp_record_note(const bt_link_upd_t *u)
+{
+    bool changed = false;
+    if (u->dones != s_comp_dones) {
+        const uint32_t k = u->dones - s_comp_dones;
+        s_comp_dones = u->dones;
+        if (!s_comp_have || memcmp(s_comp_rec.sha8, u->to_sha, 8)) {
+            memset(&s_comp_rec, 0, sizeof s_comp_rec);
+            memcpy(s_comp_rec.sha8, u->to_sha, 8);
+            strlcpy(s_comp_rec.ver, u->to, sizeof s_comp_rec.ver);
+            s_comp_have = true;
+        }
+        s_comp_rec.tries = (uint8_t)(s_comp_rec.tries + k > 255 ? 255 : s_comp_rec.tries + k);
+        changed = true;
+    }
+    if (u->seq != s_comp_seq) {
+        s_comp_seq = u->seq;
+        if (u->result == BT_UPD_KEPT) {
+            /* Kept: the tries go -- but one never to go again stays so. */
+            if (s_comp_have && (s_comp_rec.result == BT_UPD_NONE || !memcmp(s_comp_rec.sha8, u->last_sha, 8))) {
+                s_comp_have = false;
+                changed = true;
+            }
+        } else if (u->block) {
+            if (!s_comp_have || memcmp(s_comp_rec.sha8, u->last_sha, 8)) {
+                memset(&s_comp_rec, 0, sizeof s_comp_rec);
+                memcpy(s_comp_rec.sha8, u->last_sha, 8);
+                strlcpy(s_comp_rec.ver, !memcmp(u->last_sha, u->to_sha, 8) ? u->to : "?", sizeof s_comp_rec.ver);
+                s_comp_have = true;
+            }
+            s_comp_rec.result = u->result;
+            s_comp_rec.why    = u->why;
+            changed = true;
+        }
+        /* Anything else -- stopped, refused for now, dropped -- is no try. */
+    }
+    if (!changed) return;
+    bt_link_update_record(s_comp_have ? &s_comp_rec : NULL);
+    s_comp_dirty = true;
+}
+
+static void comp_record_save(bool busy)
+{
+    static bool said;
+    if (!s_comp_dirty || busy) return;
+    nvs_handle_t h;
+    esp_err_t e = nvs_open("btlink", NVS_READWRITE, &h);
+    if (e == ESP_OK) {
+        if (s_comp_have) {
+            comp_disk_t d = { .tries = s_comp_rec.tries, .result = s_comp_rec.result, .why = s_comp_rec.why };
+            memcpy(d.sha8, s_comp_rec.sha8, sizeof d.sha8);
+            /* NUL-padded, the rest of d zeroed; 16 characters may fill it. */
+            memcpy(d.ver, s_comp_rec.ver, strnlen(s_comp_rec.ver, sizeof d.ver));
+            e = nvs_set_blob(h, "comp", &d, sizeof d);
+        } else {
+            e = nvs_erase_key(h, "comp");
+            if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+        }
+        if (e == ESP_OK) e = nvs_commit(h);
+        nvs_close(h);
+    }
+    if (e == ESP_OK) {
+        s_comp_dirty = said = false;
+    } else if (!said) {
+        said = true;
+        ESP_LOGW(TAG, "second chip: what the knob remembers of its updates not written: %s", esp_err_to_name(e));
+    }
+}
+
+/* The knob keeps the chip up to date: it is there, has said what it runs,
+ * takes updates, runs a release, and has settled -- no firmware on trial.
+ * Otherwise it is left alone, which is said once for each firmware. */
+static bool comp_auto(const bt_link_status_t *st, const bt_link_upd_t *u)
+{
+    EXT_RAM_BSS_ATTR static char said[33];
+    if (!st->companion) return false;
+    const bool takes = st->flags & BTL_HELLO_UPDATE;
+    if (takes && !u->info) return false;          /* what it runs: not said yet */
+    const bool release = takes && (u->chip.flags & BTL_INFO_RELEASE);
+    if (release) return u->chip.state != BTL_RUN_TRIAL;
+    if (strcmp(said, st->version) != 0) {
+        strlcpy(said, st->version, sizeof said);
+        /* Two calls: the log pastes its format in as it stands. */
+        if (!takes) ESP_LOGW(TAG, "second chip: %s takes no updates -- it needs the bench once", st->version);
+        else        ESP_LOGW(TAG, "second chip: %s is a development build: not updated automatically", st->version);
+    }
+    return false;
+}
+
+/* The offer is for this chip: newer than what it runs -- never older -- not
+ * its own image, and nothing held against it: the chip's word, the last
+ * result, the record. */
+static bool comp_wanted(const ota_comp_offer_t *o, const bt_link_status_t *st, const bt_link_upd_t *u)
+{
+    return o->known && ota_is_newer(o->version, st->version) && memcmp(o->app_sha, u->chip.app_sha, 8) != 0 &&
+           !bt_link_update_blocked(o->app_sha, NULL, 0);
+}
+
+/* What the chip runs and what there is for it, said when either changes. */
+static void comp_say(const bt_link_status_t *st, const bt_link_upd_t *u, const ota_comp_offer_t *o)
+{
+    EXT_RAM_BSS_ATTR static uint8_t chip[8], app[8];
+    static bool    said, known, card;
+    if (said && !memcmp(chip, u->chip.app_sha, 8) && known == o->known && card == o->from_card &&
+        !memcmp(app, o->app_sha, 8))
+        return;
+    said  = true;
+    known = o->known;
+    card  = o->from_card;
+    memcpy(chip, u->chip.app_sha, 8);
+    memcpy(app, o->app_sha, 8);
+    char a[17];
+    hex16(a, u->chip.app_sha);
+    if (!o->known)
+        ESP_LOGI(TAG, "second chip: %s [%s], release; no firmware for it found yet", st->version, a);
+    else if (ota_is_newer(o->version, st->version))
+        ESP_LOGI(TAG, "second chip: %s [%s], release; the %s has %s", st->version, a,
+                 o->from_card ? "SD card" : "server", o->version);
+    else
+        ESP_LOGI(TAG, "second chip: %s [%s], release; %s is the latest", st->version, a, o->version);
+}
+
+/* In the boot window, once, before the radio's client starts: the one moment
+ * with internal RAM to spare for a download -- about 11 s once a release --
+ * or for the card's copy. Nothing new costs nothing. The image waits in
+ * PSRAM, handed over by second_chip() and sent at a quiet moment. `wifi`:
+ * the radio's link is WiFi, whose check just now did or did not reach the
+ * update server; on the cable, the card's copy only. */
+RADIO_ONLY_FN static void second_chip_boot(bool wifi)
+{
+    EXT_RAM_BSS_ATTR static bt_link_status_t st;
+    EXT_RAM_BSS_ATTR static bt_link_upd_t    u;
+    EXT_RAM_BSS_ATTR static ota_comp_offer_t o;
+    /* Its word on what it runs: there by now, a second or two after
+     * power-on -- unless it has none to give, or no chip answers, which
+     * 5 s after this one started is none at all: no wait every boot for a
+     * knob without the companion firmware. */
+    for (int i = 0; i < 30; i++) {
+        bt_link_status(&st);
+        bt_link_update_status(&u);
+        if (u.info || (st.companion && !(st.flags & BTL_HELLO_UPDATE)) ||
+            (!st.companion && esp_timer_get_time() > 5 * 1000000LL))
+            break;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (!comp_auto(&st, &u)) return;
+    ota_companion_offer(&o);
+    /* The boot check reached the server, and its look for the chip's
+     * firmware rides on after it, on its connection: a moment more. */
+    if (wifi && o.looked && o.route && net_prov_ota_hours() != 0 && ota_busy()) {
+        for (int i = 0; i < 30 && ota_busy(); i++) vTaskDelay(pdMS_TO_TICKS(200));
+        ota_companion_offer(&o);
+    }
+    /* Only with the automatic check on: off, the knob looks for nothing on
+     * the network for the chip either -- the card's copy still goes. */
+    const bool online = wifi && o.route && net_prov_ota_hours() != 0;
+    if (!online || !o.known) {
+        ota_companion_card_look();
+        ota_companion_offer(&o);
+    }
+    comp_say(&st, &u, &o);
+    if (!comp_wanted(&o, &st, &u) || ota_companion_fetch(online, false) != ESP_OK) return;
+    s_comp_fetched_at = esp_timer_get_time();
+    int t = 0;
+    for (; t < 30000 && ota_companion_busy(); t += 200) vTaskDelay(pdMS_TO_TICKS(200));
+    if (ota_companion_busy()) {
+        /* Never beside the session: a fetch at a quiet moment does better.
+         * Waited for, too: the read under way may take 8 s more, with no
+         * RAM floors, and the client about to start wants that RAM. */
+        ESP_LOGW(TAG, "second chip: its firmware not fetched in %d s: stopped, for the radio's client", t / 1000);
+        ota_companion_stop("its time was up");
+        for (int i = 0; i < 50 && ota_companion_busy(); i++) vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+/* Every pass of the supervisor: whether this is a quiet moment to send the
+ * second chip its firmware -- this image confirmed and up a minute, the
+ * radio idle with no question on the dial, no over or call, no install or
+ * upload of this chip's own; the headset's part bt_link knows best, and
+ * keeps. Said every pass: a pass that does not come -- an install, the WiFi
+ * setup -- stops a transfer by its silence. Then what the knob remembers of
+ * it, an image fetched to hand over, and -- the boot window having missed
+ * it, or the offer new since -- a fetch now, after two quiet minutes, at
+ * most once in half an hour and three times a boot, with internal RAM to
+ * spare, and stopped by an over or a call. `idle`: the radio idle, no
+ * question on the dial; one with no client yet is. `session`: the radio's
+ * client runs. */
+static void second_chip(bool idle, bool session)
+{
+    EXT_RAM_BSS_ATTR static bt_link_status_t st;
+    EXT_RAM_BSS_ATTR static bt_link_upd_t    u;
+    EXT_RAM_BSS_ATTR static ota_comp_offer_t o;
+    EXT_RAM_BSS_ATTR static int fetches;
+    EXT_RAM_BSS_ATTR static bool    fetching;       /* a fetch of ours runs */
+    EXT_RAM_BSS_ATTR static int64_t spaced;         /* s_comp_fetched_at before it */
+    EXT_RAM_BSS_ATTR static int64_t quiet_since;    /* idle, with no over or call, since; 0: not now */
+    const int64_t now  = esp_timer_get_time();
+    const bool    busy = audio_busy();
+    bt_link_update_allow(s_boot_ok && now >= 60 * 1000000LL && idle && !busy && !ota_writing());
+    if (!idle || busy)     quiet_since = 0;
+    else if (!quiet_since) quiet_since = now;
+
+    /* A fetch of ours, beside the radio's session, steps aside for an over
+     * or a call as the transfer it feeds does: stopped at its next read, and
+     * neither counted nor spaced -- it goes again at the next quiet two
+     * minutes, which it waits for as the transfer does: never a download
+     * begun over and over between the overs of a contact. */
+    if (fetching && !ota_companion_busy()) fetching = false;
+    if (fetching && busy) {
+        fetching = false;
+#if VFO_RADIO_PHONE
+        const bool stopped = ota_companion_stop("a call came first -- again after two quiet minutes");
+#else
+        const bool stopped = ota_companion_stop("an over came first -- again after two quiet minutes");
+#endif
+        if (stopped) {
+            fetches--;
+            s_comp_fetched_at = spaced;
+        }
+    }
+
+    bt_link_status(&st);
+    bt_link_update_status(&u);
+    comp_record_note(&u);
+    comp_record_save(busy);
+    const bool keep_up = comp_auto(&st, &u);
+    ota_companion_offer(&o);
+    if (keep_up) comp_say(&st, &u, &o);
+
+    size_t   len = 0;
+    uint8_t  sha[32];
+    uint8_t *img = ota_companion_take(&len, sha);
+    if (img) {
+        /* Fetched for the chip as it was then: still for it now? */
+        char    ver[33] = "?";
+        uint8_t app[8];
+        const char *no = !ota_companion_image_ok(img, len, ver, sizeof ver, app) ? "not a second-chip firmware"
+                       : !keep_up                                ? "the second chip is not to be updated now"
+                       : !ota_is_newer(ver, st.version) || !memcmp(app, u.chip.app_sha, 8)
+                                                                 ? "the second chip runs it, or a newer one"
+                       : bt_link_update_blocked(app, NULL, 0)    ? "it is not to go again"
+                       : NULL;
+        if (!no && bt_link_update_start(img, len, sha, false) != ESP_OK)
+            no = "an update of the second chip is held or going";
+        if (no) {
+            ESP_LOGW(TAG, "second chip: %s not handed over: %s", ver, no);
+            free(img);
+        }
+        return;
+    }
+    /* Two quiet minutes -- which keeps it out of the first two as well,
+     * while the radio's client makes its connection. */
+    if (!keep_up || !quiet_since || now - quiet_since < 120 * 1000000LL || fetches >= 3 ||
+        (s_comp_fetched_at && now - s_comp_fetched_at < 30 * 60 * 1000000LL) || bt_link_update_holding() ||
+        ota_companion_busy() || ota_writing() || !comp_wanted(&o, &st, &u) ||
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 16 * 1024 ||
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 6 * 1024)
+        return;
+    /* The server only while the automatic check is on, and its last look
+     * reached it; the card's copy always. */
+    if (ota_companion_fetch(o.route && net_prov_ota_hours() != 0, session) == ESP_OK) {
+        fetches++;
+        fetching = true;
+        spaced = s_comp_fetched_at;
+        s_comp_fetched_at = now;
+        ESP_LOGI(TAG, "second chip: fetching %s for it%s", o.version, session ? ", beside the radio's session" : "");
+    }
+}
+
+/* ota.c's, just before this chip's flash is written -- an install, a switch,
+ * an upload: the second chip's update steps aside. This chip's comes first. */
+RADIO_ONLY_FN static void second_chip_step_aside(void)
+{
+    bt_link_update_stop(BTL_UPD_WHY_KNOB);
+}
+
 RADIO_ONLY_FN static void net_task(void *arg)
 {
     (void)arg;
@@ -1922,6 +2579,13 @@ RADIO_ONLY_FN static void net_task(void *arg)
             if (host && !via_usb && !update_checked) {
                 update_checked = true;
                 boot_update_check();
+            }
+            /* The second chip's firmware, the same once a boot -- on the
+             * cable too, from the SD card -- before the client starts. */
+            static bool chip_checked;
+            if (host && !chip_checked) {
+                chip_checked = true;
+                second_chip_boot(!via_usb);
             }
             if (host && via_usb) {
                 /* Hand the radio's internal RAM back before asking for the
@@ -2001,20 +2665,35 @@ RADIO_ONLY_FN static void net_task(void *arg)
             ui_set_netinfo(info);
         }
 
-        {   /* Transmitting counts as use, however long the over runs. */
+        {   /* Transmitting counts as use, however long the over runs; so
+             * does a call, from its first ring to its end: a phone that
+             * rings on a dark screen shows nobody who is calling, and one
+             * that goes dark mid-call has its HANG UP under the tap meant
+             * to wake it. */
             radio_status_t ds;
             radio_get_status(&ds);
-            ui_dim_tick(ds.tx || ds.ptt_state != PTT_IDLE);
+            ui_dim_tick(ds.tx || ds.ptt_state != PTT_IDLE || ds.call == RADIO_CALL_IN
+                        || ds.call == RADIO_CALL_OUT || ds.call == RADIO_CALL_UP);
         }
 
+        /* For the second chip's firmware: the radio idle, and no question
+         * on the dial -- one with no client started yet is. */
+        bool quiet_radio = true;
         if (started) {
             radio_status_t st;
             radio_get_status(&st);
 
             /* A periodic check falls due: start it only while the radio is
              * idle and internal RAM has room, or it would compete with the
-             * very session it is running beside. Until then it stays due. */
-            const bool idle = !st.tx && st.ptt_state == PTT_IDLE;
+             * very session it is running beside. Until then it stays due.
+             * The telephone never transmits: idle there is no call ringing,
+             * being made or up. Else the check's TLS would run beside the
+             * call, and its question -- which takes the next tap on the
+             * face, wherever it lands -- could come up over a call ringing
+             * in, and take the tap meant for ANSWER. (Every other firmware's
+             * call stays idle.) */
+            const bool idle = !st.tx && st.ptt_state == PTT_IDLE &&
+                              (st.call == RADIO_CALL_IDLE || st.call == RADIO_CALL_ENDED);
             if (ota_check_due() && idle &&
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= 16 * 1024 &&
                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= 6 * 1024 &&
@@ -2023,8 +2702,9 @@ RADIO_ONLY_FN static void net_task(void *arg)
 
             /* A check -- periodic, a slow one from boot, or the configuration
              * page's "Check now" -- found something newer: ask, but never
-             * while transmitting or with an editor open. A yes restarts the
-             * knob, which then installs at boot; see boot_update_check(). */
+             * while transmitting, in a call or with an editor open. A yes
+             * restarts the knob, which then installs at boot; see
+             * boot_update_check(). */
             static bool asking;
             ota_status_t o;
             ota_get_status(&o);
@@ -2066,6 +2746,7 @@ RADIO_ONLY_FN static void net_task(void *arg)
                     }
                 }
             }
+            quiet_radio = idle && !asking;
 
             /* No restart when the link drops, either. The client reconnects on
              * its own, backing off to 8 s, and the radio is already safe:
@@ -2157,6 +2838,7 @@ RADIO_ONLY_FN static void net_task(void *arg)
                          (unsigned)a.format, (unsigned)a.channels,
                          (unsigned)ui_volume());
         }
+        second_chip(quiet_radio, started);
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
@@ -2337,6 +3019,7 @@ static void boot_ok_cb(void *arg)
      * arrived over the air it is on trial until now, and the bootloader will
      * put the previous one back if we never get here. */
     ota_mark_valid();
+    s_boot_ok = true;
 }
 
 void app_main(void)
@@ -2423,8 +3106,13 @@ void app_main(void)
         bring_up("web SDR", sdr_rx_init);
 #endif
 #if !VFO_RADIO_SETUP
-        /* The second chip, for a Bluetooth headset. */
+        /* The second chip, for a Bluetooth headset. An update of its own
+         * firmware steps aside for an over, or a call, and for this chip's
+         * own update; what the knob remembers of the last is read back. */
         bring_up("bt link", bt_link_init);
+        bt_link_update_busy_cb(audio_busy);
+        ota_set_flash_hook(second_chip_step_aside);
+        comp_record_load();
 #endif
         /* The saved levels, even with no display to carry them. */
         audio_out_set_volume(net_prov_volume());
@@ -2534,6 +3222,11 @@ void app_main(void)
     /* Core 1 is the "feel" core: knob, haptics, touch and LVGL. Core 0 is
      * reserved for WiFi and lwIP, whose burst timing we cannot control. */
     xTaskCreatePinnedToCore(encoder_task, "enc_input", 4096, NULL, 15, NULL, 1);
+#if VFO_RADIO_PHONE
+    for (int c = 0; c < 2; c++)
+        xTaskCreatePinnedToCoreWithCaps(probe_task, c ? "probe1" : "probe0", 4096,
+                                        (void *)(intptr_t)c, 22, NULL, c, MALLOC_CAP_SPIRAM);
+#endif
 
     ESP_LOGI(TAG, "--- up: board=%d panel=%d touch=%d ui=%d %s---",
              have_board, have_panel, have_touch, have_ui,

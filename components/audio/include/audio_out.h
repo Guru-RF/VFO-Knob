@@ -25,7 +25,7 @@
  * load against 48 kHz; the server accepts only 8/12/24/48. */
 /* The radios stream 24 kHz. The svxconnect firmware runs at SvxLink's own
  * 16 kHz, so the reflector's Opus needs no resampling either way. */
-#if VFO_RADIO_SVXCONNECT
+#if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE
 #define AUDIO_RATE_HZ   16000
 #else
 #define AUDIO_RATE_HZ   24000
@@ -66,6 +66,19 @@ void audio_out_set_volume(uint8_t vol);
  * the playback task, and safe from any other. */
 void audio_out_kick(void);
 void audio_out_flush(void);
+/* The jack silent, the audio still going to the tap (a Bluetooth headset):
+ * the telephone's, while a headset is connected. */
+void audio_out_dac_mute(bool on);
+/* Behind: the oldest audio dropped until `keep_frames` are left, playing on.
+ * A call's speaker, held up while the network went on, is not left late. */
+void audio_out_trim(size_t keep_frames);
+
+/* A probe, for now: called from the playback task when it has waited over
+ * 60 ms in the jack's DMA or the headset's tap -- where, since when, for how
+ * long, and the DMA's buffers finished meanwhile with its longest gap. */
+typedef void (*audio_out_hold_hook_t)(const char *where, int64_t since_us, int64_t held_us,
+                                      uint32_t dma_done, int64_t dma_gap_us);
+void audio_out_set_hold_hook(audio_out_hold_hook_t fn);
 
 /* Sample frames buffered and not yet played. */
 size_t audio_out_queued(void);

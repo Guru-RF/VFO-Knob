@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VFO-Knob: back to your knob</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;background:#08090c;color:#e8eef5;
+display:grid;place-items:center;min-height:90vh;margin:0}p{max-width:30em;padding:0 1em}</style>
+</head><body><p id="t">Back to your knob&hellip;</p>
+<script>
+/* Served as it is at https://vfoknob.com/google.html, the address the
+   firmware and every owner's Google client name (GOOGLE.md).
+   Google's sign-in for the Telephone firmware's contacts (docs/phone.md)
+   returns here, as only an https page may be its redirect address. This page
+   hands the code to the knob whose address came along in `state`, on your
+   own network -- and to nothing else: a LAN address, or a name only your
+   network knows (vfo-knob, vfo-knob.local, .lan, .home.arpa, .internal).
+   `state` is "<knob>/<nonce>"; the knob checks the nonce. */
+const q = new URLSearchParams(location.search);
+const state = q.get('state') || '', code = q.get('code'), err = q.get('error');
+const knob = state.split('/')[0];
+const lan = /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[a-z0-9-]+(\.(local|lan|home|internal|home\.arpa))?)(:\d{1,5})?$/i;
+if (lan.test(knob) && (code || err)) {
+  location.replace('http://' + knob + '/api/phone/google/callback?state=' + encodeURIComponent(state) + '&' +
+                   (code ? 'code=' + encodeURIComponent(code) : 'error=' + encodeURIComponent(err)));
+} else {
+  document.getElementById('t').textContent =
+    'This page returns Google’s sign-in to a VFO-Knob on your network, and there is no knob to return to.';
+}
+</script></body></html>

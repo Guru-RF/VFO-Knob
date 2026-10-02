@@ -89,6 +89,7 @@ esp_err_t drv2605_init(drv2605_t *d, i2c_master_bus_handle_t bus,
     d->last_effect = 0xFF;
     d->faulted     = false;
     d->err_streak  = 0;
+    d->rated       = actuator == DRV_ACTUATOR_ERM ? ERM_RATED_VOLTAGE : LRA_RATED_VOLTAGE;
 
     i2c_device_config_t cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -221,9 +222,17 @@ esp_err_t drv2605_rtp_write(drv2605_t *d, uint8_t amplitude)
     return wr(d, REG_RTPIN, amplitude);
 }
 
+esp_err_t drv2605_rtp_begin_at(drv2605_t *d, uint8_t rated)
+{
+    if (!d || d->faulted) return ESP_ERR_INVALID_STATE;
+    ESP_RETURN_ON_ERROR(wr(d, REG_RATED_VOLTAGE, rated), TAG, "rv");
+    return drv2605_rtp_begin(d);
+}
+
 esp_err_t drv2605_rtp_end(drv2605_t *d)
 {
     ESP_RETURN_ON_ERROR(wr(d, REG_RTPIN, 0), TAG, "rtp0");
     d->last_effect = 0xFF;          /* mode change invalidates the cache */
+    ESP_RETURN_ON_ERROR(wr(d, REG_RATED_VOLTAGE, d->rated), TAG, "rv");
     return wr(d, REG_MODE, MODE_INTTRIG);
 }

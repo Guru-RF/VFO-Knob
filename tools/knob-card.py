@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""The firmwares onto a knob's microSD card, through its USB cable.
+"""The firmwares onto a knob's microSD card, through its USB cable -- and
+what the bench writes on its second chip.
 
 For tools/install-setup.sh, as it provisions a knob:
 
     knob-card.py fetch <cache-dir> <plan.json>
         The release's index and every firmware in it -- the setup firmware
-        too -- into the cache, each checked against its manifest's sha256,
-        fetched only when the cache does not already have it. Writes the plan
-        for `push`.
+        too, and the second chip's -- into the cache, each checked against
+        its manifest's sha256, fetched only when the cache does not already
+        have it. Writes the plan for `push`.
 
     knob-card.py push <port> <plan.json>
         Each of them down the cable onto the knob's SD card, in the minutes
@@ -15,6 +16,17 @@ For tools/install-setup.sh, as it provisions a knob:
         them then (main/app_main.c, card_console_task), and keeps an image
         only with its sha256. Then the index, for the setup firmware's list
         when there is no server.
+
+    knob-card.py chip <cache-dir> <parts.json> [<build-dir>]
+        What the bench writes on the second chip, once per knob: a
+        bootloader that can go back to the firmware before, the partition
+        table and an empty otadata -- published once, with the second chip's
+        first release (firmware/companion/bench/) -- and its firmware, the
+        latest release's. Into the cache, each checked against its
+        manifest's sha256; or, from a build directory (companion/build_a,
+        say), that build's. Each is checked for what the chip needs of it,
+        and their paths written for install-setup.sh. Exit status 3: no
+        second-chip firmware is published yet.
 
 The port is opened without touching DTR and RTS: the ESP32-S3's USB serial
 restarts the chip when DTR drops while RTS is up -- which is what pyserial
@@ -24,13 +36,26 @@ import hashlib
 import json
 import os
 import select
+import struct
 import sys
 import termios
 import time
+import urllib.error
 import urllib.request
 
 ROOT = "https://raw.githubusercontent.com/Guru-RF/VFO-Knob/firmware/firmware/"
 BLOCK = 8192        # main/app_main.c CARD_BLOCK: one block, one answer
+NOT_YET = 3         # chip: no second-chip firmware is published yet
+
+# The second chip's flash as the bench leaves it. install-setup.sh writes the
+# ESP32's bootloader at 0x1000 and the partition table at 0x8000, empties
+# otadata and writes the firmware into ota_0, and leaves the settings (the
+# headset's pairing) where they are -- so the table must say just that. It
+# is frozen once a knob has it: an update never writes it, and
+# tools/release.sh holds every release to the one published.
+CHIP_PARTS = {"bootloader.bin": 0x1000, "partition-table.bin": 0x8000, "ota_data_initial.bin": 0xE000}
+CHIP_TABLE = {"nvs": (0x9000, 0x5000), "otadata": (0xE000, 0x2000),
+              "ota_0": (0x20000, 0x1E0000), "ota_1": (0x200000, 0x1E0000)}
 
 
 def get(url):
@@ -48,7 +73,13 @@ def fetch(cache, plan_path):
     index = get(ROOT + "index.json")
     with open(os.path.join(cache, "index.json"), "wb") as f:
         f.write(index)
-    radios = [x["radio"] for x in json.loads(index)["firmwares"] if x.get("radio")]
+    idx = json.loads(index)
+    radios = [x["radio"] for x in idx["firmwares"] if x.get("radio")]
+    # The second chip's firmware, under a key of its own in the index -- never
+    # in "firmwares", the setup firmware's list: onto the card too, where a
+    # radio's firmware finds it and hands it to that chip.
+    if idx.get("companion") and "companion" not in radios:
+        radios.append("companion")
     plan = {"index": os.path.join(cache, "index.json"), "images": []}
     fetched = 0
     for radio in radios:
@@ -190,10 +221,114 @@ def push(port, plan_path):
         sys.exit(1)
 
 
+def cached(cache, url_path, name, sha):
+    """A published file in the cache, as its manifest's sha256 says it is:
+    fetched only when the cache does not hold it already."""
+    path = os.path.join(cache, name)
+    if not (os.path.exists(path) and sha256(open(path, "rb").read()) == sha):
+        data = get(ROOT + url_path)
+        if sha256(data) != sha:
+            sys.exit(f"{url_path} does not match its manifest's sha256")
+        with open(path, "wb") as f:
+            f.write(data)
+    return path
+
+
+def chip_check(parts):
+    """Why these must not go on a second chip, or None; and what they are."""
+    b = open(parts["bootloader"], "rb").read()
+    # The image's header and its first segment's, then esp_bootloader_desc_t:
+    # magic 0x50 at 32, its version (CONFIG_BOOTLOADER_PROJECT_VER) at 36.
+    if len(b) < 40 or b[0] != 0xE9 or struct.unpack_from("<H", b, 12)[0] != 0:
+        return "its bootloader is not an ESP32's", None
+    boot = struct.unpack_from("<I", b, 36)[0] if b[32] == 0x50 else 0
+    if boot < 2:
+        return f"its bootloader is version {boot}: it cannot go back to a firmware before", None
+    t = open(parts["table"], "rb").read()
+    table = {}
+    for i in range(0, len(t) - 31, 32):
+        if t[i:i + 2] != b"\xaa\x50":
+            break
+        table[t[i + 12:i + 28].split(b"\0")[0].decode(errors="replace")] = struct.unpack_from("<II", t, i + 4)
+    for name, (off, size) in CHIP_TABLE.items():
+        if table.get(name) != (off, size):
+            return f"its partition table does not have {name} at {off:#x}, {size:#x} bytes", None
+    o = open(parts["otadata"], "rb").read()
+    if len(o) != CHIP_TABLE["otadata"][1] or o.count(0xFF) != len(o):
+        return "its otadata is not an empty one", None
+    a = open(parts["image"], "rb").read()
+    n = len(a)
+    # esp_app_desc_t at 32: version at 48, project at 80, app_elf_sha256 at
+    # 176. A signed image ends in its 4 kB signature sector, magic 0xE7.
+    if (n < 2 * 4096 or n % 4096 or n > CHIP_TABLE["ota_0"][1] or a[0] != 0xE9
+            or struct.unpack_from("<H", a, 12)[0] != 0 or a[32:36] != bytes.fromhex("3254cdab")
+            or a[80:112].split(b"\0")[0] != b"vfo-knob-companion"):
+        return "its firmware is not the second chip's", None
+    if a[n - 4096] != 0xE7:
+        return "its firmware is not signed", None
+    return None, {"bootloader_version": boot, "version": a[48:80].split(b"\0")[0].decode(),
+                  "app_sha256": a[176:208].hex()}
+
+
+def chip(cache, out_path, build=None):
+    if build:
+        parts = {"bootloader": os.path.join(build, "bootloader", "bootloader.bin"),
+                 "table": os.path.join(build, "partition_table", "partition-table.bin"),
+                 "otadata": os.path.join(build, "ota_data_initial.bin"),
+                 "image": os.path.join(build, "vfo-knob-companion.bin")}
+        for p in parts.values():
+            if not os.path.exists(p):
+                sys.exit(f"{p} is missing: build it first (idf.py -C companion -B {build} build)")
+        source = f"this tree's {build}"
+        m = None
+        # A release (the release overlay's mark) is what the knob keeps up to
+        # date by itself; a development build it leaves alone.
+        try:
+            release = "CONFIG_VFO_COMPANION_RELEASE=y" in open(os.path.join(build, "sdkconfig")).read().split("\n")
+        except OSError:
+            release = False
+    else:
+        os.makedirs(cache, exist_ok=True)
+        if not json.loads(get(ROOT + "index.json")).get("companion"):
+            print("No second-chip firmware is published yet.")
+            sys.exit(NOT_YET)
+        m = json.loads(get(ROOT + "companion/manifest.json"))
+        try:
+            bench = json.loads(get(ROOT + "companion/bench/manifest.json"))
+        except urllib.error.HTTPError as e:
+            sys.exit(f"The second chip's bench files are not published (firmware/companion/bench/): {e}")
+        parts = {"image": cached(cache, f"companion/{m['file']}", m["file"], m["sha256"])}
+        for key, name in (("bootloader", "bootloader.bin"), ("table", "partition-table.bin"),
+                          ("otadata", "ota_data_initial.bin")):
+            f = bench["files"][name]
+            if int(f["offset"], 16) != CHIP_PARTS[name]:
+                sys.exit(f"The bench's {name} goes at {f['offset']}, not at {CHIP_PARTS[name]:#x}: "
+                         "this tool predates that change")
+            # One set for every release: fixed names in the cache.
+            parts[key] = cached(cache, f"companion/bench/{name}", f"companion-bench-{name}", f["sha256"])
+        source = f"release {m['version']}"
+        release = True
+    why, info = chip_check(parts)
+    if why:
+        sys.exit(f"Not for a second chip: {why} ({source}).")
+    # The image must be the one its manifest names: the same version, the
+    # same identity, as the knob checks it later.
+    if m and (info["version"].lstrip("v") != m["version"].lstrip("v")
+              or info["app_sha256"] != m.get("app_sha256", "").lower()):
+        sys.exit(f"The second chip's firmware says it is {info['version']} [{info['app_sha256'][:16]}], "
+                 f"not what its manifest says ({m['version']})")
+    with open(out_path, "w") as f:
+        json.dump({**parts, "source": source, "release": release, **info}, f, indent=1)
+    print(f"Second chip: {info['version']} [{info['app_sha256'][:16]}], {source}"
+          f"{'' if release else ', a development build'}; bootloader version {info['bootloader_version']}")
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "fetch":
         fetch(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == "push":
         push(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) in (4, 5) and sys.argv[1] == "chip":
+        chip(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else None)
     else:
         sys.exit(__doc__)

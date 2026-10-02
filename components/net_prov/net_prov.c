@@ -36,6 +36,19 @@
 #define DEFAULT_PORT 5300            /* SvxLink's reflector port */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_PHONE
+/* Unused: the telephone's SIP account is the phone client's own ("phone"
+ * namespace). Keys of its own, so it never writes another firmware's. */
+#define KEY_HOST     "phhost"
+#define KEY_RLIST    "phlist"
+#define KEY_RSEL     "phsel"
+#define KEY_PORT     "phport"
+#define KEY_USER     "phuser"
+#define KEY_PASS     "phpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 5060
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_MULTIFLEX
 #define KEY_HOST     "fxhost"
 #define KEY_RLIST    "fxlist"     /* the radios, one in use: see below */
@@ -114,7 +127,7 @@ static int                s_nradios, s_radio_sel;
 static EventGroupHandle_t s_events;
 static bool               s_connected;
 static int                s_retries;
-static uint8_t            s_volume = 40, s_micgain = 100;
+static uint8_t            s_volume = 40, s_micgain = 100, s_micgain_hs = 100;
 static uint8_t            s_boots;
 
 #define BIT_GOT_IP BIT0
@@ -465,6 +478,7 @@ static void load_or_seed(void)
         uint8_t v;
         if (nvs_get_u8(h, "vol",   &v) == ESP_OK) s_volume  = v;
         if (nvs_get_u8(h, "mic",   &v) == ESP_OK) s_micgain = v;
+        if (nvs_get_u8(h, "mich",  &v) == ESP_OK) s_micgain_hs = v;
         if (nvs_get_u8(h, "boots", &v) == ESP_OK) s_boots   = v;
         nvs_get_u16(h, "otah", &s_ota_hours);
         nvs_get_u16(h, "dim", &s_dim_min);
@@ -672,6 +686,7 @@ esp_err_t net_prov_init(void)
 const vfo_cfg_t *net_prov_cfg(void) { return &s_cfg; }
 uint8_t net_prov_volume(void)   { return s_volume; }
 uint8_t net_prov_mic_gain(void) { return s_micgain; }
+uint8_t net_prov_mic_gain_headset(void) { return s_micgain_hs; }
 
 uint8_t net_prov_boot_count(void) { return s_boots; }
 
@@ -687,18 +702,47 @@ void net_prov_boot_ok(void)
     ESP_LOGI(TAG, "boot considered healthy; loop counter cleared");
 }
 
-void net_prov_save_audio(uint8_t volume, uint8_t mic_gain)
+static bool s_audio_dirty;
+
+void net_prov_set_audio(uint8_t volume, uint8_t mic_gain, uint8_t mic_gain_headset)
 {
-    if (volume == s_volume && mic_gain == s_micgain) return;
+    if (volume == s_volume && mic_gain == s_micgain && mic_gain_headset == s_micgain_hs) return;
     s_volume = volume;
     s_micgain = mic_gain;
+    s_micgain_hs = mic_gain_headset;
+    s_audio_dirty = true;
+}
+
+void net_prov_flush_audio(void)
+{
+    if (!s_audio_dirty) return;
+    s_audio_dirty = false;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "vol", s_volume);
+    nvs_set_u8(h, "mic", s_micgain);
+    nvs_set_u8(h, "mich", s_micgain_hs);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "saved volume=%u mic=%u headset mic=%u", s_volume, s_micgain, s_micgain_hs);
+}
+
+void net_prov_save_audio(uint8_t volume, uint8_t mic_gain, uint8_t mic_gain_headset)
+{
+    if (volume == s_volume && mic_gain == s_micgain && mic_gain_headset == s_micgain_hs &&
+        !s_audio_dirty) return;
+    s_audio_dirty = false;
+    s_volume = volume;
+    s_micgain = mic_gain;
+    s_micgain_hs = mic_gain_headset;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_u8(h, "vol", volume);
     nvs_set_u8(h, "mic", mic_gain);
+    nvs_set_u8(h, "mich", mic_gain_headset);
     nvs_commit(h);
     nvs_close(h);
-    ESP_LOGI(TAG, "saved volume=%u mic=%u", volume, mic_gain);
+    ESP_LOGI(TAG, "saved volume=%u mic=%u headset mic=%u", volume, mic_gain, mic_gain_headset);
 }
 bool net_prov_is_connected(void)    { return s_connected; }
 

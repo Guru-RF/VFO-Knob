@@ -106,6 +106,19 @@ void audio_in_use_ext(bool on)
             }
             if (s_ext_hook) s_ext_hook(true);
         }
+        /* ...and one gone in the middle hands it back: a telephone's call
+         * goes on, on the knob's own microphone, from a fresh buffer. */
+        if (!on && s_active && !s_pdm_on) {
+            size_t n;
+            void  *p;
+            while ((p = xRingbufferReceiveUpTo(s_ring, &n, 0, MIC_RING_BYTES)))
+                vRingbufferReturnItem(s_ring, p);
+            s_priming  = true;
+            s_dc_reset = true;
+            i2s_channel_enable(s_rx);
+            s_pdm_on = true;
+            if (s_ext_hook) s_ext_hook(false);
+        }
     }
     xSemaphoreGive(s_mx);
 }

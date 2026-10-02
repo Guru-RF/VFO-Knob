@@ -1,0 +1,18 @@
+# The phone firmware: a telephone over WiFi, one SIP account (VFO_RADIO=phone),
+# on SVXConnect's face.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the knob reaches
+# the SIP provider over WiFi, and the USB link has no route to it -- the knob is
+# the DHCP server there, on a link with no gateway. Leaving TinyUSB out also
+# frees the internal RAM its buffers take, and keeps the serial console on the
+# cable.
+
+# SIP and RTP, a DNS query, Google's HTTPS for the contacts, beside the web
+# page's sockets and the log's.
+CONFIG_LWIP_MAX_SOCKETS=16
+# 50 RTP datagrams a second each way: room for a burst while the task is busy.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=16
+
+# AES in software, as every firmware: the engine's DMA takes its bounce buffers
+# from internal RAM, which a call's audio and WiFi need.
+CONFIG_MBEDTLS_HARDWARE_AES=n

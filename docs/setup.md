@@ -58,7 +58,7 @@ shows them on the dial, one a detent. Turn to your radio's and tap the panel.
 | **AetherSDR** | AetherSDR on a computer, over the USB cable or WiFi (TCI) |
 | **Icom** | the IC-705 and the IC-7610, over the radio's own LAN |
 | **FlexRadio** | a FLEX-6000/8000 as a MultiFlex station, on the LAN or through SmartLink |
-| **SvxLink** | an SvxLink reflector: the knob is the station |
+| **SVXConnect** | an SvxLink reflector: the knob is the station |
 
 The list comes from the update server each time, so a knob set up long after
 it was made still offers every firmware there is by then. The last entry is
@@ -141,6 +141,11 @@ checked as for a download. So:
   without any network at all;
 - with the update server out of reach, the setup firmware lists what is on
   the card, **From the SD card**, and installs from it.
+
+The card keeps the second chip's firmware too, the Bluetooth headset's: the
+setup firmware puts it there with the others, and a radio's firmware hands it
+to the chip by itself when it is newer than the one the chip runs — see
+[the headset guide](headset.md#the-second-chip).
 
 Everything of the knob's is in one folder on the card, `VFO-KNOB`; nothing
 else on it is touched. A knob without a card works as before, downloading

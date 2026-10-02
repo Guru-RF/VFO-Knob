@@ -115,6 +115,8 @@ PALETTES = {
                              (-53,   -33, "#25F425"), (-33,   -13, "#25F425")],
                     SWRZONES=SWRZONES, MICZONES=MICZONES),
 }
+# The phone firmware wears SVXConnect's face (ui.c SVX_LOOK), colours and all.
+PALETTES["phone"] = PALETTES["svxconnect"]
 
 
 def use_palette(name):

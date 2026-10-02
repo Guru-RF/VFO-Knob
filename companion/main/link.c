@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "upd.h"
 
 static const char *TAG = "link";
 
@@ -50,6 +51,9 @@ void link_log(const char *fmt, ...)
 
 uint32_t link_bad_frames(void) { return s_rx.bad; }
 
+/* What was sent, out on the wire: before a restart. */
+void link_flush(void) { uart_wait_tx_done(LINK_UART, pdMS_TO_TICKS(100)); }
+
 /* At 2 Mbit/s the receive FIFO's 128 bytes last 0.64 ms. The driver's
  * default asks for them at 120 -- 40 us to spare -- and its interrupt ran on
  * core 0 with the Bluetooth controller's: bytes were lost, and with each
@@ -81,7 +85,12 @@ static void rx_task(void *arg)
     install();
     xSemaphoreGive(s_up);
     for (;;) {
-        const int n = uart_read_bytes(LINK_UART, chunk, sizeof chunk, pdMS_TO_TICKS(20));
+        /* A read returns when its chunk is full or one wait runs out. While
+         * an update comes in, the knob sends a few frames and then waits
+         * for their ACKs: the last frame's tail would sit here 20 ms, and
+         * the transfer with it. Outside updates the audio's path is as it
+         * was. */
+        const int n = uart_read_bytes(LINK_UART, chunk, sizeof chunk, pdMS_TO_TICKS(upd_active() ? 2 : 20));
         for (int i = 0; i < n; i++)
             if (btl_rx_put(&s_rx, chunk[i]) && s_cb) s_cb(s_rx.type, s_rx.buf, s_rx.len);
     }

@@ -6,6 +6,7 @@
 
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
+#include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
@@ -53,6 +54,28 @@ static char            s_switch[16];
 static ota_status_t    s_st = { .phase = OTA_IDLE };
 static portMUX_TYPE    s_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool   s_busy;
+/* An install or an upload writes this chip's flash, from before its first
+ * erase to its end: what stops the second chip's update (ota_writing()).
+ * In PSRAM, as all the second chip's here: tasks only, never code that runs
+ * with the flash cache off, and internal RAM is what sessions run short of. */
+EXT_RAM_BSS_ATTR static volatile bool s_writing;
+EXT_RAM_BSS_ATTR static uint32_t      s_hours;     /* the automatic check's interval; 0: off */
+
+/* The second chip's firmware (ota.h): what is to be had, and the image
+ * fetched for it -- all under s_lock, in PSRAM. The manifest's text goes
+ * onto the SD card with the image, as published. */
+#define COMP            "companion"       /* its channel, and its name on the card */
+#define COMP_MANIFEST   1024
+EXT_RAM_BSS_ATTR static ota_comp_offer_t s_offer;
+EXT_RAM_BSS_ATTR static char             s_offer_json[COMP_MANIFEST];
+EXT_RAM_BSS_ATTR static uint8_t         *s_comp_img;        /* fetched, not yet taken */
+EXT_RAM_BSS_ATTR static size_t           s_comp_len;
+EXT_RAM_BSS_ATTR static uint8_t          s_comp_sha[32];
+EXT_RAM_BSS_ATTR static volatile bool    s_comp_busy;       /* a fetch asked for, or running */
+EXT_RAM_BSS_ATTR static volatile bool    s_comp_stop;       /* ...to stop now: */
+EXT_RAM_BSS_ATTR static const char      *s_comp_stop_why;   /* ...for this */
+EXT_RAM_BSS_ATTR static bool             s_comp_network, s_comp_session;   /* the fetch asked for */
+EXT_RAM_BSS_ATTR static void           (*s_flash_hook)(void);
 
 static void set_phase(ota_phase_t p, const char *msg)
 {
@@ -94,6 +117,8 @@ static bool is_newer(const char *candidate, const char *running)
     }
     return false;
 }
+
+bool ota_is_newer(const char *candidate, const char *running) { return is_newer(candidate, running); }
 
 /* ------------------------------------------------------------ which radio */
 
@@ -140,20 +165,60 @@ static bool json_string_field(const char *json, const char *key,
     return i > 0;
 }
 
+/* A number's value, as a manifest's "size"; 0 when there is none. */
+static uint32_t json_number_field(const char *json, const char *key)
+{
+    char pat[48];
+    snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *p = strstr(json, pat);
+    if (!p || !(p = strchr(p + strlen(pat), ':'))) return 0;
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    return (*p >= '0' && *p <= '9') ? (uint32_t)strtoul(p, NULL, 10) : 0;
+}
+
 /* -------------------------------------------- the SD card's copies (sd_cache) */
 
 /* What an image says it is, from its first bytes: the app description sits
- * past the image header and its first segment's, in every ESP-IDF image. */
+ * past the image header and its first segment's, in every ESP-IDF image.
+ * This chip's too: the second chip's firmware, an ESP32's, is signed with
+ * the same key, and must never get as far as an erase here. */
 static bool image_is(const uint8_t *head, size_t n, const char *want)
 {
     const size_t at = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t);
     if (n < at + sizeof(esp_app_desc_t)) return false;
+    if (((const esp_image_header_t *)head)->chip_id != CONFIG_IDF_FIRMWARE_CHIP_ID) return false;
     const esp_app_desc_t *d = (const esp_app_desc_t *)(head + at);
     if (d->magic_word != ESP_APP_DESC_MAGIC_WORD) return false;
     char name[sizeof d->project_name + 1];
     memcpy(name, d->project_name, sizeof d->project_name);
     name[sizeof d->project_name] = 0;
     return same_product(name, want);
+}
+
+/* The second chip's firmware, by its form alone: what the knob can tell
+ * before sending it. Its signature is the chip's to check -- against the
+ * key of the firmware it runs -- and the chip's slot is what bounds it. */
+bool ota_companion_image_ok(const uint8_t *img, size_t n, char *ver, size_t cap, uint8_t app_sha8[8])
+{
+    const size_t at = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t);
+    if (!img || n < 2 * 4096 || n % 4096 || n > OTA_COMPANION_SLOT) return false;
+    const esp_image_header_t *h = (const esp_image_header_t *)img;
+    if (h->magic != ESP_IMAGE_HEADER_MAGIC || h->chip_id != ESP_CHIP_ID_ESP32) return false;
+    const esp_app_desc_t *d = (const esp_app_desc_t *)(img + at);
+    if (d->magic_word != ESP_APP_DESC_MAGIC_WORD) return false;
+    if (strncmp(d->project_name, OTA_PREFIX "companion", sizeof d->project_name)) return false;
+    /* Signed: the last sector is the Secure Boot v2 signature's, which
+     * starts with its magic byte. */
+    if (img[n - 4096] != 0xE7) return false;
+    if (ver && cap) {
+        const size_t k = strnlen(d->version, sizeof d->version);
+        const size_t m = k < cap - 1 ? k : cap - 1;
+        memcpy(ver, d->version, m);
+        ver[m] = 0;
+    }
+    if (app_sha8) memcpy(app_sha8, d->app_elf_sha256, 8);
+    return true;
 }
 
 /* A radio's image from the card into the update slot -- the signature
@@ -200,20 +265,32 @@ out:
     return err;
 }
 
-/* Whether `n` bytes hash to the sha256 given (hex), a piece at a time. */
-static bool sha_is(const uint8_t *data, size_t n, const char *sha_hex)
+/* The SHA-256 of `n` bytes, a piece at a time. */
+static void sha_of(const uint8_t *data, size_t n, uint8_t d[32])
 {
     mbedtls_sha256_context c;
     mbedtls_sha256_init(&c);
     mbedtls_sha256_starts(&c, 0);
     for (size_t at = 0; at < n; at += 8192)
         mbedtls_sha256_update(&c, data + at, n - at < 8192 ? n - at : 8192);
-    uint8_t d[32];
-    char hex[65];
     mbedtls_sha256_finish(&c, d);
     mbedtls_sha256_free(&c);
+}
+
+/* Whether a digest is the one given in hex. */
+static bool sha_hex_is(const uint8_t d[32], const char *sha_hex)
+{
+    char hex[65];
     for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", d[i]);
-    return strcasecmp(hex, sha_hex) == 0;
+    return sha_hex && strcasecmp(hex, sha_hex) == 0;
+}
+
+/* Whether `n` bytes hash to the sha256 given (hex). */
+static bool sha_is(const uint8_t *data, size_t n, const char *sha_hex)
+{
+    uint8_t d[32];
+    sha_of(data, n, d);
+    return sha_hex_is(d, sha_hex);
 }
 
 /* An image onto the card with its manifest, the card mounted -- or nothing
@@ -230,6 +307,87 @@ static esp_err_t card_write(const char *radio, const uint8_t *img, size_t size, 
     return err;
 }
 
+/* Internal RAM enough for a download, or the card, beside a radio's
+ * session, whose own TLS wants the same RAM: 12 kB free, and a 4 kB DMA
+ * block for the bounce buffers. */
+static bool ram_floors(void)
+{
+    return heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= 12 * 1024 &&
+           heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) >= 4 * 1024;
+}
+
+/* How a download goes. */
+typedef struct {
+    size_t         max;          /* the most the file may be */
+    int            buffer;       /* esp_http_client's receive buffer, internal RAM */
+    int            timeout_ms;   /* each read's: how long a stop may wait */
+    bool           floors;       /* each read only above ram_floors(), else ESP_ERR_NO_MEM */
+    volatile bool *stop;         /* set: it ends early */
+} dl_t;
+
+/* A file downloaded whole into PSRAM, its connection closed after; *out is
+ * then the caller's to free. Never onto the card at the same time: see
+ * download_to_card(). */
+static esp_err_t download_to_psram(const char *url, const char *what, const dl_t *d,
+                                   uint8_t **out, size_t *out_len)
+{
+    *out = NULL;
+    *out_len = 0;
+    esp_http_client_config_t hc = {
+        .url               = url,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms        = d->timeout_ms,
+        .buffer_size       = d->buffer,
+    };
+    esp_http_client_handle_t h = esp_http_client_init(&hc);
+    if (!h) return ESP_ERR_NO_MEM;
+    esp_http_client_set_header(h, "User-Agent", "VFO-Knob");
+    uint8_t *img = NULL;
+    int64_t total = 0, got = 0;
+    esp_err_t err = esp_http_client_open(h, 0);
+    if (err == ESP_OK) {
+        total = esp_http_client_fetch_headers(h);
+        if (esp_http_client_get_status_code(h) != 200 || total <= 0 || total > (int64_t)d->max)
+            err = ESP_ERR_INVALID_RESPONSE;
+        else if (!(img = heap_caps_malloc((size_t)total, MALLOC_CAP_SPIRAM)))
+            err = ESP_ERR_NO_MEM;
+    }
+    int64_t moved = esp_timer_get_time();
+    while (err == ESP_OK && got < total) {
+        if (d->stop && *d->stop) { err = ESP_ERR_INVALID_STATE; break; }
+        if (d->floors && !ram_floors()) {
+            ESP_LOGW(TAG, "%s: internal RAM ran short (%u free, largest DMA block %u): the download stopped at "
+                          "%lld of %lld bytes", what, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+                     (long long)got, (long long)total);
+            err = ESP_ERR_NO_MEM;
+            break;
+        }
+        const int n = esp_http_client_read(h, (char *)img + got,
+                                           (int)(total - got < 8192 ? total - got : 8192));
+        /* No data yet is not an error -- esp_https_ota reads on through it
+         * too -- unless nothing comes for half a minute. */
+        if (n == -ESP_ERR_HTTP_EAGAIN && esp_timer_get_time() - moved < 30000000) continue;
+        if (n <= 0) {
+            ESP_LOGW(TAG, "%s: the download stopped at %lld of %lld bytes (%d)", what,
+                     (long long)got, (long long)total, n);
+            err = ESP_FAIL;
+            break;
+        }
+        moved = esp_timer_get_time();
+        got += n;
+    }
+    esp_http_client_close(h);
+    esp_http_client_cleanup(h);
+    if (err != ESP_OK) {
+        free(img);
+        return err;
+    }
+    *out     = img;
+    *out_len = (size_t)total;
+    return ESP_OK;
+}
+
 /* An image downloaded onto the card, its sha256 checked against the
  * manifest's -- or nothing left on the card. Into PSRAM first, and onto the
  * card only once its connection is closed, the card mounted only then: the
@@ -240,48 +398,14 @@ static esp_err_t card_write(const char *radio, const uint8_t *img, size_t size, 
 static esp_err_t download_to_card(const char *url, const char *radio, const char *sha_hex,
                                   const char *manifest, volatile bool *stop)
 {
-    esp_http_client_config_t hc = {
-        .url               = url,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms        = 20000,
-        .buffer_size       = 4096,
-    };
-    esp_http_client_handle_t h = esp_http_client_init(&hc);
-    if (!h) return ESP_ERR_NO_MEM;
-    esp_http_client_set_header(h, "User-Agent", "VFO-Knob");
+    const dl_t d = { .max = 4 * 1024 * 1024, .buffer = 4096, .timeout_ms = 20000, .stop = stop };
     uint8_t *img = NULL;
-    int64_t total = 0, got = 0;
-    esp_err_t err = esp_http_client_open(h, 0);
-    if (err == ESP_OK) {
-        total = esp_http_client_fetch_headers(h);
-        if (esp_http_client_get_status_code(h) != 200 || total <= 0 || total > 4 * 1024 * 1024)
-            err = ESP_ERR_INVALID_RESPONSE;
-        else if (!(img = heap_caps_malloc((size_t)total, MALLOC_CAP_SPIRAM)))
-            err = ESP_ERR_NO_MEM;
-    }
-    int64_t moved = esp_timer_get_time();
-    while (err == ESP_OK && got < total) {
-        if (stop && *stop) { err = ESP_ERR_INVALID_STATE; break; }
-        const int n = esp_http_client_read(h, (char *)img + got,
-                                           (int)(total - got < 8192 ? total - got : 8192));
-        /* No data yet is not an error -- esp_https_ota reads on through it
-         * too -- unless nothing comes for half a minute. */
-        if (n == -ESP_ERR_HTTP_EAGAIN && esp_timer_get_time() - moved < 30000000) continue;
-        if (n <= 0) {
-            ESP_LOGW(TAG, "%s: the download stopped at %lld of %lld bytes (%d)", radio,
-                     (long long)got, (long long)total, n);
-            err = ESP_FAIL;
-            break;
-        }
-        moved = esp_timer_get_time();
-        got += n;
-    }
-    esp_http_client_close(h);
-    esp_http_client_cleanup(h);
-    if (err == ESP_OK && !sha_is(img, (size_t)total, sha_hex)) err = ESP_ERR_INVALID_CRC;
+    size_t   n   = 0;
+    esp_err_t err = download_to_psram(url, radio, &d, &img, &n);
+    if (err == ESP_OK && !sha_is(img, n, sha_hex)) err = ESP_ERR_INVALID_CRC;
     if (err == ESP_OK) {
         if (sdc_mount()) {
-            err = card_write(radio, img, (size_t)total, manifest);
+            err = card_write(radio, img, n, manifest);
             sdc_unmount();
         } else {
             err = ESP_ERR_NOT_FOUND;
@@ -325,46 +449,315 @@ static bool card_has(const char *radio, const char *sha_hex, char *ver, size_t c
     return f != NULL;
 }
 
+/* An image from the card into PSRAM, whole, when the card's manifest is for
+ * the sha256 given -- the second chip's, which is sent from RAM and never
+ * installed here -- the card mounted meanwhile. *out is then the caller's to
+ * free, its hash the caller's to check. `floors`: beside a radio's session,
+ * each read only above ram_floors(), the card's bounce buffers being
+ * internal RAM too. */
+static esp_err_t card_read(const char *radio, const char *sha_hex, size_t max, bool floors,
+                           volatile bool *stop, uint8_t **out, size_t *out_len)
+{
+    *out = NULL;
+    *out_len = 0;
+    if (floors && !ram_floors()) return ESP_ERR_NO_MEM;
+    if (!sdc_mount()) return ESP_ERR_NOT_FOUND;
+    esp_err_t err  = ESP_ERR_NOT_FOUND;
+    size_t    size = 0;
+    uint8_t  *img  = NULL;
+    FILE *f = card_has(radio, sha_hex, NULL, 0) ? sdc_image_open(radio, &size) : NULL;
+    if (f) {
+        err = !size || size > max                                   ? ESP_ERR_INVALID_SIZE
+            : !(img = heap_caps_malloc(size, MALLOC_CAP_SPIRAM)) ? ESP_ERR_NO_MEM : ESP_OK;
+        for (size_t got = 0; err == ESP_OK && got < size; ) {
+            const size_t k = size - got < 8192 ? size - got : 8192;
+            if (stop && *stop)               err = ESP_ERR_INVALID_STATE;
+            else if (floors && !ram_floors()) err = ESP_ERR_NO_MEM;
+            else if (fread(img + got, 1, k, f) != k) err = ESP_FAIL;
+            got += k;
+        }
+        fclose(f);
+    }
+    sdc_unmount();
+    if (err != ESP_OK) {
+        free(img);
+        return err;
+    }
+    *out     = img;
+    *out_len = size;
+    return ESP_OK;
+}
+
 /* ------------------------------------------------------------- the worker */
 
-static esp_err_t fetch_url(const char *url, char *body, size_t cap, int *out_len);
-
-static esp_err_t fetch_latest(const char *base, char *body, size_t cap, int *out_len)
+/* One small file's answer, on a connection open or opened now. */
+static esp_err_t get_small(esp_http_client_handle_t h, char *body, size_t cap, int *out_len)
 {
-    char url[160];
-    snprintf(url, sizeof url, "%smanifest.json", base);
-    return fetch_url(url, body, cap, out_len);
+    esp_err_t err = esp_http_client_open(h, 0);
+    if (err != ESP_OK) return err;
+    if (esp_http_client_fetch_headers(h) < 0) return ESP_FAIL;        /* no answer at all */
+    const int status = esp_http_client_get_status_code(h);
+    if (status != 200) return status == 404 ? ESP_ERR_NOT_FOUND : ESP_ERR_INVALID_RESPONSE;
+    const int n = esp_http_client_read_response(h, body, (int)cap - 1);
+    if (n <= 0) return ESP_FAIL;
+    body[n] = 0;
+    *out_len = n;
+    return ESP_OK;
+}
+
+/* A small file from the update server into `body`, NUL-terminated. With
+ * `conn`, on the connection it holds: opened on first use and left open for
+ * the next file from the same server -- a second TLS handshake costs about
+ * as long as the first -- unless the server would not keep it, or this
+ * answer was not read to its end. A kept connection the server has let go
+ * meanwhile is opened again, once. Without `conn`, one of its own, closed
+ * after. */
+static esp_err_t fetch_on(esp_http_client_handle_t *conn, const char *url, char *body, size_t cap,
+                          int *out_len)
+{
+    esp_http_client_handle_t h = conn ? *conn : NULL;
+    const bool again = h != NULL;
+    if (h) {
+        if (esp_http_client_set_url(h, url) != ESP_OK) return ESP_ERR_INVALID_ARG;
+    } else {
+        esp_http_client_config_t c = {
+            .url               = url,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms        = 8000,        /* a few hundred bytes; do not linger */
+            .keep_alive_enable = false,
+        };
+        h = esp_http_client_init(&c);
+        if (!h) return ESP_ERR_NO_MEM;
+        /* raw.githubusercontent.com rejects requests with no User-Agent. */
+        esp_http_client_set_header(h, "User-Agent", "VFO-Knob");
+        if (conn) *conn = h;
+    }
+    esp_err_t err = get_small(h, body, cap, out_len);
+    if (again && err != ESP_OK && err != ESP_ERR_NOT_FOUND && err != ESP_ERR_INVALID_RESPONSE) {
+        esp_http_client_close(h);
+        err = get_small(h, body, cap, out_len);
+    }
+    if (!conn || err != ESP_OK || !esp_http_client_is_persistent_connection(h) ||
+        !esp_http_client_is_complete_data_received(h))
+        esp_http_client_close(h);
+    if (!conn) esp_http_client_cleanup(h);
+    return err;
+}
+
+/* The connection fetch_on() kept, let go. */
+static void fetch_done(esp_http_client_handle_t *conn)
+{
+    if (!*conn) return;
+    esp_http_client_close(*conn);
+    esp_http_client_cleanup(*conn);
+    *conn = NULL;
 }
 
 static esp_err_t fetch_url(const char *url, char *body, size_t cap, int *out_len)
 {
-    esp_http_client_config_t c = {
-        .url               = url,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms        = 8000,        /* a few hundred bytes; do not linger */
-        .keep_alive_enable = false,
-    };
-    esp_http_client_handle_t h = esp_http_client_init(&c);
-    if (!h) return ESP_ERR_NO_MEM;
-    /* raw.githubusercontent.com rejects requests with no User-Agent. */
-    esp_http_client_set_header(h, "User-Agent", "VFO-Knob");
+    return fetch_on(NULL, url, body, cap, out_len);
+}
 
-    esp_err_t err = esp_http_client_open(h, 0);
-    if (err != ESP_OK) goto out;
-    esp_http_client_fetch_headers(h);
-    const int status = esp_http_client_get_status_code(h);
-    if (status != 200) {
-        err = status == 404 ? ESP_ERR_NOT_FOUND : ESP_ERR_INVALID_RESPONSE;
-        goto out;
+static esp_err_t fetch_latest(esp_http_client_handle_t *conn, const char *base, char *body, size_t cap,
+                              int *out_len)
+{
+    char url[160];
+    snprintf(url, sizeof url, "%smanifest.json", base);
+    return fetch_on(conn, url, body, cap, out_len);
+}
+
+/* ------------------------------------------------ the second chip's firmware
+ *
+ * The knob's update channel has a second-chip channel beside its radios':
+ * firmware/companion/, with a manifest of its own -- the image's sha256, and
+ * its identity, app_elf_sha256's first 8 bytes, as the chip reports its own
+ * (bt_link_proto.h). It is looked up with every check of the knob's own,
+ * fetched into PSRAM by the same worker, and handed to bt_link by the
+ * caller (main/app_main.c), which sends it at a quiet moment. Never
+ * installed on this chip: nothing here writes its flash. */
+
+static int hexval(char c)
+{
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
+         : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* A second-chip manifest, read: the companion's project, a version, a file
+ * in its channel, the image's sha256 and its identity, and its size when it
+ * says one. */
+static bool offer_parse(const char *m, ota_comp_offer_t *o)
+{
+    char project[40] = "", app[72] = "";
+    memset(o, 0, sizeof *o);
+    json_string_field(m, "project", project, sizeof project);
+    if (strcmp(project, OTA_PREFIX COMP) != 0) return false;
+    if (!json_string_field(m, "version", o->version, sizeof o->version) ||
+        !json_string_field(m, "file", o->file, sizeof o->file) ||
+        !json_string_field(m, "sha256", o->sha256, sizeof o->sha256) || strlen(o->sha256) != 64 ||
+        !json_string_field(m, "app_sha256", app, sizeof app) || strlen(app) < 16)
+        return false;
+    for (int i = 0; i < 8; i++) {
+        const int hi = hexval(app[2 * i]), lo = hexval(app[2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        o->app_sha[i] = (uint8_t)(hi << 4 | lo);
     }
-    int n = esp_http_client_read_response(h, body, cap - 1);
-    if (n <= 0) { err = ESP_FAIL; goto out; }
-    body[n] = 0;
-    *out_len = n;
-out:
-    esp_http_client_close(h);
-    esp_http_client_cleanup(h);
-    return err;
+    /* Its file, in its own channel and nowhere else. */
+    if (strchr(o->file, '/') || strchr(o->file, '\\') || strstr(o->file, "..")) return false;
+    o->size = json_number_field(m, "size");
+    if (o->size % 4096 || o->size > OTA_COMPANION_SLOT) return false;
+    o->known = true;
+    return true;
+}
+
+/* "v1.18.0" is "1.18.0": an image says its version with the v, a manifest
+ * without. */
+static bool same_version(const char *a, const char *b)
+{
+    if (*a == 'v' || *a == 'V') a++;
+    if (*b == 'v' || *b == 'V') b++;
+    return strcmp(a, b) == 0;
+}
+
+#if !VFO_RADIO_SETUP
+/* The second chip's firmware on the update server, looked up on the
+ * connection of the check that has just reached it: the offer, the card's
+ * given up for it. How long the look took is said, as it rides on every
+ * check. */
+static void companion_look(esp_http_client_handle_t *conn)
+{
+    char *m = heap_caps_malloc(COMP_MANIFEST, MALLOC_CAP_SPIRAM);
+    if (!m) return;
+    const int64_t t0 = esp_timer_get_time();
+    int len = 0;
+    esp_err_t e = fetch_on(conn, OTA_ROOT_URL COMP "/manifest.json", m, COMP_MANIFEST, &len);
+    const unsigned ms = (unsigned)((esp_timer_get_time() - t0) / 1000);
+    ota_comp_offer_t o;
+    if (e == ESP_OK && !offer_parse(m, &o)) e = ESP_ERR_INVALID_RESPONSE;
+    if (e == ESP_OK) {
+        char a[17];
+        for (int i = 0; i < 8; i++) sprintf(a + 2 * i, "%02x", o.app_sha[i]);
+        ESP_LOGI(TAG, "second chip: the update server has %s [%s] (looked up in %u ms)", o.version, a, ms);
+        portENTER_CRITICAL(&s_lock);
+        o.route  = s_offer.route;
+        o.looked = s_offer.looked;
+        s_offer  = o;
+        memcpy(s_offer_json, m, COMP_MANIFEST);
+        portEXIT_CRITICAL(&s_lock);
+    } else if (e == ESP_ERR_NOT_FOUND) {
+        ESP_LOGI(TAG, "second chip: the update server has no firmware for it (looked up in %u ms)", ms);
+        portENTER_CRITICAL(&s_lock);
+        if (!s_offer.from_card) s_offer.known = false;     /* withdrawn: the card's stays */
+        portEXIT_CRITICAL(&s_lock);
+    } else {
+        ESP_LOGW(TAG, "second chip: its firmware's manifest on the update server: %s", esp_err_to_name(e));
+    }
+    free(m);
+}
+#endif
+
+/* The offer's image, fetched (ota_companion_fetch()) on the check's worker,
+ * its stack in PSRAM: TLS and the card, never this chip's flash. The card
+ * first, for its copy is a second's read; else the download, 1 kB at a
+ * time through esp_http_client's buffer, for its internal RAM. Its hash is
+ * taken once, here. */
+static void companion_fetch(void)
+{
+    EXT_RAM_BSS_ATTR static ota_comp_offer_t o;
+    EXT_RAM_BSS_ATTR static char             man[COMP_MANIFEST];
+    portENTER_CRITICAL(&s_lock);
+    o = s_offer;
+    memcpy(man, s_offer_json, sizeof man);
+    const bool network = s_comp_network, session = s_comp_session;
+    portEXIT_CRITICAL(&s_lock);
+
+    uint8_t *img = NULL;
+    size_t   n   = 0;
+    uint8_t  sha[32] = { 0 };
+    bool     downloaded = false;
+    esp_err_t e = ESP_ERR_NOT_FOUND;
+    const int64_t t0   = esp_timer_get_time();
+    const size_t  ram0 = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (o.known && !s_comp_stop) {
+        e = card_read(COMP, o.sha256, OTA_COMPANION_SLOT, session, &s_comp_stop, &img, &n);
+        if (e == ESP_OK) {
+            sha_of(img, n, sha);
+            if (!sha_hex_is(sha, o.sha256)) {
+                ESP_LOGW(TAG, "second chip: the SD card's %s does not match its manifest", o.version);
+                free(img);
+                img = NULL;
+                e   = ESP_ERR_INVALID_CRC;
+            }
+        }
+    }
+    if (!img && o.known && network && !s_comp_stop && e != ESP_ERR_NO_MEM) {
+        char url[192];
+        snprintf(url, sizeof url, OTA_ROOT_URL COMP "/%s", o.file);
+        /* Each read waits 8 s at most: an install of this chip's own, which
+         * stops this, waits 10. */
+        const dl_t d = { .max = OTA_COMPANION_SLOT, .buffer = 1024, .timeout_ms = 8000, .floors = session,
+                         .stop = &s_comp_stop };
+        ESP_LOGI(TAG, "second chip: downloading %s (internal RAM %u free, largest DMA block %u)", o.version,
+                 (unsigned)ram0, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+        e = download_to_psram(url, "second chip", &d, &img, &n);
+        if (e == ESP_OK) {
+            sha_of(img, n, sha);
+            downloaded = sha_hex_is(sha, o.sha256);
+            if (!downloaded) {
+                free(img);
+                img = NULL;
+                e   = ESP_ERR_INVALID_CRC;
+            }
+        }
+    }
+    /* What it is, by its own bytes: the manifest's release of the second
+     * chip's firmware. */
+    if (img) {
+        char    ver[32];
+        uint8_t app[8];
+        const char *bad = !ota_companion_image_ok(img, n, ver, sizeof ver, app) ? "not a signed second-chip firmware"
+                        : o.size && n != o.size                                 ? "not its manifest's size"
+                        : !same_version(ver, o.version)                         ? "not its manifest's version"
+                        : memcmp(app, o.app_sha, 8)                             ? "not its manifest's image"
+                        : NULL;
+        if (bad) {
+            ESP_LOGW(TAG, "second chip: %s from %s not taken: %s", o.version,
+                     downloaded ? "the update server" : "the SD card", bad);
+            free(img);
+            img = NULL;
+            e   = ESP_ERR_INVALID_VERSION;
+        }
+    }
+    const unsigned secs = (unsigned)((esp_timer_get_time() - t0 + 500000) / 1000000);
+    if (img && downloaded) {
+        /* A copy onto the card in the boot window, the connection closed:
+         * never beside a radio's session (see download_to_card()). */
+        esp_err_t ce = ESP_ERR_INVALID_STATE;
+        if (!session && !s_comp_stop) {
+            ce = ESP_ERR_NOT_FOUND;
+            if (sdc_mount()) {
+                ce = card_write(COMP, img, n, man);
+                sdc_unmount();
+            }
+        }
+        ESP_LOGI(TAG, "second chip: %s downloaded in %u s (internal RAM %u -> %u free)%s%s", o.version, secs,
+                 (unsigned)ram0, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 session ? "" : "; a copy onto the SD card: ", session ? "" : esp_err_to_name(ce));
+    } else if (img) {
+        ESP_LOGI(TAG, "second chip: %s from the SD card, %u bytes, sha256 good", o.version, (unsigned)n);
+    } else if (o.known) {
+        const char *stop = s_comp_stop_why ? s_comp_stop_why : "stopped";
+        ESP_LOGW(TAG, "second chip: %s not fetched: %s", o.version,
+                 s_comp_stop || e == ESP_ERR_INVALID_STATE  ? stop
+                 : e == ESP_ERR_NO_MEM                       ? "internal RAM ran short"
+                 : e == ESP_ERR_NOT_FOUND && !network        ? "not on the SD card, and not to be downloaded now"
+                 : esp_err_to_name(e));
+    }
+    portENTER_CRITICAL(&s_lock);
+    s_comp_img = img;
+    s_comp_len = n;
+    memcpy(s_comp_sha, sha, sizeof s_comp_sha);
+    portEXIT_CRITICAL(&s_lock);
+    s_comp_busy = false;
 }
 
 static void ota_run(bool install)
@@ -375,6 +768,9 @@ static void ota_run(bool install)
     const size_t cap = 2048;
     char *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
     char *keep = NULL;                /* the manifest, for the SD card's copy */
+    /* A check keeps its connection for the second chip's look after it. */
+    esp_http_client_handle_t conn = NULL;
+    esp_err_t got = ESP_FAIL;
     if (!body) body = malloc(cap);
     if (!body) { set_phase(OTA_FAILED, "out of memory"); goto done; }
 
@@ -391,7 +787,7 @@ static void ota_run(bool install)
     }
     set_phase(OTA_CHECKING, sw ? "looking up the firmware" : "checking for a newer release");
     int len = 0;
-    esp_err_t got = fetch_latest(base, body, cap, &len);
+    got = fetch_latest(install ? NULL : &conn, base, body, cap, &len);
     /* No update server, and a switch: the SD card's copy, if it has one --
      * a deliberate choice, and the card holds only what was published. */
     bool from_card = false;
@@ -543,10 +939,46 @@ done:
     free(keep);
     free(body);
     s_switch[0] = 0;
+    /* Whether the server answered -- this radio's channel empty is an answer
+     * too -- for the second chip's look, which rides on it while the
+     * automatic check is on. This firmware's own answer goes out first: the
+     * boot check waits for it alone, within its own few seconds
+     * (check_now()); the look follows on the same connection while the
+     * worker is still busy (ota_busy()), which an install, and the boot
+     * window's second chip, wait out. The setup firmware sends nothing to
+     * the chip: it only keeps its image on the card (ota_cache()). */
+    const bool answered = !install && (got == ESP_OK || got == ESP_ERR_NOT_FOUND);
     portENTER_CRITICAL(&s_lock);
+    if (!install) {
+        s_offer.looked = true;
+        s_offer.route  = answered;
+    }
     s_st.checks++;
     portEXIT_CRITICAL(&s_lock);
+#if !VFO_RADIO_SETUP
+    if (answered && s_hours) companion_look(&conn);
+#endif
+    fetch_done(&conn);
     s_busy = false;
+}
+
+/* This chip's flash is about to be written, by the calling task: the second
+ * chip's update steps aside. A transfer to it stops (the hook: bt_link), and
+ * so does a fetch of its image, which is waited for, 10 s at most -- its TLS
+ * and the card's DMA want the internal RAM an install needs. This chip's
+ * own update comes first. */
+static void comp_yield(void)
+{
+    if (s_flash_hook) {
+        s_flash_hook();
+        /* A pass of the link's task, so that its ABORT is on the wire
+         * before an erase stalls both cores. */
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    s_comp_stop_why = "this chip's own update comes first";
+    s_comp_stop     = true;
+    for (int i = 0; i < 50 && s_comp_busy; i++) vTaskDelay(pdMS_TO_TICKS(200));
+    if (s_comp_busy) ESP_LOGW(TAG, "second chip: the fetch of its firmware has not stopped in 10 s");
 }
 
 /* Installing writes flash, and a task whose stack is in PSRAM must not, so an
@@ -554,7 +986,9 @@ done:
 static void ota_install_task(void *arg)
 {
     (void)arg;
+    comp_yield();
     ota_run(true);
+    s_writing = false;
     vTaskDelete(NULL);
 }
 
@@ -562,17 +996,52 @@ static void ota_install_task(void *arg)
  * PSRAM, its control block static and internal. Never deleted, because
  * deleting a task with a PSRAM stack makes IDF allocate a helper task in
  * internal RAM -- and abort() if it cannot, which is exactly the resource a
- * check beside a live TCI session is short of. */
+ * check beside a live TCI session is short of. It runs the second chip's
+ * fetches too, as jobs of their own: a check asked for while one runs goes
+ * right after it, and never fails for it. */
 static StaticTask_t s_chk_tcb;
 static TaskHandle_t s_chk;
+
+#define JOB_CHECK     (1u << 0)           /* ota_run(false) */
+#define JOB_COMPANION (1u << 1)           /* companion_fetch() */
 
 static void ota_check_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        ota_run(false);
+        uint32_t jobs = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &jobs, portMAX_DELAY);
+        /* The check first: a fetch takes the image its look found. */
+        if (jobs & JOB_CHECK)     ota_run(false);
+        if (jobs & JOB_COMPANION) companion_fetch();
     }
+}
+
+/* The worker, made on its first job. Two tasks asking at once -- a check
+ * from the page, a fetch from the supervisor -- make one. */
+static bool worker(void)
+{
+    EXT_RAM_BSS_ATTR static bool making;
+    for (;;) {
+        portENTER_CRITICAL(&s_lock);
+        const bool have = s_chk != NULL, mine = !have && !making;
+        if (mine) making = true;
+        portEXIT_CRITICAL(&s_lock);
+        if (have) return true;
+        if (mine) break;
+        vTaskDelay(1);
+    }
+    /* IDF's StackType_t is a byte, so the depth is in bytes. */
+    StackType_t *stack = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
+    TaskHandle_t t = stack ? xTaskCreateStaticPinnedToCore(ota_check_task, "otachk", 8192, NULL, 4, stack,
+                                                           &s_chk_tcb, 0)
+                           : NULL;
+    if (!t) heap_caps_free(stack);
+    portENTER_CRITICAL(&s_lock);
+    s_chk  = t;
+    making = false;
+    portEXIT_CRITICAL(&s_lock);
+    return t != NULL;
 }
 
 /* --------------------------------------------------------------- upload */
@@ -587,6 +1056,9 @@ bool ota_busy(void) { return s_busy || s_up; }
 esp_err_t ota_upload_begin(const char *radio, size_t size)
 {
     if (s_busy || s_up) return ESP_ERR_INVALID_STATE;
+    /* The second chip's firmware is no radio's, and never this chip's: it
+     * goes over the link (POST /api/bt/update), refused before any erase. */
+    if (radio && strcmp(radio, COMP) == 0) return ESP_ERR_INVALID_ARG;
     if (radio && *radio)
         snprintf(s_up_want, sizeof s_up_want, OTA_PREFIX "%s", radio);
     else
@@ -597,6 +1069,8 @@ esp_err_t ota_upload_begin(const char *radio, size_t size)
     if (size > s_up_part->size) return ESP_ERR_INVALID_SIZE;
     s_up_written = 0;
     s_busy = true;                  /* before the erase: nothing else starts */
+    s_writing = true;
+    comp_yield();
 
     /* Erase the image's room first, in 64 kB blocks, rather than a 4 kB
      * sector at a time as the data arrives. Every erase stalls both cores
@@ -614,6 +1088,7 @@ esp_err_t ota_upload_begin(const char *radio, size_t size)
     if (err != ESP_OK) {
         s_up = 0;
         s_busy = false;
+        s_writing = false;
         set_phase(OTA_FAILED, "could not prepare the update slot");
         return err;
     }
@@ -665,13 +1140,18 @@ esp_err_t ota_upload_end(void)
     s_up = 0;
     s_busy = false;
     if (err != ESP_OK) {
+        s_writing = false;
         set_phase(OTA_FAILED, err == ESP_ERR_OTA_VALIDATE_FAILED
                                   ? "rejected: bad signature or bad image"
                                   : "rejected: image did not validate");
         return err;
     }
-    if (!upload_is_wanted()) return ESP_ERR_NOT_SUPPORTED;
+    if (!upload_is_wanted()) {
+        s_writing = false;
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     err = esp_ota_set_boot_partition(s_up_part);
+    s_writing = false;
     if (err != ESP_OK) {
         set_phase(OTA_FAILED, "could not switch to the new image");
         return err;
@@ -686,6 +1166,7 @@ void ota_upload_abort(void)
     esp_ota_abort(s_up);
     s_up = 0;
     s_busy = false;
+    s_writing = false;
     set_phase(OTA_FAILED, "upload interrupted");
 }
 
@@ -696,7 +1177,16 @@ void ota_upload_abort(void)
  * It only looks. Whether to install is the operator's call, asked on the dial
  * -- updating a transmitter's control head unattended is not something an
  * update mechanism gets to decide, and neither is staging an image that then
- * takes over at the next power cycle without anyone having said yes. */
+ * takes over at the next power cycle without anyone having said yes.
+ *
+ * With one exception, on purpose: the second chip's firmware, looked up with
+ * the same check (companion_look()), is fetched and sent to the chip without
+ * asking. It is not this chip's, it never transmits, and it goes only while
+ * no headset is connected and the radio is idle; the chip checks its
+ * signature against the firmware it runs, keeps the one before until the new
+ * one has started and talked to the knob, and goes back to it by itself if
+ * the new one does not settle (bt_link.h, companion/main/upd.c). An interval
+ * of 0 stops that look too. */
 static esp_timer_handle_t s_periodic;
 static volatile bool      s_due;
 
@@ -713,6 +1203,7 @@ void ota_clear_due(void)  { s_due = false; }
 
 esp_err_t ota_set_interval(uint32_t hours)
 {
+    s_hours = hours;
     if (s_periodic) {
         esp_timer_stop(s_periodic);
         esp_timer_delete(s_periodic);
@@ -730,6 +1221,8 @@ esp_err_t ota_set_interval(uint32_t hours)
 esp_err_t ota_start_switch(const char *radio)
 {
     if (!radio || !*radio || strlen(radio) >= sizeof s_switch) return ESP_ERR_INVALID_ARG;
+    /* The second chip's firmware: no radio's, never this chip's. */
+    if (strcmp(radio, COMP) == 0) return ESP_ERR_INVALID_ARG;
     if (s_busy) return ESP_ERR_INVALID_STATE;
     strlcpy(s_switch, radio, sizeof s_switch);
     const esp_err_t e = ota_start_check(true);
@@ -746,7 +1239,7 @@ esp_err_t ota_fetch_version(const char *radio, char *ver, size_t cap)
     char *body = heap_caps_malloc(bcap, MALLOC_CAP_SPIRAM);
     if (!body) return ESP_ERR_NO_MEM;
     int len = 0;
-    esp_err_t e = fetch_latest(base, body, bcap, &len);
+    esp_err_t e = fetch_latest(NULL, base, body, bcap, &len);
     if (e == ESP_OK && !json_string_field(body, "version", ver, cap)) e = ESP_ERR_INVALID_RESPONSE;
     free(body);
     return e;
@@ -790,7 +1283,7 @@ esp_err_t ota_cache(const char *radio, volatile bool *stop)
     char *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
     if (!body) return ESP_ERR_NO_MEM;
     int len = 0;
-    esp_err_t e = fetch_latest(base, body, cap, &len);
+    esp_err_t e = fetch_latest(NULL, base, body, cap, &len);
     if (e == ESP_OK && (!json_string_field(body, "file", file, sizeof file) ||
                         !json_string_field(body, "sha256", sha, sizeof sha)))
         e = ESP_ERR_INVALID_RESPONSE;
@@ -844,26 +1337,107 @@ esp_err_t ota_start_check(bool install)
     /* TLS needs a lot of stack, and this runs on core 0 with the rest of the
      * networking so it cannot disturb the knob or the display. */
     if (install) {
+        s_writing = true;                 /* the second chip's update steps aside from here */
         if (xTaskCreatePinnedToCore(ota_install_task, "ota", 8192, NULL, 4,
                                     NULL, 0) != pdPASS) {
+            s_writing = false;
             s_busy = false;
             return ESP_ERR_NO_MEM;
         }
         return ESP_OK;
     }
-    if (!s_chk) {
-        /* IDF's StackType_t is a byte, so the depth is in bytes. */
-        StackType_t *stack = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
-        if (stack)
-            s_chk = xTaskCreateStaticPinnedToCore(ota_check_task, "otachk",
-                                                  8192, NULL, 4, stack,
-                                                  &s_chk_tcb, 0);
-        if (!s_chk) {
-            heap_caps_free(stack);
-            s_busy = false;
-            return ESP_ERR_NO_MEM;
-        }
+    if (!worker()) {
+        s_busy = false;
+        return ESP_ERR_NO_MEM;
     }
-    xTaskNotifyGive(s_chk);
+    xTaskNotify(s_chk, JOB_CHECK, eSetBits);
     return ESP_OK;
 }
+
+/* ------------------------------------------------ the second chip's, public */
+
+void ota_companion_offer(ota_comp_offer_t *out)
+{
+    if (!out) return;
+    portENTER_CRITICAL(&s_lock);
+    *out = s_offer;
+    portEXIT_CRITICAL(&s_lock);
+}
+
+esp_err_t ota_companion_card_look(void)
+{
+    char *m = heap_caps_malloc(COMP_MANIFEST, MALLOC_CAP_SPIRAM);
+    if (!m) return ESP_ERR_NO_MEM;
+    esp_err_t e = ESP_ERR_NOT_FOUND;
+    if (sdc_mount()) {
+        if (card_has(COMP, NULL, NULL, 0)) e = sdc_manifest(COMP, m, COMP_MANIFEST);
+        sdc_unmount();
+    }
+    ota_comp_offer_t o;
+    if (e == ESP_OK && !offer_parse(m, &o)) {
+        ESP_LOGW(TAG, "second chip: the SD card's COMPANIO.JSN is not a second-chip manifest");
+        e = ESP_ERR_INVALID_RESPONSE;
+    }
+    if (e == ESP_OK) {
+        portENTER_CRITICAL(&s_lock);
+        if (!s_offer.known || s_offer.from_card) {
+            o.from_card = true;
+            o.route     = s_offer.route;
+            o.looked    = s_offer.looked;
+            s_offer     = o;
+            memcpy(s_offer_json, m, COMP_MANIFEST);
+        }
+        portEXIT_CRITICAL(&s_lock);
+    }
+    free(m);
+    return e;
+}
+
+esp_err_t ota_companion_fetch(bool network, bool in_session)
+{
+    portENTER_CRITICAL(&s_lock);
+    const bool known = s_offer.known;
+    const bool ok    = known && !s_comp_busy && !s_comp_img && !s_writing;
+    if (ok) {
+        s_comp_busy    = true;
+        s_comp_stop    = false;
+        s_comp_network = network;
+        s_comp_session = in_session;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    if (!known) return ESP_ERR_NOT_FOUND;
+    if (!ok) return ESP_ERR_INVALID_STATE;
+    if (!worker()) {
+        s_comp_busy = false;
+        return ESP_ERR_NO_MEM;
+    }
+    xTaskNotify(s_chk, JOB_COMPANION, eSetBits);
+    return ESP_OK;
+}
+
+bool ota_companion_busy(void) { return s_comp_busy; }
+
+bool ota_companion_stop(const char *why)
+{
+    if (!s_comp_busy) return false;
+    s_comp_stop_why = why ? why : "stopped";
+    s_comp_stop     = true;
+    return true;
+}
+
+uint8_t *ota_companion_take(size_t *len, uint8_t sha256[32])
+{
+    portENTER_CRITICAL(&s_lock);
+    uint8_t *img = s_comp_img;
+    if (img) {
+        if (len) *len = s_comp_len;
+        if (sha256) memcpy(sha256, s_comp_sha, sizeof s_comp_sha);
+    }
+    s_comp_img = NULL;
+    portEXIT_CRITICAL(&s_lock);
+    return img;
+}
+
+bool ota_writing(void) { return s_writing; }
+
+void ota_set_flash_hook(void (*before)(void)) { s_flash_hook = before; }

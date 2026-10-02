@@ -698,13 +698,13 @@ def aethersdr_pictures():
 
 def svxconnect_pictures():
     f = reflector()
-    left = [(64, 64, "audio level, dBFS · hold: the addresses"), (88, 122, "lock"),
+    left = [(64, 64, "audio, dBFS · hold: addresses"), (88, 122, "lock"),
             (74, 222, "link"), (112, 300, "PTT · tap on, tap off")]
     right = [(226, 77, "who is talking"), (198, 98, "for how long, or where"),
              (214, 123, "talkgroup"), (272, 122, "mute"), (288, 162, "its name"),
              (242, 197, "the reflector"), (244, 222, "volume"), (306, 222, "mic gain")]
     out = {}
-    out["01-face"] = callouts("svx-01", "The SvxLink firmware's face", f, left, right)
+    out["01-face"] = callouts("svx-01", "The SVXConnect firmware's face", f, left, right)
     out["02-turn"] = knob("svx-02", "Turn: the next talkgroup",
                           reflector(dbfs=-60, tg=9990, tg_name="Test", talker="--", talking=""),
                           turn(), "turn: the next switchable talkgroup")
@@ -721,6 +721,79 @@ def svxconnect_pictures():
     out["03-tx"] = knob("svx-03", "On the air: the microphone on the arc", tx)
     out["04-headset"] = knob("svx-04", "A Bluetooth headset: its button is the PTT",
                              headset_face(reflector()), "", "the headset's button: key, and key off")
+    return out
+
+
+# --- the phone firmware -----------------------------------------------------------
+
+def telephone(**reading):
+    """The phone firmware's face at a reading (mkrender's phone_dial: idle,
+    registered, "Office" on the dial unless told otherwise)."""
+    md.use_palette("phone")
+    return mr.phone_dial(reading)
+
+
+def phone_pictures():
+    # A call up: Mum, two minutes 47 in. Ofcom's drama numbers throughout.
+    call = dict(call=3, secs=167, dbfs=-20, rx_pk=-13, tx_db=-31, tx_pk=-23,
+                peer="Mum", peer_num="+447700900123")
+    left = [(64, 64, "their audio · hold: addresses"), (98, 122, "the favourite's number"),
+            (74, 222, "link: registered"), (112, 300, "CALL the one shown · HANG UP")]
+    right = [(300, 70, "your microphone"),
+             (194, 77, "-- here: the call's time"), (230, 98, "how many favourites"),
+             (286, 122, "mute: your microphone"), (218, 162, "the favourite · turn: the next"),
+             (252, 197, "your own number"), (244, 222, "volume"), (306, 222, "mic gain")]
+    out = {}
+    out["01-face"] = callouts("tel-01", "The Telephone firmware's face", telephone(), left, right)
+    out["02-turn"] = knob("tel-02", "Turn: the next favourite",
+                          telephone(fav_name="Mum", fav_num="+447700900123"), turn(),
+                          "turn: the next favourite  \u00b7  tap CALL")
+    out["03-keypad"] = knob("tel-03", "Swipe down: the keypad, to dial a number by hand",
+                            telephone(keypad="01632960123", flash="3"), swipe_at("down"),
+                            "swipe down  \u00b7  type  \u00b7  tap CALL  \u00b7  \u00d7 at the top: away")
+    out["04-calling"] = knob("tel-04", "Calling: it rings at the other end",
+                             telephone(call=1, why="ringing", secs=6, peer="Mum",
+                                       peer_num="+447700900123"), "",
+                             "HANG UP gives up")
+    out["05-incoming"] = knob("tel-05", "A call coming in: DECLINE or ANSWER",
+                              telephone(call=2, peer="Office", peer_num="+441632960123"),
+                              tap(258, 322), "it rings and buzzes  \u00b7  tap ANSWER, or DECLINE")
+    left = [(64, 64, "their audio, its peak"), (124, 129, "their number"),
+            (150, 170, "who: their name"), (74, 222, "link: registered"),
+            (112, 300, "HANG UP")]
+    right = [(300, 70, "your microphone, its peak"),
+             (212, 77, "the call's time"), (226, 102, "in a call"),
+             (286, 122, "mute: your microphone"), (252, 197, "your own number")]
+    out["06-call"] = callouts("tel-06", "A call: its time, who, and both voices",
+                              telephone(**call), left, right)
+    out["07-dtmf"] = knob("tel-07", "In a call the keypad sends its keys as DTMF",
+                          telephone(keypad="1#", flash="#", **call), swipe_at("down"),
+                          "swipe down in a call  \u00b7  the keys go out as tones  \u00b7  \u00d7: away")
+    out["08-ended"] = knob("tel-08", "A call ended, and why",
+                           telephone(call=4, why="busy", peer="Mum", peer_num="+447700900123"), "",
+                           "busy  \u00b7  declined  \u00b7  no answer  \u00b7  not available ...")
+    out["09-no-service"] = knob("tel-09", "Not registered: NO SERVICE, and why",
+                                telephone(link="disconnected") + warning("NOT REGISTERED", "Telephone"))
+    out["10-mute"] = knob("tel-10", "Mute: your microphone off",
+                          telephone(muted=True, **call), tap(286, 122),
+                          "tap the microphone  \u00b7  they hear nothing, you still hear them")
+    out["11-headset"] = knob("tel-11", "A Bluetooth headset: its logo on the slab",
+                             telephone(headset=True, **call), "",
+                             "its button hangs up  \u00b7  its own mute mutes")
+    out["14-incoming-headset"] = knob("tel-14", "A call coming in with a headset: its button answers",
+                                      telephone(call=2, headset=True, peer="Office",
+                                                peer_num="+441632960123"), "",
+                                      "the headset's button answers  \u00b7  the slab declines")
+    md.use_palette("phone")
+    out["12-history"] = knob("tel-12", "Swipe from the left: the calls, newest first",
+                             telephone() + editor("CALLS 1 / 6", "Mum", 28,
+                                                            hint="missed  -  12 min ago",
+                                                            colour=md.DANGER),
+                             swipe_at("right") + turn(),
+                             "swipe from the left  \u00b7  turn  \u00b7  tap the panel: call back")
+    out["13-missed"] = knob("tel-13", "A call missed: said under the arc until looked at",
+                            telephone(n_missed=2), "",
+                            "2 missed  \u00b7  the history clears it")
     return out
 
 
@@ -906,7 +979,8 @@ def ubersdr_pictures():
 
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "svxconnect": svxconnect_pictures,
-             "ubersdr": ubersdr_pictures, "headset": headset_pictures}
+             "ubersdr": ubersdr_pictures, "phone": phone_pictures,
+             "headset": headset_pictures}
 
 
 def main():

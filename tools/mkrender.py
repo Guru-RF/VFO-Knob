@@ -17,6 +17,9 @@ in that firmware's colours, so the two sets tell apart at a glance:
               talking, the arc at -14 dBFS
   multiflex   the Maestro's colours: S9+20 on 20 m, 14.200.00 USB, RF.G at
               +8 dB -- the FlexRadio's RF gain, which its own API carries
+  phone       the Telephone, in SVXConnect's colours: a call up 2:47, the
+              caller's name in the middle, both voices on the split arc --
+              theirs left, ours right
 
 The body is a 66 mm cylinder, 22 mm deep: a blue anodised ring with diagonal
 knurling over a black base, the cover glass, and the 1.8" panel inside it --
@@ -56,9 +59,14 @@ RADIOS = {
                       agc="MED", gain_caption="RF.G", gain="+8 dB", gain_known=True),
     # A reflector: the talkgroup where the frequency is, who is talking where
     # the S-units are, and the arc in dBFS.
-    "svxconnect": dict(name="SvxLink", reflector=True, dbfs=-14, tg=8,
+    "svxconnect": dict(name="SVXConnect", reflector=True, dbfs=-14, tg=8,
                        tg_name="70cm Repeaters", server="be.svx.link",
                        talker="ON6URE", talking="14s"),
+    # A telephone on a call. The numbers are Ofcom's, kept for drama: no one
+    # answers them.
+    "phone": dict(name="Telephone", phone=True, call=3, secs=167, dbfs=-20,
+                  rx_pk=-13, tx_db=-31, tx_pk=-23, peer="Mum",
+                  peer_num="+447700900123"),
 }
 
 
@@ -83,9 +91,8 @@ def sound_on(x, y, colour):
             f'stroke="{colour}" stroke-width="2" stroke-linecap="round"/></g>')
 
 
-def reflector_dial(R):
-    """The svxconnect firmware's receive face (ui.c, REFLECTOR_FACE)."""
-    DB = R["dbfs"]
+def audio_arc(DB):
+    """The reflector face's arc: the audio, -60 to 0 dBFS, at DB."""
     s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
          f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '
          f'fill="none" stroke="{D.SUBTLE}" stroke-width="{D.BAND}"/>']
@@ -105,6 +112,12 @@ def reflector_dial(R):
         col = D.TEXT2 if kind == 1 else (D.WARN if kind == 2 else D.LABEL)
         s.append(D.tick(D.ARC_ROT + level_frac(d) * D.ARC_SPAN, ln, col,
                         3 if kind == 1 else 2))
+    return s
+
+
+def reflector_dial(R):
+    """The svxconnect firmware's receive face (ui.c, REFLECTOR_FACE)."""
+    s = audio_arc(R["dbfs"])
     # Who is talking, where the S-units are, and for how long.
     s.append(D.text(180, 83, R["talker"], 20, D.TEXT, 700))
     s.append(D.text(180, 103, R["talking"], 14, D.GREEN))
@@ -119,6 +132,175 @@ def reflector_dial(R):
     s.append(D.icon_readout(D.CX + 42, 227, D.speaker, "40", D.TEXT2))
     s.append(D.icon_readout(D.CX + 104, 227, D.microphone, "100", D.TEXT2))
     s.append(D.ptt_slab(D.BG1, "PTT", D.TEXT2))
+    return "".join(s)
+
+
+# --- the telephone's face -------------------------------------------------------
+# ui.c's own numbers (PHONE_FACE): the keypad's keys KP_W x KP_H from
+# KP_TOP, its number and backspace on KP_ROW_Y.
+KP_TOP, KP_W, KP_H, KP_GAP_X, KP_GAP_Y = 66, 70, 42, 6, 4
+KP_ROW_Y, KP_NUM_DX, KP_BS_DX = 43, -16, 88
+KP_KEYS = "123456789*0#"
+
+# What phone_dial() draws unless told otherwise: idle, registered, a dozen
+# favourites with "Office" on the dial. ui_state_t's call: 0 idle, 1 calling
+# out, 2 ringing in, 3 talking, 4 ended.
+PHONE = dict(call=0, secs=0, why="", peer="", peer_num="", fav_name="Office",
+             fav_num="+441632960123", n_fav=12, n_missed=0, number="+447700900461",
+             link="connected", muted=False, dbfs=-60, tx_db=-60, rx_pk=None,
+             tx_pk=None, keypad=None,
+             flash=None, headset=False, vol="40", mic="100")
+
+
+def split_arc(rx_db, tx_db, rx_pk=None, tx_pk=None):
+    """The telephone's arc in two (ui.c vu_build): their audio on the left
+    half, filling up from the left end; ours on the right half, filling up
+    from the right end. Each with the reflector's zones, notches and ticks on
+    its half, and its peak LED, a 3 degree block in its zone's colour."""
+    s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>']
+    for side, db, pk in ((0, rx_db, rx_pk), (1, tx_db, tx_pk)):
+        rot, span, mirror = (D.SWR_ROT, D.SWR_SPAN, False) if side == 0 else (D.AUD_ROT, D.AUD_SPAN, True)
+
+        def ang(d, rot=rot, span=span, mirror=mirror):
+            f = level_frac(d)
+            return rot + ((1 - f) if mirror else f) * span
+        s.append(f'<path d="{D.arc_path(rot, rot + span, D.RC)}" fill="none" '
+                 f'stroke="{D.SUBTLE}" stroke-width="{D.BAND}"/>')
+        for lo, hi, col in D.RXZONES:
+            if db > lo:
+                a0, a1 = ang(lo), ang(min(db, hi))
+                s.append(D.block(min(a0, a1), max(a0, a1), col))
+        for d in (-48, -36, -24, -18, -12, -6, -3):
+            s.append(D.notch(ang(d)))
+        for d, ln, kind in ((-24, 6, 0), (-12, 11, 1), (-6, 6, 2), (0, 9, 2)):
+            col = D.TEXT2 if kind == 1 else (D.WARN if kind == 2 else D.LABEL)
+            s.append(D.tick(ang(d), ln, col, 3 if kind == 1 else 2))
+        if pk is not None and pk > -60:
+            zc = next((col for lo, hi, col in D.RXZONES if pk < hi), D.RXZONES[-1][2])
+            a = ang(pk)
+            s.append(D.block(a, a + 3, zc) if mirror else D.block(a - 3, a, zc))
+    return s
+
+
+def sound_muted(x, y, colour):
+    """font_svx_icons_24's volume-xmark (SYM_MUTED): sound_on()'s speaker,
+    a cross where its waves were."""
+    return (f'<g transform="translate({x - 11:.1f},{y - 10:.1f})" fill="{colour}">'
+            f'<path d="M0,6.5 h4.5 l6,-5.5 v18 l-6,-5.5 h-4.5 z"/>'
+            f'<path d="M14,6.5 l7,7 M21,6.5 l-7,7" fill="none" stroke="{colour}" '
+            f'stroke-width="2.2" stroke-linecap="round"/></g>')
+
+
+def backspace(cx, top, colour, bg):
+    """LV_SYMBOL_BACKSPACE, Font Awesome's delete-left, as Montserrat 28 has
+    it: 35 x 21 px, centred on cx, its top at `top`."""
+    x0, x1, y0, y1 = cx - 17.5, cx + 17.5, top, top + 21
+    return (f'<path d="M{x0:.1f},{(y0 + y1) / 2:.1f} L{x0 + 10:.1f},{y0:.1f} H{x1 - 3:.1f} '
+            f'a3,3 0 0 1 3,3 V{y1 - 3:.1f} a3,3 0 0 1 -3,3 H{x0 + 10:.1f} Z" fill="{colour}"/>'
+            f'<path d="M{cx - 1:.1f},{y0 + 6:.1f} l9,9 M{cx + 8:.1f},{y0 + 6:.1f} l-9,9" '
+            f'stroke="{bg}" stroke-width="2.6" stroke-linecap="round"/>')
+
+
+def esc(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def phone_dial(R):
+    """The telephone's face (ui.c, PHONE_FACE): SVXConnect's, with the
+    favourites where the talkgroups were. R as PHONE above; `keypad` the
+    digits typed with the keypad up ("" for none yet), `flash` the key just
+    tapped."""
+    P = dict(PHONE)
+    P.update(R)
+    call = P["call"]
+    # The meters move only in a call (ui.c: both at rest outside one).
+    talking = call == 3
+    s = split_arc(P["dbfs"] if talking else -60, P["tx_db"] if talking else -60,
+                  P["rx_pk"] if talking else None, P["tx_pk"] if talking else None)
+    # Under the arc: the call's time, or what the call is doing.
+    secs = P["secs"]
+    if call == 3:
+        a, ca, b, cb = f"{secs // 60:02d}:{secs % 60:02d}", D.TEXT, "in call", D.GREEN
+    elif call == 2:
+        a, ca, b, cb = "RINGING", D.GREEN, "incoming call", D.GREEN
+    elif call == 1:
+        a, ca, b, cb = ("RINGING" if P["why"] == "ringing" else "CALLING"), D.TEXT, f"{secs}s", D.WARN
+    elif call == 4:
+        a, ca, b, cb = "ENDED", D.LABEL, P["why"], D.LABEL
+    elif P["n_missed"]:
+        a, ca, b, cb = "--", D.LABEL, f"{P['n_missed']} missed", D.DANGER
+    else:
+        a, ca, b, cb = "--", D.LABEL, f"{P['n_fav']} favourites" if P["n_fav"] else "", D.LABEL
+    s.append(D.text(180, 83, esc(a), 20, ca, 700))
+    s.append(D.text(180, 103, esc(b), 14, cb))
+    # The talkgroup's row: the favourite's number at rest, the other end's in
+    # a call. No lock -- nothing to lock -- and the mute out at the right,
+    # clear of a long number.
+    row = P["fav_num"] if call == 0 else P["peer_num"]
+    s.append(D.text(D.CX, 129, esc(row or "--"), 20, D.ACCENT))
+    # The mute: the knob's own microphone (font_btmic_28), struck through in
+    # red when muted; greyed while a headset is in use.
+    s.append(D.microphone28(D.CX + 106, 109, D.DANGER if P["muted"] else
+                            D.DISABLED if P["headset"] else D.LABEL, P["muted"], D.BG))
+    # The middle: in a call the other end by name, or by number; how a call
+    # ended; at rest the favourite -- never a favourite in a call. Our own
+    # number under it.
+    big = (P["peer"] or P["peer_num"] if call in (1, 2, 3)
+           else (P["why"] or "call ended").upper() if call == 4
+           else P["fav_name"] if P["n_fav"] else "NO FAVOURITES")
+    s.append(D.text(D.CX, 170, esc(big), 28, D.TEXT))
+    s.append(D.text(D.CX, 203, esc(P["number"]), 20, D.TEXT2))
+    link = P["link"]
+    s.append(D.text(D.CX - 56, 227, link, 20, D.GREEN if link == "connected"
+                    else D.WARN if link == "connecting" else D.DANGER))
+    s.append(D.icon_readout(D.CX + 42, 227, D.speaker, P["vol"], D.TEXT2))
+    s.append(D.icon_readout(D.CX + 104, 227, D.microphone, P["mic"], D.TEXT2))
+    # The slab: the call's next step.
+    kp = P["keypad"]
+    if call == 2 and P["headset"]:
+        # The headset answers: the slab declines, a line says so (ui.c).
+        s.append(D.ptt_slab(D.TX_RED, "DECLINE", "#FFFFFF"))
+        s.append(D.text(180, D.PTT_TOP + 52 + 12, "answer on the headset", 14, "#FFFFFF"))
+    elif call == 2:
+        # No headset: the slab in two, DECLINE left and ANSWER right.
+        for x, w, col, lab in ((0, 179, D.TX_RED, "DECLINE"), (181, 179, D.GREEN, "ANSWER")):
+            s.append(f'<rect x="{x}" y="{D.PTT_TOP}" width="{w}" height="{360 - D.PTT_TOP}" fill="{col}"/>')
+            s.append(f'<line x1="{x}" y1="{D.PTT_TOP + 1}" x2="{x + w}" y2="{D.PTT_TOP + 1}" '
+                     f'stroke="{D.ACCENT}" stroke-width="2"/>')
+            s.append(D.text(102 if x == 0 else 258, D.PTT_TOP + 14 + 25, lab, 28, "#FFFFFF", 500))
+    elif call in (1, 3):
+        s.append(D.ptt_slab(D.TX_RED, "HANG UP", "#FFFFFF"))
+    elif call == 4:
+        s.append(D.ptt_slab(D.BG1, "ENDED", D.TEXT2))
+    elif link != "connected":
+        s.append(D.ptt_slab(D.BG1, "NO SERVICE", D.TEXT2))
+    elif kp:
+        s.append(D.ptt_slab(D.BG1, "CALL", D.TEXT))
+    else:
+        s.append(D.ptt_slab(D.BG1, "CALL" if P["n_fav"] else "----", D.TEXT2))
+    if call == 2:                               # ringing in: the rim green (ui.c ring_anim)
+        s.append(f'<circle cx="180" cy="180" r="178" fill="none" stroke="{D.GREEN}" '
+                 f'stroke-width="4"/>')
+    if P["headset"]:                            # only its logo: the slab is the call's
+        s.append(D.bluetooth(180 + 126, D.PTT_TOP + 12 + 18, D.ACCENT))
+    # The keypad, over everything above the slab: the number -- eight
+    # characters in the big type, more in the smaller -- the backspace, keys.
+    if kp is not None:
+        s.append(f'<rect x="0" y="0" width="360" height="{D.PTT_TOP - 2}" fill="{D.BG}"/>')
+        n = len(kp)
+        show = kp[-12:] if n else "DTMF" if call == 3 else "number"
+        size, base = (20, KP_ROW_Y - 11 + 18) if n > 8 else (28, KP_ROW_Y - 15 + 25)
+        s.append(D.text(180 + KP_NUM_DX, base, esc(show), size, D.TEXT if n else D.LABEL))
+        s.append(backspace(180 + KP_BS_DX, KP_ROW_Y - 15 + 4, D.LABEL, D.BG))
+        # The close, LV_SYMBOL_CLOSE at Montserrat 20, at the top (ui.c s_kp_x).
+        s.append(f'<path d="M174,11 l12,12 M186,11 l-12,12" stroke="{D.LABEL}" '
+                 f'stroke-width="3" stroke-linecap="round"/>')
+        for i, k in enumerate(KP_KEYS):
+            x = 180 - (3 * KP_W + 2 * KP_GAP_X) // 2 + (i % 3) * (KP_W + KP_GAP_X)
+            y = KP_TOP + (i // 3) * (KP_H + KP_GAP_Y)
+            fill = D.ACCENT if k == P["flash"] else D.BG1
+            s.append(f'<rect x="{x}" y="{y}" width="{KP_W}" height="{KP_H}" rx="12" fill="{fill}"/>')
+            s.append(D.text(x + KP_W / 2, y + 6 + 25, k, 28, D.TEXT))
     return "".join(s)
 
 # --- the body, in face pixels (360 px = the 1.8" panel) ---------------------
@@ -204,6 +386,8 @@ def dial(radio):
     R = RADIOS[radio]
     if R.get("reflector"):
         return reflector_dial(R)
+    if R.get("phone"):
+        return phone_dial(R)
     DBM = R["dbm"]
     s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
          f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '

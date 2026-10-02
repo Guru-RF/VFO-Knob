@@ -10,7 +10,8 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [Icom](icom.md) | `vfo-knob-icom` — the IC-705, the IC-7610, the IC-9700 and the IC-R8600 receiver, over the radio's own LAN |
 | [FlexRadio](multiflex.md) | `vfo-knob-multiflex` — a MultiFlex station, on the LAN and through SmartLink |
 | [AetherSDR](aethersdr.md) | `vfo-knob-aethersdr` — a dial for AetherSDR, over the USB cable or WiFi |
-| [SvxLink](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
+| [SVXConnect](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
+| [Telephone](phone.md) | `vfo-knob-phone` — a telephone on one SIP account: favourites on the dial, a keypad, a call history, Google Contacts |
 | [UberSDR](ubersdr.md) | `vfo-knob-ubersdr` — a dial for an UberSDR web receiver: its spots and voices, SSTV pictures, and a KiwiSDR beside it |
 | [A Bluetooth headset](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, on every firmware but setup |
 

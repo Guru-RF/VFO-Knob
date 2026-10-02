@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "mbedtls/sha256.h"
 
 #include "audio_in.h"
 #include "audio_out.h"
@@ -236,13 +237,14 @@ static esp_err_t config_get(httpd_req_t *r)
      * the field is non-empty, so a save does not have to round-trip it. */
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
-             "\"vol\":%u,\"mic\":%u,"
+             "\"vol\":%u,\"mic\":%u,\"mich\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
              "\"radio\":\"%s\",\"fwbase\":\"%s\",\"fwroot\":\"%s\","
              "\"ruser\":\"%s\",\"rpass\":%s,\"link\":\"%s\","
              "\"client\":\"%s\",\"client_usb\":%s}",
              c->radio_host, (unsigned)c->radio_port, c->ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
+             (unsigned)net_prov_mic_gain_headset(),
              net_prov_web_user(),
              net_prov_web_is_default() ? "true" : "false",
              (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
@@ -338,11 +340,12 @@ static esp_err_t config_post(httpd_req_t *r)
         ota_set_interval(net_prov_ota_hours());
     }
 
-    uint8_t vol = net_prov_volume(), mic = net_prov_mic_gain();
+    uint8_t vol = net_prov_volume(), mic = net_prov_mic_gain(), mich = net_prov_mic_gain_headset();
     if (field_num(body, "vol", &v)) vol = (uint8_t)clampl(v, 0, 100);
     /* Up to 200%, as on the dial: the PDM element is quiet. Clamping to 100
      * here used to halve a gain set on the dial whenever the page was saved. */
     if (field_num(body, "mic", &v)) mic = (uint8_t)clampl(v, 0, 200);
+    if (field_num(body, "mich", &v)) mich = (uint8_t)clampl(v, 0, 200);
     /* Credentials last: changing them invalidates the browser's cached
      * Authorization for the NEXT request, so everything else must already be
      * committed by the time that happens. */
@@ -352,10 +355,12 @@ static esp_err_t config_post(httpd_req_t *r)
     if ((got_user && user[0]) || (got_pass && pass[0]))
         net_prov_save_web(got_user ? user : NULL, got_pass ? pass : NULL);
 
-    net_prov_save_audio(vol, mic);
-    ui_set_levels(vol, mic);      /* audio is the one thing that applies live */
+    net_prov_save_audio(vol, mic, mich);
+    /* The gain in use: a headset's while one is connected. */
+    const uint8_t live = bt_link_headset_connected() ? mich : mic;
+    ui_set_levels(vol, live);     /* audio is the one thing that applies live */
     audio_out_set_volume(vol);    /* directly too: with no display, no UI task */
-    audio_in_set_gain(mic);
+    audio_in_set_gain(live);
 
     ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u",
              cfg.radio_host, (unsigned)cfg.radio_port, cfg.ssid,
@@ -457,7 +462,8 @@ static esp_err_t coredump_get(httpd_req_t *r)
 /* ?radio=<name> is the page switching the knob to that radio's firmware, on
  * purpose. Without it, an upload is an update and must be this radio's own
  * firmware. A name is a short run of [a-z0-9]; anything else is refused
- * rather than guessed at.
+ * rather than guessed at, and so is "companion": the second chip's firmware
+ * goes over the link (POST /api/bt/update), never into this chip's flash.
  *
  * Parsed in a function of its own, into a static: the upload's deepest point,
  * the RSA check at the end, leaves this task very little stack, and anything
@@ -475,7 +481,7 @@ static __attribute__((noinline)) bool upload_radio(httpd_req_t *r)
     for (const char *p = s_up_radio; ok && *p; p++)
         ok = (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9');
     if (e != ESP_OK) s_up_radio[0] = 0;
-    return ok;
+    return ok && strcmp(s_up_radio, "companion") != 0;
 }
 
 static esp_err_t ota_upload_run(httpd_req_t *r)
@@ -823,7 +829,7 @@ static esp_err_t wifi_post_h(httpd_req_t *r)
     return send_json(r, "{\"ok\":true}");
 }
 
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
 /* ------------------------------------------------------------- the radios
  *
  * The radios the knob knows, one in use (see net_prov.h):
@@ -1211,12 +1217,12 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  * neither PTT nor a tune cycle, on the page or in the API, and no setting at
  * all while the radio is on the air. Not for the setup firmware, which has
  * no radio, nor svxconnect's reflector. */
-#define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT)
+#define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE)
 
 /* ------------------------------------------------------ Bluetooth headset */
 
 #if !VFO_RADIO_SETUP
-#define BT_URIS 2
+#define BT_URIS 3
 
 static void bda_text(const uint8_t *b, char *s)
 {
@@ -1229,6 +1235,90 @@ static bool bda_parse(const char *s, uint8_t *b)
     if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return false;
     for (int i = 0; i < 6; i++) b[i] = (uint8_t)v[i];
     return true;
+}
+
+static void hex8_text(const uint8_t *b, char *s)
+{
+    for (int i = 0; i < 8; i++) snprintf(s + 2 * i, 3, "%02x", b[i]);
+}
+
+/* The second chip's own firmware, for /api/bt: what it runs and says of
+ * itself -- its INFO -- and its update (bt_link.h). Identities are the
+ * first 8 bytes of an image's app_elf_sha256, in hex.
+ *
+ *   blocked    every image the knob will not send it again: the last
+ *              result's, the chip's own word, the knob's record
+ *   offer      the release there is for it (ota.h), from the server or the
+ *              SD card, or null
+ *   can_fetch  the knob fetches it by itself: false on the USB cable, and
+ *              when its last check did not reach the update server -- then
+ *              the page hands it over */
+static int bt_update_json(char *j, size_t cap, const bt_link_status_t *st)
+{
+    EXT_RAM_BSS_ATTR static bt_link_upd_t    u;
+    EXT_RAM_BSS_ATTR static ota_comp_offer_t o;
+    bt_link_update_status(&u);
+    ota_companion_offer(&o);
+    static const char *const phases[]  = { "idle", "waiting", "sending", "checking", "restarting", "trial" };
+    static const char *const results[] = { "", "kept", "went back", "stopped", "failed", "refused", "unknown" };
+    static const char *const backs[]   = { "", "power", "quiet", "crashed", "hung", "early", "guard" };
+    /* Static, as the rest of this page's: this task's stack is tight. */
+    EXT_RAM_BSS_ATTR static char last[200], back[160], offer[160], blocked[64];
+    char app[17] = "", to[40];
+    if (u.info) hex8_text(u.chip.app_sha, app);
+    json_esc(u.phase ? u.to : "", to, sizeof to);
+    json_esc(u.text, last, sizeof last);
+    /* Gone back for one of these, the chip never takes that image again. */
+    const uint8_t c    = u.info ? u.chip.back : BTL_BACK_NONE;
+    const bool    real = c == BTL_BACK_CRASHED || c == BTL_BACK_HUNG || c == BTL_BACK_EARLY || c == BTL_BACK_GUARD;
+    strlcpy(back, "null", sizeof back);
+    if (c) {
+        char bver[17], bv[40], bs[17];
+        memcpy(bver, u.chip.back_ver, 16);
+        bver[16] = 0;
+        json_esc(bver, bv, sizeof bv);
+        hex8_text(u.chip.back_sha, bs);
+        snprintf(back, sizeof back, "{\"why\":\"%s\",\"ver\":\"%s\",\"sha\":\"%s\",\"real\":%s}",
+                 c < 7 ? backs[c] : "?", bv, bs, real ? "true" : "false");
+    }
+    const uint8_t *bl[3];
+    int nb = 0;
+    if (u.block) bl[nb++] = u.last_sha;
+    if (real) bl[nb++] = u.chip.back_sha;
+    if (u.remembered && (u.rec.result != BT_UPD_NONE || u.rec.tries >= BT_UPD_TRIES)) bl[nb++] = u.rec.sha8;
+    size_t bo = 0;
+    blocked[0] = 0;
+    for (int i = 0; i < nb; i++) {
+        bool seen = false;
+        for (int k = 0; k < i; k++) seen = seen || !memcmp(bl[k], bl[i], 8);
+        if (seen) continue;
+        char h[17];
+        hex8_text(bl[i], h);
+        bo += (size_t)snprintf(blocked + bo, sizeof blocked - bo, "%s\"%s\"", bo ? "," : "", h);
+    }
+    strlcpy(offer, "null", sizeof offer);
+    if (o.known) {
+        char ov[72], os[17];
+        json_esc(o.version, ov, sizeof ov);
+        hex8_text(o.app_sha, os);
+        snprintf(offer, sizeof offer, "{\"ver\":\"%s\",\"sha\":\"%s\",\"from\":\"%s\"}", ov, os,
+                 o.from_card ? "card" : "server");
+    }
+    /* Before its first check the knob can fetch for itself while WiFi is
+     * its way: the USB cable has no route out. */
+    char wifi[20];
+    netif_addr("WIFI_STA_DEF", wifi, sizeof wifi);
+    const bool can_fetch = o.looked ? o.route : wifi[0] != 0;
+    return snprintf(j, cap,
+                    "\"proto\":%u,\"updates\":%s,\"release\":%s,\"trial\":%s,\"boot\":%u,\"app\":\"%s\","
+                    "\"upd\":{\"phase\":\"%s\",\"pct\":%u,\"to\":\"%s\",\"forced\":%s,\"result\":\"%s\","
+                    "\"last\":\"%s\",\"back\":%s,\"blocked\":[%s],\"offer\":%s,\"can_fetch\":%s},",
+                    st->proto, (st->flags & BTL_HELLO_UPDATE) ? "true" : "false",
+                    u.info && (u.chip.flags & BTL_INFO_RELEASE) ? "true" : "false",
+                    u.info && u.chip.state == BTL_RUN_TRIAL ? "true" : "false", u.info ? u.chip.boot_ver : 0, app,
+                    u.phase < 6 ? phases[u.phase] : "?", u.percent, to, u.forced ? "true" : "false",
+                    u.result < 7 ? results[u.result] : "?", last, back, blocked, offer,
+                    can_fetch ? "true" : "false");
 }
 
 /* The headset, and what the last scan found. */
@@ -1251,11 +1341,13 @@ static esp_err_t bt_get_h(httpd_req_t *r)
     int o = snprintf(j, sizeof j,
                      "{\"companion\":%s,\"version\":\"%s\",\"link\":\"%s\",\"audio\":\"%s\","
                      "\"name\":\"%s\",\"bda\":\"%s\",\"remembered\":%s,\"scanning\":%s,"
-                     "\"spk\":%u,\"mic\":%u,\"presses\":%lu,\"mic_frames\":%lu,\"boom\":%s,\"found\":[",
+                     "\"spk\":%u,\"mic\":%u,\"presses\":%lu,\"mic_frames\":%lu,\"boom\":%s,",
                      st.companion ? "true" : "false", ver, links[st.hs.link % 3], audios[st.hs.audio % 3],
                      name, b, st.hs.remembered ? "true" : "false", st.hs.scanning ? "true" : "false",
                      st.hs.spk, st.hs.mic, (unsigned long)st.presses, (unsigned long)st.up_frames,
                      bt_link_boom_ptt() ? "true" : "false");
+    o += bt_update_json(j + o, sizeof j - o, &st);
+    o += snprintf(j + o, sizeof j - o, "\"found\":[");
     for (int i = 0; i < nf && o < (int)sizeof j - 200; i++) {
         json_esc(found[i].name, name, sizeof name);
         bda_text(found[i].bda, b);
@@ -1298,6 +1390,147 @@ static esp_err_t bt_post_h(httpd_req_t *r)
     else return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "do what");
     ESP_LOGI(TAG, "bluetooth: %s %s", act, bs);
     return send_json(r, "{\"ok\":true}");
+}
+
+/* The second chip's firmware, handed over from the page or a computer:
+ *
+ *   POST /api/bt/update[?force=1]     the body: a signed second-chip image
+ *
+ * Taken into PSRAM here, its form checked, and handed to bt_link, which
+ * sends it at a quiet moment; the chip checks its signature. No flash is
+ * written on this chip, nor any RSA done. Without force, only to a chip
+ * that runs a release, an image with a release's version newer than the
+ * chip's, and not one that went back on it for a real failure; force sends
+ * a development build, or an older one -- the chip still refuses one it
+ * went back from for real.
+ *
+ * Read slowly, 2 kB at a time: on the USB cable the radio's audio comes
+ * down the same pipe, and must keep coming. */
+#define BT_UP_PACE_MS 10                /* between reads: ~200 kB/s at the most */
+
+static esp_err_t bt_update_refuse(httpd_req_t *r, const char *status, const char *why)
+{
+    ESP_LOGW(TAG, "second chip: an image from the page not taken: %s", why);
+    httpd_resp_send_custom_err(r, status, why);
+    /* ESP_OK: what the client still sends is read and dropped, so that it
+     * sees this answer rather than a closed connection. */
+    return ESP_OK;
+}
+
+/* A version as tools/release.sh gives one, "v1.18.0". The release mark
+ * itself the image does not show -- only a chip running it says so -- but a
+ * development build's version says more ("v1.18.0-2-gabc1234-dirty"), and
+ * reads as newer all the same: sent unforced, it would leave the chip on a
+ * development build, which the knob then leaves alone. */
+static bool release_version(const char *v)
+{
+    if (*v == 'v') v++;
+    for (int part = 0; part < 3; part++) {
+        if (*v < '0' || *v > '9') return false;
+        while (*v >= '0' && *v <= '9') v++;
+        if (part < 2 && *v++ != '.') return false;
+    }
+    return *v == 0;
+}
+
+static esp_err_t bt_update_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static bt_link_status_t st;
+    EXT_RAM_BSS_ATTR static bt_link_upd_t    u;
+    EXT_RAM_BSS_ATTR static char             why[160];
+    char q[32] = "", v[4] = "";
+    const bool force = httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK &&
+                       httpd_query_key_value(q, "force", v, sizeof v) == ESP_OK && v[0] == '1';
+    bt_link_status(&st);
+    bt_link_update_status(&u);
+    const char *no = !st.companion                   ? "the second chip does not answer"
+                   : !(st.flags & BTL_HELLO_UPDATE)  ? "the second chip takes no updates: it needs the bench once"
+                   : !u.info                         ? "the second chip has not said yet what it runs: again in a moment"
+                   : bt_link_update_holding()        ? "an update of the second chip is held or going already"
+                   : NULL;
+    if (no) return bt_update_refuse(r, "409 Conflict", no);
+    const int len = r->content_len;
+    if (len < 2 * 4096 || len > OTA_COMPANION_SLOT || len % 4096)
+        return bt_update_refuse(r, HTTPD_400, "not a second-chip firmware: its size");
+    uint8_t *img = heap_caps_malloc((size_t)len, MALLOC_CAP_SPIRAM);
+    if (!img) return bt_update_refuse(r, HTTPD_500, "no memory for it");
+
+    audio_stats_t a0, a1;
+    audio_out_stats(&a0);
+    const int64_t t0 = esp_timer_get_time();
+    int got = 0, stalls = 0;
+    while (got < len) {
+        const int k = httpd_req_recv(r, (char *)img + got, len - got > 2048 ? 2048 : len - got);
+        if (k == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++stalls > kUploadStalls) break;
+            continue;
+        }
+        if (k <= 0) break;
+        stalls = 0;
+        got += k;
+        vTaskDelay(pdMS_TO_TICKS(BT_UP_PACE_MS));
+    }
+    audio_out_stats(&a1);
+    const int64_t ms = (esp_timer_get_time() - t0) / 1000;
+    if (got < len) {
+        free(img);
+        ESP_LOGW(TAG, "second chip: an image from the page broke off after %d of %d bytes", got, len);
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "transfer interrupted");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "second chip: %d bytes from the configuration page in %lu.%lu s; radio audio frames "
+                  "dropped meanwhile: %lu", len, (unsigned long)(ms / 1000), (unsigned long)(ms % 1000 / 100),
+             (unsigned long)(a1.dropped - a0.dropped));
+
+    char ver[33];
+    uint8_t app[8];
+    if (!ota_companion_image_ok(img, (size_t)len, ver, sizeof ver, app)) {
+        free(img);
+        return bt_update_refuse(r, HTTPD_400, "not a signed second-chip firmware");
+    }
+    /* As things are now, after the seconds the upload took. */
+    bt_link_status(&st);
+    bt_link_update_status(&u);
+    why[0] = 0;
+    if (!memcmp(app, u.chip.app_sha, 8)) {
+        snprintf(why, sizeof why, "the second chip runs %s already", ver);
+    } else if (!force) {
+        char blk[100];
+        if (!(u.chip.flags & BTL_INFO_RELEASE))
+            snprintf(why, sizeof why, "the second chip runs a development build (%s): ?force=1 sends it anyway",
+                     st.version);
+        else if (!release_version(ver))
+            snprintf(why, sizeof why, "%s is a development build, not a release: ?force=1 sends it anyway", ver);
+        else if (!ota_is_newer(ver, st.version))
+            snprintf(why, sizeof why, "%s is not newer than the second chip's %s: ?force=1 sends it anyway", ver,
+                     st.version);
+        else if (bt_link_update_blocked(app, blk, sizeof blk))
+            snprintf(why, sizeof why, "%s is not sent again: %s", ver, blk);
+    }
+    if (why[0]) {
+        free(img);
+        return bt_update_refuse(r, "409 Conflict", why);
+    }
+    /* Its SHA-256, for the chip to check the bytes against: on this task,
+     * in pieces, as ota.c hashes its downloads. */
+    uint8_t sha[32];
+    mbedtls_sha256_context c;
+    mbedtls_sha256_init(&c);
+    mbedtls_sha256_starts(&c, 0);
+    for (int at = 0; at < len; at += 8192)
+        mbedtls_sha256_update(&c, img + at, len - at < 8192 ? (size_t)(len - at) : 8192);
+    mbedtls_sha256_finish(&c, sha);
+    mbedtls_sha256_free(&c);
+    if (bt_link_update_start(img, (size_t)len, sha, force) != ESP_OK) {
+        free(img);
+        return bt_update_refuse(r, "409 Conflict", "the second chip cannot take it now: again in a moment");
+    }
+    ESP_LOGI(TAG, "second chip: %s handed over from the configuration page%s", ver, force ? ", forced" : "");
+    char v_esc[48], out[96];
+    json_esc(ver, v_esc, sizeof v_esc);         /* the image's own words: its signature is the chip's to check */
+    snprintf(out, sizeof out, "{\"ok\":true,\"queued\":\"%s\"}", v_esc);
+    return send_json(r, out);
 }
 #else
 #define BT_URIS 0
@@ -1477,7 +1710,12 @@ static esp_err_t radio_set(httpd_req_t *r)
     if (field(q, "freq", v, sizeof v) && v[0]) {
         /* Hz, or MHz with a point: 14074000 or 14.074. */
         const double f = strchr(v, '.') ? strtod(v, NULL) * 1e6 : strtod(v, NULL);
-        if (f >= 10000.0 && f <= 1.3e9) {
+        /* Up to the radio's own top, where it says: the IC-905 tunes to
+         * 10.5 GHz, the IC-R8600 to 3 GHz. 1.3 GHz where nothing is known. */
+        EXT_RAM_BSS_ATTR static radio_status_t lim;
+        radio_get_status(&lim);
+        const double top = lim.f_max > 0 ? (double)lim.f_max : 1.3e9;
+        if (f >= 10000.0 && f <= top) {
             ESP_LOGI(TAG, "web: freq -> %.0f", f);
             radio_goto_freq((int64_t)(f + 0.5));
         }
@@ -1607,6 +1845,7 @@ esp_err_t webcfg_start(void)
     static const httpd_uri_t bt_uris[] = {
         { .uri = "/api/bt", .method = HTTP_GET,  .handler = bt_get_h },
         { .uri = "/api/bt", .method = HTTP_POST, .handler = bt_post_h },
+        { .uri = "/api/bt/update", .method = HTTP_POST, .handler = bt_update_h },
     };
     for (size_t i = 0; i < sizeof bt_uris / sizeof bt_uris[0]; i++)
         httpd_register_uri_handler(s_srv, &bt_uris[i]);

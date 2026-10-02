@@ -50,6 +50,7 @@ typedef struct {
     drv_actuator_t          actuator;
     drv_library_t           library;
     uint8_t                 last_effect;  /* lets fire() skip a redundant write */
+    uint8_t                 rated;        /* reg 0x16 as the clicks have it */
     bool                    faulted;      /* latched after repeated I2C errors  */
     uint8_t                 err_streak;
 } drv2605_t;
@@ -76,6 +77,10 @@ esp_err_t drv2605_fire(drv2605_t *d, uint8_t effect);
 esp_err_t drv2605_rtp_begin(drv2605_t *d);
 esp_err_t drv2605_rtp_write(drv2605_t *d, uint8_t amplitude);
 esp_err_t drv2605_rtp_end(drv2605_t *d);
+/* The same, at a steady-state voltage of its own -- `rated` in reg 0x16's
+ * steps, 21.18 mV for an ERM, up to the overdrive clamp -- for a long, strong
+ * vibration: a telephone's ring. rtp_end() puts the clicks' voltage back. */
+esp_err_t drv2605_rtp_begin_at(drv2605_t *d, uint8_t rated);
 
 esp_err_t drv2605_read_status(drv2605_t *d, uint8_t *status);
 bool      drv2605_ok(const drv2605_t *d);

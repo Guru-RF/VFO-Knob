@@ -3,8 +3,8 @@
 A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
 FlexRadio and the Icom IC-705, IC-7610, IC-9700 and IC-R8600, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
-over WiFi. And, with firmware of their own, a talkgroup knob for SvxLink
-reflectors and a dial for UberSDR web receivers.
+over WiFi. And, with firmware of their own, SVXConnect, a talkgroup knob for
+SvxLink reflectors, a dial for UberSDR web receivers, and a telephone.
 
 <p align="center">
   <img src="docs/display-rx.svg" width="400" alt="Receiving: the S-meter rises to S9+20 and falls back while its readout follows and the 100 Hz digit ticks; S-units marked around the blue 66 mm body">
@@ -28,7 +28,9 @@ so knob and radio are a complete station with no computer in between. Its face
 wears Icom's colours, so which radio a knob is for shows at a glance. The same
 firmware runs the IC-7610, with MAIN or SUB and its antennas on a swipe, the
 IC-9700 on 2 m, 70 cm and 23 cm, and the IC-R8600 receiver, 10 kHz to 3 GHz,
-which it never keys. The guide says
+which it never keys. It also knows the IC-7300MK2, the IC-7760 and the IC-905
+(up to 10 GHz), from wfview's descriptions, not yet tried on the radios
+themselves. The guide says
 how to set each radio up for it: see [the Icom guide](docs/icom.md).
 
 With a **FlexRadio** it is one of the radio's MultiFlex stations, over the
@@ -36,11 +38,11 @@ radio's own API: a station of its own, with Opus audio both ways, or the dial
 and PTT for a SmartSDR, AetherSDR or Maestro station already on the radio. In
 the Maestro's colours. See [FlexRadio](#flexradio-multiflex).
 
-With the **svxconnect** firmware there is no radio at all: the knob is an
+With the **SVXConnect** firmware there is no radio at all: the knob is an
 [SvxLink](https://www.svxlink.org/) reflector client over WiFi, in the style of
 [SVXConnect](https://svxconnect.app/) and in its colours. The dial picks the
 talkgroup, the S-meter shows who is talking, and the built-in microphone and
-the jack are the station. See [SvxLink reflectors](#svxlink-reflectors).
+the jack are the station. See [SVXConnect](#svxconnect).
 
 With the **ubersdr** firmware the knob is a dial for an
 [UberSDR](https://ubersdr.org/) web receiver, over the receiver's own
@@ -48,6 +50,11 @@ protocol: through its tunnel or on the LAN, with its audio on the jack, the
 spots and voices on the band along the bottom, its noise filters and SNR
 beside the S-meter, and its SSTV pictures on the glass. It only receives. See
 [UberSDR](#ubersdr).
+
+With the **Telephone** firmware the knob is a telephone on one SIP account,
+in SVXConnect's colours: favourites on the dial, a keypad for any number, your
+starred Google contacts as the favourites, the caller's name in a call, and
+both voices on the split arc. See [Telephone](#telephone).
 
 ---
 
@@ -59,7 +66,7 @@ beside the S-meter, and its SSTV pictures on the glass. It only receives. See
 | **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
-| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button the PTT. The slab shows the headset, its microphone struck through in red while muted, and a press does not key while it is; optionally the boom arm is the PTT, down to talk. On the UberSDR firmware, only for listening. |
+| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button the PTT. The slab shows the headset, its microphone struck through in red while muted, and a press does not key while it is; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the UberSDR firmware, only for listening. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705 and the IC-9700, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another; on the IC-9700 the group is the band it is on). VFO again for the VFO, simplex. |
@@ -326,14 +333,14 @@ dark theme. Step by step: [the UberSDR guide](docs/ubersdr.md).
 | **A KiwiSDR beside it** | Swipe down for LOCAL or a KiwiSDR (or a Web-888), which follows the UberSDR: the UberSDR left, the KiwiSDR right, BALANCE from the left. |
 | **Its limits** | Without the receiver's password the knob listens as a guest: when the receiver ends a session, the dial asks before starting another, as UberSDR's own page does. |
 
-## SvxLink reflectors
+## SVXConnect
 
-The svxconnect firmware (`vfo-knob-svxconnect`) turns the knob into a node on
+The SVXConnect firmware (`vfo-knob-svxconnect`) turns the knob into a node on
 an SvxLink reflector: protocol 3.0, the reflector's own TLS with a client
 certificate, Opus audio both ways at 16 kHz. It is a port of
 [SVXConnect-CLI](https://github.com/Guru-RF/SVXConnect-CLI)'s reflector client,
 and shares its protocol code, talkgroup manager and codec settings. Step by
-step: [the SvxLink guide](docs/svxconnect.md).
+step: [the SVXConnect guide](docs/svxconnect.md).
 
 <p align="center">
   <img src="docs/display-svxconnect.svg" width="320" alt="The svxconnect face: ON6URE talking for 14 s on TG 8, 70cm Repeaters, on be.svx.link; the arc at -14 dBFS, the talkgroup unlocked and the sound on">
@@ -375,16 +382,47 @@ names (kept in flash, refreshed daily) and follows its live feed for where each
 talker is. The feed is a second connection to the same host; the knob pauses
 it while it logs in, and it can be switched off on the configuration page.
 
+## Telephone
+
+The Telephone firmware (`vfo-knob-phone`) turns the knob into a telephone on
+one SIP account, with its own small SIP client: registered over UDP and out
+through your router by itself (no STUN, no port forwarding), G.722 HD voice where the other side has it and G.711 otherwise, both ways,
+RFC 4733 DTMF. Step by step: [the Telephone guide](docs/phone.md); for the
+starred Google contacts, [GOOGLE.md](GOOGLE.md).
+
+<p align="center">
+  <img src="docs/display-phone.svg" width="320" alt="The telephone face in a call: 02:47, in call; Mum in the middle with her number above; her voice on the left half of the arc, ours on the right; our own number under it; a red HANG UP slab">
+</p>
+
+SVXConnect's face, read as a telephone:
+
+| | |
+|---|---|
+| **The dial** | Between calls, steps through the favourites: the name in the middle, its number above it. Up to 40, typed on the configuration page or synced from your starred Google contacts every six hours. In a call, the volume. |
+| **The slab** | The call's next step: **CALL** the favourite shown, a red **HANG UP**; a call ringing in splits it, **DECLINE** left and a green **ANSWER** right. **NO SERVICE** while the account is not registered. |
+| **Keypad** | Swipe down: a number by hand, then **CALL**; a long press on 0 for `+`. In a call the keys go out as DTMF. |
+| **Meter** | Split in two: the other end's audio on the left half, your microphone on the right, each with a peak that holds and falls. Under it the call's time, or **RINGING**, **CALLING**, **ENDED** and why. |
+| **In a call** | The other end's name in the middle -- your favourites', or the caller's own -- and their number above it; no favourite until the call is over. |
+| **History** | Swipe from the left: the last 20 calls, missed ones in red. Turn through them, tap to call back. A missed call shows under the arc until you look. |
+| **Mute** | The microphone right of the number: the knob's own microphone off, and you still hear them. A headset's mute is the headset's. |
+| **Ringing** | A call coming in vibrates at full strength in the ring's rhythm, the ANSWER slab breathes green inside a green rim, and it rings on the jack and in a headset. |
+| **Audio** | On the 3.5 mm jack, the knob's own microphone muted until you tap the microphone icon; or, with a headset connected, only in the headset, its microphone live. |
+| **Headset** | Its audio opens for calls only, from the ring or the dialling until the call is over. Its button answers a call ringing in and hangs up one that is up, the slab then declining; its own mute only mutes. |
+
+For other programs, `GET /api/phone` says what the telephone is doing, and
+`GET /api/phone/history` lists the recent calls, and `/api/phone/dial?number=…`,
+`/answer`, `/hangup` and `/dtmf?digits=…` act, behind the page's login.
+
 ## A Bluetooth headset
 
 The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
 S3 lacks, and a UART between the two. The companion firmware (`companion/`)
 makes it a headset's audio gateway, as a phone is: hands-free profile,
 wideband speech where the headset has it, the audio passed to and from the
-knob at its own rate. It goes on the second chip once, over the USB-C plugged
-the other way round; pair the headset on the configuration page, and the knob
-calls it whenever it is switched on. Step by step:
-[the headset guide](docs/headset.md).
+knob at its own rate. It comes on the second chip, and the knob keeps it up
+to date by itself, at a quiet moment with no headset connected; pair the
+headset on the configuration page, and the knob calls it whenever it is
+switched on. Step by step: [the headset guide](docs/headset.md).
 
 While a headset is connected its call button is the PTT, the glass only
 unkeys, and the knob unkeys by itself if the headset goes out of reach on the
@@ -454,6 +492,15 @@ the hardware.
 - **Over USB** the knob has no route to the internet — it is the DHCP *server*
   on that link. The configuration page does the checking and the downloading
   instead, then pushes the image over. Same image, same signature check.
+- **The second chip's firmware** — the Bluetooth headset's — is the one update
+  the knob installs without asking: it never transmits, and the chip checks
+  its signature and falls back to the firmware before by itself. The same
+  check finds a newer release of it, or the SD card has one; the knob fetches
+  it, at its start where it can, and sends it to the chip at a quiet moment,
+  never during an over or a call, nor with a headset connected. On the USB
+  cable the configuration page hands it over. An interval of 0 stops this
+  look too; a copy on the SD card still goes. See
+  [the headset guide](docs/headset.md#the-second-chip).
 
 If an update fails to boot, the bootloader rolls back to the previous slot. The
 confirmation is tied to the same "this boot looks healthy" timer that clears the
@@ -467,10 +514,12 @@ without a card, and then keeps a copy on the card. The setup firmware fills the 
 every firmware published while it shows its list, and with no update server
 in reach lists and installs what the card holds; a radio's firmware goes back
 to the setup firmware from the card without a network. Without a card,
-everything downloads as before.
+everything downloads as before. The second chip's firmware is kept there
+too, `COMPANIO.BIN`: a radio's firmware sends it to that chip, never
+installing it on its own.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect` and `vfo-knob-ubersdr` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr` and `vfo-knob-phone` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -480,7 +529,15 @@ under **Firmware** on the configuration page, or on the dial through the
 Publishing a release: `tools/release.sh 1.2.3 --push` (another radio's:
 `RADIO=<radio> tools/release.sh …`). Each release also rewrites
 `firmware/index.json`, the list the setup firmware shows, from the channels'
-manifests.
+manifests — only the channels `tools/release.sh` names, and a radio is
+released only once it is named there; the second chip's sits under a key of
+its own, never in that list. The second chip's firmware is released only
+when it changed, in two steps with a bench between them:
+`RADIO=companion tools/release.sh 1.2.3` builds and stages it and says what
+the bench must show; `BENCH_LOG=<the knob's log> RADIO=companion
+tools/release.sh 1.2.3 --push` publishes it once that log has it kept on a
+second chip and then taking an update itself — a broken one would leave
+every knob's second chip waiting for a cable.
 
 ## Building
 
@@ -505,7 +562,7 @@ idf.py -B build_icom -D VFO_RADIO=icom \
        build flash
 ```
 
-So are the multiflex, svxconnect, ubersdr and setup firmwares:
+So are the multiflex, svxconnect, ubersdr, phone and setup firmwares:
 
 ```sh
 idf.py -B build_multiflex -D VFO_RADIO=multiflex \
@@ -516,6 +573,9 @@ idf.py -B build_svxconnect -D VFO_RADIO=svxconnect \
        build flash
 idf.py -B build_ubersdr -D VFO_RADIO=ubersdr \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ubersdr" \
+       build flash
+idf.py -B build_phone -D VFO_RADIO=phone \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.phone" \
        build flash
 idf.py -B build_setup -D VFO_RADIO=setup \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.setup" \
@@ -532,11 +592,20 @@ cmake -S test/host -B build_host && cmake --build build_host && (cd build_host &
 paths without a radio.
 
 The companion firmware for the second chip is its own project (target
-`esp32`), flashed over the USB-C the other way round:
+`esp32`), reached over the USB-C the other way round. A knob's second chip
+is set up once by `tools/install-setup.sh --second-chip` — a bootloader that
+can go back, the partition table, a first firmware — its headset's pairing
+kept. After that a build goes on by cable with `app-flash` and an empty
+otadata, never a plain `flash`, which would write the bootloader again:
 
 ```sh
-cd companion && idf.py -B build build && idf.py -B build -p /dev/ttyUSB0 flash
+cd companion && idf.py -B build build
+idf.py -B build -p /dev/ttyUSB0 app-flash
+esptool.py -p /dev/ttyUSB0 erase_region 0xe000 0x2000
 ```
+
+or without a cable, `POST /api/bt/update?force=1`: see
+[the headset guide](docs/headset.md#for-developers).
 
 To try the face's touch with nothing keyed, `-D VFO_PTT_DRY_RUN=1` builds an
 image whose PTT taps are only logged, never sent to the radio; its slab reads
@@ -573,10 +642,15 @@ every firmware published goes down the cable onto the card
 (`tools/knob-card.py`), each kept only with its manifest's sha256, so the new
 knob installs its radio's in seconds; they are fetched once into
 `~/.cache/vfo-knob`, so a row of knobs downloads them once. The knob restarts
-when they are on, and shows WIFI SETUP. With the plug the wrong way round it
-finds the second chip's CH340 instead and says to turn the plug over; a knob
-running the USB-networked AetherSDR firmware is asked to restart and caught in
-those 6 seconds.
+when they are on, and shows WIFI SETUP. Then the script asks for the plug to
+be turned over and writes the second chip, its whole flash erased first: a
+bootloader that can go back, the partition table and the latest release of
+its firmware, from the bench files published with that firmware's first
+release, then reads the chip's console as it starts. `--second-chip` does
+only that, on a knob in use, keeping its headset's pairing. With the plug the
+wrong way round at the start it finds the second chip's CH340 instead and
+says to turn the plug over; a knob running the USB-networked AetherSDR
+firmware is asked to restart and caught in those 6 seconds.
 
 ## Safety
 

@@ -1,0 +1,242 @@
+Design C wins: draw each meter as one plain LVGL object that paints its own arcs. On the models it brings the call VU from the measured 53-64% of core 1 down to about 2-4%, and the meters look the same as now. Nothing was edited, built or flashed. All cost figures below come from models; only the 53-64% was measured on the device. ui.c line numbers are from the 4,727-line copy saved at 01:30. The file was being edited while I read it, so look every name up again before editing.
+
+WHY THE VU IS EXPENSIVE (checked against LVGL 9.3.0, esp_lvgl_port 2.9.0 and ui.c)
+
+1. Peak LEDs repaint the whole arc several times a second.
+   - lv_arc's angle setters redraw the whole 344x344 object (91% of the screen) when the span wraps (lv_arc.c:107, 130, 160, 182).
+   - led_set (ui.c:501-519) collapses the old zone's LED to (0,0) at ui.c:515. That wraps whenever the LED's start angle is below 177 degrees, which is every zone change.
+   - Any LED move of more than 3 degrees toward the start of its half also wraps. The mirrored mic half does this on almost every rising step (over about 1.9 dB).
+2. Every visible arc costs time under every redraw inside its circle.
+   - Each arc draw covers its whole circle box (lv_draw_arc.c:60-65). Each row of box ∩ dirty area gets a memset, three masks and a blend (lv_draw_sw_arc.c:64, 186-222).
+   - The inner-radius mask zeroes the ring's hole but never returns "transparent" (lv_draw_sw_mask.c:860-889). Labels in the middle therefore pay for every arc.
+   - A call shows 35 such arcs: s_ring, plus two times (track + 8 zones + 8 LEDs).
+3. s_ring (ui.c:2745-2753) is a 356 px ring in the background colour, invisible but never hidden. Its whole box is redrawn on every refresh.
+
+Mechanisms each design relies on:
+- A: children and invalidations are clipped to the parent (lv_refr.c:134-145, lv_obj_pos.c:894-913). Holds.
+- C: a widget may narrow layer->_clip_area before adding draw tasks. lv_draw.h:86-94 documents it, lv_draw.c:109 copies it into each task, and lv_chart, lv_roller and lv_dropdown do it. Holds.
+- B: an A8 image is drawn as a masked fill in the recolour (lv_draw_sw_img.c:237-249). Holds.
+
+LVGL limits:
+- A 33rd dirty area makes LVGL repaint the whole screen (lv_refr.c:323).
+- LVGL busy-waits while a strip is sent (lv_refr.c:1429), and that wait counts as taskLVGL time.
+- Invalidating from inside a draw callback trips an assert (lv_refr.c:277).
+
+Three problems none of the designs mentioned:
+- **Dotted labels redraw every tick.** set_text (ui.c:3564) compares against lv_label_get_text(). LV_LABEL_LONG_DOT writes the dots into the stored text (lv_label.c:1223-1237), so the comparison always fails. Any dotted label (s_hs_name at 3999, s_ptt_lbl at 3973, a radio-face s_mem_big that overflows) is set and redrawn at 20 Hz.
+- **The scrolling caller name costs about 4-5%.** s_mem_big scrolls in a loop on the phone (ui.c:3006). Each 1 px step at 40 px/s redraws its 300x34 box (lv_label.c:33, 1241-1246). That stays true even with cheap meters, and it now matters because the caller's name replaces the favourite during a call.
+- **The ringing slab pulls in all 35 arcs.** The breathing ANSWER slab (y 248-359) sits inside all 35 arc boxes, so each animation step runs all of them.
+
+My geometry check (scratchpad/judge/geom.py):
+
+| Meter | Band pixels | Bounding box | 16-row cells | Pixels in cells |
+|---|---|---|---|---|
+| VU half | 3,958 | 165x204 (33.7k px) | 13 | 6.2k |
+| 200-degree arc | 8.1k | (not computed) | 26 | 12.5k |
+| SDR line | (not computed) | (not computed) | 28 | 8.6k |
+| Mic ring | (not computed) | (not computed) | 12 | 3.7k |
+
+- A 3-degree LED block's box is at most 484 px; a 16-degree piece's at most 2.3k px.
+- With a 2 px pad, every LED box covers its anti-aliased pixels.
+
+SCORES (1-5, higher is better)
+
+| Design | Cost | Look | Risk | Effort | Total |
+|---|---|---|---|---|---|
+| A, clip cells | 3.5 | 4.5 | 4 | 4.5 | 16.5 |
+| B, A8 sprites | 5 | 2.5 | 2.5 | 3 | 13 |
+| C, band objects | 4.5 | 5 | 4 | 3.5 | 17 |
+
+- **A:**
+  - Cost: its model gives 3.6-4.7%, pessimistic 8-13%. Each touched cell still has 2 styled arcs. The SDR line and power bar stay full-size arcs, and a sweep across quadrants still dirties their whole circle (lv_draw_arc.c:162-167).
+  - Look: the track splits into 8 pieces, leaving 1-pixel seams. The next zone's track can cover the LED's last degree.
+  - Risk and effort: adds 16 objects (about 3 kB of LVGL heap); about 150 lines.
+- **B:**
+  - Cost: its model gives 1.2-1.3%, or 2.6-2.8% when scaled the way the current layout needs to match the measurement.
+  - Look: the bar end moves in 1.6-degree (1 dB) steps instead of 1 degree. Bar and LED ends get a hard, non-antialiased edge. The LED becomes 2 cells that can show two colours.
+  - Risk and effort: a new rasteriser, 13-33 kB of sprites in PSRAM, and about 300 lines removed across all 8 firmwares; 1-2 days.
+- **C:**
+  - Cost: its model gives 1.9-4.0% at full call activity, 7.4% in a synthetic worst case.
+  - Look: the same LVGL arc rasteriser, settings and drawing order, so the look is unchanged. The bar end can differ by up to 1 degree. Mic and SWR track seams disappear.
+  - Risk: it writes layer->_clip_area, which is internal but documented as settable, on LVGL pinned at 9.3.0. It frees about 15-20 kB of LVGL heap.
+
+WINNER: C, with these taken from the others
+
+- From all three: hide s_ring whenever its colour would be the background.
+- From A: ship in steps, check the cells by tinting them, and stop the caller-name scroll during calls.
+- From B: write nothing per tick except invalidating the sectors that changed.
+- From this review:
+  - merge the LED's old and new blocks when they touch;
+  - cap dirty areas per meter per update;
+  - optionally make release() time-based;
+  - fix set_text for dotted labels;
+  - optionally skip meter writes while the panel is blanked.
+
+PLAN
+
+1. Objects and geometry
+
+All angles are absolute LVGL degrees (0 = 3 o'clock, clockwise). Centre is (180,180), radius r is the outer edge, width w. "Fill frame" means degrees counted from the end the meter fills from. Each object's box is its sector box plus 2 px.
+
+| Meter | Start | Span | r / w | Mirrored | Zones (fill frame) | Box | Cells |
+|---|---|---|---|---|---|---|---|
+| Phone VU, their audio (s_vu[0]) | 170 (SWR_ROT) | 97 (SWR_SPAN) | 170 / 12 | no | 0,19,38,58,67,77,87,92,97 | about (8,8)-(175,214) | 13 |
+| Phone VU, our mic (s_vu[1]) | 273 (AUD_ROT) | 97 | 170 / 12 | yes | same | about (185,8)-(352,214) | 13 |
+| s_rx_band, SVX audio or radio S-meter | 170 | 200 | 170 / 12 | no | SVX: 0,40,80,120,140,160,180,190,200; S-meter: 0,13,40,66,93,120,146,173,200 | about (8,8)-(352,214) | 26 |
+| s_sdr_band (VFO_HAS_SDR) | 170 | 200 | 176 / 4 | no | one zone [0,200] in C_SDR, LED SDR_HEX | (not computed) | 28 |
+| s_pwr_band | 273 | 97 | 170 / 12 | no | one zone [0,97], PWR_HEX | (not computed) | (not computed) |
+| s_swr_band | 170 | 97 | 170 / 12 | no | 0,48,72,97 | (not computed) | (not computed) |
+| s_mic_band | 273 | 97 | 148 / 5 | yes | [0,58],[58,78],[78,97] | (not computed) | 12 |
+
+- VU zones use (int)(smeter_frac()*97), as ui.c computes them today; colours are RXZONES. Zone 0 is drawn first in both halves.
+- The S-meter zones use the per-radio palette.
+- Mic zones: fill-frame = AUD_SPAN − A1 .. AUD_SPAN − A0, with A0/A1 computed exactly as ui.c:2864-2865 does.
+- Notches and ticks stay as lv_line objects in the existing groups: the phone's marks, s_rx_ticks and s_tx_ticks. Those groups stay lifted above the bands (ui.c:3719, 2946-2947).
+
+2. band_t and helpers
+
+Put them after led_show (ui.c:521-527) so build() and the VU can use them. Use EXT_RAM_BSS_ATTR for the radio-face bands.
+
+    typedef struct { int16_t x1, y1, x2, y2; } box16_t;
+    typedef struct {
+        lv_obj_t *obj; int16_t rot, span, r, w; bool mirror; uint8_t nz, ncell;
+        int16_t a0[8], a1[8]; lv_color_t zc[8], track;
+        box16_t zbox[8], cell[28], ledbox;
+        int16_t bar, led; int8_t led_z;      /* fill-frame degrees; led = -1: out */
+    } band_t;
+
+- **band_abs(b, a):** mirror ? rot+span−a : rot+a.
+- **band_sector(b, lo, hi, &box):**
+  - convert fill-frame to absolute [A,B];
+  - corners at radius r+1 and r−w−1, using lv_trigo_cos/sin >> LV_TRIGO_SHIFT;
+  - add r+1 at every multiple of 90 inside [A,B];
+  - pad 2 px and clamp to the object's box.
+- **band_build(b, rot, span, r, w, mirror, nz, a0[], a1[], rgb[]):**
+  - lv_obj_create(s_scr), lv_obj_remove_style_all;
+  - remove CLICKABLE and SCROLLABLE (taps stay coordinate-based, ui.c:2238-2265);
+  - set position and size from band_sector(0, span);
+  - lv_obj_add_event_cb(obj, band_draw_cb, LV_EVENT_DRAW_MAIN, b);
+  - compute zbox[z] and the cells; track = C_SUBTLE; bar = 0; led = −1.
+- **band_cells:**
+  - walk the box in 16-row strips;
+  - in each row, test only pixels inside the ring between r−w−1.5 and r+1.5, found with sqrtf;
+  - keep those whose centre angle (atan2f) is within [rot−1, rot+span+1];
+  - per strip, record the x extent separately left and right of x=180, plus 1 px.
+  - Run once at boot; well under 2 ms per band.
+- **band_draw_cb:**
+
+      const lv_area_t clip0 = layer->_clip_area;
+      d: lv_draw_arc_dsc_init; center (180,180); radius r; width w; rounded 0
+      for each cell meeting clip0:
+          layer->_clip_area = cell ∩ clip0;  arc(track, 0, span)
+          for z while a0[z] < bar:  if (cell ∩ clip0 ∩ zbox[z]) arc(zc[z], a0[z], min(bar, a1[z]))
+          if led >= 0 and (cell ∩ clip0 ∩ ledbox): arc(zc[led_z], led, led + LED_DEG)
+      layer->_clip_area = clip0;
+
+  - arc() converts to absolute degrees and calls lv_draw_arc.
+  - The cells don't overlap, so every pixel gets track, then zones, then LED, as today.
+  - Never invalidate inside this callback.
+- **band_set(b, bar_f, pk_f, pk_z):**
+  - bar = clamp((int)(bar_f*span), 0, span);
+  - led = (pk_f > 0 && pk_z >= 0) ? clamp((int)(pk_f*span + 0.5f) − LED_DEG, 0, span − LED_DEG) : −1. This is led_set's rule, and it also holds for mirrored meters.
+  - If the bar changed, call band_inv(min, max).
+  - If the LED moved or changed zone: invalidate the union of old and new blocks when they overlap or touch, otherwise each block on its own. Then update ledbox.
+  - If nothing changed, write nothing.
+- **band_inv:** split the range into pieces of at least 16 degrees, at most 6 pieces, and call lv_obj_invalidate_area for each. That gives at most 8 areas per meter per tick: phone at most 18 in total, S-meter plus SDR line at most 16.
+- **band_show(b, on):** toggle HIDDEN only on change. A hidden band invalidates nothing; showing it repaints its box once.
+
+3. Update rate and throttling
+
+- ui_task stays the only writer, at 20 Hz (app_main.c:879-884).
+- Integer degrees mean an unchanged meter costs nothing.
+- Ballistics are unchanged:
+  - release() 35% per tick;
+  - peak_hold: hold 1 s, then fall at 30 dB/s (VU, S-meter, SDR), 20 dB/s (mic), 0.5×full-scale/s (power), 1.0/s (SWR).
+- Optional: make release time-based. Compute s_rel_k = 1 − expf(−0.008616f × clamp(dt_ms, 10, 250)) once per ui_update right after ui.c:4008, and use it in release() (ui.c:452-456). A skipped tick then no longer changes the fall.
+- Optional: skip meter writes while s_level == LVL_BLANK. s_level is declared at ui.c:4688, after ui_update, so it needs a forward declaration. The next band_set after waking redraws the difference correctly.
+- **Meters fed by radio and SDR data streams don't change the drawing cost.** TCI, VITA-49, CI-V, Kiwi and UberSDR values are parsed on the clients' own tasks; the face samples them once per 50 ms tick. So the meters can stay on everywhere.
+
+4. Phase 1: phone VU (ship and measure before going on)
+
+1. Add band_t and the helpers.
+2. vu_t (ui.c:3601-3607) becomes { band_t b; float disp; peak_t pk; }.
+3. vu_build (3623-3684):
+   - replace the track arc, the 8 zone arcs and led_build (about 3627-3658) with band_build(&v->b, rot, SWR_SPAN, ARC_R0, 12, mirror, RX_ZONES, a0, a1, rgb);
+   - keep peak_reset, the disp init and the notch/tick code that goes into marks.
+4. vu_set (3690-3704) becomes: release; pk = peak_hold(..., 30.0f); band_set(&v->b, smeter_frac(v->disp), smeter_frac(pk), rx_zone_of(pk)).
+5. phone_build (3706-3719) stays as it is: marks group, then both vu_builds, then move marks to the foreground.
+6. s_ring:
+   - add HIDDEN at ui.c:2753;
+   - add ring_color(c): hide when c is C_BG, otherwise set the colour while hidden and then show;
+   - use it at ui.c:3925 (ring_anim) and 4586 (TX swap). This is safe on every face.
+7. Caller name during a call (PHONE_FACE, s_mem_big at 3006-3007, set at 4101):
+   - no endless scroll during calls 1-3: use LONG_DOT, or switch to montserrat_20 when the name is wider than 300 px at 28, then dots;
+   - make set_text compare against a cached copy for dotted labels.
+   - If the caller-name display changes, update docs/phone.md and its tools/mkdocs.py screens; the meter change itself needs no docs.
+
+5. Phase 2: SVXConnect arc
+
+- Replace s_meter and the zone loop (ui.c:2755-2796) with band_build(&s_rx_band, ARC_ROT, ARC_SPAN, ARC_R0, 12, false, RX_ZONES, ...) in the same place. Delete led_build(&s_sig_led) at 2916.
+- Drop the s_meter, s_rx_zone and s_rx_val statics (304, 703-704). s_meter shares its declaration line with s_ring, s_ptt and s_ptt_lbl.
+- ui_update (4299-4330): keep release and peak_hold (4302-4306). Replace lines 4307-4326 with band_set(&s_rx_band, smeter_frac(s_meter_disp), smeter_frac(sig_pk), rx_zone_of(sig_pk)).
+- On radio faces, skip this band_set while transmitting; the band is hidden then.
+- phone_build 3712-3715 becomes band_show(&s_rx_band, false), keeping the s_rx_ticks hide.
+- TX/RX swap (4554-4584) becomes band_show(&s_rx_band, !st->tx).
+- On SVXConnect in TX the arc stays and only the background changes: one full repaint per PTT edge, as today.
+
+6. Phase 3: radio faces (aethersdr, icom, xiegu, multiflex, ubersdr, plus setup compiling)
+
+- s_rx_band now serves as the S-meter.
+- s_sdr_band replaces s_sdr_arc and its LED (ui.c:2797-2817 and 2923-2928). In ui_update (4399-4416):
+  - when the SDR switches on or off: band_set(b, 0, 0, −1), then band_show;
+  - while on: band_set(&s_sdr_band, smeter_frac(s_sdr_disp), smeter_frac(sdr_pk), 0).
+- Transmit meters:
+  - s_pwr_band replaces s_pwr_arc (2834-2849);
+  - s_mic_band replaces the mic zones (2859-2880);
+  - s_swr_band replaces the SWR zones (2886-2906);
+  - delete the LED block (2910-2929);
+  - keep the SWR notches, add_pwr_notches and the foreground lifts (2937-2947).
+- Transmit updates in ui_update:
+
+  | Lines | New call |
+  |---|---|
+  | 4461-4466 | band_set(&s_mic_band, mic_frac(mv), mic_frac(mic_pk), mic_zone_of(mic_pk)) |
+  | 4492-4494 | band_set(&s_pwr_band, pf, pk_f, 0) |
+  | 4503-4509 | band_set(&s_swr_band, swr_frac(w_bar), swr_frac(w), swr_zone_of(w)) |
+
+- The TX swap uses band_show. pwr_set_range is unchanged.
+- Finally delete peak_led_t, led_build, led_set and led_show (466-527, keep LED_DEG), and the s_mic_zone, s_swr_zone, s_pwr_arc and s_sdr_arc statics.
+
+7. Measuring on the device
+
+Use dev builds over the cable, never a release. Read [CPU] (log_cpu, app_main.c:2530-2573) on the console or log port 3333. It prints each task as name@core=% of one core: every 30 s (2443), and with every [TXA] line while transmitting (2440). Take the second and third line well inside a scenario lasting at least 90 s, with the panel at full brightness.
+
+| Scenario | Before | Target / expected after |
+|---|---|---|
+| Phone call to an echo number, speakerphone on (both halves move) | 53-64% | under 10%; expect 3-6% |
+| Same call with meters off (/api/phone/meters?on=0) | about 1% | (not measured) |
+| Phone, loud material at both ends | (not measured) | 8% or less |
+| Ringing for 60 s | (not measured) | should drop |
+| SVXConnect: long receive over, then long transmit over | measure first | (not estimated) |
+| icom with Kiwi line on busy SSB | measure first | (not estimated) |
+| aethersdr, multiflex, ubersdr in receive and transmit | measure first | (not estimated) |
+
+- Also watch idle% for core 1 and the "core 1 held" probe lines.
+- Optional profiling build (#if UI_PROF):
+  - lv_display_add_event_cb on s_disp for RENDER_START/READY (esp_timer) and FLUSH_START (count area pixels);
+  - log every 30 s through note().
+  - Don't count INVALIDATE_AREA: get_max_row sends test areas through it (lv_refr.c:1323).
+- To see what is redrawn: CONFIG_LV_USE_REFR_DEBUG=y on a scratch build, or tint the cells at 20% (BAND_DEBUG). During a call only small wedges on the ring should flash.
+- Check LVGL heap with lv_mem_monitor before and after; expect 8-13 kB more free on the phone after phase 1.
+
+8. Pitfalls
+
+- Restore layer->_clip_area before returning from the draw callback.
+- The band object's box must include the anti-aliased edges (r+1, r−w−1, plus 2 px); LVGL clips each object to its own box.
+- Cells must not overlap and must include every anti-aliased pixel.
+- Zone a0/a1 must be computed exactly as today (truncation, and the mic's +0.5).
+- Create bands where their arcs were; s_ring before the SDR band; notch groups lifted last.
+- In transmit, a power-range change can add about 18 areas. Going past 32 forces one full repaint (about 15-30 ms), which is rare and acceptable.
+- LVGL's circle-mask cache holds 4 entries and is emptied every refresh. If circ_calc_aa4 shows up in a profile, raise CONFIG_LV_DRAW_SW_CIRCLE_CACHE_SIZE.
+- Angles are whole degrees (LV_USE_FLOAT is off).
+- Changing the background colour for transmit still repaints the whole screen once per PTT edge.

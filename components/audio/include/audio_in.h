@@ -25,8 +25,8 @@
 
 #include "esp_err.h"
 
-#if VFO_RADIO_SVXCONNECT
-#define TX_AUDIO_RATE_HZ 16000     /* SvxLink's rate: see audio_out.h */
+#if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE
+#define TX_AUDIO_RATE_HZ 16000     /* SvxLink's rate, and G.722's: see audio_out.h */
 #else
 #define TX_AUDIO_RATE_HZ 24000
 #endif

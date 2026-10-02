@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "vu_band.h"
 #include "splash.h"
 #include "board_pins.h"
 #include "hal_touch.h"
@@ -14,10 +15,42 @@
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
+#include <ctype.h>
+#include <time.h>
+#include <stdarg.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <strings.h>
 
 static const char *TAG = "ui";
+
+/* A line to log, from the LVGL task's callbacks: written here and logged by
+ * the ui task (ui_take_note), never by the LVGL task itself. Logging takes
+ * mutexes; a higher-priority task waiting on one lends the LVGL task its
+ * priority, and it keeps that until the whole render pass has given back the
+ * LVGL lock -- the audio held up all that while (2026-10-01). One line at a
+ * time; a second before the first is taken is dropped. */
+static char         s_note[128];
+static volatile bool s_note_due;
+
+static void note(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void note(const char *fmt, ...)
+{
+    if (s_note_due) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_note, sizeof s_note, fmt, ap);
+    va_end(ap);
+    s_note_due = true;
+}
+
+bool ui_take_note(char *out, size_t cap)
+{
+    if (!s_note_due) return false;
+    strlcpy(out, s_note, cap);
+    s_note_due = false;
+    return true;
+}
 
 /* LVGL's symbol set has no microphone, so the mic-gain readout used the music
  * note. font_mic_14 carries the one glyph and falls back to Montserrat 14 for
@@ -29,6 +62,11 @@ LV_FONT_DECLARE(font_btmic_28);
 #define SYM_HS_MIC  "\xEF\x84\xB0"                  /* U+F130 */
 #define SYM_HS_MUTE "\xEF\x84\xB1"                  /* U+F131 */
 #define SYM_MIC "\xEF\x84\xB0"
+#define SYM_MIC_OFF "\xEF\x84\xB1"                  /* U+F131, struck through */
+
+/* SVXConnect's look -- its palette, its level arc, the reflector's face --
+ * for the svxconnect firmware, and the telephone that wears it. */
+#define SVX_LOOK (VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE)
 
 #if VFO_RADIO_ICOM
 /* --- Icom palette ----------------------------------------------------------
@@ -127,7 +165,7 @@ LV_FONT_DECLARE(font_btmic_28);
 #define C_GREEN     lv_color_hex(0x45D69A)   /* --good                  */
 #define PWR_HEX     0x08A2FB
 #define SDR_HEX     0x8B7CF8                 /* --violet: a KiwiSDR beside it */
-#elif VFO_RADIO_SVXCONNECT
+#elif SVX_LOOK
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
  * clients use: green connected, amber (re)connecting, red transmitting. */
@@ -182,7 +220,7 @@ LV_FONT_DECLARE(font_btmic_28);
 
 /* The svxconnect firmware's face: a reflector's talkgroup where a radio's
  * frequency is, and the audio level on the arc. */
-#if VFO_RADIO_SVXCONNECT
+#if SVX_LOOK
 #define REFLECTOR_FACE 1
 LV_FONT_DECLARE(font_svx_icons_24);
 #define SYM_LOCK    "\xEF\x80\xA3"                  /* U+F023 */
@@ -191,6 +229,12 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define SYM_SOUND   "\xEF\x80\xA8"                  /* U+F028 */
 #else
 #define REFLECTOR_FACE 0
+#endif
+/* The phone firmware's: SVXConnect's face, the favourites its talkgroups. */
+#if VFO_RADIO_PHONE
+#define PHONE_FACE 1
+#else
+#define PHONE_FACE 0
 #endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
@@ -255,12 +299,53 @@ static const int DIG_STEP[N_DIG] = {
 static const int DIG_STEP_GHZ[N_DIG] = {
     1000000, 1000000, 1000000, 1000000, 100000, 10000, 1000, 100,
 };
+/* ...and from 10 GHz (the IC-905's 3 cm, icom firmware) the first of them
+ * reads "10": every MHz place steps 1 MHz, so the two share a label, and the
+ * 100 Hz digit QO-100's SSB needs stays. */
 
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
 static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl;
 static lv_obj_t *s_hs_name, *s_hs_mic, *s_hs_raise;  /* the slab while a headset is connected */
 static lv_obj_t *s_hs_bt;                   /* a receiver's: the headset's logo beside the spots */
+#if PHONE_FACE
+/* The telephone's face: see phone_build(). */
+/* The keypad's top row: the number, and the backspace right of it, both
+ * kept inside the glass where it is narrow. */
+#define KP_ROW_Y   43
+#define KP_CLOSE_Y 28              /* above the number: the close, the whole strip */
+#define KP_NUM_DX  (-16)
+#define KP_NUM_W   168
+#define KP_BS_DX   88
+#define KP_TOP     66
+#define KP_W       70
+#define KP_H       42
+#define KP_GAP_X   6
+#define KP_GAP_Y   4
+
+static lv_obj_t *s_kp, *s_kp_num, *s_kp_bs, *s_kp_x, *s_kp_key[12];
+static bool      s_kp_open, s_kp_in_call;
+static int       s_kp_flash = -1;
+static uint32_t  s_kp_flash_at;
+static char      s_kp_digits[24];
+static portMUX_TYPE s_kp_mux = portMUX_INITIALIZER_UNLOCKED;
+static char      s_dtmf_q[16];
+static volatile uint8_t s_dtmf_w, s_dtmf_r, s_kp_clicks;
+static char      s_dial_req[24];
+static volatile bool s_dial_due;
+static const char KP_KEYS[] = "123456789*0#";
+static void phone_build(void);
+static void keypad_show(bool on);
+static void keypad_tap(lv_point_t p, uint32_t held);
+/* A call ringing in: the slab in two halves without a headset, a hint under
+ * DECLINE with one; and what a tap on it asked (ui_take_call_req). */
+static lv_obj_t     *s_half[2], *s_half_lbl[2], *s_hs_hint;
+static volatile uint8_t s_call_req;
+/* The history (ED_CALLS), as ui_set_calls() last had it. */
+EXT_RAM_BSS_ATTR static ui_call_t s_calls[UI_CALLS_MAX];
+static uint8_t       s_ncalls;
+static volatile bool s_calls_seen;
+#endif
 static lv_obj_t *s_warn_panel, *s_warn_net;
 
 /* "Update?" -- see ui_ask_update(). */
@@ -323,7 +408,7 @@ static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
     { -40.0f, -10.0f, 0xFF8C1A },   /* orange */
     { -10.0f,   0.0f, 0xFFD000 },   /* yellow */
     {   0.0f,  10.0f, 0xFF3B30 },   /* red    */
-#elif VFO_RADIO_SVXCONNECT
+#elif SVX_LOOK
     { -40.0f, -10.0f, 0x35B35A },   /* SvxConnect's meter: green  */
     { -10.0f,   0.0f, 0xD8C43A },   /* yellow */
     {   0.0f,  10.0f, 0xD13B3B },   /* red    */
@@ -343,7 +428,7 @@ static float mic_frac(float db) { return (db - MIC_DB_MIN) / (MIC_DB_MAX - MIC_D
 #define PEAK_HOLD_MS 1000
 typedef struct { float v; uint32_t t_peak, t_last; } peak_t;
 static peak_t s_mic_pk, s_pwr_pk, s_swr_pk;
-static peak_t s_sig_pk = { .v = -127.0f };       /* the S-meter, from the floor */
+RADIO_ONLY static peak_t s_sig_pk = { .v = -127.0f };   /* the S-meter, from the floor */
 
 static float peak_hold(peak_t *p, float x, float fall_per_s)
 {
@@ -519,7 +604,7 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0xFF8C1A },   /* orange */
     { 2.0f, 2.5f, 0xFFD000 },   /* yellow */
     { 2.5f, 3.0f, 0xFF3B30 },   /* red    */
-#elif VFO_RADIO_SVXCONNECT
+#elif SVX_LOOK
     { 1.0f, 2.0f, 0x35B35A },
     { 2.0f, 2.5f, 0xD8C43A },
     { 2.5f, 3.0f, 0xD13B3B },
@@ -585,7 +670,7 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0x25F425 },   /* S9 to +20  */
     {  -53.0f,  -33.0f, 0x25F425 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0x25F425 },   /* +40 to +60 */
-#elif VFO_RADIO_SVXCONNECT
+#elif SVX_LOOK
     /* Not an S-meter: the audio level, -60 to 0 dBFS, in SvxConnect's meter
      * colours -- green, then yellow from -12 dB, red in the last 3. */
     {  -60.0f,  -48.0f, 0x1B5E2E },
@@ -610,7 +695,7 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
 
 /* Every boundary gets a notch, which means every printed tick gets one -- the
  * ends excepted, since they are the ends. */
-#if VFO_RADIO_SVXCONNECT
+#if SVX_LOOK
 static const float RXNOTCH[] = { -48.0f, -36.0f, -24.0f, -18.0f, -12.0f,
                                   -6.0f, -3.0f };
 #else
@@ -634,7 +719,7 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
                ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER, ED_SQUELCH, ED_RXSRC,
-               ED_BALANCE, ED_RADIO, ED_VM, ED_SPOT, ED_SSTV } edit_t;
+               ED_BALANCE, ED_RADIO, ED_VM, ED_SPOT, ED_SSTV, ED_CALLS } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int     s_edit_from, s_edit_n;  /* where the receiver's opened; how many */
@@ -669,6 +754,12 @@ static int     s_edit_pct;             /* RF GAIN and POWER, 0-100 */
 static int     s_edit_bal;             /* BALANCE, -100..100 */
 static bool    s_edit_lsb;   /* passband sits below the carrier */
 static uint8_t s_volume = 40;
+static bool    s_meters_on = true;      /* the telephone's call meters drawn */
+/* VOLUME's panel brought up by the dial alone (ui_volume_turn): it goes by
+ * itself, and a tap is not spent on it. */
+static bool     s_edit_auto;
+static uint32_t s_edit_turned;
+#define VOL_PANEL_MS 2000
 static uint8_t s_micgain = 100;
 static ui_commit_t s_commit;
 static bool    s_have_commit;
@@ -708,7 +799,7 @@ static const char *AGCS[]  = { "fast","mid","slow" };
 static const char *MODES[] = { "usb","lsb","cwu","cwl","am","sam","fm","nfm" };
 static const char *AGCS[]  = { "" };
 #define GAIN_CAPTION "FIL"
-#elif VFO_RADIO_SVXCONNECT
+#elif SVX_LOOK
 /* A reflector has no modes, AGC or gain; the tables stay for the editors'
  * sake, which the reflector face never opens. */
 static const char *MODES[] = { "fm" };
@@ -766,8 +857,12 @@ static const struct { const char *name; int64_t hz; } BANDS[] = {
     { "6m",   50200000 },               /* an UberSDR stops at 30 MHz */
 #endif
 #if VFO_RADIO_ICOM
+    { "4m",   70200000 },               /* the IC-7300MK2's */
     { "2m",  144300000 }, { "70cm", 432200000 },
     { "23cm", 1296200000 },             /* the IC-9700's and the IC-R8600's */
+    /* The IC-905's: 2400.200 is in every version's 13 cm; 3 cm needs its
+     * CX-10G, and without one the radio refuses it and the dial comes back. */
+    { "13cm", 2400200000LL }, { "6cm", 5760200000LL }, { "3cm", 10368200000LL },
 #endif
 };
 #define NELEM(a) ((int)(sizeof (a) / sizeof (a)[0]))
@@ -787,32 +882,38 @@ static int   s_active_dig = 5;
 static int32_t s_step_req;
 
 /* The digits' places: MMM.kkk.hh, the sub-kHz pair narrower -- or, from
- * 1 GHz up, MMMM.kkk.h, the separators one digit along. */
-static bool s_ghz;
+ * 1 GHz up, MMMM.kkk.h, the separators one digit along -- or, from 10 GHz,
+ * the same with "10" in a first place 50 wide and the rest closed up, so the
+ * row keeps the 1 GHz one's 40-320 px: clear of the S-meter's ticks and, in
+ * transmit, of the microphone's ring. */
+static uint8_t s_lay;                     /* 0; 1 from 1 GHz; 2 from 10 GHz */
 static int  s_underline_dig = -1;
 #define DIG_PITCH 33                      /* a digit's width */
 #define DIG_SMALL 28                      /* ...below 1 kHz */
 #define DIG_SEPW  11                      /* a separator's */
-static void dig_place(bool ghz)
+#define DIG_TENS  50                      /* "10", from 10 GHz */
+static void dig_place(uint8_t lay)
 {
-    const int n_small = ghz ? 1 : 2, sep_a = ghz ? 3 : 2, sep_b = ghz ? 6 : 5;
-    const int total = (N_DIG - n_small) * DIG_PITCH + n_small * DIG_SMALL + 2 * DIG_SEPW;
+    const int n_small = lay ? 1 : 2, sep_a = lay ? 3 : 2, sep_b = lay ? 6 : 5;
+    const int pitch = lay == 2 ? 31 : DIG_PITCH, small = lay == 2 ? 26 : DIG_SMALL,
+              sepw  = lay == 2 ? 9 : DIG_SEPW,   first = lay == 2 ? DIG_TENS : pitch;
+    const int total = first + (N_DIG - 1 - n_small) * pitch + n_small * small + 2 * sepw;
     int x = CX - total / 2, sep = 0;
     for (int i = 0; i < N_DIG; i++) {
-        const int w = i >= N_DIG - n_small ? DIG_SMALL : DIG_PITCH;
+        const int w = i == 0 ? first : i >= N_DIG - n_small ? small : pitch;
         s_dig_x[i] = x + w / 2;
         lv_obj_align(s_dig[i], LV_ALIGN_CENTER, s_dig_x[i] - CX, 170 - CY);
         x += w;
         if (i == sep_a || i == sep_b) {
-            lv_obj_align(s_sep[sep++], LV_ALIGN_CENTER, x + DIG_SEPW / 2 - CX, 170 - CY);
-            x += DIG_SEPW;
+            lv_obj_align(s_sep[sep++], LV_ALIGN_CENTER, x + sepw / 2 - CX, 170 - CY);
+            x += sepw;
         }
     }
-    s_ghz = ghz;
+    s_lay = lay;
     s_underline_dig = -1;                 /* under the same step, somewhere new */
 }
 
-static const int *dig_steps(void) { return s_ghz ? DIG_STEP_GHZ : DIG_STEP; }
+static const int *dig_steps(void) { return s_lay ? DIG_STEP_GHZ : DIG_STEP; }
 
 static bool  s_ptt_tap, s_was_tx;
 static bool  s_ptt_armed;            /* a press on the slab, in receive: see touch_cb */
@@ -820,7 +921,7 @@ static bool  s_ptt_armed;            /* a press on the slab, in receive: see tou
  * A flicker is a few tens of ms; a deliberate second tap is well over this. */
 #define PTT_REARM_MS 150
 static uint32_t s_released_at;       /* lv_tick of the last release */
-static float s_meter_disp = -127.0f;
+RADIO_ONLY static float s_meter_disp = -127.0f;
 static lv_display_t *s_disp;
 /* The panel is mounted upside down relative to the USB-C port: with the cable
  * at the top, the image needs 180 degrees. Software rotation, because this
@@ -851,7 +952,7 @@ static void fmt1(char *out, size_t n, const char *pre, float v, const char *suf)
  * next to the desktop. */
 static float smeter_frac(float dbm)
 {
-#if VFO_RADIO_SVXCONNECT
+#if SVX_LOOK
     /* The reflector face's arc is the audio level: -60 to 0 dBFS, evenly. */
     if (dbm < -60.0f) dbm = -60.0f;
     if (dbm > 0.0f)   dbm = 0.0f;
@@ -889,10 +990,15 @@ RADIO_ONLY static const char *band_of(int64_t hz)
     if (m >= 24890  && m <= 24990)  return "12m";
     if (m >= 28000  && m <= 29700)  return "10m";
     if (m >= 50000  && m <= 54000)  return "6m";
+#if VFO_RADIO_ICOM
+    if (m >= 70000  && m <= 70500)  return "4m";        /* the IC-7300MK2's */
+#endif
     if (m >= 144000 && m <= 148000) return "2m";
     if (m >= 430000 && m <= 440000) return "70cm";
     if (m >= 1240000 && m <= 1300000) return "23cm";     /* the IC-R8600's */
     if (m >= 2300000 && m <= 2450000) return "13cm";
+    if (m >= 5650000 && m <= 5925000) return "6cm";
+    if (m >= 10000000 && m <= 10500000) return "3cm";
     return "--";
 }
 
@@ -994,6 +1100,30 @@ static int ant_index(const ui_state_t *st)
     return st->ant + (st->ant_rx ? st->n_ant : 0);
 }
 
+#if PHONE_FACE
+/* A call in the history, under its name: which way, how long, how long ago --
+ * "in 2:47  -  3 h ago", "missed  -  12 min ago". */
+static void call_line(const ui_call_t *c, char *out, size_t cap)
+{
+    static const char *KIND[] = { "out", "in", "missed", "declined" };
+    if (!c) {
+        snprintf(out, cap, "calls in and out land here");
+        return;
+    }
+    char dur[12] = "", age[16] = "";
+    if (c->secs) snprintf(dur, sizeof dur, " %u:%02u", (unsigned)(c->secs / 60), (unsigned)(c->secs % 60));
+    const time_t now = time(NULL);
+    if (c->when && now > 1700000000 && now >= (time_t)c->when) {
+        const unsigned long d = (unsigned long)(now - (time_t)c->when);
+        if (d < 60)         snprintf(age, sizeof age, "just now");
+        else if (d < 3600)  snprintf(age, sizeof age, "%lu min ago", d / 60);
+        else if (d < 86400) snprintf(age, sizeof age, "%lu h ago", d / 3600);
+        else                snprintf(age, sizeof age, "%lu d ago", d / 86400);
+    }
+    snprintf(out, cap, "%s%s%s%s", KIND[c->kind & 3], dur, age[0] ? "  -  " : "", age);
+}
+#endif
+
 static void edit_render(void)
 {
     if (s_edit == ED_NONE) {
@@ -1040,7 +1170,7 @@ static void edit_render(void)
         snprintf(v, sizeof v, "%d", s_volume);
         break;
     case ED_MIC:
-        title = "MIC GAIN";
+        title = s_last.headset ? "HEADSET MIC" : "MIC GAIN";
         snprintf(v, sizeof v, "%d", s_micgain);
         break;
     case ED_RX:
@@ -1120,6 +1250,23 @@ static void edit_render(void)
         spot_lines(&s_spot_snap[s_edit_idx], v, sizeof v, l2, sizeof l2);
         break;
     }
+    case ED_CALLS: {
+#if PHONE_FACE
+        static char t[32];
+        if (!s_ncalls) {
+            title = "CALLS";
+            snprintf(v, sizeof v, "NONE YET");
+            vcolor = C_DISABLED;
+            break;
+        }
+        const ui_call_t *c = &s_calls[s_edit_idx];
+        snprintf(t, sizeof t, "CALLS %d / %d", s_edit_idx + 1, (int)s_ncalls);
+        title = t;
+        snprintf(v, sizeof v, "%s", c->name[0] ? c->name : c->number);
+        if (c->kind == UI_CALL_MISSED) vcolor = C_DANGER;
+#endif
+        break;
+    }
     case ED_SSTV:
         title = "SSTV";
         if (s_last.n_sstv > 0) snprintf(v, sizeof v, "%d PICTURES", s_last.n_sstv);
@@ -1132,7 +1279,8 @@ static void edit_render(void)
     /* A station's name wants more room than a mode or a width. */
     lv_obj_set_style_text_font(s_edit_value,
                                s_edit == ED_CHOICE || s_edit == ED_RADIO || s_edit == ED_VM ||
-                               s_edit == ED_SPOT || s_edit == ED_SSTV || (s_edit == ED_RXSRC && s_edit_idx)
+                               s_edit == ED_SPOT || s_edit == ED_SSTV || s_edit == ED_CALLS ||
+                               (s_edit == ED_RXSRC && s_edit_idx)
                                ? &lv_font_montserrat_28 : &lv_font_montserrat_48, 0);
     lv_label_set_text(s_edit_value, v);
     lv_obj_set_style_text_color(s_edit_value, vcolor, 0);
@@ -1150,6 +1298,12 @@ static void edit_render(void)
         char l1[24], h[56];
         spot_lines(&s_spot_snap[s_edit_idx], l1, sizeof l1, h, sizeof h);
         lv_label_set_text(s_edit_hint, h);
+#if PHONE_FACE
+    } else if (s_edit == ED_CALLS) {
+        char h[56];
+        call_line(s_ncalls ? &s_calls[s_edit_idx] : NULL, h, sizeof h);
+        lv_label_set_text(s_edit_hint, h);
+#endif
     } else if (s_edit == ED_SSTV) {
         lv_label_set_text(s_edit_hint, s_last.n_sstv > 0 ? "tap to look  -  the knob turns them"
                                                          : "the receiver's gallery is empty");
@@ -1188,8 +1342,15 @@ static int nearest_filter(int32_t w)
 /* A band the radio tunes: all of them, until it has said where it tunes. */
 static bool band_ok(int i)
 {
-    return (!s_last.f_min || BANDS[i].hz >= s_last.f_min) &&
-           (!s_last.f_max || BANDS[i].hz <= s_last.f_max);
+    const int64_t hz = BANDS[i].hz;
+    /* 4 m for the IC-7300MK2, whose top is 74.8 MHz, and the bands from 2 GHz
+     * for the IC-905, which reaches 10 GHz: the IC-705 and the IC-R8600 tune
+     * there too, and their lists stay as they were. */
+    if (hz > 60000000 && hz < 100000000 && !(s_last.f_max > 0 && s_last.f_max < 100000000))
+        return false;
+    if (hz >= 2000000000LL && !(s_last.f_max > 3000000000LL)) return false;
+    return (!s_last.f_min || hz >= s_last.f_min) &&
+           (!s_last.f_max || hz <= s_last.f_max);
 }
 
 static int nearest_band(int64_t hz)
@@ -1209,6 +1370,7 @@ static void netinfo_show(bool on);
 static void edit_open(edit_t what, const ui_state_t *st)
 {
     s_edit = what;
+    s_edit_auto = false;
     netinfo_show(false);                  /* it would peek out from behind */
     /* ...and a warning -- NO LINK, with the radio in use switched off --
      * would cover it: it waits until the editor closes. */
@@ -1286,6 +1448,13 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_edit_n   = st->n_radios;
         s_edit_idx = st->radio_sel >= 0 && st->radio_sel < st->n_radios ? st->radio_sel : 0;
         break;
+#if PHONE_FACE
+    case ED_CALLS:
+        s_edit_n     = s_ncalls ? s_ncalls : 1;
+        s_edit_idx   = 0;
+        s_calls_seen = true;
+        break;
+#endif
     case ED_VM:
         s_edit_n   = 2;
         s_edit_idx = st->mem_state != UI_MEM_OFF;
@@ -1424,6 +1593,7 @@ static void edit_fill(void)
 static void edit_close(void)
 {
     s_edit = ED_NONE;
+    s_edit_auto = false;
     edit_render();
 }
 
@@ -1446,10 +1616,54 @@ static void edit_publish(void)
 
 bool ui_edit_active(void) { return s_edit != ED_NONE || s_sv_open; }
 
+void ui_set_meters(bool on) { s_meters_on = on; }
+
+static void edit_rotate_now(int32_t detents);
+
+static void volume_turn_now(int32_t detents)
+{
+    if (!detents || !lvgl_port_lock(20)) return;
+    if (s_edit == ED_NONE && !s_sv_open) {
+        edit_open(ED_VOL, &s_last);
+        s_edit_auto = true;
+    }
+    s_edit_turned = lv_tick_get();
+    edit_rotate_now(detents);           /* the port lock is recursive */
+    lvgl_port_unlock();
+}
+
+/* Detents from the knob's task (enc_input, priority 15), for the open editor
+ * or the dial's VOLUME panel: counted here, and applied by an LVGL timer in
+ * the LVGL task (detents_cb). The knob's task taking the LVGL lock itself
+ * lent the LVGL task its priority 15 for up to 20 ms whenever a render was
+ * under way, and the audio (priority 11, same core) waited: a 49 ms hold on
+ * a turn of the volume (2026-10-02). */
+static atomic_int s_edit_detents, s_vol_detents;
+
 void ui_edit_rotate(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_edit_detents, (int)detents);
+}
+
+void ui_volume_turn(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_vol_detents, (int)detents);
+}
+
+static void detents_cb(lv_timer_t *t)
+{
+    (void)t;
+    const int v = atomic_exchange(&s_vol_detents, 0);
+    if (v) volume_turn_now(v);
+    const int e = atomic_exchange(&s_edit_detents, 0);
+    if (e) edit_rotate_now(e);
+}
+
+static void edit_rotate_now(int32_t detents)
 {
     if ((s_edit == ED_NONE && !s_sv_open) || !detents) return;
     if (!lvgl_port_lock(20)) return;
+    if (s_edit_auto) s_edit_turned = lv_tick_get();   /* the dial's panel stays while it turns */
     /* The SSTV viewer: the next picture, or the one before. */
     if (s_sv_open) {
         int i = s_sv_idx + (detents > 0 ? 1 : -1);
@@ -1510,6 +1724,7 @@ void ui_edit_rotate(int32_t detents)
     case ED_RADIO:
     case ED_VM:
     case ED_SPOT:
+    case ED_CALLS:
     case ED_RX:
     case ED_ANT:
     case ED_MENU:
@@ -1588,6 +1803,84 @@ int ui_take_choice(void)
     const int a = s_ch_answer;
     s_ch_answer = -1;
     return a;
+}
+
+char ui_take_dtmf(void)
+{
+#if PHONE_FACE
+    char k = 0;
+    taskENTER_CRITICAL(&s_kp_mux);
+    if (s_dtmf_r != s_dtmf_w) k = s_dtmf_q[s_dtmf_r++ % sizeof s_dtmf_q];
+    taskEXIT_CRITICAL(&s_kp_mux);
+    return k;
+#else
+    return 0;
+#endif
+}
+
+bool ui_take_dial(char *out, size_t cap)
+{
+#if PHONE_FACE
+    bool due = false;
+    taskENTER_CRITICAL(&s_kp_mux);
+    if (s_dial_due) {
+        strlcpy(out, s_dial_req, cap);
+        s_dial_due = false;
+        due = true;
+    }
+    taskEXIT_CRITICAL(&s_kp_mux);
+    return due;
+#else
+    (void)out; (void)cap;
+    return false;
+#endif
+}
+
+uint8_t ui_take_key_clicks(void)
+{
+#if PHONE_FACE
+    return __atomic_exchange_n(&s_kp_clicks, 0, __ATOMIC_RELAXED);
+#else
+    return 0;
+#endif
+}
+
+bool ui_set_calls(const ui_call_t *calls, uint8_t n)
+{
+#if PHONE_FACE
+    if (!lvgl_port_lock(20)) return false;
+    if (n > UI_CALLS_MAX) n = UI_CALLS_MAX;
+    if (n && calls) memcpy(s_calls, calls, sizeof s_calls[0] * n);
+    s_ncalls = calls ? n : 0;
+    if (s_edit == ED_CALLS) {                   /* open: still a call to show */
+        s_edit_n = s_ncalls ? s_ncalls : 1;
+        if (s_edit_idx >= s_edit_n) s_edit_idx = s_edit_n - 1;
+        edit_render();
+    }
+    lvgl_port_unlock();
+    return true;
+#else
+    (void)calls; (void)n;
+    return true;
+#endif
+}
+
+uint8_t ui_take_call_req(void)
+{
+#if PHONE_FACE
+    return __atomic_exchange_n(&s_call_req, 0, __ATOMIC_RELAXED);
+#else
+    return 0;
+#endif
+}
+
+bool ui_take_calls_seen(void)
+{
+#if PHONE_FACE
+    return __atomic_exchange_n(&s_calls_seen, false, __ATOMIC_RELAXED);
+#else
+    return false;
+#endif
 }
 
 bool ui_take_commit(ui_commit_t *out)
@@ -1861,6 +2154,12 @@ static void tap(lv_point_t p, uint32_t held)
         sv_close();
         return;
     }
+#if PHONE_FACE
+    if (s_kp_open) {
+        keypad_tap(p, held);
+        return;
+    }
+#endif
     /* An editor is open: ANY tap accepts. Commitment on the imprecise input,
      * selection on the precise one. */
     if (s_edit == ED_CHOICE) {
@@ -1911,6 +2210,20 @@ static void tap(lv_point_t p, uint32_t held)
             edit_render();
             return;
         }
+#if PHONE_FACE
+        /* The history's panel calls back the one shown. */
+        if (was == ED_CALLS) {
+            if (s_ncalls && s_calls[s_edit_idx].number[0] && s_last.link_ok &&
+                (s_last.call == 0 || s_last.call == 4)) {
+                taskENTER_CRITICAL(&s_kp_mux);
+                strlcpy(s_dial_req, s_calls[s_edit_idx].number, sizeof s_dial_req);
+                s_dial_due = true;
+                taskEXIT_CRITICAL(&s_kp_mux);
+            }
+            edit_close();
+            return;
+        }
+#endif
         /* SSTV's panel is a door: a tap on it opens the viewer. */
         if (was == ED_SSTV) {
             edit_close();
@@ -1949,7 +2262,7 @@ static void tap(lv_point_t p, uint32_t held)
     /* The lock left of the talkgroup, the mute right of it: toggles, with or
      * without a link. */
     if (p.y >= 104 && p.y < 140) {
-        if (p.x < CX - 38) { s_lock_tap = true; return; }
+        if (p.x < CX - 38) { if (!PHONE_FACE) s_lock_tap = true; return; }
         if (p.x > CX + 38) { s_mute_tap = true; return; }
     }
 #endif
@@ -2007,7 +2320,7 @@ static void tap(lv_point_t p, uint32_t held)
     if (p.y >= 208 && p.y < PTT_TOP) {
         if      (p.x > CX + 74) edit_open(ED_MIC, &s_last);
         else if (p.x > CX + 12) edit_open(ED_VOL, &s_last);
-        else if (p.x > CX - 56 && !REFLECTOR_FACE) edit_open(ED_RIT, &s_last);
+        else if (p.x > CX - 56 && !REFLECTOR_FACE && !s_last.no_rit) edit_open(ED_RIT, &s_last);
         return;
     }
 }
@@ -2049,7 +2362,7 @@ static void release_cb(lv_event_t *e)
      * one short shows only here. */
     const uint32_t held = lv_tick_elaps(s_pressed_at);
     if (held >= 2000)
-        ESP_LOGI(TAG, "press at %d,%d%s released after %u ms",
+        note("press at %d,%d%s released after %u ms",
                  (int)s_press_pt.x, (int)s_press_pt.y,
                  s_press_picker ? " (towards the picker)" : "", (unsigned)held);
     s_press_picker = false;
@@ -2062,11 +2375,29 @@ static void release_cb(lv_event_t *e)
         if (indev) lv_indev_get_point(indev, &q);
         if (s_gestured || LV_ABS(q.x - s_press_pt.x) > TAP_SLOP ||
             LV_ABS(q.y - s_press_pt.y) > TAP_SLOP) {
-            ESP_LOGI(TAG, "PTT not keyed: a %s from the slab, %d,%d to %d,%d",
+            note("PTT not keyed: a %s from the slab, %d,%d to %d,%d",
                      s_gestured ? "swipe" : "drag", (int)s_press_pt.x, (int)s_press_pt.y,
                      (int)q.x, (int)q.y);
             return;
         }
+#if PHONE_FACE
+        /* The keypad's number, typed: dialled, and the keypad put away. */
+        if (s_kp_open && s_kp_digits[0] && (s_last.call == 0 || s_last.call == 4)) {
+            taskENTER_CRITICAL(&s_kp_mux);
+            strlcpy(s_dial_req, s_kp_digits, sizeof s_dial_req);
+            s_dial_due = true;
+            taskEXIT_CRITICAL(&s_kp_mux);
+            keypad_show(false);
+            return;
+        }
+        /* A call ringing in: with a headset the slab declines -- the
+         * headset's button answers -- and without one its left half
+         * declines and its right half answers. */
+        if (s_last.call == 2) {
+            s_call_req = (!s_last.headset && s_press_pt.x >= CX) ? 1 : 2;
+            return;
+        }
+#endif
         s_ptt_tap = true;
         return;
     }
@@ -2095,6 +2426,16 @@ static void gesture_cb(lv_event_t *e)
     s_gestured = true;
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (s_edit != ED_NONE || s_asking || s_last.tx || s_sv_open) return;
+#if PHONE_FACE
+    /* The keypad: down brings it, up puts it away. From the left, the
+     * history -- between calls. Nothing else: a telephone has no levels or
+     * tuner to swipe to. */
+    if (dir == LV_DIR_BOTTOM) { keypad_show(true); return; }
+    if (dir == LV_DIR_TOP && s_kp_open) { keypad_show(false); return; }
+    if (s_kp_open) return;
+    if (dir == LV_DIR_RIGHT && (s_last.call == 0 || s_last.call == 4)) edit_open(ED_CALLS, &s_last);
+    return;
+#endif
     /* Up: another radio, where the knob knows more than one -- with or
      * without a link, since the one in use may be switched off. */
     if (dir == LV_DIR_TOP) {
@@ -2149,6 +2490,9 @@ static void touch_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     ui_note_activity();
+    /* The dial's own VOLUME panel keeps no tap from the face: it goes, and the
+     * tap lands where it was aimed -- HANG UP, ANSWER, the keypad. */
+    if (s_edit_auto) edit_close();
     s_press_pt   = p;
     s_pressed_at = lv_tick_get();
     s_press_tap  = false;
@@ -2202,7 +2546,7 @@ static void touch_cb(lv_event_t *e)
          * toggles, so nothing else needs this. */
         const uint32_t up = lv_tick_elaps(s_released_at);
         if (up < PTT_REARM_MS) {
-            ESP_LOGI(TAG, "PTT press ignored: finger up only %u ms", (unsigned)up);
+            note("PTT press ignored: finger up only %u ms", (unsigned)up);
             return;
         }
         /* On the air, the press unkeys, at once. In receive it keys only
@@ -2216,7 +2560,7 @@ static void touch_cb(lv_event_t *e)
         }
         /* A headset's button is the PTT while one is connected: the glass
          * only ever unkeys then, never keys. A receiver has nothing to key. */
-        if (s_last.headset || s_last.rx_only) return;
+        if (!PHONE_FACE && (s_last.headset || s_last.rx_only)) return;
         s_ptt_armed = true;
         return;
     }
@@ -2369,7 +2713,7 @@ static void add_rx_notches(void)
 static void add_ticks(void)
 {
     static const struct { float dbm; uint8_t len; uint8_t kind; } TICKS[] = {
-#if VFO_RADIO_SVXCONNECT
+#if SVX_LOOK
         { -48, 6, 0 }, { -36, 6, 0 }, { -24, 6, 0 }, { -18, 6, 0 },
         { -12, 11, 1 },                        /* -12 dBFS -- where yellow starts */
         { -6, 6, 2 }, { -3, 6, 2 }, { 0, 9, 2 },
@@ -2402,6 +2746,16 @@ static void add_ticks(void)
 
 static void build(void)
 {
+#if PHONE_FACE
+    /* The telephone's face is the busiest -- keypad, two meters, the
+     * history -- and outgrows LVGL's 64 kB of internal RAM: a second
+     * pool in PSRAM takes what does not fit, slower but never short. */
+    {
+        const size_t more = 32 * 1024;
+        void *p = heap_caps_malloc(more, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (p) lv_mem_add_pool(p, more);
+    }
+#endif
     s_scr = lv_screen_active();
     lv_obj_set_style_bg_color(s_scr, C_BG, 0);
     lv_obj_remove_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
@@ -2640,6 +2994,11 @@ static void build(void)
      * above belongs to the talker, whose callsign needs all of its width. */
     s_lock_icon = mklabel(&font_svx_icons_24, C_LABEL, CX - 76, 122, SYM_UNLOCK);
     s_mute_icon = mklabel(&font_svx_icons_24, C_LABEL, CX + 76, 122, SYM_SOUND);
+#if PHONE_FACE
+    /* The row's middle is a number -- +32475123456 is 160 px wide -- and
+     * there is no lock: the mute moves out of its way, inside the ticks. */
+    lv_obj_align(s_mute_icon, LV_ALIGN_CENTER, 106, 122 - CY);
+#endif
 #endif
 
     s_band = mklabel(&lv_font_montserrat_20, C_ACCENT, CX - 76, 122, "--");
@@ -2653,7 +3012,7 @@ static void build(void)
         s_dig[i] = mklabel(&lv_font_montserrat_48, C_TEXT, CX, 170, "0");
     for (int i = 0; i < 2; i++)
         s_sep[i] = mklabel(&lv_font_montserrat_48, C_LABEL, CX, 170, ".");
-    dig_place(false);
+    dig_place(0);
 
     s_underline = lv_obj_create(s_scr);
     lv_obj_set_size(s_underline, DIG_PITCH - 9, 3);
@@ -2729,7 +3088,7 @@ static void build(void)
     lv_obj_set_style_pad_all(s_ptt_lbl, 0, 0);
     lv_obj_set_pos(s_ptt_lbl, PTT_LEFT, PTT_TOP + 14);
     lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
-    if (!RX_FACE) {
+    if (!RX_FACE && !PHONE_FACE) {
         /* A Bluetooth headset: its button is the PTT then, and the slab is
          * the headset's -- its name, and under it its microphone, struck
          * through in red while it is muted. */
@@ -2804,6 +3163,9 @@ static void build(void)
         lv_label_set_text(s_hs_bt, LV_SYMBOL_BLUETOOTH);
     }
 
+#if PHONE_FACE
+    phone_build();
+#endif
     /* Editor overlay: hidden until a field is tapped. */
     /* Network address card. Same treatment as the editor panel, and equally
      * not clickable -- the tap that dismisses it lands on the screen. */
@@ -3064,6 +3426,39 @@ bool ui_ask_knob_moved(void)
     return s_turned_at && lv_tick_elaps(s_turned_at) < TURN_SPENT_MS;
 }
 
+/* The touch, as LVGL polls it every TOUCH_POLL_MS. esp_lvgl_port's own read
+ * aborts the knob on the first I2C error (ESP_ERROR_CHECK); polled a hundred
+ * times a second, one glitch on the bus the haptic driver shares would do
+ * it. A failed read says what the last one did, three in a row a finger
+ * lifted -- never a press stuck down. The port only scales, by 1 here; LVGL
+ * turns the point with the display. */
+static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    static lv_indev_state_t state = LV_INDEV_STATE_RELEASED;
+    static lv_point_t       at;
+    static uint8_t          failed;
+    esp_lcd_touch_handle_t tp = hal_touch_handle();
+    esp_lcd_touch_point_data_t pt[CONFIG_ESP_LCD_TOUCH_MAX_POINTS];
+    uint8_t n = 0;
+    if (tp && esp_lcd_touch_read_data(tp) == ESP_OK &&
+        esp_lcd_touch_get_data(tp, pt, &n, CONFIG_ESP_LCD_TOUCH_MAX_POINTS) == ESP_OK) {
+        failed = 0;
+        if (n) {
+            at.x  = pt[0].x;
+            at.y  = pt[0].y;
+            state = LV_INDEV_STATE_PRESSED;
+        } else {
+            state = LV_INDEV_STATE_RELEASED;
+        }
+    } else if (++failed >= 3) {
+        failed = 3;
+        state  = LV_INDEV_STATE_RELEASED;
+    }
+    data->point = at;
+    data->state = state;
+}
+
 esp_err_t ui_init(void)
 {
     lvgl_port_cfg_t pc = ESP_LVGL_PORT_INIT_CONFIG();
@@ -3124,6 +3519,9 @@ esp_err_t ui_init(void)
     const lvgl_port_touch_cfg_t tc = { .disp = disp, .handle = hal_touch_handle() };
     lv_indev_t *touch = lvgl_port_add_touch(&tc);
     ESP_RETURN_ON_FALSE(touch, ESP_FAIL, TAG, "add touch");
+    lvgl_port_lock(0);
+    lv_indev_set_read_cb(touch, touch_read);
+    lvgl_port_unlock();
     /* LVGL reads once per refresh period (16 ms) by default. A brisk tap can
      * fall between slower reads, which reads as "press firmly". */
     lvgl_port_lock(0);
@@ -3132,6 +3530,7 @@ esp_err_t ui_init(void)
 
     lvgl_port_lock(0);
     build();
+    lv_timer_create(detents_cb, 15, NULL);        /* the knob's detents, applied here */
     {
         /* LVGL's objects live in its own fixed pool, not the heap. */
         lv_mem_monitor_t mm;
@@ -3210,6 +3609,378 @@ static void vis(lv_obj_t *o, bool on)
     else    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
+#if PHONE_FACE
+/* --- the telephone's face ---------------------------------------------------
+ * SVXConnect's, with the favourites for talkgroups: the chosen one's name in
+ * the middle and its number in the talkgroup's row, our own number under it,
+ * the call's time under the arc, and the caller's name in the middle. A swipe
+ * down brings the keypad: a number dialled with the slab, or, in a call, its
+ * DTMF. A long press on 0 is +. */
+
+static int kp_x(int col) { return CX - (3 * KP_W + 2 * KP_GAP_X) / 2 + col * (KP_W + KP_GAP_X); }
+static int kp_y(int row) { return KP_TOP + row * (KP_H + KP_GAP_Y); }
+
+/* The arc in two, as in transmit: their audio on the left half, filling up
+ * from the left end, ours on the right, filling up from the right end. Each on the reflector's scale (-60 to 0 dBFS, its zones,
+ * notches and ticks) with its own peak LED, held a second and then falling,
+ * as on a VU meter. */
+typedef struct {
+    vu_band_t  b;               /* track, zones and LED: one object (vu_band.c) */
+    float      disp;
+    peak_t     pk;
+} vu_t;
+static vu_t s_vu[2];
+static const struct { float db; uint8_t len, kind; } VU_TICKS[] = {
+    { -24, 6, 0 }, { -12, 11, 1 }, { -6, 6, 2 }, { 0, 9, 2 },
+};
+#define VU_NOTCHES (sizeof RXNOTCH / sizeof RXNOTCH[0])
+#define VU_NTICKS  (sizeof VU_TICKS / sizeof VU_TICKS[0])
+
+/* Where dB sits on a half: from its own end -- the left's at the left, the
+ * right's at the right -- up to the top. */
+static float vu_deg(int rot, bool mirror, float db)
+{
+    const float f = smeter_frac(db);
+    return rot + (mirror ? 1.0f - f : f) * SWR_SPAN;
+}
+
+static void vu_build(vu_t *v, int side, lv_obj_t *marks)
+{
+    const bool mirror = side == 1;
+    const int  rot    = side ? AUD_ROT : SWR_ROT;
+    /* One object draws the half: its track, the zones lit up to the bar and
+     * the peak LED, each clipped to small cells along the ring, and a level
+     * redraws only the sectors it changed (vu_band.c). The stack of 17
+     * screen-sized lv_arcs a half was took 53-64% of core 1 in a call; on the
+     * host the band redraws 51 times fewer pixels, and looks the same. */
+    int16_t  a0[RX_ZONES], a1[RX_ZONES];
+    uint32_t rgb[RX_ZONES];
+    for (size_t z = 0; z < RX_ZONES; z++) {
+        a0[z]  = (int16_t)(smeter_frac(RXZONES[z].from) * SWR_SPAN);
+        a1[z]  = (int16_t)(smeter_frac(RXZONES[z].to) * SWR_SPAN);
+        rgb[z] = RXZONES[z].rgb;
+    }
+    vu_band_build(&v->b, s_scr, CX, CY, rot, SWR_SPAN, ARC_R0, 12, mirror, RX_ZONES,
+                  a0, a1, rgb, C_SUBTLE, LED_DEG);
+    peak_reset(&v->pk, -90.0f);
+    v->disp = -90.0f;
+    /* Its notches and ticks, as the whole arc has them. LVGL keeps the
+     * points, so they live on. */
+    static lv_point_precise_t np[2][VU_NOTCHES][2], tp[2][VU_NTICKS][2];
+    for (size_t i = 0; i < VU_NOTCHES; i++) {
+        notch_points(vu_deg(rot, mirror, RXNOTCH[i]), np[side][i]);
+        lv_line_set_points(mknotch(marks), np[side][i], 2);
+    }
+    for (size_t i = 0; i < VU_NTICKS; i++) {
+        const float a = vu_deg(rot, mirror, VU_TICKS[i].db) * 3.14159265f / 180.0f;
+        const int r1 = ARC_R0 - 15, r0 = r1 - VU_TICKS[i].len;
+        tp[side][i][0].x = (lv_value_precise_t)(CX + r0 * cosf(a));
+        tp[side][i][0].y = (lv_value_precise_t)(CY + r0 * sinf(a));
+        tp[side][i][1].x = (lv_value_precise_t)(CX + r1 * cosf(a));
+        tp[side][i][1].y = (lv_value_precise_t)(CY + r1 * sinf(a));
+        lv_obj_t *ln = lv_line_create(marks);
+        lv_line_set_points(ln, tp[side][i], 2);
+        lv_obj_set_style_line_width(ln, VU_TICKS[i].kind == 1 ? 3 : 2, 0);
+        lv_obj_set_style_line_color(ln, VU_TICKS[i].kind == 1 ? C_TEXT2
+                                        : VU_TICKS[i].kind == 2 ? C_WARN : C_LABEL, 0);
+        lv_obj_set_style_line_rounded(ln, true, 0);
+    }
+}
+
+/* A half's bar follows the level -- up at once, back down within a third of
+ * a second -- and its LED the peak. The band writes, and redraws, only what
+ * moved: a whole degree of it. */
+static void vu_set(vu_t *v, float db)
+{
+    release(&v->disp, db);
+    const float pk = peak_hold(&v->pk, v->disp, 30.0f);
+    vu_band_set(&v->b, smeter_frac(v->disp), smeter_frac(pk), rx_zone_of(pk));
+}
+
+static void phone_build(void)
+{
+    lv_obj_add_flag(s_lock_icon, LV_OBJ_FLAG_HIDDEN);       /* no talkgroup to lock */
+    lv_obj_add_flag(s_ring, LV_OBJ_FLAG_HIDDEN);            /* see ring_anim() */
+    /* The mute is a microphone's here: the knob's own (font_btmic_28). */
+    lv_obj_set_style_text_font(s_mute_icon, &font_btmic_28, 0);
+    /* The two meters, in the whole arc's place. */
+    lv_obj_add_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
+    for (size_t z = 0; z < RX_ZONES; z++) lv_obj_add_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
+    led_show(&s_sig_led, false);
+    lv_obj_t *marks = mkgroup();
+    vu_build(&s_vu[0], 0, marks);
+    vu_build(&s_vu[1], 1, marks);
+    lv_obj_move_foreground(marks);
+    /* A call ringing in, no headset: the slab in two, DECLINE red on the
+     * left and ANSWER green on the right, each its own button; with a
+     * headset, a line under DECLINE says where the answer is. */
+    static const char *const HALF[2] = { "DECLINE", "ANSWER" };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *h = lv_obj_create(s_scr);
+        lv_obj_remove_style_all(h);
+        lv_obj_set_size(h, CX - 1 - PTT_LEFT, 360 - PTT_TOP);
+        lv_obj_set_pos(h, i ? CX + 1 : PTT_LEFT, PTT_TOP);
+        lv_obj_set_style_bg_color(h, i ? C_GREEN : C_TX_RED, 0);
+        lv_obj_set_style_bg_opa(h, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(h, 2, 0);
+        lv_obj_set_style_border_side(h, LV_BORDER_SIDE_TOP, 0);
+        lv_obj_set_style_border_color(h, C_ACCENT, 0);
+        lv_obj_remove_flag(h, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(h, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_t *l = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(l, lv_color_white(), 0);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(l, 150);
+        lv_obj_set_pos(l, (i ? CX + 78 : CX - 78) - 75, PTT_TOP + 14);
+        lv_label_set_text(l, HALF[i]);
+        lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+        s_half[i] = h;
+        s_half_lbl[i] = l;
+    }
+    s_hs_hint = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_hs_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_hs_hint, lv_color_white(), 0);
+    lv_obj_set_style_text_align(s_hs_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(s_hs_hint, 280);
+    lv_obj_set_pos(s_hs_hint, CX - 140, PTT_TOP + 52);
+    lv_label_set_text(s_hs_hint, "answer on the headset");
+    lv_obj_remove_flag(s_hs_hint, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_hs_hint, LV_OBJ_FLAG_HIDDEN);
+    /* A headset connected: only its logo, at the slab's right end -- the
+     * slab is the call's. */
+    s_hs_bt = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_hs_bt, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_hs_bt, C_ACCENT, 0);
+    lv_obj_set_pos(s_hs_bt, CX + 126, PTT_TOP + 12);
+    lv_obj_remove_flag(s_hs_bt, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_hs_bt, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_hs_bt, LV_SYMBOL_BLUETOOTH);
+    /* The keypad, over everything above the slab. */
+    s_kp = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_kp);
+    lv_obj_set_size(s_kp, 360, PTT_TOP - 2);
+    lv_obj_set_pos(s_kp, 0, 0);
+    lv_obj_set_style_bg_color(s_kp, C_BG, 0);
+    lv_obj_set_style_bg_opa(s_kp, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_kp, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    s_kp_num = lv_label_create(s_kp);
+    lv_obj_set_style_text_font(s_kp_num, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_kp_num, C_LABEL, 0);
+    lv_obj_set_style_text_align(s_kp_num, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_kp_num, LV_LABEL_LONG_CLIP);   /* one line, always */
+    lv_obj_set_width(s_kp_num, KP_NUM_W);
+    /* Aligned in the keypad's panel, which is shorter than the screen. */
+    lv_obj_align(s_kp_num, LV_ALIGN_CENTER, KP_NUM_DX, KP_ROW_Y - (PTT_TOP - 2) / 2);
+    lv_label_set_text(s_kp_num, "");
+    s_kp_bs = lv_label_create(s_kp);
+    lv_obj_set_style_text_font(s_kp_bs, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_kp_bs, C_LABEL, 0);
+    lv_label_set_text(s_kp_bs, LV_SYMBOL_BACKSPACE);
+    lv_obj_align(s_kp_bs, LV_ALIGN_CENTER, KP_BS_DX, KP_ROW_Y - (PTT_TOP - 2) / 2);
+    /* The way out, at the top where the glass is narrow: the keypad came
+     * down, and a swipe up still puts it away too. */
+    s_kp_x = lv_label_create(s_kp);
+    lv_obj_set_style_text_font(s_kp_x, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_kp_x, C_LABEL, 0);
+    lv_label_set_text(s_kp_x, LV_SYMBOL_CLOSE);
+    lv_obj_align(s_kp_x, LV_ALIGN_TOP_MID, 0, 6);
+    for (int i = 0; i < 12; i++) {
+        lv_obj_t *k = lv_obj_create(s_kp);
+        lv_obj_remove_style_all(k);
+        lv_obj_set_style_bg_color(k, C_BG1, 0);
+        lv_obj_set_style_bg_opa(k, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(k, 12, 0);
+        lv_obj_set_size(k, KP_W, KP_H);
+        lv_obj_set_pos(k, kp_x(i % 3), kp_y(i / 3));
+        lv_obj_remove_flag(k, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *l = lv_label_create(k);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(l, C_TEXT, 0);
+        const char t[2] = { KP_KEYS[i], 0 };
+        lv_label_set_text(l, t);
+        lv_obj_center(l);
+        s_kp_key[i] = k;
+    }
+    lv_obj_add_flag(s_kp, LV_OBJ_FLAG_HIDDEN);
+    lv_mem_monitor_t m;
+    lv_mem_monitor(&m);
+    ESP_LOGI(TAG, "LVGL memory: %u of %u bytes used (%u%%), the largest free %u",
+             (unsigned)(m.total_size - m.free_size), (unsigned)m.total_size,
+             (unsigned)m.used_pct, (unsigned)m.free_biggest_size);
+}
+
+static void keypad_show(bool on)
+{
+    if (on == s_kp_open) return;
+    s_kp_open = on;
+    if (on) {
+        s_kp_digits[0] = 0;
+        s_kp_in_call = s_last.call == 3;
+        lv_obj_remove_flag(s_kp, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_kp);
+    } else {
+        lv_obj_add_flag(s_kp, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void keypad_tap(lv_point_t p, uint32_t held)
+{
+    /* The close, above the number: in a call, the call goes on. */
+    if (p.y < KP_CLOSE_Y) {
+        keypad_show(false);
+        return;
+    }
+    /* The backspace, right of the number. */
+    if (p.y < KP_TOP - 2) {
+        if (p.x > CX + KP_BS_DX - 22) {
+            const size_t n = strlen(s_kp_digits);
+            if (n) s_kp_digits[n - 1] = 0;
+            if (s_last.call != 3) s_kp_clicks++;
+        }
+        return;
+    }
+    for (int i = 0; i < 12; i++) {
+        const int x = kp_x(i % 3), y = kp_y(i / 3);
+        if (p.x < x - KP_GAP_X / 2 || p.x >= x + KP_W + KP_GAP_X / 2 ||
+            p.y < y - KP_GAP_Y / 2 || p.y >= y + KP_H + KP_GAP_Y / 2) continue;
+        char k = KP_KEYS[i];
+        const size_t n = strlen(s_kp_digits);
+        /* A long press on 0, first: + for an international number. */
+        if (k == '0' && held >= 500 && n == 0 && s_last.call != 3) k = '+';
+        if (n + 1 < sizeof s_kp_digits) {
+            s_kp_digits[n] = k;
+            s_kp_digits[n + 1] = 0;
+        }
+        if (s_last.call == 3) {
+            taskENTER_CRITICAL(&s_kp_mux);
+            if ((uint8_t)(s_dtmf_w - s_dtmf_r) < sizeof s_dtmf_q)
+                s_dtmf_q[s_dtmf_w++ % sizeof s_dtmf_q] = k;
+            taskEXIT_CRITICAL(&s_kp_mux);
+        } else {
+            s_kp_clicks++;
+        }
+        if (s_kp_flash >= 0) lv_obj_set_style_bg_color(s_kp_key[s_kp_flash], C_BG1, 0);
+        lv_obj_set_style_bg_color(s_kp_key[i], C_ACCENT, 0);
+        s_kp_flash = i;
+        s_kp_flash_at = lv_tick_get();
+        return;
+    }
+}
+
+static void upper_into(char *out, size_t cap, const char *s)
+{
+    size_t i = 0;
+    for (; s[i] && i + 1 < cap; i++) out[i] = (char)toupper((unsigned char)s[i]);
+    out[i] = 0;
+}
+
+static void phone_update(const ui_state_t *st)
+{
+    /* A call coming in, or the one the keypad was opened in over: the keypad
+     * makes way. */
+    if (s_kp_open && (st->call == 2 || (s_kp_in_call && st->call != 3))) keypad_show(false);
+    if (s_kp_open) {
+        const size_t n = strlen(s_kp_digits);
+        /* Eight characters in the big type; a longer number -- +32475123456
+         * is twelve -- in the smaller, so it fits beside the backspace. The
+         * last twelve of a longer one still. */
+        static bool small;
+        if ((n > 8) != small) {
+            small = n > 8;
+            lv_obj_set_style_text_font(s_kp_num, small ? &lv_font_montserrat_20 : &lv_font_montserrat_28, 0);
+        }
+        set_text(s_kp_num, n > 12 ? s_kp_digits + n - 12 : n ? s_kp_digits : st->call == 3 ? "DTMF" : "number");
+        set_text_color(s_kp_num, n ? C_TEXT : C_LABEL);
+        if (s_kp_flash >= 0 && lv_tick_elaps(s_kp_flash_at) > 120) {
+            lv_obj_set_style_bg_color(s_kp_key[s_kp_flash], C_BG1, 0);
+            s_kp_flash = -1;
+        }
+    }
+}
+
+/* A call ringing in: the ANSWER slab breathes, green to a lighter green and
+ * back, and the rim is green -- the face rings, as the buzz does. Only the
+ * slab moves: the rim's arc would redraw the whole glass each frame. */
+static bool s_ring_anim, s_breathing;
+
+static void ring_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_bg_color(var, lv_color_mix(lv_color_white(), C_GREEN, (uint8_t)v), 0);
+}
+
+/* `on`: the rim green, ringing. `breathe`: the ANSWER half breathing -- only
+ * where there is one, with no headset. */
+static void ring_anim(bool on, bool breathe)
+{
+    if (on != s_ring_anim) {
+        s_ring_anim = on;
+        lv_obj_set_style_arc_color(s_ring, on ? C_GREEN : C_BG, LV_PART_MAIN);
+        /* In the background's colour it is invisible, and was still drawn
+         * under every meter update: hidden but while a call rings in. */
+        vis(s_ring, on);
+    }
+    if (breathe == s_breathing) return;
+    s_breathing = breathe;
+    if (!breathe) {
+        lv_anim_delete(s_half[1], ring_anim_cb);
+        lv_obj_set_style_bg_color(s_half[1], C_GREEN, 0);
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_half[1]);
+    lv_anim_set_exec_cb(&a, ring_anim_cb);
+    lv_anim_set_values(&a, 0, 90);              /* up to a third white */
+    lv_anim_set_duration(&a, 600);
+    lv_anim_set_reverse_duration(&a, 600);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+/* The slab: the call's next step -- CALL, HANG UP in red; a call ringing
+ * in, DECLINE | ANSWER, or with a headset DECLINE, the headset answering. */
+static void phone_slab(const ui_state_t *st)
+{
+    const char *t;
+    lv_color_t bg = C_BG1, fg = C_TEXT2;
+    const bool ring = st->call == 2, split = ring && !st->headset;
+    for (int i = 0; i < 2; i++) {
+        vis(s_half[i], split);
+        vis(s_half_lbl[i], split);
+    }
+    vis(s_hs_hint, ring && st->headset);
+    switch (st->call) {
+    case 2:
+        if (split) t = "";
+        else     { t = "DECLINE"; bg = C_TX_RED; fg = lv_color_white(); }
+        break;
+    case 1:
+    case 3:  t = "HANG UP"; bg = C_TX_RED; fg = lv_color_white(); break;
+    case 4:  t = "ENDED"; break;
+    default:
+        if (!st->link_ok)                      t = "NO SERVICE";
+        else if (s_kp_open && s_kp_digits[0])  { t = "CALL"; fg = C_TEXT; }
+        else if (st->n_fav)                    t = "CALL";
+        else                                   t = "----";
+        break;
+    }
+    set_text(s_ptt_lbl, t);
+    set_text_color(s_ptt_lbl, fg);
+    /* Stopped first, so the slab's own colour is the last word. */
+    ring_anim(ring, split);
+    static uint32_t last = 0xFFFFFFFF;
+    const uint32_t c = lv_color_to_u32(bg);
+    if (c != last) {
+        lv_obj_set_style_bg_color(s_ptt, bg, 0);
+        last = c;
+    }
+}
+#endif
+
 static void headset_slab(const ui_state_t *st)
 {
     if (s_hs_bt) vis(s_hs_bt, st->headset);
@@ -3234,6 +4005,7 @@ void ui_update(const ui_state_t *st)
     if (!st || !s_scr) return;
     if (!lvgl_port_lock(20)) return;      /* never block the caller */
     s_last = *st;                         /* editors open on the live value */
+    if (s_edit_auto && lv_tick_elaps(s_edit_turned) >= VOL_PANEL_MS) edit_close();
 
     /* No countdown: after ten seconds, a turn of the knob, or the radio
      * keying up, the question simply goes away and the answer is no -- but
@@ -3260,10 +4032,17 @@ void ui_update(const ui_state_t *st)
         edit_render();
     }
 
+#if PHONE_FACE
+    /* A call -- in, out from the page, up -- closes the history first: an
+     * editor, it would keep the face, the slab's ANSWER, from being drawn. */
+    if (s_edit == ED_CALLS && st->call >= 1 && st->call <= 3) edit_close();
+#endif
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter -- nor,
-     * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter. */
-    if (s_edit != ED_NONE || s_sv_open) { lvgl_port_unlock(); return; }
+     * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter.
+     * Not under the dial's own VOLUME panel: a tap goes straight through it
+     * to the slab, which must say what that tap does now. */
+    if ((s_edit != ED_NONE && !s_edit_auto) || s_sv_open) { lvgl_port_unlock(); return; }
 
     /* The address card times out on its own: it covers the frequency, and an
      * operator who walked away should come back to a working dial. Not under
@@ -3297,7 +4076,17 @@ void ui_update(const ui_state_t *st)
     }
     if (mem) {
         char big[40], small[80];
-#if REFLECTOR_FACE
+#if PHONE_FACE
+        /* Who: in a call -- out, ringing in, or up -- the other end by name,
+         * the favourites' or the caller's own, by number where it has none;
+         * how a call ended; at rest, the favourite chosen. No favourite
+         * while a call is on. Our own number under it. */
+        if (st->call >= 1 && st->call <= 3) snprintf(big, sizeof big, "%s", st->peer[0] ? st->peer : st->peer_num);
+        else if (st->call == 4)             upper_into(big, sizeof big, st->call_why[0] ? st->call_why : "call ended");
+        else if (st->n_fav)                 snprintf(big, sizeof big, "%s", st->tg_name);
+        else                                snprintf(big, sizeof big, "NO FAVOURITES");
+        snprintf(small, sizeof small, "%s", st->server);
+#elif REFLECTOR_FACE
         /* The talkgroup's name, as the reflector's portal gives it, and the
          * reflector under it. */
         if (st->tg_name[0])  snprintf(big, sizeof big, "%s", st->tg_name);
@@ -3307,18 +4096,53 @@ void ui_update(const ui_state_t *st)
 #else
         mem_texts(st, big, sizeof big, small, sizeof small);
 #endif
+#if PHONE_FACE
+        /* In a call the name stays put: one too wide at 28 px is set at 20,
+         * on two lines if it must -- a name is at most 31 characters -- and
+         * ends in dots past those. Going round in a loop it redrew its line
+         * forty times a second, all call long. At rest a favourite's name
+         * still goes round, as a talkgroup's does. Compared with what was set,
+         * not with the label: dots are written into the label's own text. */
+        {
+            static char   shown[40];
+            static int8_t fit = -1;          /* 0 at rest, 1 a call at 28, 2 at 20 */
+            const bool in_call = st->call >= 1 && st->call <= 3;
+            const int8_t want = !in_call ? 0
+                : lv_text_get_width(big, (uint32_t)strlen(big), &lv_font_montserrat_28, 0) > 300 ? 2 : 1;
+            if (want != fit) {
+                fit = want;
+                lv_obj_set_style_text_font(s_mem_big, want == 2 ? &lv_font_montserrat_20
+                                                                : &lv_font_montserrat_28, 0);
+                lv_label_set_long_mode(s_mem_big, want ? LV_LABEL_LONG_DOT
+                                                       : LV_LABEL_LONG_SCROLL_CIRCULAR);
+                lv_obj_set_style_max_height(s_mem_big, want == 2
+                    ? 2 * lv_font_get_line_height(&lv_font_montserrat_20) : LV_COORD_MAX, 0);
+                shown[0] = 0;
+            }
+            if (strcmp(shown, big)) {
+                strlcpy(shown, big, sizeof shown);
+                lv_label_set_text(s_mem_big, big);
+            }
+        }
+#else
         set_text(s_mem_big, big);
+#endif
         set_text(s_mem_small, small);
         set_text_color(s_mem_big, st->tx ? C_TX_TEXT : C_TEXT);
     }
 
     /* Across 1 GHz the digits move over, the step staying where it was --
-     * 10 Hz, which has no digit up there, becoming 100 Hz. */
-    const bool ghz = f >= 1000000000LL;
-    if (ghz != s_ghz && !mem) {
+     * 10 Hz, which has no digit up there, becoming 100 Hz -- and across 10 GHz
+     * (the icom firmware's IC-905) they close up round the "10". */
+#if VFO_RADIO_ICOM
+    const uint8_t lay = f >= 10000000000LL ? 2 : f >= 1000000000LL ? 1 : 0;
+#else
+    const uint8_t lay = f >= 1000000000LL ? 1 : 0;
+#endif
+    if (lay != s_lay && !mem) {
         int step = dig_steps()[s_active_dig];
-        dig_place(ghz);
-        if (ghz && step < 100) s_step_req = step = 100;
+        dig_place(lay);
+        if (lay && step < 100) s_step_req = step = 100;
         for (int i = N_DIG - 1; i >= 0; i--)
             if (dig_steps()[i] == step) { s_active_dig = i; break; }
     }
@@ -3331,9 +4155,10 @@ void ui_update(const ui_state_t *st)
         (hz / 10) % 10,   hz % 10,
     };
     int lead = (mhz >= 100) ? 0 : (mhz >= 10) ? 1 : 2;
-    if (s_ghz) {
+    if (s_lay) {
         const int dd[N_DIG] = {
-            (mhz / 1000) % 10, (mhz / 100) % 10, (mhz / 10) % 10, mhz % 10,
+            (mhz / 1000) % (s_lay == 2 ? 100 : 10),        /* from 10 GHz: "10" */
+            (mhz / 100) % 10, (mhz / 10) % 10, mhz % 10,
             (khz / 100) % 10,  (khz / 10) % 10,  khz % 10,        hz / 10,
         };
         memcpy(d, dd, sizeof d);
@@ -3341,7 +4166,8 @@ void ui_update(const ui_state_t *st)
     }
 
     for (int i = 0; i < N_DIG && !mem; i++) {
-        char b[2] = { (char)('0' + d[i]), 0 };
+        char b[3] = { (char)('0' + d[i] % 10), 0, 0 };
+        if (d[i] >= 10) { b[0] = (char)('0' + d[i] / 10); b[1] = (char)('0' + d[i] % 10); }
         const char *txt = (i < lead) ? "" : b;
         if (strcmp(lv_label_get_text(s_dig[i]), txt) != 0)
             lv_label_set_text(s_dig[i], txt);
@@ -3357,7 +4183,30 @@ void ui_update(const ui_state_t *st)
     }
 
     char tb[24];
-#if REFLECTOR_FACE
+#if PHONE_FACE
+    /* The number where the talkgroup is -- the favourite's at rest, the
+     * other end's in a call, its name in the middle -- and the registration
+     * where the step is. */
+    set_text(s_band, "");
+    set_text(s_filt, "");
+    {
+        const char *row = st->call == 0 ? st->fav_num : st->peer_num;
+        set_text(s_mode, row[0] ? row : "--");
+        set_text_color(s_mode, C_ACCENT);
+    }
+    set_text(s_step_lbl, st->link_ok ? "connected" : st->connecting ? "connecting"
+                                                                  : "disconnected");
+    set_text_color(s_step_lbl, st->link_ok ? C_GREEN : st->connecting ? C_WARN : C_DANGER);
+    /* The knob's own microphone, live or struck through. A headset's is the
+     * headset's to mute: greyed while one is in use, unless the headset has
+     * its own muted -- then struck through in red too. */
+    {
+        const bool hs = st->headset, off = hs ? st->headset_muted : st->muted;
+        set_text(s_mute_icon, off ? SYM_MIC_OFF : SYM_MIC);
+        set_text_color(s_mute_icon, off ? C_DANGER : hs ? C_DISABLED : C_LABEL);
+    }
+    (void)tb;
+#elif REFLECTOR_FACE
     /* The talkgroup where band, mode and filter are, and the link where the
      * step is. */
     set_text(s_band, "");
@@ -3448,6 +4297,8 @@ void ui_update(const ui_state_t *st)
         lv_obj_align(s_step_lbl, LV_ALIGN_CENTER, rx_row ? -56 : -98, 220 - CY);
         lv_obj_align(s_vol, LV_ALIGN_CENTER, rx_row ? 56 : 42, 222 - CY);
     }
+    /* ...nor has the IC-905: its RIT strip goes, the row left as it is. */
+    if (!RX_FACE && !REFLECTOR_FACE && !rx_row) vis(s_rit, !st->no_rit);
     snprintf(tb, sizeof tb, LV_SYMBOL_VOLUME_MID " %u", (unsigned)s_volume);
     set_text(s_vol, tb);
     snprintf(tb, sizeof tb, SYM_MIC " %u", (unsigned)s_micgain);
@@ -3475,6 +4326,13 @@ void ui_update(const ui_state_t *st)
     /* The bar follows the signal; the peak LED hangs a second above it and
      * then falls away at 30 dB/s -- about five S-units a second. The readouts
      * give the peak: in SSB that is the figure worth reading. */
+#if PHONE_FACE
+    /* The telephone's arc is two meters: theirs, ours. Outside a call both
+     * fall to rest, whatever the last frame left behind. */
+    const bool live = st->call == 3 && s_meters_on;
+    vu_set(&s_vu[0], live ? st->rx_level_db : -90.0f);
+    vu_set(&s_vu[1], live ? st->tx_mic_dbm : -90.0f);
+#else
 #if REFLECTOR_FACE
     /* The whole arc is the audio: what is heard in receive, the microphone in
      * transmit. */
@@ -3503,7 +4361,38 @@ void ui_update(const ui_state_t *st)
         s_rx_val[z] = v;
         lv_arc_set_value(s_rx_zone[z], v);
     }
-#if REFLECTOR_FACE
+#endif /* PHONE_FACE: the whole arc */
+#if PHONE_FACE
+    /* The call's time under the arc, and what it is doing. */
+    {
+        char a[16], b[40] = "";
+        const unsigned secs = (unsigned)(st->call_ms / 1000u);
+        lv_color_t ca = C_TEXT, cb = C_LABEL;
+        switch (st->call) {
+        case 3:  snprintf(a, sizeof a, "%02u:%02u", secs / 60u, secs % 60u);
+                 snprintf(b, sizeof b, st->call_hd ? "HD call" : "in call");    /* who: the middle */
+                 cb = C_GREEN; break;
+        case 2:  snprintf(a, sizeof a, "RINGING");
+                 snprintf(b, sizeof b, "incoming call"); ca = cb = C_GREEN; break;
+        case 1:  snprintf(a, sizeof a, "%s", strcmp(st->call_why, "ringing") ? "CALLING" : "RINGING");
+                 snprintf(b, sizeof b, "%us", secs); cb = C_WARN; break;
+        case 4:  snprintf(a, sizeof a, "ENDED");
+                 snprintf(b, sizeof b, "%s", st->call_why); ca = C_LABEL; break;
+        default: snprintf(a, sizeof a, "--");
+                 if (st->n_missed) {
+                     snprintf(b, sizeof b, "%u missed", (unsigned)st->n_missed);
+                     cb = C_DANGER;
+                 } else if (st->n_fav) {
+                     snprintf(b, sizeof b, "%u favourites", (unsigned)st->n_fav);
+                 }
+                 ca = C_LABEL; break;
+        }
+        set_text(s_srd, a);
+        set_text(s_dbm, b);
+        set_text_color(s_srd, ca);
+        set_text_color(s_dbm, cb);
+    }
+#elif REFLECTOR_FACE
     /* Who is talking, where the S-units are: now, or dimmed, the last one. */
     {
         char who[40];
@@ -3740,6 +4629,10 @@ void ui_update(const ui_state_t *st)
             st->tx ? lv_color_white() : C_TEXT2, 0);
     }
     headset_slab(st);
+#if PHONE_FACE
+    phone_update(st);
+    phone_slab(st);
+#else
     if (RX_FACE) {
         /* The spot or voice nearest the dial: green while it is heard, bright
          * when the dial is on it, dimmer when it is only a pointer. */
@@ -3782,6 +4675,7 @@ void ui_update(const ui_state_t *st)
 #else
         set_text(s_ptt_lbl, st->may_key ? "PTT" : "----");
 #endif
+#endif /* PHONE_FACE */
 
     lvgl_port_unlock();
 }

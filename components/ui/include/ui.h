@@ -13,6 +13,7 @@
 #define VFO_UI_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -124,9 +125,19 @@ typedef struct {
     /* A receiver (the IC-R8600): the slab says RECEIVER and keys nothing; a
      * headset on it just listens. */
     bool     rx_only;
+    bool     no_rit;            /* no RIT strip: the IC-905 has none */
     /* Where the radio tunes, 0 = not known: the band editor offers only the
      * bands inside (the IC-9700's 2 m, 70 cm and 23 cm). */
     int64_t  f_min, f_max;
+    /* A telephone (the phone firmware), on the reflector's face: the call,
+     * as radio_status_t has it. */
+    uint8_t  call;           /* RADIO_CALL_*: 0 idle, 1 out, 2 in, 3 up, 4 ended */
+    char     call_why[16];
+    uint32_t call_ms;
+    bool     call_hd;        /* G.722: the face says HD */
+    char     peer[32], peer_num[24], fav_num[24];
+    uint8_t  n_fav;
+    uint8_t  n_missed;       /* missed, not yet looked at in the history */
     /* Transient banner: AetherSDR's refusal reason, or ours. NULL for none. */
     const char *warn;
 } ui_state_t;
@@ -158,6 +169,20 @@ typedef struct {
     bool     heard;         /* talking now: the receiver hears a voice there */
 } ui_spot_t;
 void ui_set_spots(const ui_spot_t *spots, uint8_t n);
+
+/* The telephone's calls, newest first, for the history the swipe from the
+ * left brings: the knob turns through them, a tap on the panel calls back. */
+#define UI_CALLS_MAX 20
+enum { UI_CALL_OUT, UI_CALL_IN, UI_CALL_MISSED, UI_CALL_DECLINED };
+typedef struct {
+    char     number[24];
+    char     name[24];      /* a favourite's or the caller's own; "" for none */
+    uint32_t when;          /* seconds since 1970; 0: the clock was not set */
+    uint16_t secs;          /* how long it was up; 0: never answered */
+    uint8_t  kind;          /* UI_CALL_* */
+} ui_call_t;
+/* False when the face was busy drawing: offer the list again. */
+bool ui_set_calls(const ui_call_t *calls, uint8_t n);
 
 /* When the knob or the glass was last used (lv ticks): what an idle timer
  * on the far end may want to hear about. */
@@ -198,6 +223,11 @@ bool ui_take_mute_tap(void);
  * touch, which is what makes the whole thing usable on 45 mm of round glass. */
 bool ui_edit_active(void);
 void ui_edit_rotate(int32_t detents);
+/* The dial as the volume (the telephone's, in a call): VOLUME's panel comes
+ * up as it turns and goes by itself 2 s after the last detent. */
+void ui_volume_turn(int32_t detents);
+/* The telephone's call meters drawn or not (a test switch, phone_meters()). */
+void ui_set_meters(bool on);
 
 typedef struct {
     bool     have_mode;    char    mode[8];
@@ -227,6 +257,21 @@ typedef struct {
 /* Non-zero if the operator accepted an edit, or a live editor moved (live
  * set): only the newest is kept. Consumed by the caller. */
 bool ui_take_commit(ui_commit_t *out);
+
+/* The telephone's keypad (the swipe down): each key pressed in a call, for
+ * its DTMF, 0 when there is none left; a number typed and dialled with the
+ * slab; and how many keys were pressed out of a call, each a click. */
+char    ui_take_dtmf(void);
+bool    ui_take_dial(char *out, size_t cap);
+uint8_t ui_take_key_clicks(void);
+/* The history was opened: its missed calls looked at. */
+bool    ui_take_calls_seen(void);
+/* A line the LVGL task's callbacks left to log (they never log themselves). */
+bool    ui_take_note(char *out, size_t cap);
+/* The slab, a call ringing in: 1 answer, 2 decline (0 none). Without a
+ * headset its left half declines and its right answers; with one, the slab
+ * declines and the headset's button answers. */
+uint8_t ui_take_call_req(void);
 
 /* A question from the radio's client that needs an answer before it can go
  * on (the multiflex firmware at boot: a station of its own, or the dial for

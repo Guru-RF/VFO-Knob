@@ -1,4 +1,4 @@
-# The SvxLink firmware
+# The SVXConnect firmware
 
 `vfo-knob-svxconnect` turns the knob into a node on an
 [SvxLink](https://www.svxlink.org/) reflector — no radio at all: the knob's
@@ -29,7 +29,7 @@ knob clicks, and browse to the address on the card; user `admin`, password
 
 The radio face, read differently:
 
-![The SvxLink face, its parts named](svxconnect/01-face.svg)
+![The SVXConnect face, its parts named](svxconnect/01-face.svg)
 
 | Part | Tap | |
 |---|---|---|

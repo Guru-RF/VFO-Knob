@@ -28,7 +28,15 @@ typedef struct {
  * real and the knob can produce a lot of intermediate values in a second. */
 uint8_t net_prov_volume(void);
 uint8_t net_prov_mic_gain(void);
-void    net_prov_save_audio(uint8_t volume, uint8_t mic_gain);
+/* A Bluetooth headset's microphone has its own gain: it comes levelled, the
+ * knob's PDM element is quiet, and one setting never suited both. */
+uint8_t net_prov_mic_gain_headset(void);
+void    net_prov_save_audio(uint8_t volume, uint8_t mic_gain, uint8_t mic_gain_headset);
+/* The same in RAM only, for net_prov_flush_audio() to write when it can: a
+ * flash write holds every interrupt off for up to ~100 ms, a hole in what
+ * is being heard or sent. */
+void    net_prov_set_audio(uint8_t volume, uint8_t mic_gain, uint8_t mic_gain_headset);
+void    net_prov_flush_audio(void);
 
 esp_err_t net_prov_init(void);
 

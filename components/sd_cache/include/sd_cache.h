@@ -10,6 +10,9 @@
  *   VFO-KNOB/INDEX.JSN    the release server's index.json, as last read
  *   VFO-KNOB/ICOM.BIN     the image -- vfo-knob-icom-1.15.0.bin
  *   VFO-KNOB/ICOM.JSN     its manifest, as published: version, file, sha256
+ *   VFO-KNOB/COMPANIO.BIN the second chip's firmware, and COMPANIO.JSN its
+ *                         manifest: the knob sends it to that chip, and
+ *                         never installs it on its own (components/ota)
  *
  * An image is only used against its manifest's sha256, and only ever
  * installed through the update path's signature check: a card can hold

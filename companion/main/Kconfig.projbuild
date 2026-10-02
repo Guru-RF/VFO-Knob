@@ -1,0 +1,12 @@
+menu "VFO-Knob second chip"
+
+config VFO_COMPANION_RELEASE
+    bool "A release (tools/release.sh): the knob keeps it up to date by itself"
+    default n
+    help
+        Set only by the release overlay (tools/release.sh, and the bench's
+        test images built the same way), never by hand. The chip says so in
+        its INFO frame; the knob replaces a release with a newer one by
+        itself, and leaves a development build alone.
+
+endmenu

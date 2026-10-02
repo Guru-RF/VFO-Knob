@@ -132,7 +132,7 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   </div>
   <div id="slin" hidden>
     <div id="slrows"></div>
-    <label class="chk"><input type="checkbox" id="slon"> Offer these radios on the knob</label>
+    <label class="chk"><input type="checkbox" id="slen"> Offer these radios on the knob</label>
     <button id="slrefresh" class="ghost" type="button">Refresh the list</button>
     <button id="sllogout" class="ghost" type="button">Log out</button>
   </div>
@@ -197,6 +197,14 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      while the headset has it muted; a tap there only stops a transmission.
      If the headset goes out of reach while you transmit, the knob stops
      transmitting.</p>
+  <p class="note" id="btphonenote" hidden>Put the headset in pairing mode,
+     <b>Find headsets</b>, and tap it in the list. The knob remembers it, and
+     calls it whenever it is switched on, as a phone does. While it is
+     connected, a call is in the headset only &mdash; the jack stays silent
+     &mdash; and its microphone is live. Its audio opens for a call only: when
+     one rings in (the ring plays in it and on the jack) or when you dial, and
+     it closes after. Its button answers a call ringing in, and hangs up one
+     that is up; its own mute only mutes.</p>
 </section>
 
 <section id="svxstation" hidden>
@@ -244,6 +252,75 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      in again.</p>
 </section>
 
+<section id="phonesec" hidden>
+  <h2>Telephone</h2>
+  <div id="phonerows"></div>
+  <div class="grid">
+    <div><label>SIP user</label><input id="puser" autocomplete="off"
+         autocapitalize="none" spellcheck="false"></div>
+    <div><label>Password</label><div class="pw"><input id="ppass" type="password"
+         autocomplete="new-password" placeholder="not set"><button type="button"
+         class="show">Show</button></div></div>
+    <div><label>SIP server</label><input id="pdomain" autocomplete="off"
+         autocapitalize="none" spellcheck="false" placeholder="sip.example.net"></div>
+    <div><label>Port</label><input id="pport" inputmode="numeric" placeholder="5060"></div>
+  </div>
+  <label>The account's number, shown on the knob's face</label>
+  <input id="pnumber" inputmode="tel" placeholder="+32 59 36 37 01">
+  <button id="psave">Save the account</button>
+  <p class="note">One SIP account, over UDP: the knob registers as soon as it is
+     saved, and finds its way out through your router by itself.</p>
+</section>
+
+<section id="phonecall" hidden>
+  <h2>Call</h2>
+  <label>Number</label><input id="pdial" inputmode="tel" placeholder="+32 475 12 34 56">
+  <button id="pcall">Call</button>
+  <button id="panswer" class="ghost">Answer</button>
+  <button id="phang" class="ghost">Hang up</button>
+  <label>Keys, in a call (DTMF)</label>
+  <div class="grid"><div><input id="pdtmf" inputmode="tel" placeholder="1 2 3 #"></div>
+    <div><button id="pdtmfsend" class="ghost">Send</button></div></div>
+  <label>Recent calls</label>
+  <div id="phist"></div>
+  <p class="note">For other programs, behind this page's login:
+     <code>GET /api/phone</code> says what the telephone is doing,
+     <code>GET /api/phone/history</code> its recent calls;
+     <code>/api/phone/dial?number=&hellip;</code>, <code>/api/phone/answer</code>,
+     <code>/api/phone/hangup</code> and <code>/api/phone/dtmf?digits=&hellip;</code> act.</p>
+</section>
+
+<section id="phonefav" hidden>
+  <h2>Favourites</h2>
+  <div id="favlist"></div>
+  <button id="favadd" class="ghost">Add</button>
+  <button id="favsave">Save the favourites</button>
+  <p class="note">The dial steps through them, and the slab calls the one shown.</p>
+</section>
+
+<section id="phonegoogle" hidden>
+  <h2>Google Contacts</h2>
+  <div id="googlerows"></div>
+  <div class="grid">
+    <div><label>OAuth client ID</label><input id="gcid" autocomplete="off"
+         autocapitalize="none" spellcheck="false" placeholder="from Google Cloud"></div>
+    <div><label>Client secret</label><div class="pw"><input id="gcsec" type="password"
+         autocomplete="new-password" placeholder="not set"><button type="button"
+         class="show">Show</button></div></div>
+  </div>
+  <label>Sign-in returns through (the client's redirect URI)</label>
+  <input id="grelay" autocapitalize="none" spellcheck="false">
+  <button id="gsave" class="ghost">Save the client</button>
+  <button id="gsignin">Sign in with Google</button>
+  <button id="gsync" class="ghost">Sync now</button>
+  <button id="gforget" class="ghost" hidden>Sign out</button>
+  <p class="note">Your <b>starred</b> contacts become the favourites, every number
+     each, and are synced again every six hours; a sync replaces the list
+     above. The client is your own, from a Google Cloud project: see
+     <a href="https://github.com/Guru-RF/VFO-Knob/blob/main/GOOGLE.md">GOOGLE.md</a>
+     for its five steps, and what each message here means.</p>
+</section>
+
 <section id="svxcert" hidden>
   <h2>Certificate</h2>
   <div id="certrows"></div>
@@ -279,18 +356,25 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   <h2>Audio</h2>
   <div class="grid">
     <div><label>Volume (0&ndash;100)</label><input id="vol" inputmode="numeric"></div>
-    <div><label>Mic gain (0&ndash;200)</label><input id="mic" inputmode="numeric"></div>
+    <div><label>Mic gain, the knob's (0&ndash;200)</label><input id="mic" inputmode="numeric"></div>
+    <div id="michrow"><label>Mic gain, a headset's (0&ndash;200)</label><input id="mich" inputmode="numeric"></div>
   </div>
-  <p class="note">Volume and mic gain take effect immediately.</p>
+  <p class="note">Volume and mic gain take effect immediately. The knob's own
+     microphone and a Bluetooth headset's each have their gain: the dial
+     turns the one in use.</p>
   <div class="grid">
     <div><label>Dim after (minutes, 0 = never)</label>
          <input id="dim" inputmode="numeric"></div>
     <div><label>Go dark after (minutes, 0 = never)</label>
          <input id="blank" inputmode="numeric"></div>
   </div>
-  <p class="note">Turning the knob, touching the screen or transmitting all
-     count as use. Dimming leaves the frequency readable; going dark turns the
-     backlight off.</p>
+  <p class="note" id="dimnote">Turning the knob, touching the screen or
+     transmitting all count as use. Dimming leaves the frequency readable;
+     going dark turns the backlight off.</p>
+  <p class="note" id="dimphonenote" hidden>Turning the knob, touching the
+     screen or a call, from its first ring to its end, all count as use: a
+     call ringing in lights a screen that had dimmed or gone dark. Dimming
+     leaves the screen readable; going dark turns the backlight off.</p>
 </section>
 
 <section>
@@ -377,9 +461,9 @@ async function refresh(){
 async function load(){
   const c=await (await fetch('/api/config')).json();
   $('host').value=c.host; $('port').value=c.port; wifiLoad();
-  $('vol').value=c.vol;   $('mic').value=c.mic;
+  $('vol').value=c.vol;   $('mic').value=c.mic;   $('mich').value=c.mich??100;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
-  $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||'';
+  $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||''; OTAH=+c.otah||0;
   FWROOT=c.fwroot||''; RADIO=c.radio||'aethersdr'; radios();
   /* The address this browser reaches the knob from. Over the cable that is the
      USB link's own 10.55.42.2 -- found automatically there, and unreachable
@@ -391,8 +475,13 @@ async function load(){
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
+  PHONE = c.radio === 'phone';            /* a telephone: its SIP account is its own */
   /* The setup firmware has no radio: it installs one of the others. */
-  $('radiosec').hidden = c.radio === 'setup';
+  $('radiosec').hidden = c.radio === 'setup' || PHONE;
+  for (const id of ['phonesec','phonecall','phonefav','phonegoogle']) $(id).hidden = !PHONE;
+  /* A telephone never transmits; its calls are what keep the screen lit. */
+  $('dimnote').hidden = PHONE; $('dimphonenote').hidden = !PHONE;
+  if (PHONE && !phoneLoaded) { document.documentElement.style.setProperty('--accent','#e5a823'); phoneLoad(); }
   LINKNAME = c.link || 'Radio';
   $('rtitle').textContent = icom ? 'Icom radios' : xiegu ? 'X6100 / X6200'
                           : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : uber ? 'UberSDR' : 'AetherSDR';
@@ -430,8 +519,51 @@ async function btLoad(){
   let s; try{ const r=await fetch('/api/bt',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
   /* Only where the second chip runs the companion firmware. */
   $('btsec').hidden=!s.companion; BT=s;
-  if(s.companion) btShow(s);
-  clearTimeout(btTimer); btTimer=setTimeout(btLoad, s.scanning?1000:3000);
+  if(s.companion){ btShow(s); chipPush(s) }
+  const busy = s.upd && !['idle','waiting'].includes(s.upd.phase);
+  clearTimeout(btTimer); btTimer=setTimeout(btLoad, s.scanning||busy?1000:3000);
+}
+/* The second chip's firmware, when the knob cannot fetch it itself -- on the
+   USB cable, or a LAN with no way out: this page fetches the release and
+   hands it over, once a page load, as it does the knob's own updates. The
+   knob sends it at a quiet moment. Only to a chip that runs an older
+   release, and never one that failed on it; never while a headset is
+   there, or with the automatic check off. */
+let chipPushed=false;
+async function chipPush(s){
+  const u=s.upd||{};
+  if(chipPushed || !FWROOT || !OTAH || u.can_fetch!==false || !s.updates || !s.release || !s.app
+     || s.link!=='idle' || s.scanning || u.phase!=='idle') return;
+  chipPushed=true;
+  let said=false;
+  try{
+    const r=await fetch(FWROOT+'companion/manifest.json',{cache:'no-store'});
+    if(!r.ok) return;
+    const m=await r.json();
+    const sha=String(m.app_sha256||'').slice(0,16).toLowerCase();
+    if(m.project!=='vfo-knob-companion' || !m.file || sha.length!==16 || !newer(m.version, s.version)
+       || sha===s.app || (u.blocked||[]).includes(sha)) return;
+    $('btmsg').textContent=`Second chip: fetching ${m.version}…`; said=true;
+    const f=await fetch(FWROOT+'companion/'+encodeURIComponent(m.file),{cache:'no-store'});
+    if(!f.ok) throw new Error('download failed ('+f.status+')');
+    const p=await fetch('/api/bt/update',{method:'POST',body:await f.blob()});
+    $('btmsg').textContent = p.ok ? `Second chip: ${m.version} handed over — it goes on at a quiet moment`
+                                  : 'Second chip: '+await p.text();
+  }catch(e){ if(said) $('btmsg').textContent='' }   /* offline, or blocked: not an error */
+}
+/* The second chip's own firmware: its version, a release or not, and its
+   update -- one going, or how the last one went. The knob sends it by
+   itself, at a quiet moment. */
+function chipRows(s){
+  const kind = !s.updates || !s.app ? '' : s.release ? ' (release)' : ' (development build)';
+  const u = s.upd || {}, to = esc(u.to||'');
+  const now = u.phase==='waiting'    ? `${to} waits for a quiet moment`
+            : u.phase==='sending'    ? `updating to ${to}, ${u.pct} %`
+            : u.phase==='checking'   ? `${to} sent: the chip checks it`
+            : u.phase==='restarting' ? `restarting into ${to}`
+            : u.phase==='trial'      ? `${to} on trial`
+            : esc(u.last||'');
+  return row('Second chip', esc(s.version)+kind) + (now ? row('Second chip update', now) : '');
 }
 function btShow(s){
   const st = s.link==='connected' ? `<span class="pill up">connected</span>`
@@ -442,10 +574,12 @@ function btShow(s){
                              + (UBER ? '' : row('Microphone', s.mic===0 ? '<span class="pill down">muted</span>'
                                                                        : '<span class="pill up">live</span>')
                                           + row('Button presses', s.presses)) : '')
-    + row('Companion', esc(s.version));
-  /* A receiver's knob: the headset is for listening, nothing more. */
-  for (const id of ['btboomrow','btboomnote','bttxnote']) $(id).hidden = UBER;
+    + chipRows(s);
+  /* A receiver's knob: the headset is for listening, nothing more. A
+     telephone's: no PTT, so no boom arm either. */
+  for (const id of ['btboomrow','btboomnote','bttxnote']) $(id).hidden = UBER || PHONE;
   $('btrxnote').hidden = !UBER;
+  $('btphonenote').hidden = !PHONE;
   $('btboom').checked = !!s.boom;
   $('btoff').hidden = s.link==='idle';
   $('btforget').hidden = !s.bda;
@@ -480,7 +614,7 @@ function slShow(s){
   SL=s;
   $('slout').hidden=s.logged_in; $('slin').hidden=!s.logged_in;
   if(s.email) $('slemail').value=s.email;
-  $('slon').checked=s.enabled;
+  $('slen').checked=s.enabled;
   $('slrows').innerHTML=row('Account',esc((s.callsign?s.callsign+' \u00b7 ':'')+s.email))
     + s.radios.map((x,i)=>row(esc(x.name||x.serial)+' <span class="pill up">SmartLink</span>',
         esc([x.model,x.status.replace(/_/g,' ')].filter(Boolean).join(' \u00b7 '))
@@ -501,7 +635,7 @@ $('sllogin').onclick=async()=>{
 };
 $('sllogout').onclick=()=>slPost('/api/smartlink/logout',{});
 $('slrefresh').onclick=()=>slPost('/api/smartlink',{refresh:'1'});
-$('slon').onchange=()=>slPost('/api/smartlink',{enabled:$('slon').checked?'1':'0'});
+$('slen').onchange=()=>slPost('/api/smartlink',{enabled:$('slen').checked?'1':'0'});
 /* The knob counts the configured radios first, then SmartLink's -- offered
    only when switched on. */
 async function slUse(i){
@@ -727,6 +861,139 @@ function pwHint(d,x){
   }
 }
 
+/* ---- the phone firmware: its SIP account, a call, the favourites ---- */
+let PHONE=false, phoneLoaded=false, FAVS=[];
+async function phoneLoad(){
+  phoneLoaded=true;
+  try{
+    const a=await (await fetch('/api/phone/account',{cache:'no-store'})).json();
+    $('puser').value=a.user||''; $('pdomain').value=a.domain||'';
+    $('pport').value=a.port||5060; $('pnumber').value=a.number||'';
+    $('ppass').placeholder=a.pass?'unchanged':'not set';
+  }catch(e){}
+  try{ FAVS=(await (await fetch('/api/phone/favourites',{cache:'no-store'})).json()).list||[] }catch(e){ FAVS=[] }
+  favRender(); phonePoll(); googlePoll(); histLoad();
+  /* Back from Google's sign-in: where its sync shows. */
+  if(location.hash==='#phonegoogle') $('phonegoogle').scrollIntoView();
+}
+/* The recent calls, each with a button to call it back: read when the page
+   opens and again whenever a call is over. */
+async function histLoad(){
+  let h; try{ h=await (await fetch('/api/phone/history',{cache:'no-store'})).json() }catch(e){ return }
+  const now=Date.now()/1000, mmss=n=>Math.floor(n/60)+':'+String(n%60).padStart(2,'0');
+  const ago=s=>s<60?'just now':s<3600?Math.floor(s/60)+' min ago':s<86400?Math.floor(s/3600)+' h ago':Math.floor(s/86400)+' d ago';
+  const calls=h.calls||[];
+  $('phist').innerHTML=calls.length?calls.map((c,i)=>row(
+      (c.kind==='missed'?'<span style="color:var(--bad)">missed</span>':esc(c.kind))
+        +(c.seconds?' '+mmss(c.seconds):'')+(c.when&&now>=c.when?' \u00b7 '+ago(now-c.when):''),
+      esc(c.name||c.number)+(c.name?' <span class="k">'+esc(c.number)+'</span>':'')
+        +' <button type="button" class="ghost" data-i="'+i+'">Call</button>')).join('')
+    :row('','no calls yet');
+  for(const b of document.querySelectorAll('#phist button')) b.onclick=()=>{
+    $('pdial').value=calls[+b.dataset.i].number; $('pcall').onclick() };
+}
+let histCall='';
+async function phonePoll(){
+  if(!PHONE) return;
+  let s; try{ s=await (await fetch('/api/phone',{cache:'no-store'})).json() }catch(e){ return }
+  if(s.call!==histCall){ if(s.call==='ended'||(s.call==='idle'&&histCall!=='')) histLoad(); histCall=s.call }
+  const mmss=n=>Math.floor(n/60)+':'+String(n%60).padStart(2,'0');
+  let call=s.call;
+  if(s.peer) call+=' \u00b7 '+esc(s.peer)+(s.peer_number&&s.peer_number!==s.peer?' ('+esc(s.peer_number)+')':'');
+  if(s.call==='talking') call+=' \u00b7 '+mmss(s.seconds);
+  if(s.call_why) call+=' \u00b7 '+esc(s.call_why);
+  $('phonerows').innerHTML=row('Registration',esc(s.registration)+(s.why?' \u00b7 '+esc(s.why):'')
+      +(s.public_ip?' \u00b7 seen as '+esc(s.public_ip):''))+row('Call',call)
+      +(s.muted?row('Microphone','muted'):'');
+}
+let googleLoaded=false, googleCount=-1;
+async function googlePoll(){
+  if(!PHONE) return;
+  let g; try{ g=await (await fetch('/api/phone/google',{cache:'no-store'})).json() }catch(e){ return }
+  $('googlerows').innerHTML=row('Account',g.signed_in?'signed in':'not signed in')
+      +row('Sync',esc(g.state)+(g.why?' \u00b7 '+esc(g.why):'')
+      +(g.minutes_ago>=0?' \u00b7 '+g.minutes_ago+' min ago':''));
+  if(!googleLoaded){
+    googleLoaded=true;
+    $('gcid').value=g.client_id||''; $('grelay').value=g.relay||'';
+    $('gcsec').placeholder=g.secret?'unchanged':'not set';
+  }
+  $('gsignin').disabled=!(g.client&&g.secret);
+  $('gsync').disabled=!g.signed_in;
+  $('gforget').hidden=!g.signed_in;
+  /* A sync brought a new list: the favourites above, again. */
+  if(g.state==='ok'&&g.count!==googleCount){
+    googleCount=g.count;
+    try{ FAVS=(await (await fetch('/api/phone/favourites',{cache:'no-store'})).json()).list||[]; favRender() }catch(e){}
+  }
+}
+$('gsave').onclick=async()=>{
+  const b=new URLSearchParams();
+  b.append('client_id',$('gcid').value.trim()); b.append('relay',$('grelay').value.trim());
+  if($('gcsec').value) b.append('client_secret',$('gcsec').value.trim());
+  let r; try{ r=await (await fetch('/api/phone/google',{method:'POST',body:b})).json() }catch(e){ r={} }
+  say(r.ok?'Google client saved.':'Could not save the client.',!!r.ok);
+  if(r.ok){ $('gcsec').value=''; $('gcsec').placeholder='unchanged' }
+  googlePoll();
+};
+$('gsignin').onclick=()=>{ location.href='/api/phone/google/signin' };
+$('gsync').onclick=async()=>{ await fetch('/api/phone/google/sync',{method:'POST'}); googleCount=-1;
+  say('Syncing the starred contacts\u2026',true); setTimeout(googlePoll,1500) };
+$('gforget').onclick=async()=>{ if(!confirm('Sign out of Google? The favourites stay as they are.')) return;
+  await fetch('/api/phone/google/forget',{method:'POST'}); googlePoll() };
+for(const b of document.querySelectorAll('#phonegoogle button.show')) b.onclick=()=>{
+  const p=b.previousElementSibling, s=p.type==='password'; p.type=s?'text':'password'; b.textContent=s?'Hide':'Show'; p.focus() };
+
+function favRender(){
+  const L=$('favlist'); L.innerHTML=FAVS.length?'':'<p class="note">None yet.</p>';
+  FAVS.forEach((f,i)=>{
+    const d=document.createElement('div'); d.className='sdr';
+    d.innerHTML=`<div class="grid">
+      <div><label>Name</label><input data-k="name" maxlength="23"></div>
+      <div><label>Number</label><input data-k="number" maxlength="23" inputmode="tel"></div></div>
+      <div class="sdrrow"><button type="button" class="ghost" data-act="rm">Remove</button></div>`;
+    for(const inp of d.querySelectorAll('input[data-k]')){
+      const k=inp.dataset.k; inp.value=f[k]||''; inp.oninput=()=>{ f[k]=inp.value };
+    }
+    d.querySelector('[data-act=rm]').onclick=()=>{ FAVS.splice(i,1); favRender() };
+    L.appendChild(d);
+  });
+  $('favadd').hidden=FAVS.length>=40;
+}
+$('favadd').onclick=()=>{ FAVS.push({name:'',number:''}); favRender();
+  const all=$('favlist').querySelectorAll('input[data-k=name]'); all[all.length-1].focus() };
+$('favsave').onclick=async()=>{
+  const keep=FAVS.filter(f=>(f.number||'').trim()), b=new URLSearchParams();
+  b.append('n',keep.length);
+  keep.forEach((f,i)=>{ b.append('name'+i,(f.name||'').trim()); b.append('number'+i,f.number.trim()) });
+  let r; try{ r=await (await fetch('/api/phone/favourites',{method:'POST',body:b})).json() }catch(e){ r={} }
+  say(r.ok?'Favourites saved: '+keep.length+'.':'Could not save the favourites.',!!r.ok);
+};
+$('psave').onclick=async()=>{
+  const b=new URLSearchParams();
+  b.append('user',$('puser').value.trim()); b.append('domain',$('pdomain').value.trim());
+  b.append('port',$('pport').value.trim()); b.append('number',$('pnumber').value.trim());
+  if($('ppass').value) b.append('pass',$('ppass').value);
+  let r; try{ r=await (await fetch('/api/phone/account',{method:'POST',body:b})).json() }catch(e){ r={} }
+  say(r.ok?'Account saved: the knob registers again.':'Could not save: '+(r.why||'?'),!!r.ok);
+  if(r.ok){ $('ppass').value=''; $('ppass').placeholder='unchanged' }
+  setTimeout(phonePoll,1500);
+};
+$('pcall').onclick=async()=>{
+  const n=$('pdial').value.trim(); if(!n) return;
+  let r; try{ r=await (await fetch('/api/phone/dial?number='+encodeURIComponent(n))).json() }catch(e){ r={} }
+  say(r.ok?'Calling '+n+'.':'Cannot call now: '+(r.why||'not registered, or a call is up'),!!r.ok);
+  setTimeout(phonePoll,500);
+};
+$('panswer').onclick=()=>fetch('/api/phone/answer').then(()=>setTimeout(phonePoll,500));
+$('phang').onclick=()=>fetch('/api/phone/hangup').then(()=>setTimeout(phonePoll,500));
+$('pdtmfsend').onclick=()=>{
+  const d=$('pdtmf').value.replace(/[^0-9*#A-D]/gi,''); if(d) fetch('/api/phone/dtmf?digits='+encodeURIComponent(d));
+  $('pdtmf').value='';
+};
+for(const b of document.querySelectorAll('#phonesec button.show')) b.onclick=()=>{
+  const p=b.previousElementSibling, s=p.type==='password'; p.type=s?'text':'password'; b.textContent=s?'Hide':'Show'; p.focus() };
+
 /* ---- the svxconnect firmware: the station and its certificate ---- */
 const SVXF={call:'scall',email:'semail',loc:'sloc',lat:'slat',lon:'slon',sw:'ssw',
             mon:'smon',deftg:'sdeftg',linger:'slinger',idle:'sidle',txto:'stxto'};
@@ -787,7 +1054,7 @@ $('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 $('save').onclick=async()=>{
   const b=new URLSearchParams();
   /* With a list of radios the one in use is saved with the list, below. */
-  for(const k of [...(LIST?[]:['host','port']),'vol','mic','user','otah','dim','blank']) b.append(k,$(k).value);
+  for(const k of [...(LIST?[]:['host','port']),'vol','mic','mich','user','otah','dim','blank']) b.append(k,$(k).value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);
     if($('rpass').value) b.append('rpass',$('rpass').value);
@@ -826,8 +1093,9 @@ $('reboot').onclick=async()=>{
 function poll(){ const t=setInterval(async()=>{
   try{ await fetch('/api/status'); clearInterval(t); location.reload() }catch(e){} },2000) }
 
-/* Where firmware is published; filled in from /api/config. */
-let FWBASE='';
+/* Where firmware is published; filled in from /api/config. OTAH: the
+   automatic check's hours, 0 = off -- the second chip's too. */
+let FWBASE='', OTAH=0;
 let webLatest=null;      /* manifest fetched by THIS PAGE, when it can */
 
 /* The page can reach the internet even when the knob cannot -- which over USB
@@ -937,7 +1205,8 @@ $('upload').onclick = async()=>{
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 / IC-9700 / IC-R8600 (LAN)'},
               {id:'xiegu',     name:'Xiegu X6100 / X6200 (LAN)', soon:true},
-              {id:'svxconnect',name:'SvxLink reflector (SVXConnect)'},
+              {id:'svxconnect',name:'SVXConnect (SvxLink reflectors)'},
+              {id:'phone',     name:'Telephone (SIP)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
               {id:'ubersdr',   name:'UberSDR (a web receiver)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
@@ -975,5 +1244,6 @@ $('switch').onclick=async()=>{
 
 load().then(webCheck).then(ota);
 refresh(); setInterval(refresh,2000); setInterval(ota,2000); setInterval(svxPoll,2000);
+setInterval(phonePoll,2000); setInterval(googlePoll,3000);
 </script>
 </body></html>

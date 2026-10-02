@@ -13,5 +13,7 @@ bool link_send(uint8_t type, const void *p, uint16_t n);
 /* A line for the knob's log, and this chip's console. */
 void link_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 uint32_t link_bad_frames(void);
+/* Waits (up to 100 ms) until all that was sent has left: before a restart. */
+void link_flush(void);
 
 #endif /* LINK_H */

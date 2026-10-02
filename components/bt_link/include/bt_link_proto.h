@@ -32,7 +32,11 @@
 #define BTL_SYNC1       0x5A
 #define BTL_BAUD        2000000
 #define BTL_MAX_PAYLOAD 1024
-#define BTL_PROTO       1          /* the version of this file's meaning */
+/* The version of this file's meaning: 2 brought the second chip's own
+ * firmware over the link (BTL_UPD_*). Each side only logs the other's:
+ * neither ever refuses a peer for it, and each ignores the types and the
+ * flag bits it does not know. */
+#define BTL_PROTO       2
 
 enum {
     /* either way */
@@ -62,12 +66,31 @@ enum {
     /* audio */
     BTL_AUDIO_DN     = 0x30,   /* knob -> headset's ear */
     BTL_AUDIO_UP     = 0x31,   /* headset's microphone -> knob */
+
+    /* The second chip's own firmware (companion/main/upd.c). Frozen once a
+     * knob ships: only new types, new flag bits, or fields appended at the end
+     * that a receiver may find missing (len says). Every knob firmware keeps
+     * speaking every dialect a shipped chip has. */
+    /* knob -> companion */
+    BTL_UPD_BEGIN    = 0x40,   /* btl_upd_begin_t: an image follows */
+    BTL_UPD_DATA     = 0x41,   /* u32 offset LE, then 1..BTL_UPD_CHUNK bytes of it */
+    BTL_UPD_END      = 0x42,   /* u32 size LE: all sent -- check it, switch, restart */
+    BTL_UPD_ABORT    = 0x43,   /* u8 BTL_UPD_WHY_*: stop, keep nothing */
+    BTL_UPD_KEEP     = 0x44,   /* the knob hears you and reads your INFO: keep the firmware on trial */
+    BTL_UPD_ASK      = 0x45,   /* say UPD_INFO now */
+    /* companion -> knob */
+    BTL_UPD_STATUS   = 0x48,   /* btl_upd_status_t: the answer to BEGIN, DATA, END, ABORT */
+    BTL_UPD_INFO     = 0x49,   /* btl_upd_info_t: after each HELLO either way, on ASK, on KEEP, after keeping */
 };
 
 /* HELLO's flags. A side sends HELLO with ASK when it starts, until it hears
  * the other; a HELLO with ASK is answered with one without. Either side can
- * restart without the other, and neither ever answers an answer. */
-enum { BTL_HELLO_ASK = 1 };
+ * restart without the other, and neither ever answers an answer.
+ *
+ * UPDATE, the companion's only: it takes its own firmware over this link --
+ * its bootloader can go back to the firmware before (its version is 2 or
+ * more), it runs from ota_0 or ota_1, and it has the receiver. */
+enum { BTL_HELLO_ASK = 1, BTL_HELLO_UPDATE = 2 };
 
 /* What the headset's link is doing. */
 enum { BTL_LINK_IDLE = 0, BTL_LINK_CONNECTING, BTL_LINK_CONNECTED };
@@ -100,6 +123,93 @@ typedef struct __attribute__((packed)) {
     int8_t   rssi;
     char     name[32];
 } btl_found_t;
+
+/* ---- the second chip's own firmware ------------------------------------
+ *
+ * The knob sends BEGIN; the chip answers READY (or REFUSED, why). DATA
+ * follows from offset 0, at most BTL_UPD_WINDOW frames unanswered; each one
+ * written is answered ACK{next}, and anything out of order ACK{next} again,
+ * from where the knob goes on. END: the chip checks the bytes' SHA-256, the
+ * image and its signature, switches to it and answers DONE, then restarts
+ * into it, on trial. It keeps it once the knob has heard its INFO saying so
+ * and sent KEEP -- or goes back to the firmware before, by itself. A
+ * repeated BEGIN or END is answered again: either side may lose a frame. */
+#define BTL_UPD_CHUNK  1020    /* 4 + 1020 = BTL_MAX_PAYLOAD */
+#define BTL_UPD_WINDOW 4       /* DATA unanswered, at most: ~4.1 kB, half the chip's 8 kB RX ring */
+
+typedef struct __attribute__((packed)) {
+    uint32_t size;             /* whole 4 kB sectors (signed) */
+    uint8_t  sha256[32];       /* of all `size` bytes */
+    uint8_t  app_sha[8];       /* its app_elf_sha256 (offset 0xB0), first 8 bytes: its identity */
+    char     version[16];      /* offset 0x30, NUL-padded */
+} btl_upd_begin_t;             /* 60 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t  state;            /* BTL_UPD_READY.. */
+    uint8_t  why;              /* BTL_UPD_WHY_* */
+    uint32_t next;             /* bytes written: the offset wanted next */
+    int32_t  err;              /* esp_err_t or 0 */
+} btl_upd_status_t;            /* 10 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t  boot_ver;         /* esp_bootloader_desc_t.version: 2+ goes back */
+    uint8_t  slot;             /* 0 ota_0, 1 ota_1, 0xFF neither */
+    uint8_t  state;            /* BTL_RUN_* */
+    uint8_t  flags;            /* BTL_INFO_RELEASE */
+    uint8_t  app_sha[8];       /* the running firmware */
+    uint8_t  back;             /* BTL_BACK_*: why the last new firmware went back, while its slot holds it */
+    uint8_t  back_sha[8];
+    char     back_ver[16];
+} btl_upd_info_t;              /* 37 */
+
+/* UPD_STATUS's state. */
+enum {
+    BTL_UPD_READY = 1,         /* BEGIN taken: DATA from 0 */
+    BTL_UPD_ACK,               /* written up to next: DATA from there */
+    BTL_UPD_DONE,              /* checked and switched to: restarting into it (next is its size) */
+    BTL_UPD_REFUSED,           /* BEGIN not taken: why */
+    BTL_UPD_FAILED,            /* the image or the flash failed: why, err */
+    BTL_UPD_STOPPED,           /* given up, nothing kept: why */
+};
+/* Why: in UPD_STATUS, and the knob's ABORT. */
+enum {
+    BTL_UPD_WHY_NONE = 0,
+    BTL_UPD_WHY_HEADSET,       /* a headset connecting, connected, in a call, or a scan */
+    BTL_UPD_WHY_TRIAL,         /* the firmware running is on trial: none until it is kept */
+    BTL_UPD_WHY_BUSY,          /* another image is coming in; from the knob, an over or a call */
+    BTL_UPD_WHY_SIZE,          /* not whole sectors, more than a slot, or not all of it came */
+    BTL_UPD_WHY_BEFORE,        /* this image went back here before, for a real failure */
+    BTL_UPD_WHY_BOOTLOADER,    /* this chip's bootloader cannot go back: no updates until the bench */
+    BTL_UPD_WHY_FLASH,         /* the flash said no: err */
+    BTL_UPD_WHY_SHA,           /* the bytes are not BEGIN's SHA-256 */
+    BTL_UPD_WHY_IMAGE,         /* the image did not verify (its form, hash, chip, signature): err */
+    BTL_UPD_WHY_PROJECT,       /* a good image, but not of this chip's firmware */
+    BTL_UPD_WHY_QUIET,         /* 15 s without DATA or END */
+    BTL_UPD_WHY_KNOB,          /* the knob's ABORT */
+    BTL_UPD_WHY_MEMORY,        /* no room for the transfer */
+    BTL_UPD_WHY_NO_SESSION,    /* DATA, END or ABORT with no update going */
+    BTL_UPD_WHY_RESTARTED,     /* the other side restarted mid-transfer */
+};
+/* INFO's state: the firmware running. */
+enum {
+    BTL_RUN_OTHER = 0,         /* otadata says neither: no entry, or one a firmware without rollback wrote */
+    BTL_RUN_VALID,             /* kept */
+    BTL_RUN_TRIAL,             /* on trial: KEEP it, or it goes back by itself */
+};
+enum { BTL_INFO_RELEASE = 1 }; /* a release (tools/release.sh): the knob keeps it up to date by itself */
+/* INFO's back: why the last new firmware went back to the one before. */
+enum {
+    BTL_BACK_NONE = 0,
+    BTL_BACK_POWER,            /* the power (or the EN pin) went during its trial or its start: it may come again */
+    BTL_BACK_QUIET,            /* no knob kept it within 2 minutes: it may come again, a try */
+    BTL_BACK_CRASHED,          /* it crashed on trial -- real from here on: never taken again */
+    BTL_BACK_HUNG,             /* it hung on trial (the RTC watchdog) */
+    BTL_BACK_EARLY,            /* it crashed or hung before its trial could begin, or would not load at all */
+    BTL_BACK_GUARD,            /* kept, then it crashed 3 times in a row */
+};
+_Static_assert(sizeof(btl_upd_begin_t) == 60 && sizeof(btl_upd_status_t) == 10 &&
+               sizeof(btl_upd_info_t) == 37, "frozen");
+_Static_assert(4 + BTL_UPD_CHUNK == BTL_MAX_PAYLOAD, "DATA fills a frame");
 
 /* CRC-16/CCITT-FALSE. */
 static inline uint16_t btl_crc16(uint16_t crc, const uint8_t *p, size_t n)

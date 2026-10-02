@@ -207,7 +207,8 @@ static struct {
      * reads (no memories over CI-V) and the modulation inputs (no such
      * setting). An IC-705 refuses neither; a radio behind wfview's server
      * that is not one may. */
-    bool       no_mem, no_modin;
+    bool       no_mem, no_modin, no_probe;
+    bool       probing;                  /* the model has wfview's numbers to read */
     bool       aud_quiet;          /* the radio's audio has stopped (AUDIO_BEST_EFFORT) */
     uint32_t   t_token, t_civ_rx, t_civ_open, t_session, t_retry, t_aud_rx;
     bool       waiting_busy;       /* the radio still holds our last session */
@@ -520,6 +521,17 @@ static void on_refused(uint8_t c, uint8_t sub, uint8_t len)
         S.mem_state = RADIO_MEM_OFF;
         taskEXIT_CRITICAL(&S_LOCK);
         ESP_LOGW(TAG, "the radio has no memories over CI-V: no memory mode");
+    } else if (c == 0x07 && sub == 0xD2 && len == 2) {           /* MAIN or SUB? */
+        static bool said;
+        if (!said) {
+            said = true;
+            ESP_LOGW(TAG, "the radio will not say whether MAIN or SUB is selected: "
+                          "no overs from the knob, which cannot tell what it would key");
+        }
+    } else if (c == 0x1A && sub == 0x05 && len == 4 && C.probing &&
+               !C.no_probe) {                                     /* wfview's, read */
+        C.no_probe = true;
+        ESP_LOGW(TAG, "the radio refuses wfview's modulation-input numbers: not read again");
     } else if (c == 0x1A && sub == 0x05 && len == 4 && !C.no_modin) {  /* read */
         C.no_modin = true;
         ESP_LOGW(TAG, "the radio has no modulation-input setting over CI-V: "
@@ -578,17 +590,23 @@ static void civ_openclose(bool open)
 static uint8_t bcd(unsigned v) { return (uint8_t)(((v / 10) % 10) << 4 | (v % 10)); }
 static unsigned unbcd(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
 
-/* Frequencies are five BCD bytes, least significant first. */
-static int64_t freq_from(const uint8_t *p)
+/* Frequencies are five BCD bytes, least significant first -- six on the
+ * IC-905 from 10 GHz, where five stop at 9.999 999 999 GHz (wfview's
+ * icomcommander.cpp: "On the IC-905 10GHz+ uses 6 bytes for freq!"). */
+static int64_t freq_from_n(const uint8_t *p, size_t n)
 {
     int64_t f = 0, m = 1;
-    for (int i = 0; i < 5; i++, m *= 100) f += unbcd(p[i]) * m;
+    for (size_t i = 0; i < n && i < 6; i++, m *= 100) f += unbcd(p[i]) * m;
     return f;
 }
+static int64_t freq_from(const uint8_t *p) { return freq_from_n(p, 5); }
 
-static void freq_to(uint8_t *p, int64_t f)
+/* Five bytes, or six from 10 GHz as wfview sends them: how many it wrote. */
+static size_t freq_to(uint8_t *p, int64_t f)
 {
-    for (int i = 0; i < 5; i++, f /= 100) p[i] = bcd((unsigned)(f % 100));
+    const size_t n = f >= 10000000000LL ? 6 : 5;
+    for (size_t i = 0; i < n; i++, f /= 100) p[i] = bcd((unsigned)(f % 100));
+    return n;
 }
 
 /* Levels and meters are 0-255 as two BCD bytes, most significant first. */
@@ -622,6 +640,11 @@ static const cal_t CAL_S_7610[] = { {0,-54}, {11,-48}, {21,-42}, {34,-36}, {50,-
                                     {59,-24}, {75,-18}, {93,-12}, {103,-6}, {124,0},
                                     {145,10}, {160,20}, {183,30}, {204,40}, {222,50},
                                     {246,60} };
+
+/* The IC-905's S-meter: the IC-705's up to S9, S9+60 at the top rather than
+ * +64 (wfview's IC-905.rig; IC-R8600.rig has the same). */
+static const cal_t CAL_S_905[] = { {0,-54}, {10,-48}, {30,-36}, {60,-24}, {90,-12},
+                                   {120,0}, {241,60} };
 
 /* ---------------------------------------------------------------- models */
 
@@ -664,10 +687,25 @@ typedef struct model {
      * with a transmitter -- 1C 00, RF power, RIT -- which it refuses. */
     bool           rx_only;
     bool           squelch;         /* a squelch the dial sets, 14 03 */
+    /* The IC-905's: from 10 GHz a frequency is six bytes in 00, 03 and 05. */
+    bool           freq6;
+    /* ...its power from 2 GHz, and from 10 GHz in milliwatts -- 0.5 W, which
+     * the dial shows as %: 0 = as the band below. */
+    uint16_t       max_w_2g, max_mw_10g;
+    bool           no_rit;          /* no 21 xx: RIT neither read nor set */
+    /* wfview's modulation-input numbers on a radio nobody here has tried:
+     * read and logged against modin_names, never written (modin_voice 0). */
+    uint16_t       probe_voice, probe_data;
 } model_t;
 
 static const char *const MODIN_705[]  = { "MIC", "USB", "MIC+USB", "WLAN" };
 static const char *const MODIN_7610[] = { "MIC", "ACC", "MIC+ACC", "USB", "MIC+USB", "LAN" };
+/* By value as wfview's rig files give them: for the log only, nothing is
+ * switched on these until a radio has confirmed them (probe_voice). */
+static const char *const MODIN_7300MK2[] = { "MIC", "USB", "ACC", "MIC+USB", "MIC+ACC", "LAN" };
+static const char *const MODIN_905[]     = { "MIC", "USB", "MIC+USB", "LAN" };
+static const char *const MODIN_7760[]    = { "MIC", "USB", "LINE", "ACC", "MIC+USB", "MIC+LINE",
+                                             "MIC+ACC", "MIC+USB+ACC", "MIC+LINE+ACC", "LAN" };
 
 static const model_t MODELS[] = {
     /* 30 kHz-470 MHz; two preamps on HF and 6 m, a single one on 2 m and
@@ -688,6 +726,21 @@ static const model_t MODELS[] = {
       .modin_voice = 0x0091, .modin_data = 0x0092, .modin_lan = 5,
       .modin_names = MODIN_7610, .n_modin_names = 6,
       .n_rx = 2, .n_ant = 2, .rx_ant = true, .max_w = 100, .tuner = true },
+    /* The IC-7760: 30 kHz-60 MHz and 200 W, two receivers -- MAIN and SUB as
+     * on the IC-7610, whose commands, unprefixed, and S-meter it has; its Po
+     * about the IC-705's table twenty times over (exact to 100 W and at
+     * 200 W). From wfview's rig file alone, not yet tried on one: its
+     * modulation inputs are only read (1A 05 01 29 and 01 30) -- an over goes
+     * out on whatever input it is set to, so DATA OFF MOD and DATA1 MOD to LAN
+     * on the radio for the knob's microphone -- and its four antennas, their
+     * RX ANT input and its tuner are left alone until they have been: they
+     * switch relays. Its memories, as the IC-7610's, are not read. */
+    { .name = "IC-7760", .f_min = 30000, .f_max = 60000000,
+      .preamps = 2,
+      .cal_s = CAL_S_7610, .n_cal_s = NCAL(CAL_S_7610), .po_scale = 20,
+      .probe_voice = 0x0129, .probe_data = 0x0130,
+      .modin_names = MODIN_7760, .n_modin_names = 10,
+      .n_rx = 2, .max_w = 200 },
     /* The IC-R8600, a receiver: 10 kHz-3 GHz, one preamp, ANT1-3. Its
      * memories are not the IC-705's groups; it echoes every command it is
      * sent, which civ_frame() leaves alone like any echo. */
@@ -709,6 +762,42 @@ static const model_t MODELS[] = {
       .modin_names = MODIN_7610, .n_modin_names = 6,
       .memories = true, .mem_by_band = true,
       .n_rx = 1, .max_w = 100, .max_w_uhf = 75, .max_w_shf = 10 },
+    /* The IC-7300MK2: 30 kHz-74.8 MHz -- HF, 6 m and 4 m -- 100 W, one
+     * receiver, P.AMP1 and P.AMP2. Its S-meter is the IC-705's and its Po the
+     * IC-705's ten times over (wfview's rig file; 4 m may be 50 W on some
+     * versions, unconfirmed). Not yet tried on one, so nothing past the
+     * dial's own is switched: not its modulation inputs (wfview's 1A 05 00 84
+     * and 85, only read: overs go out on whatever input it is set to), nor
+     * its tuner, squelch or RX ANT. Its memories, channels 1-99 with no
+     * group, are a layout on_memory() does not read. Named in full, its
+     * modulation-input numbers are read (wfview's, logged against the radio's
+     * menu); matched only as "IC-7300" -- an IC-7300 behind wfview's server,
+     * where those numbers are other settings -- they are not. */
+    { .name = "IC-7300MK2", .f_min = 30000, .f_max = 74800000,
+      .preamps = 2,
+      .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 10,
+      .probe_voice = 0x0084, .probe_data = 0x0085,
+      .modin_names = MODIN_7300MK2, .n_modin_names = 6,
+      .n_rx = 1, .max_w = 100 },
+    { .name = "IC-7300", .f_min = 30000, .f_max = 74800000,
+      .preamps = 2,
+      .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 10,
+      .n_rx = 1, .max_w = 100 },
+    /* The IC-905: 2 m, 70 cm and 23 cm at 10 W, 13 cm and 6 cm at 2 W, 3 cm
+     * (10 GHz, with its CX-10G) at 0.5 W -- POWER and the meter in the band's
+     * watts, the 0.5 W as %. From 10 GHz a frequency takes six bytes (freq6,
+     * from wfview). One receiver, one preamp, no antenna to choose, no tuner,
+     * no RIT. Not yet tried on one: its memories (a 69-byte layout of its
+     * own) are not read, and its modulation inputs (wfview's 1A 05 01 26 /
+     * 01 27) are only read -- DATA OFF MOD and DATA MOD to LAN on the radio
+     * for the knob's microphone. */
+    { .name = "IC-905", .f_min = 144000000, .f_max = 10500000000LL,
+      .preamps = 1,
+      .cal_s = CAL_S_905, .n_cal_s = NCAL(CAL_S_905), .po_scale = 1,
+      .freq6 = true, .no_rit = true,
+      .probe_voice = 0x0126, .probe_data = 0x0127,
+      .modin_names = MODIN_905, .n_modin_names = 4,
+      .n_rx = 1, .max_w = 10, .max_w_2g = 2, .max_mw_10g = 500 },
     /* The X6100 and X6200: 0.5-54 MHz behind an IC-705's CI-V, one preamp.
      * Their server has neither the memories nor the modulation inputs. */
     { .name = "X6", .f_min = 500000, .f_max = 54000000,
@@ -736,19 +825,25 @@ static const model_t *model_now(void)
     return m ? m : &MODEL_OTHER;
 }
 
-/* RF power's full scale on the band the radio is on. */
-static uint16_t max_w_at(const model_t *m, int64_t f)
+/* RF power's full scale on the band the radio is on, in watts. */
+static float po_w_at(const model_t *m, int64_t f)
 {
-    if (m->max_w_shf && f >= 1000000000LL) return m->max_w_shf;
-    if (m->max_w_uhf && f >= 400000000LL)  return m->max_w_uhf;
+    if (m->max_mw_10g && f >= 10000000000LL) return m->max_mw_10g / 1000.0f;
+    if (m->max_w_2g && f >= 2000000000LL)    return m->max_w_2g;
+    if (m->max_w_shf && f >= 1000000000LL)   return m->max_w_shf;
+    if (m->max_w_uhf && f >= 400000000LL)    return m->max_w_uhf;
     return m->max_w;
 }
+
+/* ...as the dial shows it: whole watts, 0 = in % (the IC-905's 0.5 W). */
+static uint16_t max_w_at(const model_t *m, int64_t f) { return (uint16_t)po_w_at(m, f); }
 
 /* The Po meter, times CAL_PO's 10 W: the band's full scale where it varies. */
 static float po_scale_now(void)
 {
     const model_t *m = model_now();
-    return m->max_w_uhf ? max_w_at(m, S.f_server) / 10.0f : m->po_scale;
+    return (m->max_w_uhf || m->max_w_shf || m->max_w_2g || m->max_mw_10g)
+           ? po_w_at(m, S.f_server) / 10.0f : m->po_scale;
 }
 
 static const model_t *model_for(const char *name)
@@ -771,6 +866,9 @@ static const mode_map_t MODES[] = {
     /* The IC-R8600's synchronous AM, as it reports it; "sam" set on the
      * others is their AM, the entry above. */
     { "sam", 0x11, 0 },
+    /* The IC-905's and IC-9700's digital data and ATV: named on the glass,
+     * not offered by it. */
+    { "dd", 0x22, 0 }, { "atv", 0x23, 0 },
 };
 
 static const char *mode_name(uint8_t mode, uint8_t data)
@@ -989,12 +1087,16 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
     const size_t   bn  = n - 6;
     C.t_civ_rx = t;
     uint8_t asked = 0, asked_sub = 0xFF, asked_len = 0;
-    const bool answer = f[2] == CIV_US && await_pop(cmd, &asked, &asked_sub, &asked_len);
+    /* A frame prefixed 29 <receiver> (the IC-7760's kind, should it report
+     * that way) answers nothing we asked: popping for it would drain the
+     * queue, and later refusals would go to the wrong command. */
+    const bool answer = f[2] == CIV_US && cmd != 0x29 &&
+                        await_pop(cmd, &asked, &asked_sub, &asked_len);
 
     switch (cmd) {
     case 0x00: case 0x03:                            /* frequency */
         if (bn >= 5) {
-            on_freq(freq_from(b), t);
+            on_freq(freq_from_n(b, model_now()->freq6 && bn >= 6 ? 6 : 5), t);
             if (S.link == RADIO_LINK_GREETING && S.have_freq) {
                 S.link = RADIO_LINK_READY;
                 S.t_ready_ms = t;
@@ -1034,6 +1136,10 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
                 ESP_LOGW(TAG, "the radio has no modulation-input setting over CI-V: "
                               "overs go out on whatever input it is set to");
             C.no_modin = true;
+            if (model_now()->probe_voice && !C.no_probe)
+                ESP_LOGW(TAG, "%s answers wfview's modulation-input numbers short: "
+                              "they are not its own", C.radio_name);
+            C.no_probe = true;
         } else if (bn >= 4 && b[0] == 0x05 && model_now()->modin_voice && !C.modin_switched) {
             const uint16_t which = (uint16_t)(b[1] << 8 | b[2]);
             if (which == model_now()->modin_voice) C.modin_off = b[3];   /* modulation inputs */
@@ -1042,6 +1148,22 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
                 C.modin_logged = true;
                 ESP_LOGI(TAG, "modulation inputs: %s, data %s",
                          modin_name(C.modin_off), modin_name(C.modin_d1));
+            }
+        } else if (bn >= 4 && b[0] == 0x05 && model_now()->probe_voice) {
+            /* wfview's numbers on a radio nobody here has tried: what they
+             * hold, for its owner to hold against the radio's own menu. */
+            const model_t *m = model_now();
+            const uint16_t which = (uint16_t)(b[1] << 8 | b[2]);
+            if (which == m->probe_voice) C.modin_off = b[3];
+            if (which == m->probe_data)  C.modin_d1 = b[3];
+            if (!C.modin_logged && C.modin_off != 0xFF && C.modin_d1 != 0xFF) {
+                C.modin_logged = true;
+                ESP_LOGW(TAG, "%s: DATA OFF MOD reads %02X (%s), DATA MOD %02X (%s) -- "
+                              "1A 05 %04X and %04X, wfview's numbers, read only: "
+                              "the knob switches neither",
+                         C.radio_name, (unsigned)C.modin_off, modin_name(C.modin_off),
+                         (unsigned)C.modin_d1, modin_name(C.modin_d1),
+                         (unsigned)m->probe_voice, (unsigned)m->probe_data);
             }
         } else if (bn >= 5 && b[0] == 0x00) {        /* a memory channel */
             on_memory(b + 1, bn - 1);
@@ -1281,7 +1403,7 @@ static bool session_begin(uint32_t t)
     C.modin_off = C.modin_d1 = 0xFF;
     C.modin_switched = C.modin_logged = false;
     C.civ_addr = CIV_RADIO;
-    C.no_mem = C.no_modin = C.aud_quiet = false;
+    C.no_mem = C.no_modin = C.no_probe = C.probing = C.aud_quiet = false;
     C.waiting_busy = false;
     C.t_session = t;
     taskENTER_CRITICAL(&S_LOCK);
@@ -1337,8 +1459,11 @@ static void on_control(const uint8_t *d, int n, uint32_t t)
         const model_t *m = model_for(C.radio_name);
         ESP_LOGI(TAG, "radio: %s, CI-V 0x%02x, audio %02x%02x rx, %02x%02x tx%s",
                  C.radio_name, c[0x52], c[0x53], c[0x54], c[0x55], c[0x56],
-                 m->name[0] ? "" : " -- not one this knob knows: receive and "
-                                   "tuning only, overs on its own input");
+                 !m->name[0] ? " -- not one this knob knows: receive and "
+                               "tuning only, overs on its own input"
+                 : !m->rx_only && !m->modin_voice
+                             ? " -- its modulation input is not switched: overs carry "
+                               "whatever input the radio has selected" : "");
         taskENTER_CRITICAL(&S_LOCK);
         S.model = m;
         S.have_ant = S.have_rx = false;
@@ -1365,6 +1490,7 @@ static void on_control(const uint8_t *d, int n, uint32_t t)
             }
         }
         if (!m->modin_voice) C.no_modin = true;
+        C.probing = m->probe_voice != 0;
         return;
     }
     if (n == PKT_CONNINFO && type != 0x01) {
@@ -1443,7 +1569,7 @@ static void civ_hello(uint32_t t)
     CIV(0x26, 0x00);              /* mode, data, filter */
     if (!S.mem_mode) CIV(0x1A, 0x03);   /* filter width; refused on a memory */
     const model_t *m = model_now();
-    if (!m->rx_only) CIV(0x21, 0x00);   /* RIT */
+    if (!m->rx_only && !m->no_rit) CIV(0x21, 0x00);   /* RIT */
     CIV(0x16, 0x12);              /* AGC */
     CIV(0x16, 0x02);              /* preamp */
     CIV(0x14, 0x02);              /* RF gain */
@@ -1465,6 +1591,10 @@ static void civ_hello(uint32_t t)
     if (m->modin_voice && !C.no_modin) {  /* as the operator has them */
         modin_read(m->modin_voice);
         modin_read(m->modin_data);
+    }
+    if (m->probe_voice && !C.no_probe) {  /* wfview's numbers: read, never set */
+        modin_read(m->probe_voice);
+        modin_read(m->probe_data);
     }
 }
 
@@ -1921,6 +2051,9 @@ static void poll_civ(uint32_t t)
                  * microphone, silent. So ask until they are known. */
                 if (m->modin_voice && !C.no_modin && C.modin_off == 0xFF) modin_read(m->modin_voice);
                 if (m->modin_voice && !C.no_modin && C.modin_d1 == 0xFF)  modin_read(m->modin_data);
+                /* ...and wfview's, where the knob only reads them, the same. */
+                if (m->probe_voice && !C.no_probe && C.modin_off == 0xFF) modin_read(m->probe_voice);
+                if (m->probe_voice && !C.no_probe && C.modin_d1 == 0xFF)  modin_read(m->probe_data);
                 break;
             case 5: if (m->n_rx > 1) CIV(0x07, 0xD2); break;
             case 6: if (m->n_ant) CIV(0x12); break;
@@ -1953,9 +2086,8 @@ static void tune_out(uint32_t t)
     }
     taskEXIT_CRITICAL(&S_LOCK);
     if (fire) {
-        uint8_t b[6] = { 0x05 };
-        freq_to(b + 1, want);
-        civ_send(b, sizeof b);
+        uint8_t b[7] = { 0x05 };
+        civ_send(b, 1 + freq_to(b + 1, want));
     }
 }
 
@@ -2267,6 +2399,7 @@ void radio_set_tuner(bool on)
 
 void radio_set_rit(int32_t hz)
 {
+    if (model_now()->no_rit) return;             /* the IC-905: none */
     int32_t a = hz < 0 ? -hz : hz;
     if (a > 9999) a = 9999;
     taskENTER_CRITICAL(&S_LOCK);
@@ -2278,6 +2411,13 @@ void radio_set_rit(int32_t hz)
 
 void radio_goto_freq(int64_t hz)
 {
+    /* Only where the radio tunes: the page's API takes any frequency, and a
+     * radio sent one it lacks refuses it -- the dial jumped there and back. */
+    const model_t *m = model_now();
+    if (hz < m->f_min || hz > m->f_max) {
+        ESP_LOGW(TAG, "%lld Hz is outside where the radio tunes", (long long)hz);
+        return;
+    }
     uint32_t t = now_ms();
     taskENTER_CRITICAL(&S_LOCK);
     tune_assign(&S.tune, hz);
@@ -2357,6 +2497,7 @@ void radio_get_status(radio_status_t *o)
     o->have_squelch = S.have_squelch;
     o->squelch_pct  = (uint8_t)((S.squelch * 100u + 127u) / 255u);
     o->rx_only      = m->rx_only;
+    o->no_rit       = m->no_rit;
     o->have_levels  = S.have_rf_gain && S.have_rf_power;
     o->rf_gain_pct  = (uint8_t)((S.rf_gain  * 100u + 127u) / 255u);
     o->rf_power_pct = (uint8_t)((S.rf_power * 100u + 127u) / 255u);

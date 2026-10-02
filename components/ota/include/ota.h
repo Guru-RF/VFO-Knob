@@ -14,6 +14,12 @@
  * update is accepted (CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT), which is
  * what makes it safe to point a transceiver's control head at the internet.
  *
+ * The one exception, on purpose: the second chip's firmware (below), which
+ * the knob fetches and sends without asking. It never transmits, it goes
+ * only while no headset is connected, the chip checks its signature, and
+ * the chip goes back to the firmware before by itself if it does not settle
+ * (bt_link.h).
+ *
  * Nothing is burned into eFuse and Secure Boot is not enabled, so a device can
  * always still be recovered over USB. The signature protects the update path,
  * not the hardware.
@@ -45,7 +51,8 @@ esp_err_t ota_init(void);
  * RAM has room, then ota_clear_due(). Only looks -- whether to install is
  * asked on the dial, not decided here. Only ever useful on WiFi: over the USB
  * cable the device has no route out, and the configuration page does the
- * checking instead. */
+ * checking instead. 0 also stops the look for the second chip's firmware
+ * that rides on every check (below). */
 esp_err_t ota_set_interval(uint32_t hours);
 bool      ota_check_due(void);
 void      ota_clear_due(void);
@@ -114,6 +121,74 @@ const char *ota_base_url(void);
 /* Where every radio's channel lives, for the page's switch to another radio's
  * firmware. */
 const char *ota_root_url(void);
+
+/* Whether version `candidate` is newer than `running` ("v1.18.0" or
+ * "1.18.0"; the "v" ignored). One that does not parse never is. */
+bool ota_is_newer(const char *candidate, const char *running);
+
+/* The second chip's firmware (companion/, bt_link.h): never installed on
+ * this chip. The most an image of it can be: its app slot. */
+#define OTA_COMPANION_SLOT 0x1E0000
+
+/* An image of the second chip's firmware, by its form: whole 4 kB sectors,
+ * no more than its slot, an ESP32's (not this chip's), the companion's
+ * project, and signed -- the signature's sector last. Its version into
+ * `ver`, its identity (app_elf_sha256's first 8 bytes) into `app_sha8`. The
+ * signature itself the second chip checks, against the key of the firmware
+ * it runs. */
+bool ota_companion_image_ok(const uint8_t *img, size_t n, char *ver, size_t cap, uint8_t app_sha8[8]);
+
+/* Where the second chip's firmware is to be had: firmware/companion/ on the
+ * update server -- never in index.json's "firmwares" -- and the SD card's
+ * VFO-KNOB/COMPANIO.BIN. Its manifest names the release: */
+typedef struct {
+    char     version[32];   /* "1.18.0" */
+    char     file[64];      /* in the channel: vfo-knob-companion-1.18.0.bin */
+    char     sha256[72];    /* of the image, hex */
+    uint8_t  app_sha[8];    /* its identity: app_elf_sha256's first 8 bytes */
+    uint32_t size;          /* 0: not said */
+    bool     known;         /* a release is known: the fields above */
+    bool     from_card;     /* ...from the SD card's manifest, not the server's */
+    bool     route;         /* the knob's last check reached the update server */
+    bool     looked;        /* ...and there was one, since the knob started */
+} ota_comp_offer_t;
+void ota_companion_offer(ota_comp_offer_t *out);
+
+/* The look rides on the knob's own check (ota_start_check(false)): after
+ * this firmware's manifest, on its connection, firmware/companion/
+ * manifest.json -- while the automatic check is on (ota_set_interval: 0
+ * stops this look too). Without the server, the SD card's manifest is the
+ * offer: this reads it, no network, the card mounted meanwhile. It never
+ * replaces one the server gave. */
+esp_err_t ota_companion_card_look(void);
+
+/* The offer's image into PSRAM, on the check's worker: from the SD card when
+ * it has that one, else -- `network` -- downloaded. `in_session`: a radio's
+ * client runs beside it, so the download stops when internal RAM runs short
+ * (12 kB free, a 4 kB block), and nothing is written to the card; without,
+ * the boot window, a download also leaves a copy on the card. Checked: its
+ * sha256 against the manifest's, its form (ota_companion_image_ok), its
+ * version and identity against the manifest's. Started, not done:
+ * ota_companion_busy() says when, ota_companion_take() has the image.
+ * ESP_ERR_INVALID_STATE while one is fetched or waits to be taken, or this
+ * chip's flash is written; ESP_ERR_NOT_FOUND with no offer. */
+esp_err_t ota_companion_fetch(bool network, bool in_session);
+bool      ota_companion_busy(void);
+/* A fetch going stops at its next read (8 s at most), for `why`, which its
+ * log line gives ("its time was up", "an over"). False: none was going. */
+bool      ota_companion_stop(const char *why);
+/* The image fetched, and its SHA-256: the caller's to free, or to hand to
+ * bt_link_update_start(). NULL when there is none. */
+uint8_t  *ota_companion_take(size_t *len, uint8_t sha256[32]);
+
+/* An install or an upload is writing this chip's flash, or about to. */
+bool ota_writing(void);
+
+/* Called just before this chip's flash is written -- an install, a switch,
+ * an upload -- from the task about to write it: the second chip's update
+ * steps aside (bt_link_update_stop). A fetch of its image stops too, and
+ * the install waits for it, 10 s at most. */
+void ota_set_flash_hook(void (*before)(void));
 
 /* Push an image in from the browser instead of pulling it from GitHub.
  *

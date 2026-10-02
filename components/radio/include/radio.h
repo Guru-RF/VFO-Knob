@@ -47,6 +47,15 @@ typedef enum {
     RADIO_MEM_EMPTY,         /* nothing is programmed in this group */
 } radio_mem_state_t;
 
+/* A telephone's call (the phone firmware). */
+typedef enum {
+    RADIO_CALL_IDLE = 0,
+    RADIO_CALL_OUT,          /* placed; call_why "ringing" once it rings there */
+    RADIO_CALL_IN,           /* ringing here */
+    RADIO_CALL_UP,           /* talking */
+    RADIO_CALL_ENDED,        /* over, for a moment: call_why says how */
+} radio_call_t;
+
 typedef struct {
     radio_link_t link;
     uint8_t    ptt_state;      /* ptt_state_t */
@@ -101,6 +110,7 @@ typedef struct {
     /* A receiver (the IC-R8600): nothing to key -- the slab says RECEIVER,
      * and neither the glass nor a headset's button or boom arm keys. */
     bool       rx_only;
+    bool       no_rit;         /* no RIT to offer (the IC-905) */
     uint8_t    n_rx, rx;       /* receivers (0 or 1 = just the one); 0 MAIN, 1 SUB */
     uint8_t    n_ant, ant;     /* antennas to choose from (0 = no choice); 0 = ANT1 */
     bool       has_rx_ant;     /* ...each also with the RX ANT input */
@@ -144,6 +154,18 @@ typedef struct {
     char       last_talker[16];/* the last one heard, while nobody is */
     uint32_t   talker_ms;      /* how long they have been talking, or since */
     bool       tg_locked;      /* no switching, by the dial or by priority */
+    /* A telephone (the phone firmware), on the reflector's face: its
+     * favourites are the talkgroups -- tg the chosen one, from 1, tg_name its
+     * name -- and server is our own number. Then the call: */
+    uint8_t    call;           /* radio_call_t */
+    char       call_why[16];   /* "ringing", "busy", "declined"; "" */
+    uint32_t   call_ms;        /* talking, or ringing, for so long */
+    bool       call_hd;        /* the call in G.722: HD voice */
+    char       peer[32];       /* who: a name, else the number */
+    char       peer_num[24];
+    char       fav_num[24];    /* the chosen favourite's number */
+    uint8_t    n_fav;
+    uint8_t    n_missed;       /* calls missed, not yet looked at */
     bool       muted;          /* nothing heard */
     float      rx_level_db;    /* the received audio, dBFS */
     char       server[40];     /* the reflector, as the face names it */

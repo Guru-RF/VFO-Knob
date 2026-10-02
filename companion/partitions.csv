@@ -1,8 +1,16 @@
-# Two app slots, so the knob can one day update this chip over the UART
-# between them; 4 MB of embedded flash.
-# Name,   Type, SubType, Offset,   Size
-nvs,      data, nvs,     0x9000,   0x5000
-otadata,  data, ota,     0xe000,   0x2000
-phy_init, data, phy,     0x10000,  0x1000
-ota_0,    app,  ota_0,   0x20000,  0x1E0000
-ota_1,    app,  ota_1,   0x200000, 0x1E0000
+# Two app slots: the knob updates this chip over the UART between them
+# (main/upd.c), the slot not running taking each new firmware; 4 MB of
+# embedded flash.
+#
+# Frozen once a knob is bench-flashed: an update over the link never writes
+# the partition table (nor the bootloader), so every firmware to come must
+# fit this one, unchanged -- tools/release.sh refuses a release whose table
+# is not the one published with the first (firmware/companion/bench/). The
+# last 128 kB are a core dump's, kept for a firmware that turns core dumps on.
+# Name,   Type, SubType,  Offset,   Size
+nvs,      data, nvs,      0x9000,   0x5000
+otadata,  data, ota,      0xe000,   0x2000
+phy_init, data, phy,      0x10000,  0x1000
+ota_0,    app,  ota_0,    0x20000,  0x1E0000
+ota_1,    app,  ota_1,    0x200000, 0x1E0000
+coredump, data, coredump, 0x3E0000, 0x20000

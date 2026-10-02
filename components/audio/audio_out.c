@@ -10,6 +10,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
@@ -60,8 +61,31 @@ void audio_out_set_tap(audio_out_tap_t tap) { s_tap = tap; }
 
 void audio_out_stats(audio_stats_t *st) { if (st) *st = s_stats; }
 
+static volatile bool s_dac_mute;
+static volatile size_t s_trim;      /* frames to keep, the oldest dropped; 0: none */
+
 void audio_out_kick(void)  { s_kick = true; }
 void audio_out_flush(void) { s_flush = true; }
+void audio_out_dac_mute(bool on) { s_dac_mute = on; }
+void audio_out_trim(size_t keep_frames) { s_trim = keep_frames ? keep_frames : 1; }
+
+/* The jack's DMA, watched: the buffers it has finished, and the longest it
+ * went between two. */
+static volatile uint32_t     s_dma_done;
+static volatile int64_t      s_dma_at, s_dma_gap;
+static audio_out_hold_hook_t s_hold_hook;
+
+void audio_out_set_hold_hook(audio_out_hold_hook_t fn) { s_hold_hook = fn; }
+
+static bool on_dma_sent(i2s_chan_handle_t h, i2s_event_data_t *e, void *ctx)
+{
+    (void)h; (void)e; (void)ctx;
+    const int64_t now = esp_timer_get_time();
+    if (s_dma_at && now - s_dma_at > s_dma_gap) s_dma_gap = now - s_dma_at;
+    s_dma_at = now;
+    s_dma_done++;
+    return false;
+}
 
 size_t audio_out_queued(void)
 {
@@ -170,8 +194,21 @@ static void mix_block(void)
     }
     const audio_out_tap_t tap = s_tap;
     if (tap) tap(out, MIX_FRAMES);
+    if (s_dac_mute) memset(out, 0, sizeof out);
     size_t written = 0;
     i2s_channel_write(s_tx, out, sizeof out, &written, portMAX_DELAY);
+}
+
+/* Where the playback task waits, when it waits long: its queue, the headset's
+ * tap, the jack's DMA. Logged only past 40 ms, at most every 10 s. */
+static void stall_note(const char *what, int64_t us)
+{
+    static int64_t t_said;
+    if (us < 40000) return;
+    const int64_t now = esp_timer_get_time();
+    if (now - t_said < 10000000) return;
+    t_said = now;
+    ESP_LOGW(TAG, "playback held %lld ms in %s", (long long)(us / 1000), what);
 }
 
 static void play_task(void *arg)
@@ -199,6 +236,19 @@ static void play_task(void *arg)
             s_playing = false;
         }
         size_t buffered = RING_BYTES - xRingbufferGetCurFreeSize(s_ring);
+        /* Far behind: the oldest dropped down to what is to be kept, the
+         * playing going on -- no pre-roll again, no hole. */
+        if (s_trim) {
+            const size_t keep = s_trim * 4;
+            s_trim = 0;
+            while (buffered > keep) {
+                size_t got = 0;
+                void  *q = xRingbufferReceiveUpTo(s_ring, &got, 0, buffered - keep);
+                if (!q) break;
+                vRingbufferReturnItem(s_ring, q);
+                buffered -= got;
+            }
+        }
         if (!s_playing) {
             /* A kick starts whatever is there; one that finds nothing is
              * spent, so it cannot cut the next stream's pre-roll short. */
@@ -212,8 +262,10 @@ static void play_task(void *arg)
         }
 
         size_t n = 0;
+        const int64_t t_q = esp_timer_get_time();
         uint8_t *p = xRingbufferReceiveUpTo(s_ring, &n, pdMS_TO_TICKS(60),
                                             sizeof s_conv);
+        stall_note("its queue", esp_timer_get_time() - t_q);
         if (!p) {
             /* Ran dry: go back to buffering rather than stuttering along the
              * bottom of the ring. */
@@ -233,9 +285,21 @@ static void play_task(void *arg)
         }
 
         const audio_out_tap_t tap = s_tap;
+        const int64_t t_tap = esp_timer_get_time();
         if (tap) tap(smp, count / 2);
+        const int64_t tap_held = esp_timer_get_time() - t_tap;
+        stall_note("the headset's tap", tap_held);
+        if (tap_held > 60000 && s_hold_hook) s_hold_hook("tap", t_tap, tap_held, 0, 0);
+        if (s_dac_mute) memset(smp, 0, n);         /* the headset's alone */
         size_t written = 0;
+        const uint32_t done0 = s_dma_done;
+        s_dma_gap = 0;
+        const int64_t t_i2s = esp_timer_get_time();
         i2s_channel_write(s_tx, smp, n, &written, portMAX_DELAY);
+        const int64_t held = esp_timer_get_time() - t_i2s;
+        stall_note("the jack's DMA", held);
+        if (held > 60000 && s_hold_hook)
+            s_hold_hook("jack", t_i2s, held, s_dma_done - done0, s_dma_gap);
         vRingbufferReturnItem(s_ring, p);
     }
 }
@@ -282,6 +346,8 @@ esp_err_t audio_out_init(void)
         },
     };
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_tx, &sc), TAG, "std");
+    const i2s_event_callbacks_t cbs = { .on_sent = on_dma_sent };
+    i2s_channel_register_event_callback(s_tx, &cbs, NULL);
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_tx), TAG, "enable");
 
     s_stats.sample_rate = AUDIO_RATE_HZ;

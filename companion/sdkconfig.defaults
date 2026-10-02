@@ -24,3 +24,25 @@ CONFIG_BT_HFP_AG_ENABLE=y
 CONFIG_BT_HFP_CLIENT_ENABLE=n
 CONFIG_BT_HFP_AUDIO_DATA_PATH_HCI=y
 CONFIG_BT_HFP_WBS_ENABLE=y
+
+# The knob updates this chip over the UART (main/upd.c). The bootloader is
+# written once, at the bench, never over the link (CMakeLists.txt refuses a
+# build without these).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_BOOTLOADER_PROJECT_VER=2
+# The bootloader's 9 s RTC watchdog stays on into the app: a firmware on
+# trial feeds it from its main loop, so a hang goes back too (main/upd.c).
+CONFIG_BOOTLOADER_WDT_DISABLE_IN_USER_CODE=y
+# Signed with the S3's key, RSA-3072 (Secure Boot v2 format, no secure boot):
+# a new firmware is checked against the one running, which needs the chip's
+# revision 3 or later (both knobs' are v3.1).
+CONFIG_ESP32_REV_MIN_3=y
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="../ota_signing_key.pem"
+# The image checks (RSA, a 1216-byte signature block, mbedTLS contexts) run
+# on the main task when the crash guard goes back: at 3584 they overflow
+# (the S3 measured the same path, webcfg.c above c.stack_size). ~90 kB of
+# heap is free at the lowest.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

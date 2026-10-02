@@ -65,7 +65,15 @@ esp_err_t hal_touch_init(void)
         .x_max         = BOARD_LCD_H_RES,
         .y_max         = BOARD_LCD_V_RES,
         .rst_gpio_num  = BOARD_PIN_TOUCH_RST,
-        .int_gpio_num  = BOARD_PIN_TOUCH_INT,
+        /* Not its INT pin (BOARD_PIN_TOUCH_INT): given one, esp_lvgl_port reads
+         * the touch on the interrupt, in its task, holding its tick's mutex
+         * inside the LVGL lock. The tick (esp_timer, priority 22) waits on that
+         * mutex every 5 ms, lends its priority, and the LVGL task keeps it for
+         * the whole render that follows, until the LVGL lock goes: the audio
+         * (priority 11, same core) was held for as long as a finger was on the
+         * glass, up to 334 ms (2026-10-01). Polled instead, on LVGL's read
+         * timer (ui.c, TOUCH_POLL_MS), under the LVGL lock alone. */
+        .int_gpio_num  = GPIO_NUM_NC,
         .levels        = { .reset = 0, .interrupt = 0 },
         /* No mirroring here: esp_lvgl_port applies the display rotation to the
          * touch stream as well, so doing it twice would cancel out. */

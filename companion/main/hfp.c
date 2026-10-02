@@ -14,14 +14,17 @@
  * clock needs (rs.h), and the microphone to the knob's rate on its way out. */
 #include "hfp.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "air.h"
 #include "bt_link_proto.h"
 #include "esp_bt.h"
 #include "esp_bt_device.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
+#include "esp_heap_caps.h"
 #include "esp_hf_ag_api.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -31,6 +34,7 @@
 #include "link.h"
 #include "nvs.h"
 #include "rs.h"
+#include "upd.h"
 
 static const char *TAG = "hfp";
 
@@ -61,7 +65,10 @@ static struct {
     bool          audio_pending;
     int           audio_tries, page_fails;
     int64_t       next_page_us, next_audio_us;
+    int           conns, conn_audios;       /* headset links since boot; audio opens on this one */
+    int64_t       conn_us;                  /* when this one was made */
 } S = { .spk = 10, .mic = 10, .dn_rate = 24000, .up_rate = 24000 };
+static bool s_hold;                         /* an update coming in: the headset not called (s_mx) */
 
 #define LOCK()   xSemaphoreTake(s_mx, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_mx)
@@ -76,6 +83,13 @@ static int         s_name_next;             /* the next nameless headset to ask 
 static rs_t           s_dn, s_up;           /* knob -> headset, headset -> knob */
 static TaskHandle_t   s_pump;
 static volatile bool  s_audio_on, s_mic_on, s_first;
+static uint32_t       s_session;            /* audio opens since boot (s_mx) */
+static struct {                             /* the last one's, for its reports (s_mx) */
+    esp_bd_addr_t bda;
+    int           conns, audios;
+    int64_t       conn_us;
+} s_open;
+static volatile int   s_knob_hellos;        /* the knob's, asking: since boot */
 static volatile int32_t s_credit;           /* bytes heard from the headset, not yet answered */
 static bool           s_primed;
 static float          s_avg;                /* the downlink's fill, smoothed */
@@ -228,12 +242,12 @@ static uint32_t hf_outgoing(uint8_t *p, uint32_t sz)
 }
 
 /* Hands the stack its frames, and the microphone to the knob -- off the
- * stack's own task, which must never wait on the UART. */
+ * stack's own task, which must never wait on the UART. Nor this one on the
+ * console: its reports are the main task's (reports(), below). */
 static void pump_task(void *arg)
 {
     (void)arg;
     static int16_t out[512];
-    int64_t t_stat = 0;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
         if (!s_audio_on) continue;
@@ -241,16 +255,6 @@ static void pump_task(void *arg)
         size_t n;
         while ((n = rs_pull_some(&s_up, out, sizeof out / sizeof out[0])) > 0)
             if (s_mic_on) link_send(BTL_AUDIO_UP, out, (uint16_t)(n * 2));
-        const int64_t now = esp_timer_get_time();
-        if (now - t_stat > 30000000) {
-            t_stat = now;
-            link_log("audio: %lu in, %lu out, fill %lu (target %lu), %lu dry, %lu skips, %.0f ppm, "
-                     "%lu bad frames on the link",
-                     (unsigned long)s_frames_in, (unsigned long)s_frames_out,
-                     (unsigned long)rs_fill(&s_dn), (unsigned long)s_dn_target,
-                     (unsigned long)s_under, (unsigned long)s_skips,
-                     (s_dn.step / s_dn.nominal - 1.0) * 1e6, (unsigned long)link_bad_frames());
-        }
     }
 }
 
@@ -272,6 +276,7 @@ static void audio_open(bool msbc)
     audio_rates(msbc);
     s_first  = true;
     s_under = s_skips = s_frames_in = s_frames_out = 0;
+    s_session++;
     esp_hf_ag_register_data_callback(hf_incoming, hf_outgoing);
     s_audio_on = true;
 }
@@ -420,6 +425,24 @@ static void gap_cb(esp_bt_gap_cb_event_t ev, esp_bt_gap_cb_param_t *p)
     case ESP_BT_GAP_KEY_REQ_EVT:
         esp_bt_gap_ssp_passkey_reply(p->key_req.bda, false, 0);
         break;
+    case ESP_BT_GAP_READ_RSSI_DELTA_EVT:
+        air_signal(p->read_rssi_delta.stat == ESP_BT_STATUS_SUCCESS, p->read_rssi_delta.rssi_delta);
+        break;
+    case ESP_BT_GAP_MODE_CHG_EVT:
+        /* A call keeps the link awake (air.c); one that sleeps all the same,
+         * or is woken as its audio opens, says so. The interval says whose
+         * sleep: 31-94 ms is the stack's own for a call, its policy never
+         * cleared; 250-500 ms its own between calls, asked a moment before
+         * this one opened; anything else most likely the headset's. */
+        if (s_audio_on) {
+            const esp_bt_pm_mode_t m = p->mode_chg.mode;
+            if (m == ESP_BT_PM_MD_SNIFF)
+                link_log("the link went to sniff during the call, every %u ms",
+                         (unsigned)(p->mode_chg.interval * 5u / 8u));
+            else
+                link_log("the link went %s during the call", m == ESP_BT_PM_MD_ACTIVE ? "active" : "to another mode");
+        }
+        break;
     case ESP_BT_GAP_PIN_REQ_EVT: {
         /* An old headset: they all take 0000. */
         esp_bt_pin_code_t pin;
@@ -472,6 +495,9 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
         S.audio_tries   = 0;
         S.audio_pending = false;
         S.next_audio_us = now + 800000;     /* a moment for the headset to settle */
+        S.conns++;
+        S.conn_us       = now;
+        S.conn_audios   = 0;
         if (!S.remembered || !same(S.mem, S.bda) || strcmp(S.mem_name, S.name)) {
             memcpy(S.mem, S.bda, 6);
             strlcpy(S.mem_name, S.name, sizeof S.mem_name);
@@ -482,6 +508,7 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
         char name[32];
         strlcpy(name, S.name, sizeof name);
         UNLOCK();
+        upd_headset_came();                 /* a firmware on trial: proven enough to keep */
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
         if (need_name) esp_bt_gap_read_remote_name((uint8_t *)bda);
         link_log("headset connected: %s (%s)", name[0] ? name : "?", bda_str(bda, b));
@@ -530,7 +557,7 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
     hfp_report_state();
 }
 
-static void on_audio_state(esp_hf_audio_state_t st)
+static void on_audio_state(esp_hf_audio_state_t st, const uint8_t *bda)
 {
     LOCK();
     switch (st) {
@@ -540,6 +567,10 @@ static void on_audio_state(esp_hf_audio_state_t st)
         S.audio         = msbc ? BTL_AUDIO_MSBC_16K : BTL_AUDIO_CVSD_8K;
         S.audio_pending = false;
         S.audio_tries   = 0;
+        memcpy(s_open.bda, bda, 6);         /* for the reports, with audio_open()'s count */
+        s_open.conns    = S.conns;
+        s_open.conn_us  = S.conn_us;
+        s_open.audios   = ++S.conn_audios;
         audio_open(msbc);
         UNLOCK();
         link_log("audio open: %s", msbc ? "mSBC, 16 kHz" : "CVSD, 8 kHz");
@@ -568,7 +599,7 @@ static void hf_cb(esp_hf_cb_event_t ev, esp_hf_cb_param_t *p)
         on_connection(p->conn_stat.remote_bda, p->conn_stat.state);
         break;
     case ESP_HF_AUDIO_STATE_EVT:
-        on_audio_state(p->audio_stat.state);
+        on_audio_state(p->audio_stat.state, p->audio_stat.remote_addr);
         break;
     case ESP_HF_CIND_RESPONSE_EVT:
         esp_hf_ag_cind_response(p->cind_rep.remote_addr,
@@ -767,15 +798,189 @@ void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
     }
 }
 
+/* ---- the reports -------------------------------------------------------- */
+
+/* The audio's numbers, every 30 s from each audio open and once more at its
+ * close, with the air's (air.c); at each open, the link it got and the
+ * history behind it. All from the main task, the lowest, a line a tick: a
+ * line is longer than the console UART's 128-byte FIFO, and the console
+ * waits on it a few milliseconds a line, more for one right after another
+ * -- never in the pump, which feeds the headset. */
+enum { J_AUDIO = 1, J_FROM = 2, J_TO = 4, J_LINK = 8, J_HISTORY = 16 };   /* in this order */
+static unsigned s_jobs;
+static struct {                             /* the audio's numbers, as taken */
+    uint32_t in, out, fill, target, under, skips, bad;
+    long     ppm;
+} s_snap;
+static struct {                             /* the history of the audio open */
+    int     conns, audios;
+    int64_t conn_us;
+} s_hist;
+
+void hfp_knob_hello(void) { s_knob_hellos++; }
+
+/* 42 s, 17 min, 5 h 12 min. */
+static const char *dur_str(char *s, size_t n, int64_t us)
+{
+    const unsigned long t = (unsigned long)(us / 1000000);
+    if (t < 60)        snprintf(s, n, "%lu s", t);
+    else if (t < 3600) snprintf(s, n, "%lu min", t / 60);
+    else               snprintf(s, n, "%lu h %lu min", t / 3600, t / 60 % 60);
+    return s;
+}
+
+/* Counted since the audio opened; the bad frames are the UART's, from the
+ * knob since this chip started -- not the air's. */
+static void log_audio(void)
+{
+    link_log("audio: %lu in, %lu out, fill %lu (target %lu), %lu dry, %lu skips, %ld ppm, "
+             "%lu bad frames on the wire from the knob since boot",
+             (unsigned long)s_snap.in, (unsigned long)s_snap.out, (unsigned long)s_snap.fill,
+             (unsigned long)s_snap.target, (unsigned long)s_snap.under, (unsigned long)s_snap.skips,
+             s_snap.ppm, (unsigned long)s_snap.bad);
+}
+
+/* What a bad connection asks of its past: a fresh one, or one of many on a
+ * chip up all night through the knob's restarts? Memory running short? The
+ * knob's hellos are its starts, and its losses of this chip (15 s unheard). */
+static void log_history(void)
+{
+    char up[24], age[24];
+    const int64_t  now    = esp_timer_get_time();
+    const uint32_t caps   = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    const int      hellos = s_knob_hellos;
+    link_log("history: up %s, %d knob hello%s, connection %d (%s old), audio %d on it; "
+             "heap %u kB free, %u kB in one piece, %u kB lowest",
+             dur_str(up, sizeof up, now), hellos, hellos == 1 ? "" : "s", s_hist.conns,
+             dur_str(age, sizeof age, now - s_hist.conn_us), s_hist.audios,
+             (unsigned)(heap_caps_get_free_size(caps) / 1024),
+             (unsigned)(heap_caps_get_largest_free_block(caps) / 1024),
+             (unsigned)(heap_caps_get_minimum_free_size(caps) / 1024));
+}
+
+/* The numbers, taken now, all at once; their lines follow, one a tick. */
+static void report(void)
+{
+    s_snap.in     = s_frames_in;
+    s_snap.out    = s_frames_out;
+    s_snap.fill   = rs_fill(&s_dn);
+    s_snap.target = s_dn_target;
+    s_snap.under  = s_under;
+    s_snap.skips  = s_skips;
+    s_snap.ppm    = lround((s_dn.step / s_dn.nominal - 1.0) * 1e6);
+    s_snap.bad    = link_bad_frames();
+    if (air_take(s_snap.in, s_snap.out)) s_jobs |= J_AUDIO | J_FROM | J_TO;
+}
+
+static void reports(void)
+{
+    static uint32_t seen;                   /* the audio open reported on */
+    static bool     open, asked;
+    static int64_t  t_stat;
+    LOCK();
+    const bool     up  = S.audio != BTL_AUDIO_NONE;
+    const uint32_t ses = s_session;
+    const __typeof__(s_open) o = s_open;
+    UNLOCK();
+    const int64_t now = esp_timer_get_time();
+    if (open && (!up || ses != seen)) {
+        /* Closed: the part since the last report -- unless it opened again
+         * already, and the counts are the new one's. */
+        open = false;
+        if (ses == seen) report();
+    }
+    if (up && ses != seen) {
+        seen           = ses;
+        open           = true;
+        asked          = false;
+        t_stat         = now;
+        s_hist.conns   = o.conns;
+        s_hist.audios  = o.audios;
+        s_hist.conn_us = o.conn_us;
+        air_opened(o.bda);
+        s_jobs |= J_LINK | J_HISTORY;
+    }
+    if (open) {
+        /* Every 30 s from the open; the signal asked a second before, to be
+         * fresh in the report. */
+        if (!asked && now - t_stat >= 29000000) {
+            asked = true;
+            air_ask_signal();
+        }
+        if (now - t_stat >= 30000000) {
+            t_stat = now;
+            asked  = false;
+            report();
+        }
+    }
+    const unsigned j = s_jobs & -s_jobs;    /* the first due */
+    s_jobs &= ~j;
+    switch (j) {
+    case J_AUDIO:   log_audio();    break;
+    case J_FROM:    air_log_from(); break;
+    case J_TO:      air_log_to();   break;
+    case J_LINK:    air_log_link(); break;
+    case J_HISTORY: log_history();  break;
+    default:                        break;
+    }
+}
+
+/* ---- an update of this chip's firmware coming in (upd.c) ---------------- */
+
+static bool idle_locked(void)
+{
+    return S.link == BTL_LINK_IDLE && !S.scanning && S.audio == BTL_AUDIO_NONE && !S.audio_pending && !S.call;
+}
+
+bool hfp_idle(void)
+{
+    LOCK();
+    const bool idle = idle_locked();
+    UNLOCK();
+    return idle;
+}
+
+bool hfp_try_hold(void)
+{
+    LOCK();
+    const bool idle = idle_locked();
+    if (idle) s_hold = true;
+    UNLOCK();
+    return idle;
+}
+
+void hfp_hold(bool on)
+{
+    LOCK();
+    s_hold = on;
+    if (!on) {
+        /* Never sooner than it was due: a call held back goes out a
+         * second from now, one due later keeps its time. */
+        const int64_t soon = esp_timer_get_time() + 1000000;
+        if (S.next_page_us < soon) S.next_page_us = soon;
+    }
+    UNLOCK();
+}
+
+bool hfp_audio_open(void)
+{
+    LOCK();
+    const bool open = S.audio != BTL_AUDIO_NONE;
+    UNLOCK();
+    return open;
+}
+
 /* ---- now and then ------------------------------------------------------- */
 
 void hfp_tick(void)
 {
     char b[18];
+    reports();
     const int64_t now = esp_timer_get_time();
     LOCK();
-    /* Call the headset, as a phone does its own when it comes in reach. */
-    if (S.link == BTL_LINK_IDLE && S.have && !S.scanning && !S.user_off && now >= S.next_page_us) {
+    /* Call the headset, as a phone does its own when it comes in reach --
+     * not while an update comes in: the transfer would only stop for it. */
+    if (S.link == BTL_LINK_IDLE && S.have && !S.scanning && !S.user_off && now >= S.next_page_us && !s_hold) {
         S.link         = BTL_LINK_CONNECTING;
         memcpy(S.conn, S.bda, 6);
         S.next_page_us = now + 30000000;    /* until the answer says otherwise */
@@ -811,9 +1016,23 @@ void hfp_init(void)
     esp_bt_controller_config_t bc = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&bc));
     ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT));
+    /* What the headset hears is this chip's transmit power, which the
+     * controller keeps between 0 and +3 dBm unless told -- the low end of
+     * Bluetooth -- and the link has little to spare: a headset 30 cm away
+     * came in here up to 20 dB under the controller's target (2026-10-02).
+     * That is its signal, not ours, but the path loses as much either way,
+     * so ours reaches it as faintly. +3 to +9 dBm: the floor where the
+     * ceiling was, the ceiling the chip's most; the controller's power
+     * control works between them. What it gains is heard in the headset
+     * only: the reports' numbers are all of the way here, which the
+     * headset's own power decides. Before anything transmits, as the call
+     * asks. */
+    esp_err_t pe = esp_bredr_tx_power_set(ESP_PWR_LVL_P3, ESP_PWR_LVL_P9);
+    if (pe != ESP_OK) ESP_LOGW(TAG, "transmit power left as it was: %s", esp_err_to_name(pe));
     esp_bluedroid_config_t cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bluedroid_init_with_cfg(&cfg));
     ESP_ERROR_CHECK(esp_bluedroid_enable());
+    air_prefer_master();
 
     esp_bt_gap_register_callback(gap_cb);
     esp_bt_gap_set_device_name(DEVICE_NAME);
@@ -840,6 +1059,9 @@ void hfp_init(void)
 
     xTaskCreatePinnedToCore(pump_task, "pump", 4096, NULL, 13, &s_pump, 1);
     char b[18];
-    ESP_LOGI(TAG, "Bluetooth up as %s (%s)%s%s", DEVICE_NAME, bda_str(esp_bt_dev_get_address(), b),
+    esp_power_level_t lo = ESP_PWR_LVL_N0, hi = ESP_PWR_LVL_P3;
+    esp_bredr_tx_power_get(&lo, &hi);
+    ESP_LOGI(TAG, "Bluetooth up as %s (%s), transmitting %+d to %+d dBm%s%s", DEVICE_NAME,
+             bda_str(esp_bt_dev_get_address(), b), -12 + 3 * (int)lo, -12 + 3 * (int)hi,
              S.remembered ? ", headset " : "", S.remembered ? S.mem_name : "");
 }

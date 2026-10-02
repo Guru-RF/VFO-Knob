@@ -11,7 +11,7 @@
  * of the talker. LVGL's built-in symbol set has no lock. Regenerate with the
  * options above rather than edit. */
 
-#if VFO_RADIO_SVXCONNECT
+#if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
