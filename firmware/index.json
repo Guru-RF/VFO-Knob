@@ -22,8 +22,13 @@
     },
     {
       "radio": "svxconnect",
-      "name": "SvxLink",
+      "name": "SVXConnect",
       "version": "1.17.0"
+    },
+    {
+      "radio": "phone",
+      "name": "Telephone",
+      "version": "1.18.0"
     },
     {
       "radio": "setup",
