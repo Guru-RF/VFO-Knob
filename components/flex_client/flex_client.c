@@ -55,6 +55,7 @@
 
 #include "audio_in.h"
 #include "audio_out.h"
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -114,6 +115,8 @@ static const char *TAG = "flex";
 
 /* VITA-49 packet class codes (the low half of the class id's second word). */
 #define PCC_METER      0x8002
+#define PCC_FFT        0x8003        /* the hidden panadapter's bins... */
+#define PCC_WFALL      0x8004        /* ...and its waterfall's tiles */
 #define PCC_OPUS       0x8005
 
 /* ----------------------------------------------------------------- state */
@@ -169,8 +172,13 @@ typedef struct {
 
 enum { KIND_VOICE = 0, KIND_TUNE, KIND_ATU };
 
-
-static state_t      S;
+/* This file's state and buffers are in PSRAM (EXT_RAM_BSS_ATTR): internal
+ * RAM is what the WiFi driver sends and receives from, and a SmartLink
+ * session with a headset ran short of it. None of them is touched by DMA, by
+ * an interrupt, or with the flash cache off -- only by tasks, and what goes
+ * to the network or to NVS is copied on the way. The lock stays internal:
+ * the atomic instruction a spinlock takes does not work on PSRAM. */
+EXT_RAM_BSS_ATTR static state_t S;
 static portMUX_TYPE S_LOCK = portMUX_INITIALIZER_UNLOCKED;
 
 /* One meter the radio has defined: where it measures, and what. */
@@ -189,7 +197,7 @@ typedef enum {
 /* The session: owned by the task, never touched from outside -- save the
  * few words the codec task reads to send the microphone (radio, ufd,
  * tx_stream), each written once per session. */
-static struct {
+EXT_RAM_BSS_ATTR static struct {
     char       host[48];
     uint16_t   port;
     struct sockaddr_in radio;
@@ -240,6 +248,10 @@ static struct {
      * may come after the radio is back on receive. */
     bool       atu_waiting;
     uint32_t   t_atu;
+    /* For the 10 s report: what else comes by UDP, by class -- meters, the
+     * hidden panadapter's FFT and waterfall, the rest -- and the longest
+     * silence between any two datagrams at all. */
+    uint32_t   udp_n[4], udp_b[4], udp_gap_max, udp_last;
 } C;
 
 /* What the other tasks asked for, carried out by the flex task. */
@@ -247,7 +259,21 @@ typedef enum { Q_MODE, Q_FILTER, Q_AGC, Q_GAIN, Q_RIT, Q_ATU_MEM } req_kind_t;
 typedef struct { uint8_t kind; int32_t a, b; char s[8]; } req_t;
 static QueueHandle_t   s_req;
 static RingbufHandle_t s_rxq;        /* [count][Opus bytes], flex -> codec */
-static uint8_t s_udp[1600];
+EXT_RAM_BSS_ATTR static uint8_t s_udp[1600];
+
+/* Allocations that failed, anywhere -- the WiFi driver's buffers among them,
+ * which is how a receive gap for want of internal RAM shows -- for the 10 s
+ * report. In IRAM, and its counts internal: it may run in an interrupt, or
+ * with the flash cache off. */
+static volatile uint32_t s_af_n, s_af_dma, s_af_max;
+
+static IRAM_ATTR void on_alloc_failed(size_t size, uint32_t caps, const char *fn)
+{
+    (void)fn;
+    s_af_n++;
+    if (caps & MALLOC_CAP_DMA) s_af_dma++;
+    if (size > s_af_max) s_af_max = size;
+}
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -488,6 +514,8 @@ static void on_meters(const uint8_t *p, size_t n, uint32_t t)
 
 static void on_udp(const uint8_t *p, int n, uint32_t t)
 {
+    if (C.udp_last && t - C.udp_last > C.udp_gap_max) C.udp_gap_max = t - C.udp_last;
+    C.udp_last = t;
     if (n < 28) return;
     const uint32_t w0 = (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
     const unsigned type = w0 >> 28;
@@ -518,8 +546,13 @@ static void on_udp(const uint8_t *p, int n, uint32_t t)
         S.rx_last = t;
         S.rx_packets++;
         if (xRingbufferSend(s_rxq, item, 1 + pn, 0) != pdTRUE) S.rx_lost++;
+        return;                                       /* counted as audio */
     }
-    /* Anything else is the hidden panadapter's. */
+    /* The meters, and the rest -- the hidden panadapter's FFT and waterfall,
+     * which tame_pan turns down -- counted by class for the 10 s report. */
+    const int k = pcc == PCC_METER ? 0 : pcc == PCC_FFT ? 1 : pcc == PCC_WFALL ? 2 : 3;
+    C.udp_n[k]++;
+    C.udp_b[k] += (uint32_t)n;
 }
 
 /* ------------------------------------------------------------ the slice */
@@ -559,7 +592,7 @@ typedef struct {
     bool     tx;
     uint32_t pan;
 } slc_t;
-static slc_t s_slc[N_SLC];
+EXT_RAM_BSS_ATTR static slc_t s_slc[N_SLC];
 
 /* Whose slices the dial works: our own station's, or the one we dial for. */
 static uint32_t owner_wanted(void) { return C.bound ? C.bound : C.handle; }
@@ -1088,6 +1121,7 @@ static void session_end(const char *why, bool polite)
     if (C.ufd >= 0) close(C.ufd);
     C.fd = C.ufd = -1;
     C.udp_ok = false;
+    C.udp_last = 0;                                   /* the next session's first is no gap */
     C.greeted = C.registered = C.listed = C.creating = C.streams_asked = C.tx_claimed = false;
     C.pan_tamed = C.wf_tamed = false;
     /* Who is on the radio is listed afresh; what we chose to be is kept. */
@@ -1493,8 +1527,8 @@ static void on_tcp(const char *d, int n, uint32_t t)
  * on the air. */
 static void tx_frame(OpusEncoder *enc)
 {
-    static int16_t mic[FRAME];
-    static uint8_t pkt[28 + OPUS_MAX];
+    EXT_RAM_BSS_ATTR static int16_t mic[FRAME];
+    EXT_RAM_BSS_ATTR static uint8_t pkt[28 + OPUS_MAX];
     C.over_frames++;
     if (!audio_in_take(mic, FRAME)) {
         memset(mic, 0, sizeof mic);
@@ -1555,7 +1589,7 @@ static void codec_task(void *arg)
     opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY(TX_COMPLEXITY));
     opus_encoder_ctl(enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
 
-    static int16_t pcm[2 * 2 * FRAME];
+    EXT_RAM_BSS_ATTR static int16_t pcm[2 * 2 * FRAME];
     uint8_t last = 0;
     bool    have_last = false;
     int64_t next_tx = 0;
@@ -1769,9 +1803,18 @@ static void flex_task(void *arg)
     (void)arg;
     C.backoff_ms = 500;
     C.t_retry = now_ms();
-    static char tcp[1460];
+    EXT_RAM_BSS_ATTR static char tcp[1460];
+
+    /* Internal RAM at its lowest, for the 10 s report: each report takes its
+     * own 10 s from the heaps' low-water marks and starts them afresh (the
+     * monitor), so the lowest since boot is kept here -- until now, then the
+     * lowest of every report's. Nothing else in this firmware reads those
+     * marks; what did would see the last 10 s, not the time since boot. */
+    unsigned low_boot = (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    heap_caps_monitor_local_minimum_free_size_start();
 
     uint32_t loop_last = 0, rep_at = 0, rep_pkts = 0, rep_full = 0, rep_conc = 0;
+    uint32_t rep_af = 0, rep_af_dma = 0;
     for (;;) {
         uint32_t t = now_ms();
         if (loop_last && t - loop_last > S.loop_gap_max) S.loop_gap_max = t - loop_last;
@@ -1779,19 +1822,53 @@ static void flex_task(void *arg)
         /* Robotic or gappy receive audio: the network, or the knob? Packets
          * that stop arriving for half a second, with this loop and the codec
          * running on, are the network's; a loop or codec that stalls is the
-         * knob's (and the UDP mailbox, 16 packets, overflows behind it). */
+         * knob's (and the UDP mailbox, 16 packets, overflows behind it). And
+         * what internal RAM -- which WiFi sends and receives from -- has
+         * left: now, in one piece, at its lowest. */
         if (!rep_at) rep_at = t + 10000;
         if ((int32_t)(t - rep_at) >= 0) {
             rep_at = t + 10000;
+            const unsigned low = (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+            heap_caps_monitor_local_minimum_free_size_start();   /* the next 10 s' lowest */
+            if (low < low_boot) low_boot = low;
             if (S.rx_packets != rep_pkts)
                 ESP_LOGI(TAG, "rx audio, 10 s: %lu packets, arriving %lu ms apart at most; "
-                         "this loop %lu ms, the codec %lu ms; %lu ring full, %lu concealed; decode %lu us",
+                         "this loop %lu ms, the codec %lu ms; %lu ring full, %lu concealed; decode %lu us | "
+                         "internal %u free, %u lowest since boot, %u in one piece",
                          (unsigned long)(S.rx_packets - rep_pkts), (unsigned long)S.rx_gap_max,
                          (unsigned long)S.loop_gap_max, (unsigned long)S.codec_gap_max,
                          (unsigned long)(S.rx_lost - rep_full), (unsigned long)(S.rx_concealed - rep_conc),
-                         (unsigned long)S.dec_max_us);
+                         (unsigned long)S.dec_max_us,
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), low_boot,
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
             rep_pkts = S.rx_packets; rep_full = S.rx_lost; rep_conc = S.rx_concealed;
             S.rx_gap_max = S.loop_gap_max = S.codec_gap_max = S.dec_max_us = 0;
+            /* What else came, and internal RAM's lowest in these 10 s: a gap
+             * in every datagram with RAM to spare is the network's (or this
+             * loop's, above); allocations failing in it are the knob's. The
+             * failures are counted since the last such line, so none is lost
+             * while there is no session to report. Under 256 characters: the
+             * log port keeps no more of a line. */
+            if (C.fd >= 0) {
+                const uint32_t af = s_af_n, af_dma = s_af_dma;
+                ESP_LOGI(TAG, "udp, 10 s: meters %lu, FFT %lu, waterfall %lu, other %lu (%lu/%lu/%lu/%lu B); "
+                         "any two %lu ms apart at most | internal 10 s low %u, DMA block %u; "
+                         "%lu allocs failed (%lu DMA, largest %lu B)",
+                         (unsigned long)C.udp_n[0], (unsigned long)C.udp_n[1],
+                         (unsigned long)C.udp_n[2], (unsigned long)C.udp_n[3],
+                         (unsigned long)C.udp_b[0], (unsigned long)C.udp_b[1],
+                         (unsigned long)C.udp_b[2], (unsigned long)C.udp_b[3],
+                         (unsigned long)C.udp_gap_max, low,
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+                         (unsigned long)(af - rep_af), (unsigned long)(af_dma - rep_af_dma),
+                         (unsigned long)s_af_max);
+                rep_af = af;
+                rep_af_dma = af_dma;
+                s_af_max = 0;
+            }
+            memset(C.udp_n, 0, sizeof C.udp_n);
+            memset(C.udp_b, 0, sizeof C.udp_b);
+            C.udp_gap_max = 0;
         }
         if (C.fd < 0) {
             if ((int32_t)(t - C.t_retry) >= 0) session_begin(t);
@@ -1960,6 +2037,8 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     ESP_RETURN_ON_FALSE(C.line && C.meters && s_req && s_rxq, ESP_ERR_NO_MEM, TAG, "buffers");
 
     esp_register_shutdown_handler(on_restart);
+    /* For the flex task's 10 s report: the allocations that fail. */
+    heap_caps_register_failed_alloc_callback(on_alloc_failed);
     /* The codec's stack in PSRAM: Opus is deep, internal RAM is what WiFi
      * sends from, and this task touches no flash. */
     if (xTaskCreatePinnedToCoreWithCaps(codec_task, "fxcodec", 16384, NULL, 5, NULL, 0,

@@ -35,3 +35,41 @@ CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
 # buffers from internal RAM, and with WiFi, Opus and two TLS connections up
 # there is none to spare.
 CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# --- internal RAM, for a SmartLink session with a headset -----------------
+# v1.18.1 ran one with 10-12 kB of internal RAM free, and a log client with a
+# browser beside it took that to 4.7 kB: the flex task stood still for 10 s
+# and the radio dropped the session. The WiFi driver sends and receives from
+# internal RAM only; it is kept for that. (The flex task's 10 s report says
+# what is left: free, at its lowest, in one piece.)
+#
+# LVGL's software renderer runs from IRAM (LV_ATTRIBUTE_FAST_MEM, in
+# sdkconfig.defaults), which on the S3 is the SRAM the heap starts after, and
+# it has a blender and a transform for every pixel format. This face draws
+# RGB565 (the panel, its images), RGB565A8 (the logo, scaled on the splash),
+# A8 (glyphs, the headset's logo, masks, shadows) and ARGB8888 (layers): the
+# other five give ~48 kB of internal RAM back. What would no longer draw is
+# an image in one of them -- or any gradient but a vertical one: LVGL blends
+# a horizontal, linear, radial or conical gradient from an RGB888 colour map,
+# where a vertical one is a solid colour a row.
+CONFIG_LV_DRAW_SW_SUPPORT_RGB888=n
+CONFIG_LV_DRAW_SW_SUPPORT_XRGB8888=n
+CONFIG_LV_DRAW_SW_SUPPORT_L8=n
+CONFIG_LV_DRAW_SW_SUPPORT_AL88=n
+CONFIG_LV_DRAW_SW_SUPPORT_I1=n
+# malloc() above 1 kB from PSRAM first, internal RAM the fallback (IDF's
+# default: above 16 kB). That moves the TLS connections' esp_tls_t (2,008
+# bytes each, two kept open -- hence not 2 kB), lwIP's full-size TCP
+# segments (what a log client and the web page queue), HTTP buffers. What has
+# to be internal asks for it by capability and stays: the WiFi driver's DMA
+# buffers, task stacks, FreeRTOS, I2S and SPI DMA, the draw buffers; and a
+# segment is copied into the driver's own buffer to be sent. Not
+# SPIRAM_TRY_ALLOCATE_WIFI_LWIP: that one forces 16 static transmit buffers
+# (~26 kB) on, and hands segments to the driver by reference.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+# mDNS (vfo-knob.local, a radio's .local name) -- its task's stack and what
+# it allocates -- and NVS's cache in PSRAM: neither is touched with the flash
+# cache off, and mDNS's task writes no flash.
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+CONFIG_NVS_ALLOCATE_CACHE_IN_SPIRAM=y
