@@ -13,7 +13,7 @@
     {
       "radio": "multiflex",
       "name": "FlexRadio",
-      "version": "1.18.2"
+      "version": "1.18.3"
     },
     {
       "radio": "ubersdr",
