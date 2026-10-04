@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-phone",
-  "version": "1.18.1",
-  "file": "vfo-knob-phone-1.18.1.bin",
-  "sha256": "617eacfbde321187f8995e7523e811d7401f005a6d97dbbec55dfc65f68fced2",
-  "size": 2035712
+  "version": "1.18.3",
+  "file": "vfo-knob-phone-1.18.3.bin",
+  "sha256": "f1034b6f852c617a707fb954a44f87d9de8c7fe6b2412245ecb66f9dc8723243",
+  "size": 1970176
 }
