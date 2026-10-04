@@ -78,8 +78,9 @@ the CW skimmer's. A voice on a spotted frequency is that spot, heard: it
 turns green, with the voice's SNR.
 
 Tap it and they are all on the dial in frequency order, opened on the
-nearest. Turn to one and tap the panel, and the receiver goes there in its
-mode.
+nearest. Turn, and the receiver goes to each spot in its mode as you reach
+it, so you hear them as you go. A tap closes the list where you are, or,
+before you turned, goes to the nearest.
 
 | On the dial | A voice nobody has spotted |
 |---|---|

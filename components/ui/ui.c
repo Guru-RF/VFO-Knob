@@ -1774,7 +1774,10 @@ static void edit_rotate_now(int32_t detents)
     }
     default: break;
     }
-    if (edit_live(s_edit)) edit_publish();
+    /* The spots too, turned through: the receiver goes to each as the knob
+     * reaches it, to be heard before it is chosen. A tap still closes the
+     * list there, or goes to the one it opened on. */
+    if (edit_live(s_edit) || s_edit == ED_SPOT) edit_publish();
     edit_render();
     lvgl_port_unlock();
 }

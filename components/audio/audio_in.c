@@ -61,8 +61,14 @@ void audio_in_set_ext_hook(void (*hook)(bool active)) { s_ext_hook = hook; }
 void audio_in_set_gain(uint8_t g) { s_gain = g > 200 ? 200 : g; }
 void audio_in_stats(audio_in_stats_t *st) { if (st) *st = s_stats; }
 
+/* A receiver's firmware never brings the microphone up (VFO_RX_ONLY), so
+ * there is no s_mx: nothing keys there, and a headset only listens. Taking
+ * the NULL mutex asserted -- a headset connecting crashed the ubersdr
+ * firmware, and again at every restart while it stayed connected
+ * (2026-10-04). */
 void audio_in_set_active(bool on)
 {
+    if (!s_mx) return;
     xSemaphoreTake(s_mx, portMAX_DELAY);
     if (on == s_active) { xSemaphoreGive(s_mx); return; }
     s_active = on;
@@ -94,6 +100,10 @@ void audio_in_set_active(bool on)
 
 void audio_in_use_ext(bool on)
 {
+    if (!s_mx) {                 /* no microphone here: see audio_in_set_active */
+        s_ext = on;
+        return;
+    }
     xSemaphoreTake(s_mx, portMAX_DELAY);
     if (on != s_ext) {
         s_ext = on;

@@ -977,7 +977,7 @@ static void ui_task(void *arg)
             }
 #if VFO_RADIO_UBERSDR
             if (c.have_spot) {
-                ESP_LOGI(TAG, "spot -> %lu Hz %s", (unsigned long)c.spot_hz, c.spot_mode);
+                ESP_LOG_LEVEL_LOCAL(lv, TAG, "spot -> %lu Hz %s", (unsigned long)c.spot_hz, c.spot_mode);
                 uber_tune_to(c.spot_hz, c.spot_mode);
             }
 #endif
