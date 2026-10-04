@@ -100,7 +100,9 @@ pictures it has. Tap it and the newest fills the face, with its mode above
 and where and when under it. The knob steps through the rest, newest first:
 the next ones are fetched ahead while you look, so a turn is usually
 instant, and otherwise the last picture stays, dimmed, until the next is
-there. Any tap goes back to the dial.
+there. Any tap goes back to the dial. The receiver's gallery loses its
+oldest pictures as new ones come: if the one you are on goes, the viewer
+steps back to the last there is, and with none left the dial is back.
 
 | SSTV | A picture |
 |---|---|

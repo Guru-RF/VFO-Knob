@@ -50,15 +50,18 @@ few seconds; the phone can be put away.
 
 The knob looks up the firmwares published for it, with their versions, and
 shows them on the dial, one a detent. Turn to your radio's and tap the panel.
+A name too long for the panel is shown in smaller type, so it fits.
 
-![FIRMWARE: INSTALL Icom 1.13.0 — turn to choose, tap the panel to install](setup/07-firmwares.svg)
+![FIRMWARE: INSTALL SVXConnect 1.18.3 — turn to choose, tap the panel to install](setup/07-firmwares.svg)
 
 | Firmware | For |
 |---|---|
 | **AetherSDR** | AetherSDR on a computer, over the USB cable or WiFi (TCI) |
-| **Icom** | the IC-705 and the IC-7610, over the radio's own LAN |
+| **Icom** | the IC-705, IC-7610, IC-9700 and the IC-R8600 receiver, over the radio's own LAN |
 | **FlexRadio** | a FLEX-6000/8000 as a MultiFlex station, on the LAN or through SmartLink |
 | **SVXConnect** | an SvxLink reflector: the knob is the station |
+| **UberSDR** | an UberSDR web receiver, receive only, with its spots and SSTV pictures |
+| **Telephone** | a SIP telephone account: the knob is the handset |
 
 The list comes from the update server each time, so a knob set up long after
 it was made still offers every firmware there is by then. The last entry is

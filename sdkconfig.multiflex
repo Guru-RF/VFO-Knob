@@ -41,22 +41,10 @@ CONFIG_MBEDTLS_HARDWARE_AES=n
 # browser beside it took that to 4.7 kB: the flex task stood still for 10 s
 # and the radio dropped the session. The WiFi driver sends and receives from
 # internal RAM only; it is kept for that. (The flex task's 10 s report says
-# what is left: free, at its lowest, in one piece.)
+# what is left: free, at its lowest, in one piece.) LVGL's unused pixel
+# formats gave the first ~48 kB back; they are off for every firmware now,
+# in sdkconfig.defaults.
 #
-# LVGL's software renderer runs from IRAM (LV_ATTRIBUTE_FAST_MEM, in
-# sdkconfig.defaults), which on the S3 is the SRAM the heap starts after, and
-# it has a blender and a transform for every pixel format. This face draws
-# RGB565 (the panel, its images), RGB565A8 (the logo, scaled on the splash),
-# A8 (glyphs, the headset's logo, masks, shadows) and ARGB8888 (layers): the
-# other five give ~48 kB of internal RAM back. What would no longer draw is
-# an image in one of them -- or any gradient but a vertical one: LVGL blends
-# a horizontal, linear, radial or conical gradient from an RGB888 colour map,
-# where a vertical one is a solid colour a row.
-CONFIG_LV_DRAW_SW_SUPPORT_RGB888=n
-CONFIG_LV_DRAW_SW_SUPPORT_XRGB8888=n
-CONFIG_LV_DRAW_SW_SUPPORT_L8=n
-CONFIG_LV_DRAW_SW_SUPPORT_AL88=n
-CONFIG_LV_DRAW_SW_SUPPORT_I1=n
 # malloc() above 1 kB from PSRAM first, internal RAM the fallback (IDF's
 # default: above 16 kB). That moves the TLS connections' esp_tls_t (2,008
 # bytes each, two kept open -- hence not 2 kB), lwIP's full-size TCP

@@ -17,8 +17,10 @@ works in the repository, as an <img> on a website, and inline beside others.
 When a screen changes in the firmware, change it here too and run this; the
 guides (docs/<firmware>.md) say what the pictures show.
 """
+import functools
 import math
 import os
+import re
 import sys
 
 sys.dont_write_bytecode = True             # no __pycache__ left in tools/
@@ -26,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mkdisplay as md  # noqa: E402  (the body, the palettes, text())
 import mkrender as mr   # noqa: E402  (the reflector's face and its icons)
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAD = 44                                  # room around the body for gestures
 W = H = 2 * md.BODY_R + 2 * PAD
 OX = OY = W / 2
@@ -45,6 +48,130 @@ def lines(cx, cy, text, size, colour, lh, weight=400, anchor="middle"):
     top = cy - len(rows) * lh / 2
     return "".join(md.text(cx, top + i * lh + lh * 0.78, esc(r), size, colour, weight, anchor)
                    for i, r in enumerate(rows))
+
+
+# --- the editor panel's value, fitted as the firmware fits it ------------------
+
+EDIT_W, EDIT_W_NAME, EDIT_H = 250, 290, 132   # components/ui/include/fit_text.h:
+                                          # a value's panel, a list of names'
+EDIT_PAD = 2 + 16                         # its border, then the theme's padding at 130 dpi
+STEPS = (48, 28, 20)                      # fit_text.c: its fonts, largest first
+
+
+def number(s):
+    """A C literal from a font file: decimal, or hex."""
+    return int(s, 16) if s.lstrip("-").startswith("0x") else int(s)
+
+
+class Montserrat:
+    """LVGL's Montserrat at one size, read from the file the firmware is
+    built with (lv_font_montserrat_<size>.c): each glyph's advance and the
+    kerning between two, summed the way lv_text_get_width() sums them -- so
+    a width here is the knob's, to the pixel."""
+
+    def __init__(self, size):
+        path = os.path.join(ROOT, "managed_components", "lvgl__lvgl", "src", "font",
+                            f"lv_font_montserrat_{size}.c")
+        if not os.path.exists(path):
+            sys.exit(f"{path} is missing: ESP-IDF's component manager fetches it -- build any "
+                     f"firmware once (idf.py build), then run this again")
+        with open(path) as f:
+            src = f.read()
+
+        def array(name):
+            body = re.search(r"\b" + name + r"\[\] = \{(.*?)\};", src, re.S).group(1)
+            return [number(v) for v in re.findall(r"-?(?:0x[0-9a-fA-F]+|\d+)", body)]
+
+        def field(name):
+            return int(re.search(r"\." + name + r"\s*=\s*(-?\d+)", src).group(1))
+
+        self.adv = [int(a) for a in re.findall(r"\.adv_w = (\d+)", src)]   # by glyph id, 1/16 px
+        self.cmaps = []
+        for m in re.finditer(r"\.range_start = (\d+), \.range_length = (\d+), \.glyph_id_start = (\d+),"
+                             r"\s*\.unicode_list = (\w+), \.glyph_id_ofs_list = NULL, "
+                             r"\.list_length = \d+, \.type = LV_FONT_FMT_TXT_CMAP_(\w+)", src):
+            start, length, gid0, codes, kind = m.groups()
+            if kind not in ("FORMAT0_TINY", "SPARSE_TINY"):
+                raise ValueError(f"{path}: a {kind} character map, not read here")
+            self.cmaps.append((int(start), int(length), int(gid0),
+                               array(codes) if codes != "NULL" else None))
+        self.left = array("kern_left_class_mapping")
+        self.right = array("kern_right_class_mapping")
+        self.pairs = array("kern_class_values")
+        self.right_cnt = field("right_class_cnt")
+        self.kern_scale = field("kern_scale")
+        self.line_height = field("line_height")
+        self.base_line = field("base_line")
+
+    def glyph(self, ch):
+        """get_glyph_dsc_id(): the glyph of a character, 0 for none."""
+        if not ch:
+            return 0
+        for start, length, gid0, codes in self.cmaps:
+            rcp = ord(ch) - start
+            if 0 <= rcp < length:
+                if codes is None:
+                    return gid0 + rcp
+                return gid0 + codes.index(rcp) if rcp in codes else 0
+        return 0
+
+    def advance(self, ch, nxt=""):
+        """lv_font_get_glyph_width(): whole pixels, kerned against the next
+        character; one the font lacks is LV_USE_FONT_PLACEHOLDER's box."""
+        g = self.glyph(ch)
+        if not g:
+            return self.line_height // 2 + 2
+        k, n = 0, self.glyph(nxt)
+        if n and self.left[g] and self.right[n]:
+            k = self.pairs[(self.left[g] - 1) * self.right_cnt + self.right[n] - 1]
+        return (self.adv[g] + ((k * self.kern_scale) >> 4) + 8) >> 4
+
+    def width(self, s, after=""):
+        """lv_text_get_width(s), no letter space; `after` is what follows s
+        in a longer text, for the last letter's kerning."""
+        t = s + after
+        return sum(self.advance(c, t[i + 1:i + 2]) for i, c in enumerate(s))
+
+
+@functools.lru_cache(maxsize=None)
+def montserrat(size):
+    return Montserrat(size)
+
+
+def dotted(f, text, room):
+    """LV_LABEL_LONG_MODE_DOTS on one line `room` wide, the text centred
+    (lv_label.c lv_label_refr_text, lv_label_get_letter_on): the line broken
+    at the last letter that fits; on it, the letter under room less three
+    dots; there the text ends, in the three dots."""
+    n = 0
+    while n < len(text) and f.width(text[:n + 1], text[n + 1:]) <= room:
+        n += 1
+    x = room // 2 - f.width(text[:n], text[n:]) // 2
+    at = room - 3 * f.advance(".", ".")
+    k = 0
+    while k < n - 1:
+        gw = f.advance(text[k], text[k + 1:k + 2])
+        if at < x + gw:
+            break
+        x += gw
+        k += 1
+    k = min(k, len(text) - 3)
+    return text[:k] + "..."
+
+
+def fit(value, size, room):
+    """fit_text() (components/ui/fit_text.c): the value in `size` where it is
+    at most `room` px wide (EDIT_ROOM: its panel less 5 px each side), or
+    else in the first smaller step it fits; too wide even in 20, cut with
+    dots there. Returns the size, the text as shown and its width."""
+    sizes = (size,) + tuple(s for s in STEPS if s < size)
+    for s in sizes:
+        w = montserrat(s).width(value)
+        if w <= room:
+            return s, value, w
+    f = montserrat(sizes[-1])
+    shown = dotted(f, value, room)
+    return sizes[-1], shown, f.width(shown)
 
 
 # --- the knob ---------------------------------------------------------------
@@ -132,14 +259,36 @@ def setup_screen(title, text, panel=""):
             + panel)
 
 
+def edit_panel(title, value, size, hint, colour, wide):
+    """The editor panel (ui.c, fit_text.h): EDIT_W x EDIT_H for a value, or
+    EDIT_W_NAME wide for a list of names (`wide`), centred 6 px above the
+    middle; inside its border and the theme's padding, the title at
+    20 px in the label colour 2 px from the top, the hint at 14 px 2 px from
+    the foot, and between them the value as fit_text() sets it -- in `size`,
+    or a smaller step where that is too wide -- centred 4 px below the middle.
+    Each line's baseline is where LVGL puts it, and in a browser the value is
+    as wide as Montserrat is on the knob, whatever font stands in for it."""
+    pw = EDIT_W_NAME if wide else EDIT_W
+    size, shown, w = fit(value, size, pw - 10)
+    f, t, k = montserrat(size), montserrat(20), montserrat(14)
+    # A label's baseline: its top, plus its line, less the font's base_line.
+    top = 174 - EDIT_H // 2 + EDIT_PAD           # the content area: 126, 96 high
+    high = EDIT_H - 2 * EDIT_PAD
+    t_base = top + 2 + t.line_height - t.base_line                       # TOP_MID 0,2
+    v_base = top + high // 2 - f.line_height // 2 + 4 + f.line_height - f.base_line   # CENTER 0,4
+    h_base = top + high - 2 - k.base_line                                # BOTTOM_MID 0,-2
+    return (f'<rect x="{180 - pw // 2}" y="{174 - EDIT_H // 2}" width="{pw}" '
+            f'height="{EDIT_H}" rx="18" fill="{md.BG1}" stroke="{md.ACCENT}" stroke-width="2"/>'
+            + md.text(180, t_base, esc(title), 20, md.LABEL)
+            + md.text(180, v_base, esc(shown), size, colour, 600,
+                      extra=f' textLength="{w}" lengthAdjust="spacingAndGlyphs"')
+            + md.text(180, h_base, esc(hint), 14, md.LABEL))
+
+
 def chooser(title, value, hint="turn to choose  -  tap to accept"):
-    """The editor panel as a chooser (ED_CHOICE): 250 x 132 at 6 px above the
-    middle, the title at 20 px in the label colour, the value at 28 px."""
-    return (f'<rect x="55" y="108" width="250" height="132" rx="18" fill="{md.BG1}" '
-            f'stroke="{md.ACCENT}" stroke-width="2"/>'
-            + md.text(180, 128, esc(title), 20, md.LABEL)
-            + md.text(180, 188, esc(value), 28, md.ACCENT_HI, 600)
-            + md.text(180, 232, esc(hint), 14, md.LABEL))
+    """The editor panel as a chooser (ED_CHOICE): the value a name, at 28 px
+    where it fits, in the wider panel (edit_panel)."""
+    return edit_panel(title, value, 28, hint, md.ACCENT_HI, True)
 
 
 def question(title, hint):
@@ -347,14 +496,18 @@ def reflector(pal="svxconnect", **reading):
     return mr.reflector_dial(R)
 
 
+# The editors that are lists of names (ui.c edit_render): the wider panel,
+# whatever font their value is in -- RX on LOCAL too. Told by the title's
+# first word, as the knob tells them by the editor.
+NAME_LISTS = ("RX", "RADIO", "SPOT", "SSTV", "CALLS")
+
+
 def editor(title, value, size=48, hint="turn to choose  -  tap to accept", colour=None):
-    """The editor panel (ui.c edit_render): 250 x 132, 6 px above the middle;
-    the title at 20 px, the value at 48 px -- 28 for names -- and the hint."""
-    return (f'<rect x="55" y="108" width="250" height="132" rx="18" fill="{md.BG1}" '
-            f'stroke="{md.ACCENT}" stroke-width="2"/>'
-            + md.text(180, 128, esc(title), 20, md.LABEL)
-            + md.text(180, 188 if size == 28 else 196, esc(value), size, colour or md.ACCENT_HI, 600)
-            + md.text(180, 232, esc(hint), 14, md.LABEL))
+    """The editor panel (ui.c edit_render): the value at 48 px -- 28 for
+    names -- where it fits (edit_panel), in the wider panel for a list of
+    names (NAME_LISTS); V/M, at 28, keeps a value's."""
+    return edit_panel(title, value, size, hint, colour or md.ACCENT_HI,
+                      title.split()[0] in NAME_LISTS)
 
 
 def warning(title, fw, net=ADDRESSES):
@@ -494,7 +647,7 @@ def setup_pictures():
     out["07-firmwares"] = knob(
         "setup-07", "The firmwares published for the knob, one a detent",
         setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",
-                     chooser("INSTALL", "Icom 1.13.0")),
+                     chooser("INSTALL", "SVXConnect 1.18.3")),
         turn() + tap(282, 150), "turn to choose  \u00b7  tap the panel to install")
     out["08-wifi-again"] = knob(
         "setup-08", "The last choice: another network",
@@ -557,13 +710,23 @@ def sdr_pictures(pal, slug, reading):
     return out
 
 
-def swipe_at(direction):
-    """A swipe drawn clear of a panel: across the S-meter, or down the edge."""
-    a, b = {"down": ((326, 96), (326, 250)), "up": ((326, 250), (326, 96)),
-            "right": ((70, 62), (290, 62)), "left": ((290, 62), (70, 62))}[direction]
+def swipe_at(direction, panel=True):
+    """A swipe drawn clear of a panel: across the S-meter, or down the edge.
+    Down or up beside the editor panel the glass leaves less room: there it
+    is shorter and thinner, its head too, between the panel and the glass's
+    edge. With no panel (`panel` False) it runs down the edge as it did."""
+    width = 6
+    if direction in ("right", "left"):
+        a, b = ((70, 62), (290, 62)) if direction == "right" else ((290, 62), (70, 62))
+    else:
+        if panel:
+            x, top, foot, width = 180 + EDIT_W_NAME // 2 + 14, 124, 236, 4
+        else:
+            x, top, foot = 326, 96, 250
+        a, b = ((x, top), (x, foot)) if direction == "down" else ((x, foot), (x, top))
     (x0, y0), (x1, y1) = on_face(*a), on_face(*b)
     return (f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{GESTURE}" '
-            f'stroke-width="6" stroke-linecap="round" stroke-opacity="0.9" marker-end="url(#arrow)"/>'
+            f'stroke-width="{width}" stroke-linecap="round" stroke-opacity="0.9" marker-end="url(#arrow)"/>'
             f'<circle cx="{x0:.1f}" cy="{y0:.1f}" r="9" fill="{GESTURE}" fill-opacity="0.35" '
             f'stroke="{GESTURE}" stroke-width="2"/>')
 
@@ -644,7 +807,7 @@ def multiflex_pictures():
     out = {}
     out["01-face"] = callouts("flex-01", "The FlexRadio firmware's face", f, left, right)
     out["02-station"] = knob("flex-02", "At boot, with others on the radio: what to be",
-                             f + editor("DIAL FOR", "thinkstation", 28), turn(),
+                             f + chooser("DIAL FOR", "thinkstation"), turn(),
                              "turn: STATION OWN, or DIAL FOR a station  \u00b7  tap the panel")
     out["03-menu"] = knob("flex-03", "Swipe from the right: TUNE, ATU, MEM",
                           f + editor("MENU", "MEM"), swipe_at("left"),
@@ -749,7 +912,7 @@ def phone_pictures():
                           telephone(fav_name="Mum", fav_num="+447700900123"), turn(),
                           "turn: the next favourite  \u00b7  tap CALL")
     out["03-keypad"] = knob("tel-03", "Swipe down: the keypad, to dial a number by hand",
-                            telephone(keypad="01632960123", flash="3"), swipe_at("down"),
+                            telephone(keypad="01632960123", flash="3"), swipe_at("down", panel=False),
                             "swipe down  \u00b7  type  \u00b7  tap CALL  \u00b7  \u00d7 at the top: away")
     out["04-calling"] = knob("tel-04", "Calling: it rings at the other end",
                              telephone(call=1, why="ringing", secs=6, peer="Mum",
@@ -767,7 +930,7 @@ def phone_pictures():
     out["06-call"] = callouts("tel-06", "A call: its time, who, and both voices",
                               telephone(**call), left, right)
     out["07-dtmf"] = knob("tel-07", "In a call the keypad sends its keys as DTMF",
-                          telephone(keypad="1#", flash="#", **call), swipe_at("down"),
+                          telephone(keypad="1#", flash="#", **call), swipe_at("down", panel=False),
                           "swipe down in a call  \u00b7  the keys go out as tones  \u00b7  \u00d7: away")
     out["08-ended"] = knob("tel-08", "A call ended, and why",
                            telephone(call=4, why="busy", peer="Mum", peer_num="+447700900123"), "",

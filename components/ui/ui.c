@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "vu_band.h"
+#include "fit_text.h"
 #include "splash.h"
 #include "board_pins.h"
 #include "hal_touch.h"
@@ -748,6 +749,7 @@ static uint8_t   s_nspots, s_nsnap;
 static lv_obj_t      *s_sv, *s_sv_img, *s_sv_title, *s_sv_cap, *s_sv_wait;
 static lv_image_dsc_t s_sv_dsc;
 static bool           s_sv_open;
+static uint32_t       s_sv_gen;      /* its request: one more each "fetching..." */
 static int            s_sv_idx;
 static void sv_title(void);
 static void spot_lines(const ui_spot_t *sp, char *l1, size_t n1, char *l2, size_t n2);
@@ -1279,13 +1281,17 @@ static void edit_render(void)
     default: return;
     }
     lv_label_set_text(s_edit_title, title);
-    /* A station's name wants more room than a mode or a width. */
-    lv_obj_set_style_text_font(s_edit_value,
-                               s_edit == ED_CHOICE || s_edit == ED_RADIO || s_edit == ED_VM ||
-                               s_edit == ED_SPOT || s_edit == ED_SSTV || s_edit == ED_CALLS ||
-                               (s_edit == ED_RXSRC && s_edit_idx)
-                               ? &lv_font_montserrat_28 : &lv_font_montserrat_48, 0);
-    lv_label_set_text(s_edit_value, v);
+    /* A station's name wants more room than a mode or a width: a wider panel
+     * for the lists of names, the same one all through a list, and a smaller
+     * font -- and a name too long even so steps down again, or is cut with
+     * dots, never at the panel's edge (fit_text.h). */
+    const bool names = s_edit == ED_CHOICE || s_edit == ED_RADIO || s_edit == ED_RXSRC ||
+                       s_edit == ED_SPOT || s_edit == ED_SSTV || s_edit == ED_CALLS;
+    const int32_t pw = names ? EDIT_W_NAME : EDIT_W;
+    lv_obj_set_width(s_edit_panel, pw);
+    fit_text(s_edit_value, v,
+             (names && !(s_edit == ED_RXSRC && !s_edit_idx)) || s_edit == ED_VM
+             ? &lv_font_montserrat_28 : &lv_font_montserrat_48, EDIT_ROOM(pw));
     lv_obj_set_style_text_color(s_edit_value, vcolor, 0);
     /* The radio chooser says how each is reached: directly, or through a
      * service -- the same FlexRadio can be both. */
@@ -2015,15 +2021,18 @@ static bool aux_spot(lv_point_t p)
 static void sv_close(void)
 {
     if (!s_sv_open) return;
-    s_sv_open = false;
     lv_obj_add_flag(s_sv, LV_OBJ_FLAG_HIDDEN);
     lv_image_set_src(s_sv_img, NULL);
     lv_image_cache_drop(&s_sv_dsc);
+    /* Last: closed is what ui_sstv_wanted() says, read without the lock,
+     * and the picture's buffer is free from then on (uber_sstv_want). */
+    s_sv_open = false;
 }
 
 static void sv_title(void)
 {
     char t[24];
+    s_sv_gen++;
     snprintf(t, sizeof t, "%d / %d", s_sv_idx + 1, (int)s_last.n_sstv);
     lv_label_set_text(s_sv_title, t);
     lv_label_set_text(s_sv_wait, "fetching...");
@@ -2086,14 +2095,20 @@ static void sv_open(void)
     lv_obj_move_foreground(s_sv);
 }
 
-int ui_sstv_wanted(void) { return s_sv_open ? s_sv_idx : -1; }
-
-void ui_sstv_show(const uint16_t *px, int w, int h, int idx, const char *title,
-                  const char *caption, bool failed)
+int ui_sstv_wanted(uint32_t *gen)
 {
-    if (!s_scr || !lvgl_port_lock(50)) return;
+    if (gen) *gen = s_sv_gen;
+    return s_sv_open ? s_sv_idx : -1;
+}
+
+int ui_sstv_show(const uint16_t *px, int w, int h, int idx, const char *title,
+                 const char *caption, bool failed)
+{
+    if (!s_scr || !s_sv_open) return 0;     /* closed: nothing to wait for */
+    if (!lvgl_port_lock(50)) return -1;
     /* Only the one the knob is on: one it has turned past is let go. */
-    if (s_sv_open && idx == s_sv_idx) {
+    const bool take = s_sv_open && idx == s_sv_idx;
+    if (take) {
         lv_image_set_src(s_sv_img, NULL);
         lv_image_cache_drop(&s_sv_dsc);
         if (failed || !px || w <= 0 || h <= 0) {
@@ -2120,6 +2135,7 @@ void ui_sstv_show(const uint16_t *px, int w, int h, int idx, const char *title,
         if (title && title[0]) lv_label_set_text(s_sv_title, title);
     }
     lvgl_port_unlock();
+    return take ? 1 : 0;
 }
 
 void ui_set_spots(const ui_spot_t *spots, uint8_t n)
@@ -3181,8 +3197,10 @@ static void build(void)
     lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_netinfo, s_netinfo_text);
 
+    /* One panel for every editor and chooser, wider for a list of names --
+     * a firmware's and its version -- than for a value (fit_text.h). */
     s_edit_panel = lv_obj_create(s_scr);
-    lv_obj_set_size(s_edit_panel, 250, 132);
+    lv_obj_set_size(s_edit_panel, EDIT_W, EDIT_H);
     lv_obj_align(s_edit_panel, LV_ALIGN_CENTER, 0, -6);
     lv_obj_set_style_radius(s_edit_panel, 18, 0);
     lv_obj_set_style_bg_color(s_edit_panel, C_BG1, 0);
@@ -4040,6 +4058,17 @@ void ui_update(const ui_state_t *st)
      * editor, it would keep the face, the slab's ANSWER, from being drawn. */
     if (s_edit == ED_CALLS && st->call >= 1 && st->call <= 3) edit_close();
 #endif
+    /* The receiver's gallery shrinks as pictures age out: a viewer left on one
+     * past its end would wait for it for good. The last one there is, then;
+     * none left, the dial is back. */
+    if (s_sv_open && st->n_sstv >= 0 && s_sv_idx >= st->n_sstv) {
+        if (st->n_sstv > 0) {
+            s_sv_idx = st->n_sstv - 1;
+            sv_title();
+        } else {
+            sv_close();
+        }
+    }
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter -- nor,
      * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter.

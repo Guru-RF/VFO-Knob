@@ -14,6 +14,16 @@
 #define LV_USE_DRAW_SW 1
 #define LV_DRAW_SW_SUPPORT_RGB565 1
 #define LV_DRAW_SW_SUPPORT_RGB565A8 1
+/* Off on the knob (sdkconfig.defaults), so off here: what draws here draws there.
+ * ARGB8888 and A8 stay on, as there (LVGL's default without Kconfig). */
+#define LV_DRAW_SW_SUPPORT_RGB888 0
+#define LV_DRAW_SW_SUPPORT_XRGB8888 0
+#define LV_DRAW_SW_SUPPORT_L8 0
+#define LV_DRAW_SW_SUPPORT_AL88 0
+#define LV_DRAW_SW_SUPPORT_I1 0
+/* ...and these two, which LVGL's Kconfig has no option for: 0 on the knob. */
+#define LV_DRAW_SW_SUPPORT_RGB565_SWAPPED 0
+#define LV_DRAW_SW_SUPPORT_ARGB8888_PREMULTIPLIED 0
 #define LV_DRAW_SW_DRAW_UNIT_CNT 1
 #define LV_DRAW_SW_COMPLEX 1
 #define LV_DRAW_SW_CIRCLE_CACHE_SIZE 4

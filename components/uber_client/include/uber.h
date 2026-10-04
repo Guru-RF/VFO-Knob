@@ -55,12 +55,14 @@ void uber_tune_to(uint32_t hz, const char *mode);
 void uber_activity(void);
 
 /* SSTV pictures from the receiver's gallery, newest first: how many (-1: it
- * has none to show), and the one to fetch (-1 once the viewer is closed). A
- * picture comes decoded to RGB565, fitted to the viewer; `seq` moves on for
- * each. The caller says when it shows one, and the buffer it is in is not
- * reused until the next is shown. */
+ * has none to show), and the one to fetch (-1 once the viewer is closed and
+ * the glass shows none of them), with `gen`, the viewer's request: it moves
+ * on each time the viewer says "fetching...", and a new one has the picture
+ * offered again, the same one too. A picture comes decoded to RGB565, fitted
+ * to the viewer; `seq` moves on for each. The caller says what became of
+ * each, and the buffer the glass shows is not reused while it shows it. */
 int  uber_sstv_count(void);
-void uber_sstv_want(int idx);
+void uber_sstv_want(int idx, uint32_t gen);
 typedef struct {
     const uint16_t *px;
     uint16_t w, h;
@@ -71,7 +73,9 @@ typedef struct {
     uint32_t seq;
 } uber_sstv_t;
 bool uber_sstv_get(uber_sstv_t *out, uint32_t after_seq);
-void uber_sstv_shown(uint32_t seq);
+/* Picture `seq` dealt with: `taken`, it is on the glass now (or its failure
+ * said there); not, the viewer let it go -- closed, or on another one. */
+void uber_sstv_shown(uint32_t seq, bool taken);
 
 /* For the knob's page: the gallery's file names, newest first, and where the
  * receiver is ("https://name.tunnel.ubersdr.org"), for a browser to fetch

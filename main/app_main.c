@@ -1062,11 +1062,27 @@ static void ui_task(void *arg)
         {
             static uint32_t shown;
             static uber_sstv_t pic;
-            uber_sstv_want(ui_sstv_wanted());
+            uint32_t gen;
+            const int want = ui_sstv_wanted(&gen);
+            uber_sstv_want(want, gen);
             if (uber_sstv_get(&pic, shown)) {
-                ui_sstv_show(pic.px, pic.w, pic.h, pic.idx, pic.title, pic.caption, pic.failed);
-                shown = pic.seq;
-                uber_sstv_shown(pic.seq);
+                /* The face too busy drawing to take it: the same picture on
+                 * the next pass. Taken as shown, it was lost, and the viewer
+                 * said "fetching..." for good (2026-10-03); its pixels stay
+                 * put until it is. */
+                const int r = ui_sstv_show(pic.px, pic.w, pic.h, pic.idx, pic.title, pic.caption,
+                                           pic.failed);
+                if (r >= 0) {
+                    shown = pic.seq;
+                    uber_sstv_shown(pic.seq, r > 0);
+                } else {
+                    static int64_t said;
+                    const int64_t now = esp_timer_get_time();
+                    if (now - said > 10000000) {
+                        said = now;
+                        ESP_LOGW(TAG, "SSTV: the face was busy, the picture waits a pass");
+                    }
+                }
             }
         }
 #endif
@@ -1386,6 +1402,7 @@ static void ui_task(void *arg)
 #endif
 
         ui_state_t u = {
+            .n_sstv        = -1,            /* no gallery: the ubersdr's says */
             .rx_only       = st.rx_only,
             .no_rit        = st.no_rit,
             .f_min         = st.f_min,

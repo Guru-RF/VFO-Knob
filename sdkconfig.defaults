@@ -82,7 +82,29 @@ CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
+# LVGL's software renderer runs from IRAM (the line below), which on the S3
+# is the SRAM the heap starts after, and it carries a blender and a transform
+# for every pixel format. Every firmware draws the one face in components/ui
+# -- nothing else calls LVGL -- in four of them: RGB565 (the panel, and the
+# UberSDR firmware's SSTV pictures, which uber_png.c decodes to RGB565),
+# RGB565A8 (the logo, scaled on the splash), A8 (glyphs -- SVXConnect's
+# icons and the headset's logo among them -- and the masks every arc, line
+# and VU meter is drawn with) and ARGB8888 (LVGL's layers, and what an
+# indexed image such as a QR code decodes to; nothing makes one today). The
+# rest is plain: the radios' faces are arcs and labels, setup's screens
+# labels, the Telephone's keypad plain objects. The other five formats give
+# ~48 kB of heap back (measured on the FlexRadio firmware, v1.18.2). What
+# would no longer draw is an image, canvas or layer in one of them -- or any
+# gradient but a vertical one: LVGL blends a horizontal, linear, radial or
+# conical gradient from an RGB888 colour map, where a vertical one is a
+# solid colour a row. It fails silently (LVGL's log is off); a firmware that
+# comes to need one sets it back to y in its own overlay.
 CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+CONFIG_LV_DRAW_SW_SUPPORT_RGB888=n
+CONFIG_LV_DRAW_SW_SUPPORT_XRGB8888=n
+CONFIG_LV_DRAW_SW_SUPPORT_L8=n
+CONFIG_LV_DRAW_SW_SUPPORT_AL88=n
+CONFIG_LV_DRAW_SW_SUPPORT_I1=n
 CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_USE_PERF_MONITOR=n
 

@@ -189,11 +189,17 @@ uint32_t ui_last_use(void);
 
 /* The SSTV viewer, opened from the swipe from the right: the knob steps
  * through the receiver's pictures, newest first, and any tap closes it.
- * ui_sstv_wanted() is the picture it wants (-1 closed); ui_sstv_show() puts
- * one up -- RGB565, w x h, kept by the caller until the next -- or, failed,
- * says why in the caption. */
-int  ui_sstv_wanted(void);
-void ui_sstv_show(const uint16_t *px, int w, int h, int idx, const char *title,
+ * ui_sstv_wanted() is the picture it wants (-1 closed: the glass shows none),
+ * and in *gen its request, which moves on each time it says "fetching...":
+ * each one waits for an answer. ui_sstv_show() puts one up -- RGB565, w x h
+ * -- or, failed, says why in the caption: 1 when it took it, 0 when it let
+ * it go (the viewer closed, or on another picture, or no screen), -1 when the
+ * face was too busy drawing to take it: offer the same one again. A picture
+ * taken is drawn from the caller's pixels until the face takes another or
+ * the viewer closes, however many it lets go meanwhile; one let go need not
+ * be kept. */
+int  ui_sstv_wanted(uint32_t *gen);
+int  ui_sstv_show(const uint16_t *px, int w, int h, int idx, const char *title,
                   const char *caption, bool failed);
 
 /* Memory mode on, or off again: V/M, last on the swipe down, on a radio with

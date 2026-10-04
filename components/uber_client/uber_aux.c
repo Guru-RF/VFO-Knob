@@ -386,15 +386,17 @@ EXT_RAM_BSS_ATTR static sstv_t s_sstv[SSTV_MAX];
 static int      s_nsstv = -1;    /* -1: not read (or none to read) */
 static int64_t  s_sstv_at;
 static volatile int s_want = -1;
+static volatile uint32_t s_want_gen;   /* the viewer's request: see uber.h */
 static struct {
     uber_sstv_t img;
     uint32_t shown;
     char     file[72];           /* the picture published */
-} V;
+    uint32_t gen;                /* the request it answered */
+    int      slot;               /* where its pixels are, -1 for none */
+} V = { .slot = -1 };
 
-/* Pictures decoded, kept: the one on the glass, the one before it until the
- * glass has let it go, and the ones fetched ahead of the knob -- so turning
- * to the next is instant. */
+/* Pictures decoded, kept: the one on the glass, the one offered to it, and
+ * the ones fetched ahead of the knob -- so turning to the next is instant. */
 #define SLOTS 4
 EXT_RAM_BSS_ATTR static struct {
     char     file[72];
@@ -402,7 +404,12 @@ EXT_RAM_BSS_ATTR static struct {
     uint32_t used;
 } s_slot[SLOTS];
 static uint16_t *s_slot_px[SLOTS];
-static int       s_on_glass = -1, s_leaving = -1;
+/* The one last offered, which may never reach the glass, and the one the
+ * glass draws: it keeps drawing a picture, dimmed under "fetching...", until
+ * it takes the next, however many it let go meanwhile. The face's task
+ * sets s_drawn: uber_sstv_shown on a take, uber_sstv_want(-1) on closing. */
+static int       s_offered = -1;
+static volatile int s_drawn = -1;
 static uint32_t  s_clock;
 static char      s_failed[72];   /* not fetched ahead again */
 
@@ -417,7 +424,7 @@ static int slot_free(void)
 {
     int best = -1;
     for (int i = 0; i < SLOTS; i++) {
-        if (i == s_on_glass || i == s_leaving) continue;
+        if (i == s_offered || i == s_drawn) continue;
         if (best < 0 || s_slot[i].used < s_slot[best].used) best = i;
     }
     return best;
@@ -430,7 +437,13 @@ int uber_sstv_count(void)
     return in.sstv ? (s_nsstv < 0 ? 0 : s_nsstv) : -1;
 }
 
-void uber_sstv_want(int idx) { s_want = idx; }
+void uber_sstv_want(int idx, uint32_t gen)
+{
+    /* Closed, the viewer has let its picture go: its slot is free again. */
+    if (idx < 0) s_drawn = -1;
+    s_want_gen = gen;
+    s_want = idx;
+}
 
 bool uber_sstv_get(uber_sstv_t *out, uint32_t after_seq)
 {
@@ -444,7 +457,13 @@ bool uber_sstv_get(uber_sstv_t *out, uint32_t after_seq)
     return r;
 }
 
-void uber_sstv_shown(uint32_t seq) { V.shown = seq; }
+void uber_sstv_shown(uint32_t seq, bool taken)
+{
+    taskENTER_CRITICAL(&A_LOCK);
+    if (taken && seq == V.img.seq) s_drawn = V.slot;
+    V.shown = seq;
+    taskEXIT_CRITICAL(&A_LOCK);
+}
 
 int uber_sstv_files(char (*out)[72], int max)
 {
@@ -502,7 +521,7 @@ static void read_sstv_list(void)
     free(b);
 }
 
-static void publish(int idx, const sstv_t *x, int slot, const char *fail)
+static void publish(int idx, uint32_t gen, const sstv_t *x, int slot, const char *fail)
 {
     char up[6] = "";
     for (int i = 0; i < 5 && x->audio[i]; i++) up[i] = (char)toupper((unsigned char)x->audio[i]);
@@ -523,11 +542,12 @@ static void publish(int idx, const sstv_t *x, int slot, const char *fail)
                  (unsigned long)(x->hz / 1000000), (unsigned long)(x->hz / 1000 % 1000), up, x->at,
                  x->snr);
     strlcpy(V.file, x->file, sizeof V.file);
+    V.gen  = gen;
+    V.slot = slot;
     V.img.seq++;
     taskEXIT_CRITICAL(&A_LOCK);
     if (slot >= 0) {
-        s_leaving  = s_on_glass;
-        s_on_glass = slot;
+        s_offered = slot;
         s_slot[slot].used = ++s_clock;
     }
 }
@@ -583,15 +603,23 @@ static int fetch_picture(int idx, char *why, size_t wn)
  * rests on one, the next one older, then the next newer, fetched ahead. */
 static void sstv_step(void)
 {
+    /* The face writes the request's gen before its idx, so an idx read
+     * first comes with its own gen or a newer one; either way a pair that
+     * moves on meanwhile is answered again on the next pass. */
     const int want = s_want;
+    const uint32_t gen = s_want_gen;
     if (want < 0 || want >= s_nsstv || V.shown != V.img.seq) return;
-    s_leaving = -1;                              /* the glass has let it go */
     char why[40];
-    if (V.img.idx != want || strcmp(V.file, s_sstv[want].file) || !V.img.seq) {
+    /* A new request has the picture offered again even when it is the one
+     * offered last: the viewer, reopened or turned back to it, waits on
+     * "fetching..." for it, and without this waited for good. So does a
+     * gallery of another size: the title counts it ("M2  2 / 5"). */
+    if (V.img.idx != want || V.gen != gen || V.img.n != s_nsstv || strcmp(V.file, s_sstv[want].file) ||
+        !V.img.seq) {
         int slot = slot_of(s_sstv[want].file);
         if (slot < 0) slot = fetch_picture(want, why, sizeof why);
         sstv_t x = s_sstv[want];
-        publish(want, &x, slot, slot < 0 ? why : NULL);
+        publish(want, gen, &x, slot, slot < 0 ? why : NULL);
         return;
     }
     for (int d = 1; d >= -1; d -= 2) {

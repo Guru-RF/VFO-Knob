@@ -28,4 +28,7 @@ python3 tools/mkdocs.py setup      # one guide's
 ```
 
 The pictures carry no scripts and no web fonts, and their ids are unique per
-file, so they work as images and inline alike.
+file, so they work as images and inline alike. A value in an editor's panel
+is fitted as the knob fits it, with Montserrat's own widths read from LVGL's
+font files (under `managed_components/`, fetched by the first
+`idf.py build`), and a browser draws it that wide whatever font it has.

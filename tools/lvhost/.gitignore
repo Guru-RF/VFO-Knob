@@ -1,3 +1,6 @@
 obj/
 vu_compare
+chooser
 *.ppm
+*.png
+fit.tsv
