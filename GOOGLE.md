@@ -369,9 +369,9 @@ The sources for pages about this feature:
 | File | |
 |---|---|
 | `GOOGLE.md` | this page: the setup, its reasons, and every message |
-| `docs/phone.md` | the Telephone guide: the account, the face, calling, the keypad, the headset, the API, and a short Google Contacts section |
+| `docs/phone.md` | the Telephone guide: the account, the face, calling, the keypad, the headset or speaker, the knob's battery, the API, and a short Google Contacts section |
 | `docs/google.html` | the return page itself, to be served as it is at exactly `https://vfoknob.com/google.html`: see [the return page](#1-the-return-page) for what the site must and must not do with it |
-| `docs/phone/*.svg` | the guide's eleven pictures, drawn from the firmware's own layout by `tools/mkdocs.py phone`: the face with its parts named, turning, the keypad, calling, a call coming in, a call with its parts named, DTMF, ended, NO SERVICE, mute, a headset |
+| `docs/phone/*.svg` | the guide's sixteen pictures, drawn from the firmware's own layout by `tools/mkdocs.py phone`: the face with its parts named, turning, the keypad, calling, a call coming in, a call with its parts named, DTMF, ended, NO SERVICE, mute, a headset, the call history, a missed call, a call coming in with a headset and with a speaker, and the knob's own battery |
 | `docs/display-phone.svg` | the face alone on its glass, in a call, for the README (`tools/mkrender.py --glass --radio phone`) |
 | `docs/marketing/phone/` | product renders, SVG and PNG: the knob angled with room for text left or right, and upright on a desk, each in the blue and the black finish (`tools/mkrender.py --radio phone`). The folder is kept out of git (`.gitignore`): it exists where that command ran |
 

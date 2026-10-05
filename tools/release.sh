@@ -93,6 +93,18 @@ DESC=$(git describe --tags --dirty --always)
 [ "$DESC" = "v$VER" ] || {
     echo "HEAD describes as $DESC, not a clean v$VER -- tag it first" >&2
     exit 1; }
+# --dirty sees only what git tracks. A source, a test or a guide's picture
+# never added would be built into these images from the tree, yet be missing
+# from the tag that is to rebuild them -- and from the guides the website
+# pulls. Only where the firmware and its guides live: notes of one's own at
+# the top are not looked at.
+LEFT_OUT=$(git ls-files --others --exclude-standard -- components main companion test docs tools \
+           CMakeLists.txt partitions.csv 'sdkconfig.*' 'dependencies*.lock')
+[ -z "$LEFT_OUT" ] || {
+    echo "untracked -- so not in v$VER -- yet part of this release:" >&2
+    sed 's/^/    /' <<<"$LEFT_OUT" >&2
+    echo "-- commit them with the release (or ignore them) and tag again" >&2
+    exit 1; }
 
 verify_signature() {
     echo "==> verifying the signature before publishing it"
@@ -158,7 +170,7 @@ CFG
     local c
     for c in BOOTLOADER_APP_ROLLBACK_ENABLE=y BOOTLOADER_PROJECT_VER=2 SECURE_SIGNED_APPS_RSA_SCHEME=y \
              SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y BOOTLOADER_WDT_DISABLE_IN_USER_CODE=y ESP32_REV_MIN_3=y \
-             VFO_COMPANION_RELEASE=y; do
+             VFO_COMPANION_RELEASE=y BT_A2DP_ENABLE=y; do
         grep -qx "CONFIG_$c" "$BUILD/sdkconfig" || {
             echo "its sdkconfig has no CONFIG_$c -- refusing to stage it" >&2; exit 1; }
     done

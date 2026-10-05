@@ -1,4 +1,5 @@
-/* The knob's second chip: see ../CMakeLists.txt. */
+/* The knob's second chip -- a Bluetooth headset's audio gateway, or a
+ * speaker's music source: see ../CMakeLists.txt. */
 #include <string.h>
 
 #include "bt_link_proto.h"
@@ -34,7 +35,8 @@ static void hello(bool ask)
     const char *v = esp_app_get_description()->version;
     uint8_t p[40];
     p[0] = BTL_PROTO;
-    p[1] = (ask ? BTL_HELLO_ASK : 0) | (upd_can_take() ? BTL_HELLO_UPDATE : 0);
+    p[1] = (ask ? BTL_HELLO_ASK : 0) | (upd_can_take() ? BTL_HELLO_UPDATE : 0) | BTL_HELLO_SPEAKERS |
+           BTL_HELLO_AV_VOLUME;
     const size_t n = strnlen(v, 32);          /* esp_app_desc_t's version[32] */
     memcpy(p + 2, v, n);
     link_send(BTL_HELLO, p, (uint16_t)(2 + n));
@@ -65,6 +67,10 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
             hello(false);
             hfp_knob_hello();
         }
+        /* What it can do, in every hello: a knob that does not say it keeps
+         * its own microphone while a speaker plays is given no speaker --
+         * every device is a headset to it, as before. */
+        if (n >= 2) hfp_knob_flags(p[1]);
         /* This chip's firmware, as news for it too: the boot story, the INFO
          * -- and a knob restarted mid-update has no update going any more. */
         upd_knob_hello(ask);
@@ -106,7 +112,7 @@ void app_main(void)
     hfp_init();
     s_ready = true;                           /* the knob's frames, from here on */
     /* Hello until the knob answers -- it may have started first, or later --
-     * and the headset's errands meanwhile; and a firmware on trial's: the
+     * and the device's errands meanwhile; and a firmware on trial's: the
      * watchdog fed, kept when the knob says so, back if it never does. */
     int64_t t_hello = 0;
     for (int i = 0;; ) {

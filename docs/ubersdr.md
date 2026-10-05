@@ -22,16 +22,26 @@ the password `admin` until you change it. Under **UberSDR**:
 | Field | |
 |---|---|
 | **Name, on the knob** | what the dial calls it, `ON6URE-TEL` |
-| **Address** | as its page has it: `https://<name>.tunnel.ubersdr.org` through UberSDR's tunnel, or `host:8080` on your own network. A link pasted whole is taken apart: its name, and port 443 |
-| **Port** | `443` through the tunnel (the knob then speaks TLS), the receiver's own on a LAN |
+| **Address** | as its page has it: `https://<name>.tunnel.ubersdr.org` through UberSDR's tunnel, over TLS, or `http://<address>:8080` on your own network, in the clear. A link pasted whole is taken apart: its `https://` or `http://` and name here, its port below |
+| **Port** | `443` through the tunnel; on a LAN the receiver's own, `8080` unless its owner changed it |
 | **Password** | optional: the receiver's bypass password, where its owner gave you one |
 
 Up to four receivers can be listed; **In use** is the one the knob starts
 with. Changes apply on the knob's next boot.
 
+`https://` is TLS and `http://` in the clear, whatever the port; an address
+without either is TLS on port 443 and in the clear on any other. An IP
+address typed alone, a `.local` name or a one-word one is taken for a
+receiver on your network, which no certificate could name: the page puts
+`http://` in front, and 8080 in the port if it said 443.
+
 Without a password the knob listens as a guest, under the receiver's own
 rules: a time limit per session (an hour on many), and a busy receiver may
-turn it away. The password lifts both. Until the receiver answers, the knob
+turn it away. The password lifts both. On the receiver's own network none is
+needed: UberSDR, as it comes, lets private addresses (`10.x`, `172.16-31.x`,
+`192.168.x`) past its limits, and the knob listens there without the tunnel
+and without its time limit. A guest's time left shows on the slab
+([a guest's time](#a-guests-time)). Until the receiver answers, the knob
 says why, with its own addresses:
 
 ![RECEIVER FULL: the receiver turned the knob away](ubersdr/02-no-link.svg)
@@ -43,6 +53,7 @@ says why, with its own addresses:
 | Part | Tap | |
 |---|---|---|
 | **S-meter** | hold: the address card | S-units in UberSDR's colours, red through yellow to green, peak held a second; the level in dBFS under the reading |
+| **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below; over an SSTV picture, none. None on USB power |
 | **SNR** | — | the signal above the noise in the passband, in dB: red at 0, green from 15, as UberSDR colours it |
 | **FIL** | the noise filter | OFF, NR2, RN2, NR4, whichever the receiver runs |
 | **Band** | the band editor | 160 m to 10 m, each band's own frequency |
@@ -51,6 +62,7 @@ says why, with its own addresses:
 | **Frequency** | a digit: the tuning step | the underlined digit is the step |
 | **Step, volume** | volume: its editor | the knob's own level |
 | **The spot or voice** | all of them, on the dial | the one nearest the dial: green while it is heard, white when you are on it, grey beside it; under it where and what it is, and how many there are on the band |
+| **Time left** | — | a guest's, at the slab's left end: whole minutes, or from a hundred on in hours, **1 h 40**; in the last five the seconds too, in amber, red in the last one; only where the receiver limits a guest ([a guest's time](#a-guests-time)) |
 
 Turn the knob to tune: a slow turn moves a step at a time, a flick crosses a
 band. Band and mode change on a tap *on the panel*. The filter, the noise
@@ -66,6 +78,13 @@ only the ones the receiver runs. The knob asks for a filter once the dial
 has rested on it for half a second, and at most once a second, which is as
 often as UberSDR takes them. If all the receiver's filters are in use, the
 knob says **FILTERS FULL** and goes back to what is running.
+
+Unplugged, the knob runs on its own battery and shows its charge at the top
+of the arc, as a phone does; an SSTV picture covers it. On USB power the
+charge cannot be read, and none shows. The address card says which:
+**battery 85 %**, or **on USB power**.
+
+![On its own battery: the knob's charge at the top of the arc](ubersdr/20-battery.svg)
 
 ## Spots and voices
 
@@ -123,13 +142,40 @@ fades from one to the other.
 |---|---|---|
 | ![RX: Web-888](ubersdr/08-rx.svg) | ![The KiwiSDR's S-meter in violet](ubersdr/09-kiwi.svg) | ![BALANCE: L \| R](ubersdr/10-balance.svg) |
 
-## When the receiver ends the session
+## A guest's time
 
-A receiver's owner may limit a session: an hour, often, or less time idle.
-When the receiver ends one, the knob does not start another by itself, as
-UberSDR's own page does not: it asks. Tap the panel for a new session.
-Turning the knob or touching the glass counts as listening, if a receiver
-has an idle timer. With the receiver's password none of this applies.
+A receiver's owner may limit a guest's session: an hour, often. The time
+left is at the left end of the slab, level with the spot: **52 min**, or from
+a hundred minutes on in hours, **1 h 40**; in the last five minutes the
+seconds too, in amber, **4:59**; red in the last minute. A call too long to
+stay centred clear of it moves aside, and only one too long for the room left
+ends in dots. With the receiver's password, or on its own network, there is
+no limit, and nothing shows there.
+
+| The time left | The last five minutes | Idle |
+|---|---|---|
+| ![52 min, at the slab's left end](ubersdr/17-time-left.svg) | ![4:59, in amber](ubersdr/18-last-minutes.svg) | ![idle 0:42, in red](ubersdr/19-idle.svg) |
+
+The knob counts it as the receiver does. A session's time runs from the
+moment it first played, by the clock. Tuning does not move it, nor does a
+dropped connection: the knob comes back to the same session, whose time has
+gone on meanwhile. Where the receiver also keeps an allowance for the day,
+for each address, and that runs out first, the knob counts that instead; it
+only runs while the knob listens.
+
+A receiver may also end a session left idle: nothing done for so many
+minutes. Touching the glass or turning the knob counts as listening, as a
+click does on UberSDR's own page. In the last minute before an idle limit
+would end the session, the knob counts that minute instead, in red:
+**idle 0:42**. Use the knob, and the count is the session's again.
+
+At 0:00 the receiver ends the session, within seconds — up to half a
+minute where it is the day's allowance that ran out, which the receiver
+looks at less often; the count waits at 0:00 meanwhile. The knob does not
+start another by itself, as UberSDR's own page does not: it asks. Tap
+the panel for a new session, with its whole time again. A session that goes
+on a minute past the count, a receiver restarted meanwhile, say, is no longer
+counted.
 
 ![TIME UP: LISTEN AGAIN](ubersdr/13-time-up.svg)
 
@@ -143,8 +189,9 @@ panel, and the knob restarts into it.
 ## From a computer
 
 With the receiver connected, the knob's page opens on its controls, with
-the spots and voices on the band, each one a button that tunes there, and
-the newest pictures of its SSTV gallery. The same works for other programs:
+the spots and voices on the band, each one a button that tunes there, the
+newest pictures of its SSTV gallery, and a guest's time left. The same works
+for other programs:
 
 ```
 GET /api/radio                          the state, as JSON, with the spots and voices
@@ -153,16 +200,27 @@ GET /api/radio/set?freq=14074000        Hz, or MHz with a point (14.074)
 ```
 
 `gain` is the noise filter by its place in the list: 0 off, then the
-receiver's.
+receiver's. In the JSON, under `uber`, `time_left_s` is a guest's time left
+in seconds, as the slab counts it (-1 where no limit applies), and
+`time_left_by` whose limit it is: `session`, `day` or `idle`.
 
 ## A Bluetooth headset
 
 With the companion firmware on the knob's second chip, a Bluetooth headset
 plays the receiver. Only its logo shows, at the right end of the slab, so the
-spots keep their place. Pairing and the companion firmware:
+spots keep their place — and its battery beside it, green, yellow or red,
+where the headset reports it ([its battery](headset.md#its-battery)). A call
+too long to stay centred clear of them moves aside, and only one too long
+for the room left ends in dots. Pairing and the companion firmware:
 [the headset guide](headset.md).
 
 ![A Bluetooth headset connected: its logo beside the spot](ubersdr/15-headset.svg)
+
+A Bluetooth speaker plays the receiver the same way, a fifth of a second or
+so behind the jack, with a speaker beside the spot:
+[A Bluetooth speaker](headset.md#a-bluetooth-speaker).
+
+![A Bluetooth speaker connected: a speaker beside the spot](ubersdr/16-speaker.svg)
 
 ## Another firmware
 

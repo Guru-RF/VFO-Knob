@@ -80,6 +80,7 @@ Until the radio answers, the knob says so, with its own addresses:
 | Part | Tap | |
 |---|---|---|
 | **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
+| **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | FAST, MID, SLOW |
 | **P.AMP** | the preamp editor | OFF, 1, 2 — or ON where the band has only one |
 | **Band** | the band editor | the band's own frequency, on a tap on the panel — only the bands the radio has: on the IC-9700 2 m, 70 cm and 23 cm; on the IC-7300MK2 HF to 4 m; on the IC-905 2 m to 3 cm |
@@ -88,7 +89,14 @@ Until the radio answers, the knob says so, with its own addresses:
 | **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 GHz up the digits read MMMM.kkk.h, and from 10 GHz (the IC-905's 3 cm) the first of them reads 10: 10368.200.0 |
 | **Step, RIT** | RIT: its editor | RIT in amber when set; none on the IC-R8600 |
 | **Volume, mic gain** | their editors | the knob's own levels; the IC-R8600 has only the volume |
-| **PTT** | key, and key off | see [Transmitting](#transmitting); on the IC-R8600 **RECEIVER**, nothing to key |
+| **PTT** | key, and key off; on the IC-7610, hold: the antenna | see [Transmitting](#transmitting) and [the antennas](#main-sub-and-the-antennas-ic-7610); on the IC-705 and the IC-9700 a held press keys as it lifts; on the IC-R8600 **RECEIVER**, nothing to key — hold: the antenna |
+
+Unplugged, the knob runs on its own battery and shows its charge at the top
+of the arc, as a phone does — on every firmware's face. On USB power the
+charge cannot be read, and none shows. The address card says which:
+**battery 85 %**, or **on USB power**.
+
+![On its own battery: the knob's charge at the top of the arc](icom/24-battery.svg)
 
 ## Tuning
 
@@ -116,7 +124,7 @@ Tap a part of the face and its editor comes up; turn the knob to choose.
 |---|---|
 | **From the left** | RF GAIN, then — a tap on it — POWER, in watts: the band's, on the IC-9700 (100 W on 2 m, 75 on 70 cm, 10 on 23 cm). Not on the IC-R8600. With a web SDR playing, BALANCE comes first |
 | **From the right** | the IC-7610's TUNER: in the line, or out; the IC-R8600's SQUELCH |
-| **Down** | RX — LOCAL or a web SDR — then, on the IC-7610, MAIN or SUB and the antenna; on the IC-R8600 the antenna; on the IC-705 and the IC-9700, V/M |
+| **Down** | RX — LOCAL or a web SDR — then, on the IC-7610, MAIN or SUB and the antenna; on the IC-R8600 the antenna; on the IC-705 and the IC-9700, V/M. The antenna is a press held on the slab away, too |
 | **Up** | RADIO: another of the knob's radios |
 
 ### RF gain, power and the tuner
@@ -134,9 +142,19 @@ Swipe down, and after **RX** the IC-7610 offers its receiver and then its
 antenna: ANT1, ANT2, and each with its RX input. Each takes a tap on the panel.
 On SUB the knob does not key the radio: SUB only listens.
 
-| VFO | ANTENNA |
-|---|---|
-| ![VFO: SUB](icom/09-vfo.svg) | ![ANTENNA: ANT1+RX](icom/10-antenna.svg) |
+The antenna is also a press away: hold **PTT** half a second, until the knob
+buzzes, and its editor comes up in place of keying — turn, and tap the panel; a
+tap anywhere else leaves it as it was. A press held that long never keys. A tap
+on PTT is still PTT, keyed 0.15 s after the finger lifts: the glass now and
+then loses a held finger for up to about 0.13 s, and that must never be taken
+for a tap — so two taps closer together than that are one press. On the air a
+touch unkeys at once and no hold opens anything; the knob switches no antenna
+relay under power. On a radio with no antenna to choose — the IC-705, the
+IC-9700 — a tap, or a held press, keys as the finger lifts, as ever.
+
+| VFO | ANTENNA | Held on PTT |
+|---|---|---|
+| ![VFO: SUB](icom/09-vfo.svg) | ![ANTENNA: ANT1+RX](icom/10-antenna.svg) | ![ANTENNA: ANT2, held up from the slab](icom/23-hold-antenna.svg) |
 
 ### Memory mode (IC-705, IC-9700)
 
@@ -159,7 +177,8 @@ The knob tunes the IC-R8600 from 10 kHz to 3 GHz, in its USB, LSB, CW, CW-R,
 AM, FM, WFM and RTTY, with its AGC, its preamp and its filters. From 1 GHz up
 the digits move over — 1296.200.0, a MHz digit more and the 10 Hz one gone —
 and the finest step is 100 Hz. Swipe down, after **RX**, for its antenna:
-ANT1, ANT2 or ANT3. Swipe from the right for its **SQUELCH**, which works in
+ANT1, ANT2 or ANT3 — or hold **RECEIVER** half a second, until the knob buzzes.
+Swipe from the right for its **SQUELCH**, which works in
 every mode, SSB and AM too: 0 % is OPEN, and it applies as the knob turns.
 
 The slab says **RECEIVER**: nothing on the knob keys it — not the glass, not a
@@ -191,6 +210,15 @@ the swipe from the left, fades from one to the other. The SDR is silent while
 you transmit. A web SDR hears what it covers — a KiwiSDR or an UberSDR up to
 30 MHz — so with the IC-R8600 above that, choose LOCAL.
 
+An UberSDR plays here through its Kiwi input: its own address on your
+network with port **8073**, its KiwiSDR compatibility switched on
+(`enable_kiwisdr` in its configuration). Its `https://` tunnel carries its
+own page only, not this. Its bypass password, where you need one, goes in
+**Password** — on its own network you need none — and the time-limit
+password is a KiwiSDR's only. In CW the knob centres the SDR where the
+receiver does: a KiwiSDR on its 500 Hz tone, an UberSDR on the carrier, with
+its own tone.
+
 | RX | Playing | BALANCE |
 |---|---|---|
 | ![RX: Web-888](icom/14-rx.svg) | ![The SDR's S-meter in blue](icom/15-sdr.svg) | ![BALANCE: L \| R](icom/16-balance.svg) |
@@ -198,9 +226,11 @@ you transmit. A web SDR hears what it covers — a KiwiSDR or an UberSDR up to
 ## Transmitting
 
 **PTT** is a toggle: tap to key, tap again to unkey. It keys as the finger
-lifts from a tap — a swipe that starts on it never keys — and on the air a
-touch unkeys at once. The face turns red: SWR across the left half, forward
-power in watts across the right, the microphone on the thin inner ring.
+lifts from a tap — on the IC-7610 0.15 s after, where a press held half a
+second opens the antenna instead — and a swipe that starts on it never keys;
+on the air a touch unkeys at once. The face turns red: SWR across the left
+half, forward power in watts across the right, the microphone on the thin
+inner ring.
 
 The knob's audio reaches the radio over the network: for each over the knob
 switches the radio's modulation input to it — WLAN on the IC-705, LAN on the
@@ -258,9 +288,13 @@ With the companion firmware on the knob's second chip, a Bluetooth headset can
 be the knob's ear and microphone, and its call button the PTT: a press keys,
 the next unkeys. The slab keeps PTT, with the headset's logo at its right
 end — red while the headset has its microphone muted, when neither its button
-nor the slab keys — and the knob's own microphone is off. On the IC-R8600 the headset
-just listens. Pairing, the companion firmware and the boom arm as the PTT:
-[the headset guide](headset.md).
+nor the slab keys — and the knob's own microphone is off. Its battery shows
+beside the logo, green, yellow or red, where the headset reports it
+([its battery](headset.md#its-battery)). On the IC-R8600 the headset
+just listens, as a speaker does. Pairing, the companion firmware and the boom
+arm as the PTT: [the headset guide](headset.md).
+A Bluetooth speaker plays the knob's audio with the jack, and you transmit
+with the knob's own microphone: [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](icom/18-headset.svg)
 

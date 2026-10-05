@@ -81,6 +81,7 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   <div class="row between">
     <div class="row"><span id="rxtag" class="tag" hidden>MAIN</span><span id="modetag" class="tag acc">--</span>
       <span id="filtag" class="tag">--</span><span id="rittag" class="tag" hidden></span></div>
+    <span id="lefttag" class="tag" hidden></span>
     <span id="txbadge" class="txbadge" hidden>TX</span>
   </div>
   <div id="freq" class="freq">--.---.---<small>MHz</small></div>
@@ -124,8 +125,10 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   <h2>Receiver &amp; antenna</h2>
   <div id="rxrow" class="row" hidden><span class="sub" style="margin:0;min-width:86px">VFO</span>
     <button data-rx="0">MAIN</button><button data-rx="1">SUB</button></div>
-  <div id="antrow" class="row" style="margin-top:8px" hidden><span class="sub" style="margin:0;min-width:86px">Antenna</span>
+  <div id="antrow" class="row" style="margin-top:8px" hidden><span id="antlbl" class="sub" style="margin:0;min-width:86px">Antenna</span>
     <span id="ants" class="row"></span></div>
+  <div id="txantrow" class="row" style="margin-top:8px" hidden><span class="sub" style="margin:0;min-width:86px">TX antenna</span>
+    <span id="txants" class="row"></span></div>
 </section>
 
 <section class="ctl" id="spotsec" hidden>
@@ -169,7 +172,8 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   <p>Another radio, by its place in the list from 0 &mdash; the knob restarts into it:<br>
      <code>POST /api/radios/switch</code> with <code>to=1</code></p>
   <p>Also <code>mode</code>, <code>filter</code> (1&ndash;3), <code>agc</code>, <code>gain</code>, <code>rfgain</code> and
-     <code>power</code> (0&ndash;100), <code>tuner</code> (on/off), <code>rx</code> (main/sub), <code>ant</code>,
+     <code>power</code> (0&ndash;100), <code>tuner</code> (on/off), <code>rx</code> (main/sub), <code>ant</code> and
+     <code>txant</code> (by place in the radio's list, from 1),
      <code>rit</code> (Hz)<span id="apisdr" hidden>, and <code>sdr</code> (<code>local</code>, or a web SDR by its
      place in the list, from 0) and <code>balance</code> (&minus;100 the radio alone, 0 the radio left and the SDR
      right, 100 the SDR alone)</span>. Both need this page's login &mdash; <code>http://user:password@&hellip;</code> &mdash;
@@ -191,7 +195,7 @@ const PAL={
  aethersdr:{bg:'#0f0f1a',panel:'#1a2a3a',panel2:'#121e2b',line:'#26394d',text2:'#8ea8c0',label:'#506070',dim:'#3a4a5a',
        accent:'#00b4d8','accent-hi':'#00c8f0',danger:'#ff4d4d',tx:'#e01010',meter:'#00b4d8'},
  ubersdr:{bg:'#090c12',panel:'#141a25',panel2:'#0f141d',line:'#212a39',text2:'#8d99ad',label:'#5c6779',dim:'#2f3b4e',
-       accent:'#08a2fb','accent-hi':'#4db4ff',danger:'#f2646a',tx:'#f2646a',meter:'#45d69a',ok:'#45d69a'}};
+       accent:'#08a2fb','accent-hi':'#4db4ff',warn:'#f2b544',danger:'#f2646a',tx:'#f2646a',meter:'#45d69a',ok:'#45d69a'}};
 const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR',ubersdr:'UberSDR'};
 const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',cwu:'CWU',cwl:'CWL',am:'AM',sam:'SAM',fm:'FM',nfm:'NFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
 const MODES={icom:['usb','lsb','cw','cwr','am','fm','rtty','digu','digl'],
@@ -248,7 +252,9 @@ function render(){
   $('sval').textContent=ready?(sunits(R.smeter)+'  '+Math.round(R.smeter)+(RXONLY(RADIO)?' dBFS':' dBm')
     +(R.have_snr?'  \u00b7  SNR '+Math.round(R.snr)+' dB':'')):'--';
   $('memtag').hidden=!(R.memories&&R.mem_state>0);
-  $('memtag').textContent='MEM '+String(R.mem_group).padStart(2,'0')+'/'+String(R.mem_ch).padStart(2,'0')+(R.mem_name?' '+R.mem_name:'');
+  /* A FlexRadio's memories are one list, with no groups: the memory's number alone. */
+  $('memtag').textContent='MEM '+(R.mem_all?'':String(R.mem_group).padStart(2,'0')+'/')
+    +String(R.mem_ch).padStart(2,'0')+(R.mem_name?' '+R.mem_name:'');
   // bands: 2 m and 70 cm only where the radio tunes that high
   const bands=BANDS.filter(b=>b[1]<=(R.f_max||60000000));
   if($('bands').children.length!==bands.length)btns($('bands'),bands.map(b=>[b[1],b[0]]),hz=>set({freq:hz}));
@@ -273,10 +279,19 @@ function render(){
   $('tunon').classList.toggle('on',R.tuner_on);$('tunoff').classList.toggle('on',!R.tuner_on);
   $('rxant').hidden=!(R.n_rx>1||R.n_ant>0);$('rxrow').hidden=!(R.n_rx>1);$('antrow').hidden=!(R.n_ant>0);
   for(const b of document.querySelectorAll('[data-rx]'))b.classList.toggle('on',+b.dataset.rx===R.rx);
-  if(R.n_ant>0){const items=[];for(let a=1;a<=R.n_ant;a++){items.push([a+':0','ANT'+a]);if(R.has_rx_ant)items.push([a+':1','ANT'+a+'+RX'])}
-    const key=items.map(i=>i[0]).join(',');if($('ants').dataset.k!==key){$('ants').dataset.k=key;
+  /* Antennas by the radio's own names where it has them (a FlexRadio's
+     slice: RX_A, XVTA ...), and its transmit antenna apart. */
+  const AN=(R.ant_names||'').split(',').filter(Boolean), TN=(R.tx_ant_names||'').split(',').filter(Boolean);
+  $('antlbl').textContent=R.n_tx_ant>1||AN.length?'RX antenna':'Antenna';
+  if(R.n_ant>0){const items=[];for(let a=1;a<=R.n_ant;a++){items.push([a+':0',AN[a-1]||'ANT'+a]);if(R.has_rx_ant)items.push([a+':1','ANT'+a+'+RX'])}
+    const key=items.map(i=>i[0]+i[1]).join(',');if($('ants').dataset.k!==key){$('ants').dataset.k=key;
       btns($('ants'),items,v=>{const [a,rx]=v.split(':');set({ant:a,rxant:rx})})}
     mark($('ants'),(R.ant+1)+':'+(R.ant_rx?1:0))}
+  $('txantrow').hidden=!(R.n_tx_ant>1);
+  if(R.n_tx_ant>1){const items=TN.slice(0,R.n_tx_ant).map((n,i)=>[i+1,n]);
+    const key=items.map(i=>i[1]).join(',');if($('txants').dataset.k!==key){$('txants').dataset.k=key;
+      btns($('txants'),items,v=>set({txant:v}))}
+    mark($('txants'),R.tx_ant+1)}
   $('ritv').textContent=(R.rit>0?'+':'')+R.rit+' Hz';
   /* The radios the knob knows: another is a restart away. */
   const RS=R.radios;$('radiosec').hidden=!(RS&&RS.names.length>1);
@@ -299,10 +314,22 @@ function render(){
     $('balbox').hidden=S.sel<0;
     if(!busy('bal')){$('bal').value=S.balance;$('balv').textContent=balText(S.balance)}}
 }
+/* A guest's time left, as the knob's slab says it: whole minutes, hours from
+ * a hundred, the seconds too in the last five; an idle limit's last minute. */
+const leftText=(s,idle)=>idle||s<300?Math.floor(s/60)+':'+String(s%60).padStart(2,'0')
+  :s<6000?Math.floor(s/60)+' min':Math.floor(s/3600)+' h '+String(Math.floor(s/60)%60).padStart(2,'0');
 /* An UberSDR: the spots and voices on the dial's band -- a tap tunes to
- * one, in its mode -- and its SSTV gallery, fetched from the receiver. */
+ * one, in its mode -- its SSTV gallery, fetched from the receiver, and a
+ * guest's time left. */
 function renderUber(U){
   $('spotsec').hidden=!U;$('sstvsec').hidden=!(U&&U.sstv&&U.sstv.length);
+  const L=$('lefttag'),s=U?U.time_left_s:-1,idle=!!U&&U.time_left_by==='idle';
+  L.hidden=!(s>=0);
+  if(s>=0){L.textContent=(idle?'idle ':'')+leftText(s,idle)+' left';
+    L.style.color=idle||s<60?'var(--danger)':s<300?'var(--warn)':'';
+    L.title=idle?'The receiver ends a session left idle: turn the knob or touch it'
+      :U.time_left_by==='day'?'What is left of the receiver’s allowance for the day'
+      :'A guest’s time on the receiver: its password lifts it'}
   if(!U)return;
   const band=(BANDS.find(b=>Math.abs(R.freq-b[1])<Math.max(500000,b[1]*0.05))||[''])[0];
   $('spottitle').textContent='Spots and voices'+(band?' on '+band:'');

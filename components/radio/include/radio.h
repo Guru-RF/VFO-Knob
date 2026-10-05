@@ -94,9 +94,13 @@ typedef struct {
      * what the radio holds in it -- a repeater's name, shift and tone. */
     bool       has_memories;
     uint8_t    mem_state;      /* radio_mem_state_t */
-    uint8_t    mem_group, mem_ch;
+    uint8_t    mem_group;
+    uint16_t   mem_ch;         /* the channel's number, as the radio counts them */
     bool       mem_band;       /* the group is the band the radio is on (the
                                   IC-9700's): none to choose on the dial */
+    bool       mem_all;        /* no groups: the radio's memories are one list
+                                  (the FlexRadio's), stepped through in order
+                                  of frequency */
     char       mem_name[17];   /* "" if it has none */
     int8_t     mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t    mem_offset_hz;
@@ -116,6 +120,15 @@ typedef struct {
     bool       has_rx_ant;     /* ...each also with the RX ANT input */
     bool       ant_rx;         /* receiving on the RX ANT input */
     bool       have_ant;       /* the radio has said which */
+    /* A radio that names its antennas itself -- the FlexRadio's slice, its
+     * ant_list -- names them here, comma-separated, in their order ("ANT1,
+     * ANT2,RX_A"); "" for ANT1 to ANTn. Where the transmit antenna is chosen
+     * apart from the receive one (its tx_ant_list), the antenna editor goes
+     * on to it: n_tx_ant to choose from, tx_ant the one in use. */
+    char       ant_names[40];
+    uint8_t    n_tx_ant, tx_ant;
+    bool       have_tx_ant;
+    char       tx_ant_names[32];
     /* A tune carrier and an antenna tuner the dial can start (the FlexRadio),
      * as SmartSDR's TX panel has them: TUNE, ATU, and the tuner's memories
      * (MEM). The swipe down offers them. */
@@ -264,6 +277,32 @@ void radio_memory_group(uint8_t group);
  * n_ant); no-ops without. Neither is acted on while transmitting. */
 void radio_select_rx(uint8_t rx);
 void radio_set_antenna(uint8_t ant, bool rx_ant);
+/* The transmit antenna, by its place in tx_ant_names, where the radio has
+ * one apart from the receive antenna (n_tx_ant); a no-op without. Not acted
+ * on while transmitting either. */
+void radio_set_tx_antenna(uint8_t ant);
+
+/* The `i`th name of a comma-separated list (ant_names, tx_ant_names) into
+ * `out`, "" past its end: false then. */
+static inline bool radio_list_item(const char *list, int i, char *out, size_t cap)
+{
+    if (cap) out[0] = 0;
+    for (const char *p = list; p && *p; ) {
+        const char *e = p;
+        while (*e && *e != ',') e++;
+        if (e > p && i-- == 0) {
+            size_t n = (size_t)(e - p);
+            if (cap) {
+                if (n >= cap) n = cap - 1;
+                for (size_t k = 0; k < n; k++) out[k] = p[k];
+                out[n] = 0;
+            }
+            return true;
+        }
+        p = *e ? e + 1 : e;
+    }
+    return false;
+}
 
 /* A tune carrier at the radio's tune power (has_tune): keyed and unkeyed
  * through the PTT machine like any over -- confirmed, laddered, dropped with
@@ -291,14 +330,18 @@ bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn);
 
 /* --- radios the client finds for itself -------------------------------
  * Beside the radios configured on the page, a client may find others -- the
- * FlexRadio firmware, those of a SmartLink account. The dial's RADIO chooser
- * and the radio page list them after the configured ones, with how they are
- * reached (radio_found_via). Choosing one makes it the radio in use from the
- * next boot, and the caller restarts the knob; choosing a configured radio
- * gives it up (radio_found_use(-1)). By default a client finds none. */
+ * FlexRadio firmware, those on the LAN by their discovery broadcast and those
+ * of a SmartLink account. The dial's RADIO chooser and the radio page list
+ * them after the configured ones, with how they are reached: the first
+ * radio_found_lan() on the LAN, the rest through radio_found_via(). Choosing
+ * one makes it the radio in use from the next boot -- one on the LAN joins
+ * the configured ones -- and the caller restarts the knob; choosing a
+ * configured radio gives a found one up (radio_found_use(-1)). By default a
+ * client finds none. */
 int         radio_found_count(void);
+int         radio_found_lan(void);             /* the first ones: on the LAN */
 bool        radio_found_get(int i, char *name, size_t cap);
-const char *radio_found_via(void);             /* "SmartLink" */
+const char *radio_found_via(void);             /* the others': "SmartLink" */
 int         radio_found_active(void);          /* -1: a configured radio is in use */
 esp_err_t   radio_found_use(int i);
 void radio_choose(uint8_t i);

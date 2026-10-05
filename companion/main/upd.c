@@ -1,24 +1,24 @@
 /* This chip's own firmware, from the knob. See upd.h.
  *
  * The transfer. BEGIN comes on link_rx, which only looks and holds: a
- * bootloader that can go back, not on trial, no headset -- hfp_try_hold(),
- * which also stops calling the headset meanwhile. The flash work is the `upd`
- * task's, one for each transfer: link_rx hands it DATA and END through a
- * queue and never waits on the flash itself, as the headset's audio passes
- * through it. The task writes the slot not running, erasing each 4 kB sector
- * as the data reaches it (esp_ota_begin(SEQUENTIAL)) and hashing as it goes.
- * At END esp_ota_end() checks the image and its RSA signature against the
- * firmware running -- the S3's key, the one trust anchor without secure boot;
- * then otadata switches to it, and the chip restarts into it.
+ * bootloader that can go back, not on trial, no headset or speaker --
+ * hfp_try_hold(), which also stops calling it meanwhile. The flash work is
+ * the `upd` task's, one for each transfer: link_rx hands it DATA and END
+ * through a queue and never waits on the flash itself, as the device's audio
+ * passes through it. The task writes the slot not running, erasing each 4 kB
+ * sector as the data reaches it (esp_ota_begin(SEQUENTIAL)) and hashing as it
+ * goes. At END esp_ota_end() checks the image and its RSA signature against
+ * the firmware running -- the S3's key, the one trust anchor without secure
+ * boot; then otadata switches to it, and the chip restarts into it.
  *
  * The trial. The bootloader starts a new firmware PENDING_VERIFY and, at the
  * next reset of any kind, marks it ABORTED and goes back to the one before.
  * So the new one keeps itself only once the round trip is proven: the knob's
  * KEEP -- sent when it has read this firmware's INFO saying TRIAL -- and 20 s
- * up, or a headset come. Two minutes without KEEP and it restarts itself, to
- * go back. A hang goes back too: the bootloader's RTC watchdog stays on into
- * the app (BOOTLOADER_WDT_DISABLE_IN_USER_CODE), and only a trial's main loop
- * feeds it.
+ * up, or a headset or a speaker come. Two minutes without KEEP and it
+ * restarts itself, to go back. A hang goes back too: the bootloader's RTC
+ * watchdog stays on into the app (BOOTLOADER_WDT_DISABLE_IN_USER_CODE), and
+ * only a trial's main loop feeds it.
  *
  * What went back, and why. The new firmware writes NVS upd/trial as its trial
  * begins. The firmware before, at its first start after, finds the record --
@@ -160,7 +160,7 @@ static void ver16(char out[16], const char *v)
 static const char *why_str(uint8_t w)
 {
     switch (w) {
-    case BTL_UPD_WHY_HEADSET:    return "a headset";
+    case BTL_UPD_WHY_HEADSET:    return "a headset or a speaker";
     case BTL_UPD_WHY_TRIAL:      return "the firmware running is on trial";
     case BTL_UPD_WHY_BUSY:       return "another image is coming in";
     case BTL_UPD_WHY_SIZE:       return "its size";
@@ -184,7 +184,7 @@ static const char *knob_why_str(uint8_t w)
 {
     switch (w) {
     case BTL_UPD_WHY_BUSY:    return "an over or a call";
-    case BTL_UPD_WHY_HEADSET: return "a headset";
+    case BTL_UPD_WHY_HEADSET: return "a headset or a speaker";
     case BTL_UPD_WHY_KNOB:    return "its own update";
     default:                  return why_str(w);
     }
@@ -629,7 +629,7 @@ static void upd_task(void *arg)
                 end = ended(ver, BTL_UPD_FAILED, BTL_UPD_WHY_SIZE, 0);
                 break;
             }
-            /* A headset's link starting, a scan, audio: it goes first. */
+            /* A headset's or a speaker's link starting, a scan, audio: it goes first. */
             if (!hfp_idle()) {
                 end = ended(ver, BTL_UPD_STOPPED, BTL_UPD_WHY_HEADSET, 0);
                 break;
@@ -674,7 +674,7 @@ static void upd_task(void *arg)
         }
         /* The last moment at which nothing has changed yet: the knob's word
          * -- an over or a call begun while the image was checked, a second
-         * or two -- and a headset, both looked at again. */
+         * or two -- and a headset or a speaker, both looked at again. */
         const uint8_t late = s_stop;
         if (late || !hfp_idle()) {
             end = ended(ver, BTL_UPD_STOPPED, late ? late : BTL_UPD_WHY_HEADSET, 0);
@@ -916,7 +916,7 @@ void upd_tick(void)
         if (now >= s_keep_retry_us) keep(now);
     } else if (now >= TRIAL_US && !s_keep_asked && !hfp_audio_open()) {
         /* A knob with no sender, or a link this firmware broke. The 2
-         * minutes wait while a headset's audio is open: a late KEEP never
+         * minutes wait while a device's audio is open: a late KEEP never
          * drops a call. */
         link_log("not kept: no knob said so in 2 minutes -- going back");
         link_flush();

@@ -24,6 +24,13 @@ CONFIG_BT_HFP_AG_ENABLE=y
 CONFIG_BT_HFP_CLIENT_ENABLE=n
 CONFIG_BT_HFP_AUDIO_DATA_PATH_HCI=y
 CONFIG_BT_HFP_WBS_ENABLE=y
+# A speaker: A2DP, this chip as its source, the stack coding the SBC itself
+# (its internal codec: 44.1 kHz stereo in, main/a2dp.c). AVRCP comes with it,
+# its controller started for a speaker's volume -- the knob's VOLUME, where
+# the speaker takes it (main/a2dp.c); its cover art, on by default, would
+# bring an OBEX client along.
+CONFIG_BT_A2DP_ENABLE=y
+CONFIG_BT_AVRCP_CT_COVER_ART_ENABLED=n
 
 # The knob updates this chip over the UART (main/upd.c). The bootloader is
 # written once, at the bench, never over the link (CMakeLists.txt refuses a

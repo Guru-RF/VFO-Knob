@@ -40,7 +40,7 @@ static const struct { const char *title, *value; bool name; } CASE[] = {
     { "INSTALL", "Telephone 1.18.10",       true },
     { "INSTALL", "AetherSDR 1.18.10",       true },
     { "INSTALL", "FlexRadio 1.18.10",       true },
-    { "INSTALL", "Kiwi888 1.19.0",          true },
+    { "INSTALL", "UberSDR 1.18.10",         true },
     { "WIFI",    "Set up again",            true },
     /* A station's name comes as a question's choice (ED_CHOICE, 23
      * characters at most): the radio list's own are 15. */
@@ -49,6 +49,10 @@ static const struct { const char *title, *value; bool name; } CASE[] = {
     { "MODE",    "USB",                     false },
     { "FILTER",  "FIL1",                    false },
     { "ANTENNA", "ANT1+RX",                 false },
+    /* A FlexRadio's slice names its antennas: RX ANT and TX ANT, a value's
+     * panel, as ANTENNA. */
+    { "RX ANT",  "RX_A",                    false },
+    { "TX ANT",  "XVTB",                    false },
     { "RF.G",    "+8 dB",                   false },
     { "BALANCE", "L | R",                   false },
     { "POWER",   "50 W",                    false },

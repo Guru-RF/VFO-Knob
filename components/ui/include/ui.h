@@ -47,21 +47,36 @@ typedef struct {
      * and its SSTV pictures, a swipe from the right (-1: it has no gallery). */
     bool     has_spots;
     int16_t  n_sstv;
+    /* ...and at the slab's left end a guest's time left, where the receiver
+     * limits one (uber_time_left): the seconds -- `left_idle`, those of an
+     * idle limit's last minute, which a touch gives back. */
+    bool     have_left, left_idle;
+    int32_t  left_s;
     /* Memory mode (radio.h): the knob selects channels instead of tuning, and
      * the channel takes the frequency readout's place. mem_state is UI_MEM_*,
      * in the order of radio_mem_state_t. */
     bool     has_memories;
-    uint8_t  mem_state, mem_group, mem_ch;
+    uint8_t  mem_state, mem_group;
+    uint16_t mem_ch;
     bool     mem_band;       /* the group is the band (the IC-9700): its name shown, no choice */
+    bool     mem_all;        /* no groups (the FlexRadio): the band shown, no choice */
     char     mem_name[17];
     int8_t   mem_duplex;     /* 0 simplex, -1 DUP-, +1 DUP+ */
     int32_t  mem_offset_hz;
     uint16_t mem_tone_dhz;
     /* A second receiver and a choice of antennas (radio.h): the swipe down
-     * chooses those instead of memory mode -- the receiver, then its antenna. */
+     * chooses those instead of memory mode -- the receiver, then its antenna --
+     * and a press held on the slab, the antenna straight away. */
     uint8_t  n_rx, rx;       /* 0 MAIN, 1 SUB */
     uint8_t  n_ant, ant;     /* 0 ANT1 */
     bool     has_rx_ant, ant_rx, have_ant;
+    /* Antennas the radio names itself, comma-separated ("" = ANT1-n), and a
+     * transmit antenna chosen apart from the receive one: after the receive
+     * antenna, a tap on its panel goes on to it (radio.h). */
+    char     ant_names[40];
+    uint8_t  n_tx_ant, tx_ant;
+    bool     have_tx_ant;
+    char     tx_ant_names[32];
     /* A tune carrier and an antenna tuner to start (radio.h): with them the
      * swipe down opens a menu -- TUNE, ATU, and the tuner's memories. */
     bool     has_tune, has_atu, atu_mem;
@@ -116,11 +131,26 @@ typedef struct {
     bool     slice_locked;
     bool     may_key;
     /* A Bluetooth headset (components/bt_link). While one is connected its
-     * button is the PTT and the glass only unkeys: the slab keeps its
-     * caption, and shows the headset's logo at its right end -- red while
-     * the headset has its microphone muted. */
+     * button is a PTT beside the glass: the slab keeps its caption, and
+     * shows the headset's logo at its right end -- red while the headset has
+     * its microphone muted. */
     bool     headset, headset_muted;
     bool     headset_raise;  /* the boom arm is the PTT, and down: "RAISE BOOM", in red */
+    /* A Bluetooth speaker (components/bt_link): a speaker at the slab's right
+     * end, where a headset's logo is -- never red; the knob's own microphone
+     * keys. */
+    bool     speaker;
+    /* The headset's or speaker's battery, where it reports one: beside its
+     * logo, green, yellow or red by its charge (0-100 %). */
+    bool     have_batt;
+    uint8_t  batt;
+    /* The knob's own battery, while it runs on it (board_power_get): its
+     * charge at the top of the arc, over the S-units, as a phone's status
+     * bar has it -- a headset's battery's look and colours. None on USB
+     * power, where it cannot be read, nor until the readings have settled;
+     * none on a radio's face on the air, where the transmit scale is. */
+    bool     knob_batt;
+    uint8_t  knob_pct;
     /* A receiver (the IC-R8600): the slab says RECEIVER and keys nothing; a
      * headset on it just listens. */
     bool     rx_only;
@@ -154,6 +184,13 @@ int32_t ui_take_step_request(void);
 
 /* A tap landed on the PTT pill. Consumed by the caller. */
 bool ui_take_ptt_tap(void);
+
+/* A press held half a second on the slab, where the radio has a choice of
+ * antennas (n_ant), opens their editor instead of keying -- receive antenna
+ * first, then the transmit antenna where there is one -- and the motor says
+ * so, under the finger. Once per press; consumed here. On the air no press
+ * opens anything: any touch unkeys, as ever. */
+bool ui_take_slab_hold(void);
 
 /* --- a receiver's slab (the ubersdr firmware) ------------------------------
  * The spots and voices on the dial's band, in frequency order: the slab
@@ -243,6 +280,7 @@ typedef struct {
     bool     have_mem_group; uint8_t mem_group;
     bool     have_rx;      uint8_t rx;
     bool     have_ant;     uint8_t ant;  bool ant_rx;
+    bool     have_tx_ant;  uint8_t tx_ant;          /* by its place in tx_ant_names */
     uint8_t  action;       /* UI_ACT_*: chosen from the swipe's menu */
     bool     atu_mem;      /* with UI_ACT_MEM: the tuner's memories on */
     bool     live;         /* sent as the knob turns, not on a tap */

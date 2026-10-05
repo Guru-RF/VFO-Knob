@@ -187,13 +187,22 @@ static void mix_block(void)
     const float b  = s_balance / 100.0f;
     const float lr = b > 0 ? 1.0f - b : 1.0f, ls = b > 0 ? b : 0.0f;
     const float rs = b < 0 ? 1.0f + b : 1.0f, rr = b < 0 ? -b : 0.0f;
-    const float g  = s_vol / 100.0f;
+    const uint8_t vol = s_vol;
+    const audio_out_tap_t tap = s_tap;
+    /* The tap's before the volume, which it applies itself (audio_out.h);
+     * then the jack's, mixed again at its volume. */
+    if (tap) {
+        for (int i = 0; i < MIX_FRAMES; i++) {
+            out[2 * i]     = sat16(lr * fr[i] + ls * fs[i]);
+            out[2 * i + 1] = sat16(rs * fs[i] + rr * fr[i]);
+        }
+        tap(out, MIX_FRAMES, vol);
+    }
+    const float g = vol / 100.0f;
     for (int i = 0; i < MIX_FRAMES; i++) {
         out[2 * i]     = sat16(g * (lr * fr[i] + ls * fs[i]));
         out[2 * i + 1] = sat16(g * (rs * fs[i] + rr * fr[i]));
     }
-    const audio_out_tap_t tap = s_tap;
-    if (tap) tap(out, MIX_FRAMES);
     if (s_dac_mute) memset(out, 0, sizeof out);
     size_t written = 0;
     i2s_channel_write(s_tx, out, sizeof out, &written, portMAX_DELAY);
@@ -273,23 +282,26 @@ static void play_task(void *arg)
             continue;
         }
 
-        /* Volume in the playback path, never on the network path: that one
-         * must stay allocation-free and as short as possible, because it
-         * shares a socket with PTT. */
         int16_t *smp   = (int16_t *)p;
         size_t   count = n / sizeof(int16_t);
-        if (s_vol != 100) {
-            int32_t g = s_vol;
-            for (size_t i = 0; i < count; i++)
-                smp[i] = (int16_t)(((int32_t)smp[i] * g) / 100);
-        }
+        const uint8_t vol = s_vol;
 
+        /* The tap's before the volume, which it applies itself (audio_out.h). */
         const audio_out_tap_t tap = s_tap;
         const int64_t t_tap = esp_timer_get_time();
-        if (tap) tap(smp, count / 2);
+        if (tap) tap(smp, count / 2, vol);
         const int64_t tap_held = esp_timer_get_time() - t_tap;
         stall_note("the headset's tap", tap_held);
         if (tap_held > 60000 && s_hold_hook) s_hold_hook("tap", t_tap, tap_held, 0, 0);
+
+        /* Volume in the playback path, never on the network path: that one
+         * must stay allocation-free and as short as possible, because it
+         * shares a socket with PTT. */
+        if (vol != 100) {
+            int32_t g = vol;
+            for (size_t i = 0; i < count; i++)
+                smp[i] = (int16_t)(((int32_t)smp[i] * g) / 100);
+        }
         if (s_dac_mute) memset(smp, 0, n);         /* the headset's alone */
         size_t written = 0;
         const uint32_t done0 = s_dma_done;

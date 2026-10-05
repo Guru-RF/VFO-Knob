@@ -34,6 +34,11 @@
  *    a status is a change made elsewhere. A mode change is the exception: it
  *    brings the mode's filter and AGC back with it.
  *
+ * The radio's memories and the slice's antennas are offered as the Icoms'
+ * are: memory mode, V/M at the end of the swipe down, and the receive and
+ * transmit antennas on a press held on the slab (see their sections). A
+ * radio on the LAN is found by its discovery broadcast (discovery.c).
+ *
  * Audio is Opus both ways, as SmartSDR's own remote audio is: the radio sends
  * 10 ms CELT frames of 24 kHz stereo (40-50 kbit/s, where the uncompressed
  * stream is 1.4 Mbit/s and crackled on WiFi), and takes the microphone the
@@ -55,12 +60,14 @@
 
 #include "audio_in.h"
 #include "audio_out.h"
+#include "discovery.h"
 #include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_tls.h"
+#include "flex_parse.h"
 #include "smartlink.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -94,6 +101,7 @@ static const char *TAG = "flex";
 #define ASK_MS         30000         /* the question unanswered: its default */
 #define N_STATIONS     (RADIO_CHOICES - 1)
 #define N_SLC          8             /* slices a radio has, at most */
+#define N_ANTS         12            /* antennas in a slice's list, at most */
 #define PONG_FRESH_MS  3000
 #define SEND_MS        50            /* tune sets, while turning */
 #define QUIET_MS       300           /* then a status may move the dial */
@@ -168,6 +176,23 @@ typedef struct {
     uint32_t   choices_seq;
     char       ch_title[RADIO_CHOICES][12], ch_name[RADIO_CHOICES][24];
     int8_t     pending_choice;       /* -1 none */
+    /* Memory mode (radio.h) -- the knob's own: a FlexRadio has none, only
+     * memories to apply to a slice. The detents not yet taken, what the
+     * other tasks asked for, and the memory shown, as the face wants it. */
+    bool       mem_mode;
+    uint8_t    mem_state;            /* radio_mem_state_t */
+    int32_t    mem_steps;
+    int8_t     pending_mem;          /* -1 none, 0 leave, 1 enter */
+    uint16_t   n_mem, mem_idx;       /* the radio's memories; the number of the one shown */
+    char       mem_name[17];
+    int8_t     mem_duplex;
+    int32_t    mem_offset_hz;
+    uint16_t   mem_tone_dhz;
+    /* The slice's antennas: the receive and transmit ones in use, and the
+     * slice's lists of each (its ant_list and tx_ant_list); and what the
+     * dial asked for, by place in those lists, -1 none. */
+    char       rxant[8], txant[8], ants[40], tx_ants[32];
+    int8_t     pending_rxant, pending_txant;
 } state_t;
 
 enum { KIND_VOICE = 0, KIND_TUNE, KIND_ATU };
@@ -191,7 +216,7 @@ typedef struct {
 typedef enum {
     P_NONE = 0, P_PING, P_GUI, P_BIND, P_UDPPORT, P_SLICE_LIST, P_PAN_CREATE, P_SLICE_CREATE,
     P_CLIENT_IP,
-    P_RFGAIN_INFO, P_RX_STREAM, P_TX_STREAM, P_XMIT_ON,
+    P_RFGAIN_INFO, P_RX_STREAM, P_TX_STREAM, P_XMIT_ON, P_MEM_APPLY,
 } pend_t;
 
 /* The session: owned by the task, never touched from outside -- save the
@@ -252,6 +277,16 @@ EXT_RAM_BSS_ATTR static struct {
      * hidden panadapter's FFT and waterfall, the rest -- and the longest
      * silence between any two datagrams at all. */
     uint32_t   udp_n[4], udp_b[4], udp_gap_max, udp_last;
+    /* The radio's memories (s_mem, n_mem of them) and memory mode: the one
+     * shown (its place in s_mem; -1 none), the one last applied and the one
+     * shown when memory mode was left (their numbers; -1 none), and the
+     * latest `memory apply`: what it was for, and its command number. */
+    int        n_mem, mem_pos;
+    int32_t    mem_sent, mem_last;
+    uint32_t   t_mem_sel, mem_apply_seq;
+    uint16_t   mem_applying;
+    bool       mem_active_sent;      /* our slice made the active one, this time */
+    bool       mem_full_said;
 } C;
 
 /* What the other tasks asked for, carried out by the flex task. */
@@ -291,21 +326,11 @@ __attribute__((weak)) void haptic_hook(uint8_t effect, uint8_t prio)
 /* --------------------------------------------------------------- parsing */
 
 /* The value of `key` in a space-separated key=value list, NUL-terminated in
- * `out`. The key must start a word: "tx" is not "rit_tx". */
+ * `out`. The key must start a word: "tx" is not "rit_tx". (flex_parse.c's,
+ * which the host tests take.) */
 static bool kv(const char *line, const char *key, char *out, size_t cap)
 {
-    const size_t kl = strlen(key);
-    for (const char *p = line; (p = strstr(p, key)) != NULL; p += kl) {
-        if ((p == line || p[-1] == ' ') && p[kl] == '=') {
-            const char *v = p + kl + 1;
-            size_t n = strcspn(v, " ");
-            if (n >= cap) n = cap - 1;
-            memcpy(out, v, n);
-            out[n] = 0;
-            return true;
-        }
-    }
-    return false;
+    return flex_kv(line, key, out, cap);
 }
 
 static bool kv_long(const char *line, const char *key, long *out)
@@ -328,16 +353,7 @@ static bool kv_hex(const char *line, const char *key, uint32_t *out)
  * 54 MHz frequency to several Hz. */
 static bool kv_mhz(const char *line, const char *key, int64_t *hz)
 {
-    char v[24];
-    if (!kv(line, key, v, sizeof v)) return false;
-    int64_t mhz = strtoll(v, NULL, 10), frac = 0;
-    const char *d = strchr(v, '.');
-    int n = 0;
-    if (d)
-        for (d++; *d >= '0' && *d <= '9' && n < 6; d++, n++) frac = frac * 10 + (*d - '0');
-    for (; n < 6; n++) frac *= 10;
-    *hz = mhz * 1000000 + frac;
-    return true;
+    return flex_kv_mhz(line, key, hz);
 }
 
 static void mhz_text(int64_t hz, char *out, size_t cap)
@@ -591,8 +607,31 @@ typedef struct {
     long     rit_on, rit_freq;
     bool     tx;
     uint32_t pan;
+    char     rxant[8], txant[8];     /* its antennas, and the lists to choose from */
+    char     ants[40], tx_ants[32];
 } slc_t;
 EXT_RAM_BSS_ATTR static slc_t s_slc[N_SLC];
+
+/* A slice's list of antennas as the radio gives it ("ANT1,ANT2,RX_A,RX_B,
+ * XVTA,XVTB"), kept with no empty name, and short of a name that would not
+ * fit whole: one is always chosen by its name, never by its place. */
+static void list_keep(char *out, size_t cap, const char *in)
+{
+    size_t o = 0;
+    for (const char *p = in; *p; ) {
+        const size_t l = strcspn(p, ",");
+        if (l && o + (o ? 1 : 0) + l < cap) {
+            if (o) out[o++] = ',';
+            memcpy(out + o, p, l);
+            o += l;
+        }
+        p += l;
+        if (*p) p++;
+    }
+    out[o] = 0;
+}
+
+static void mem_follow(int64_t f);
 
 /* Whose slices the dial works: our own station's, or the one we dial for. */
 static uint32_t owner_wanted(void) { return C.bound ? C.bound : C.handle; }
@@ -618,8 +657,15 @@ static void follow_slice(int n)
     S.filt_hi  = c->hi;
     S.rit_hz   = c->rit_on ? (int32_t)c->rit_freq : 0;
     S.tx_slice = c->tx;
+    strlcpy(S.rxant, c->rxant, sizeof S.rxant);
+    strlcpy(S.txant, c->txant, sizeof S.txant);
+    strlcpy(S.ants, c->ants, sizeof S.ants);
+    strlcpy(S.tx_ants, c->tx_ants, sizeof S.tx_ants);
     taskEXIT_CRITICAL(&S_LOCK);
-    if (c->hz) on_freq(c->hz);
+    if (c->hz) {
+        on_freq(c->hz);
+        mem_follow(c->hz);                            /* another slice, another frequency */
+    }
     meters_map();
     ESP_LOGI(TAG, "%s slice %d, on panadapter 0x%08lx", C.bound ? "dialling" : "our",
              n, (unsigned long)C.pan);
@@ -670,6 +716,17 @@ static void on_slice_status(int n, const char *line)
     if (tx) c->tx = v != 0;
     uint32_t pan;
     if (kv_hex(line, "pan", &pan) && pan) c->pan = pan;
+    /* Its antennas -- "rxant=ANT1 txant=ANT1 ant_list=ANT1,ANT2,RX_A,RX_B,
+     * XVTA,XVTB tx_ant_list=ANT1,ANT2,XVTA,XVTB" on a FLEX-6600. */
+    char al[64];
+    const bool ra = kv(line, "rxant", s, sizeof s);
+    if (ra) strlcpy(c->rxant, s, sizeof c->rxant);
+    const bool ta = kv(line, "txant", s, sizeof s);
+    if (ta) strlcpy(c->txant, s, sizeof c->txant);
+    const bool rl = kv(line, "ant_list", al, sizeof al);
+    if (rl) list_keep(c->ants, sizeof c->ants, al);
+    const bool tl = kv(line, "tx_ant_list", al, sizeof al);
+    if (tl) list_keep(c->tx_ants, sizeof c->tx_ants, al);
 
     /* Which slice the dial works: our own station's first; when dialling for
      * a station, the one it activates -- where its operator last clicked. */
@@ -688,6 +745,10 @@ static void on_slice_status(int n, const char *line)
     if (hi)  S.filt_hi = c->hi;
     if (ro || rf) S.rit_hz = c->rit_on ? (int32_t)c->rit_freq : 0;
     if (tx)  S.tx_slice = c->tx;
+    if (ra)  strlcpy(S.rxant, c->rxant, sizeof S.rxant);
+    if (ta)  strlcpy(S.txant, c->txant, sizeof S.txant);
+    if (rl)  strlcpy(S.ants, c->ants, sizeof S.ants);
+    if (tl)  strlcpy(S.tx_ants, c->tx_ants, sizeof S.tx_ants);
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
@@ -1007,6 +1068,7 @@ static void subscribe(void)
     cmd(P_NONE, "sub tx all");
     cmd(P_NONE, "sub meter all");
     cmd(P_NONE, "sub atu all");
+    cmd(P_NONE, "sub memories all");
     /* By SmartLink the radio learns our UDP address from the packets
      * themselves (wan_udp): `client udpport` is for the LAN. */
     if (C.wan) return;
@@ -1047,6 +1109,299 @@ static void on_atu_status(const char *line)
     }
 }
 
+/* -------------------------------------------------------------- memories */
+
+/* The radio's memory channels, from `sub memories all`: one list, with no
+ * groups to choose between, kept in order of frequency -- the dial's order.
+ * Memory mode is the knob's own -- a FlexRadio has none, only memories to
+ * apply to a slice -- and works as on the Icoms: V/M on the swipe down, the
+ * memory's name where the frequency was, one memory a detent. Each is put on
+ * the slice with the radio's own `memory apply`, which lands on the client's
+ * active slice: as a station of our own, ours, made so first; dialling for a
+ * station, the one it has active, which the dial works already -- and its
+ * shift and tone after it by the knob (mem_fixup). */
+#define N_MEM        100             /* memories kept: more are not offered */
+#define MEM_STEP_MS  60              /* memory applies, while turning */
+#define MEM_TOL_HZ   50              /* a slice this near a memory is on it */
+
+EXT_RAM_BSS_ATTR static flex_mem_t s_mem[N_MEM];
+
+/* The memory at `pos` as the face shows it: its number, name, shift, tone. */
+static void mem_face(int pos)
+{
+    const flex_mem_t *m = &s_mem[pos];
+    C.mem_pos = pos;
+    taskENTER_CRITICAL(&S_LOCK);
+    S.mem_idx       = m->idx;
+    strlcpy(S.mem_name, m->name, sizeof S.mem_name);
+    S.mem_duplex    = m->duplex;
+    S.mem_offset_hz = m->offset_hz;
+    S.mem_tone_dhz  = m->tone_on ? m->tone_dhz : 0;
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+/* ...and the slice at once, as tuning moves the dial before the radio has
+ * heard: its frequency, mode and filter. The radio's statuses follow, and
+ * agree -- or, where it does not echo them, were never needed. */
+static void mem_show(int pos)
+{
+    const flex_mem_t *m = &s_mem[pos];
+    mem_face(pos);
+    slc_t *c = C.slice >= 0 ? &s_slc[C.slice] : NULL;
+    taskENTER_CRITICAL(&S_LOCK);
+    if (m->hz) {
+        tune_assign(&S.tune, m->hz);
+        S.f_committed = m->hz;
+        if (c) c->hz = m->hz;
+    }
+    if (m->mode[0]) {
+        strlcpy(S.mode, m->mode, sizeof S.mode);
+        if (c) strlcpy(c->mode, m->mode, sizeof c->mode);
+    }
+    if (m->lo || m->hi) {
+        S.filt_lo = m->lo;
+        S.filt_hi = m->hi;
+        if (c) { c->lo = m->lo; c->hi = m->hi; }
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+/* The memory's shift and tone, onto the slice. `memory apply` sets the
+ * repeater's direction and offset but not tx_offset_freq, the one that moves
+ * the transmitter: left as it was, a FLEX-6600 sends a repeater memory's over
+ * on the wrong frequency (AetherSDR #1871) -- and after a repeater, a simplex
+ * memory's over on the repeater's input. So all three, as FlexLib and
+ * AetherSDR set a shift, and the tone with them -- every memory, simplex
+ * ones too. */
+static void mem_fixup(int n, const flex_mem_t *m)
+{
+    const bool shift = m->duplex && m->offset_hz;
+    const long mhz = (long)(m->offset_hz / 1000000), frac = (long)(m->offset_hz % 1000000);
+    char tone[24] = "";
+    if (m->tone_dhz)
+        snprintf(tone, sizeof tone, " fm_tone_value=%u.%u", m->tone_dhz / 10u, m->tone_dhz % 10u);
+    cmd(P_NONE, "slice set %d repeater_offset_dir=%s fm_repeater_offset_freq=%ld.%06ld "
+                "tx_offset_freq=%s%ld.%06ld fm_tone_mode=%s%s", n,
+        m->duplex > 0 ? "up" : m->duplex < 0 ? "down" : "simplex", mhz, frac,
+        shift && m->duplex < 0 ? "-" : "", shift ? mhz : 0L, shift ? frac : 0L,
+        m->tone_on && m->tone_dhz ? "ctcss_tx" : "off", tone);
+}
+
+static void mem_apply(uint32_t t)
+{
+    const flex_mem_t *m = &s_mem[C.mem_pos];
+    const int n = C.slice;
+    if (C.own && !C.mem_active_sent) {
+        C.mem_active_sent = true;
+        cmd(P_NONE, "slice set %d active=1", n);
+    }
+    C.mem_applying  = m->idx;
+    C.mem_sent      = m->idx;
+    C.t_mem_sel     = t;
+    C.mem_apply_seq = cmd(P_MEM_APPLY, "memory apply %u", (unsigned)m->idx);
+    mem_fixup(n, m);
+    /* A status from before it is no change made elsewhere. */
+    taskENTER_CRITICAL(&S_LOCK);
+    S.t_last_send_ms = t;
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+/* `memory apply` refused -- no active slice for it to land on, say: the
+ * slice put on the memory by hand, its frequency, mode, filter, shift and
+ * tone. Only for the memory still shown, and still in memory mode: the dial
+ * may have moved on meanwhile, or left -- what it shows now is applied by
+ * itself. And never on the air: then once the over is done, as mem_task
+ * applies any memory, asking the radio first again. */
+static void mem_by_hand(uint16_t idx)
+{
+    const int n = C.slice;
+    if (!S.mem_mode || n < 0 || C.mem_pos < 0 || C.mem_pos >= C.n_mem ||
+        s_mem[C.mem_pos].idx != idx) return;
+    if (S.ptt.state != PTT_IDLE || S.tx) {
+        C.mem_sent = -1;
+        return;
+    }
+    const flex_mem_t *m = &s_mem[C.mem_pos];
+    const char *api = mode_api(m->mode);
+    char mhz[24];
+    mhz_text(m->hz, mhz, sizeof mhz);
+    ESP_LOGW(TAG, "memory %u not applied by the radio: tuned there by hand", (unsigned)idx);
+    if (api) cmd(P_NONE, "slice set %d mode=%s", n, api);
+    if (m->hz) cmd(P_NONE, "slice tune %d %s", n, mhz);
+    if (m->lo || m->hi) cmd(P_NONE, "filt %d %ld %ld", n, (long)m->lo, (long)m->hi);
+    mem_fixup(n, m);
+}
+
+/* Onto a memory: the one the slice is on, else the one shown when memory
+ * mode was last left, else the nearest -- and applied, so the slice has its
+ * mode, filter, shift and tone, even if it was on its frequency already. */
+static void mem_pick(void)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    const int64_t f = S.tune.f_display;
+    taskEXIT_CRITICAL(&S_LOCK);
+    int pos = flex_mem_on(s_mem, C.n_mem, f, MEM_TOL_HZ);
+    if (pos < 0 && C.mem_last >= 0) pos = flex_mem_find(s_mem, C.n_mem, (uint16_t)C.mem_last);
+    if (pos < 0) pos = flex_mem_nearest(s_mem, C.n_mem, f);
+    C.mem_sent = -1;
+    mem_show(pos);
+    S.mem_state = RADIO_MEM_READY;
+    ESP_LOGI(TAG, "memory mode: M%u \"%s\", %lld Hz", (unsigned)s_mem[pos].idx, s_mem[pos].name,
+             (long long)s_mem[pos].hz);
+}
+
+static void mem_enter(void)
+{
+    S.mem_mode = true;
+    C.mem_active_sent = false;
+    if (C.n_mem) {
+        mem_pick();
+    } else {
+        S.mem_state = RADIO_MEM_EMPTY;
+        ESP_LOGI(TAG, "memory mode: the radio has no memories");
+    }
+}
+
+/* Back to the VFO. Simplex, as on the Icoms, when the knob leaves it: a
+ * shift the face no longer shows must not go on moving the transmitter. Not
+ * when the slice was tuned elsewhere: whoever did that has the say. */
+static void mem_leave(bool simplex)
+{
+    if (C.mem_pos >= 0 && C.mem_pos < C.n_mem) {
+        C.mem_last = s_mem[C.mem_pos].idx;
+        if (simplex && s_mem[C.mem_pos].duplex && C.slice >= 0)
+            cmd(P_NONE, "slice set %d repeater_offset_dir=simplex tx_offset_freq=0.000000", C.slice);
+    }
+    taskENTER_CRITICAL(&S_LOCK);
+    S.mem_mode  = false;
+    S.mem_state = RADIO_MEM_OFF;
+    S.mem_steps = 0;
+    taskEXIT_CRITICAL(&S_LOCK);
+    C.mem_pos  = -1;
+    C.mem_sent = -1;
+    ESP_LOGI(TAG, "VFO mode%s", simplex ? ", simplex" : "");
+}
+
+/* The slice tuned elsewhere in memory mode -- another station on it, or the
+ * one we dial for, or that station's other slice: onto a memory, which is
+ * then the one shown; anywhere else, and memory mode is over. */
+static void mem_follow(int64_t f)
+{
+    if (!S.mem_mode || S.mem_state != RADIO_MEM_READY) return;
+    if (C.mem_pos >= 0 && C.mem_pos < C.n_mem && llabs(s_mem[C.mem_pos].hz - f) <= MEM_TOL_HZ) return;
+    const int pos = flex_mem_on(s_mem, C.n_mem, f, MEM_TOL_HZ);
+    if (pos >= 0) {
+        C.mem_sent = s_mem[pos].idx;               /* the slice is on it already */
+        mem_face(pos);
+        return;
+    }
+    ESP_LOGI(TAG, "the slice was tuned to %lld Hz elsewhere: memory mode left", (long long)f);
+    mem_leave(false);
+}
+
+/* "memory 3 owner=... freq=145.600000 name=ON0ORA mode=FM ...", or "memory
+ * 3 removed": the list, and the memory shown wherever it went in it. */
+static void on_memory_status(const char *body)
+{
+    const int idx = flex_mem_index(body);
+    if (idx < 0) return;
+    const int at = flex_mem_find(s_mem, C.n_mem, (uint16_t)idx);
+    flex_mem_t m;
+    if (at >= 0) m = s_mem[at];
+    else         memset(&m, 0, sizeof m);
+    bool removed;
+    flex_mem_parse(body, &m, &removed);
+    if (removed) {
+        flex_mem_drop(s_mem, &C.n_mem, (uint16_t)idx);
+    } else if (flex_mem_put(s_mem, &C.n_mem, N_MEM, &m) < 0 && !C.mem_full_said) {
+        C.mem_full_said = true;
+        ESP_LOGW(TAG, "more than %d memories: the rest are not offered", N_MEM);
+    }
+    taskENTER_CRITICAL(&S_LOCK);
+    S.n_mem = (uint16_t)C.n_mem;
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (!S.mem_mode || S.mem_state != RADIO_MEM_READY) return;
+    const int pos = flex_mem_find(s_mem, C.n_mem, S.mem_idx);
+    if (pos >= 0) {
+        mem_face(pos);                           /* renamed, perhaps; moved, surely */
+    } else {
+        ESP_LOGI(TAG, "memory %u, the one shown, was removed", (unsigned)S.mem_idx);
+        C.mem_pos = -1;
+        mem_leave(false);
+    }
+}
+
+/* Memory mode's part of the flex task's round: what was asked for, the
+ * knob's detents -- a memory each, round the list -- and the memory shown
+ * onto the radio, at most every MEM_STEP_MS: a quick turn skips memories
+ * rather than queueing them. Never while keyed. */
+static void mem_task(uint32_t t)
+{
+    if (C.slice < 0 || S.link != RADIO_LINK_READY) return;
+    const bool keyed = S.ptt.state != PTT_IDLE || S.tx;
+    const int8_t want = S.pending_mem;
+    if (want >= 0 && !keyed) {
+        S.pending_mem = -1;
+        if (want && !S.mem_mode)      mem_enter();
+        else if (!want && S.mem_mode) mem_leave(true);
+    }
+    if (!S.mem_mode) return;
+    if (!C.n_mem) {
+        S.mem_state = RADIO_MEM_EMPTY;
+        S.mem_steps = 0;
+        return;
+    }
+    if (S.mem_state != RADIO_MEM_READY) mem_pick();     /* memories have come */
+    taskENTER_CRITICAL(&S_LOCK);
+    const int32_t steps = S.mem_steps;
+    S.mem_steps = 0;
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (steps) {
+        const int n = C.n_mem, from = C.mem_pos >= 0 ? C.mem_pos : 0;
+        mem_show((int)(((from + (int)(steps % n)) % n + n) % n));
+    }
+    if (!keyed && C.mem_pos >= 0 && (int32_t)s_mem[C.mem_pos].idx != C.mem_sent &&
+        t - C.t_mem_sel >= MEM_STEP_MS)
+        mem_apply(t);
+}
+
+/* ------------------------------------------------------------- antennas */
+
+/* The antennas asked for on the dial, by name -- the dial's place in the
+ * slice's lists -- and never while transmitting: an antenna relay is not
+ * switched under power. Until then they wait. What the dial shows from then
+ * on is what was asked: the radio does not echo a client's own settings. */
+static void antennas_step(void)
+{
+    if (C.slice < 0 || S.link != RADIO_LINK_READY) return;
+    if (S.ptt.state != PTT_IDLE || S.tx) return;
+    const int8_t rx = S.pending_rxant, tx = S.pending_txant;
+    const int n = C.slice;
+    char name[8];
+    if (rx >= 0) {
+        S.pending_rxant = -1;
+        if (radio_list_item(S.ants, rx, name, sizeof name)) {
+            ESP_LOGI(TAG, "receive antenna: %s", name);
+            cmd(P_NONE, "slice set %d rxant=%s", n, name);
+            strlcpy(s_slc[n].rxant, name, sizeof s_slc[n].rxant);
+            taskENTER_CRITICAL(&S_LOCK);
+            strlcpy(S.rxant, name, sizeof S.rxant);
+            taskEXIT_CRITICAL(&S_LOCK);
+        }
+    }
+    if (tx >= 0) {
+        S.pending_txant = -1;
+        if (radio_list_item(S.tx_ants, tx, name, sizeof name)) {
+            ESP_LOGI(TAG, "transmit antenna: %s", name);
+            cmd(P_NONE, "slice set %d txant=%s", n, name);
+            strlcpy(s_slc[n].txant, name, sizeof s_slc[n].txant);
+            taskENTER_CRITICAL(&S_LOCK);
+            strlcpy(S.txant, name, sizeof S.txant);
+            taskEXIT_CRITICAL(&S_LOCK);
+        }
+    }
+}
+
 static void on_status(char *body, uint32_t t)
 {
     if (strncmp(body, "slice ", 6) == 0) {
@@ -1061,6 +1416,8 @@ static void on_status(char *body, uint32_t t)
         on_atu_status(body);
     } else if (strncmp(body, "client ", 7) == 0) {
         on_client_status(body);
+    } else if (strncmp(body, "memory ", 7) == 0) {
+        on_memory_status(body);
     }
 }
 
@@ -1129,9 +1486,24 @@ static void session_end(const char *why, bool polite)
     C.bound = 0;
     C.n_st = 0;
     memset(s_slc, 0, sizeof s_slc);
+    /* The memories and the antennas are the radio's to say again: the
+     * memory shown is given up -- the radio is authoritative on every
+     * (re)connect -- and so is the memory mode the knob was in. */
+    if (S.mem_mode) ESP_LOGI(TAG, "memory mode left with the session");
+    C.n_mem = 0;
+    C.mem_pos = -1;
+    C.mem_sent = -1;
+    C.mem_apply_seq = 0;
+    C.mem_full_said = false;
     taskENTER_CRITICAL(&S_LOCK);
     S.n_choices = 0;
     S.pending_choice = -1;
+    S.mem_mode = false;
+    S.mem_state = RADIO_MEM_OFF;
+    S.mem_steps = 0;
+    S.n_mem = 0;
+    S.rxant[0] = S.txant[0] = S.ants[0] = S.tx_ants[0] = 0;
+    S.pending_rxant = S.pending_txant = -1;
     taskEXIT_CRITICAL(&S_LOCK);
     C.slice = -1;
     C.pan = C.waterfall = C.rx_stream = 0;
@@ -1379,6 +1751,10 @@ static void on_reply(uint32_t seq, uint32_t code, const char *body, uint32_t t)
             ptt_dispatch(&o);
             break;
         }
+        case P_MEM_APPLY:
+            /* The latest only: an earlier one's refusal is overtaken. */
+            if (seq == C.mem_apply_seq) mem_by_hand(C.mem_applying);
+            break;
         default:
             break;
         }
@@ -1770,7 +2146,7 @@ static void take_requests(void)
 static void tune_out(uint32_t t)
 {
     if (C.slice < 0 || S.link != RADIO_LINK_READY || S.ptt.state != PTT_IDLE) return;
-    bool fire = false;
+    bool fire = false, adopted = false;
     int64_t want = 0;
     taskENTER_CRITICAL(&S_LOCK);
     /* A change made elsewhere, adopted once the knob has been quiet. */
@@ -1781,16 +2157,21 @@ static void tune_out(uint32_t t)
             tune_assign(&S.tune, S.f_server);
             S.f_committed = S.f_server;
             S.reconciles++;
+            adopted = true;
         }
     }
-    if (S.have_freq && S.tune.f_display != S.f_committed &&
+    /* In memory mode the dial steps through memories (mem_task): a tune
+     * sent here would take the slice off the one it is on. */
+    if (!S.mem_mode && S.have_freq && S.tune.f_display != S.f_committed &&
         t - S.t_last_send_ms >= SEND_MS) {
         want = S.tune.f_display;
         S.f_committed = want;
         S.t_last_send_ms = t;
         fire = true;
     }
+    const int64_t now_on = S.f_committed;
     taskEXIT_CRITICAL(&S_LOCK);
+    if (adopted) mem_follow(now_on);
     if (fire) {
         char mhz[24];
         mhz_text(want, mhz, sizeof mhz);
@@ -1985,6 +2366,8 @@ static void flex_task(void *arg)
 
         ptt_step(t);
         take_requests();
+        if (C.fd >= 0) antennas_step();
+        if (C.fd >= 0) mem_task(t);
         tune_out(t);
     }
 }
@@ -2021,6 +2404,9 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     S.gain_step = 8;
     S.tx_allowed = true;
     S.pending_choice = -1;
+    S.pending_mem = S.pending_rxant = S.pending_txant = -1;
+    C.mem_pos = -1;
+    C.mem_sent = C.mem_last = -1;
 
     uuid_load();
     pick_load();
@@ -2059,7 +2445,11 @@ int64_t radio_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
     const uint32_t t = now_ms();
     int64_t f;
     taskENTER_CRITICAL(&S_LOCK);
-    if (detents) {
+    if (detents && S.mem_mode) {
+        /* Memories, one a detent, for the flex task (mem_task). */
+        if (S.mem_state == RADIO_MEM_READY) S.mem_steps += detents;
+        S.t_last_input_ms = t;
+    } else if (detents) {
         if (S.tune.step_hz != step_hz) tune_set_step(&S.tune, step_hz);
         tune_apply(&S.tune, detents, accel_mult, LOOP_MS, F_MIN, F_MAX);
         S.t_last_input_ms = t;
@@ -2124,6 +2514,9 @@ void radio_goto_freq(int64_t hz)
 {
     const uint32_t t = now_ms();
     taskENTER_CRITICAL(&S_LOCK);
+    /* A frequency asked for -- the band editor, the page -- is the VFO's:
+     * out of memory mode first, then there. */
+    if (S.mem_mode) S.pending_mem = 0;
     tune_assign(&S.tune, hz);
     S.t_last_input_ms = t;
     taskEXIT_CRITICAL(&S_LOCK);
@@ -2155,13 +2548,26 @@ void radio_choose(uint8_t i)
     if (i < S.n_choices) S.pending_choice = (int8_t)i;
 }
 
-/* Not yet on the Flex: its memory channels. */
-void radio_memory_mode(bool on)        { (void)on; }
+/* Memory mode, the knob's own (see the memories section); the radio's
+ * memories have no groups to choose. */
+void radio_memory_mode(bool on)        { S.pending_mem = on ? 1 : 0; }
 void radio_memory_group(uint8_t group) { (void)group; }
 
-/* Not yet on the Flex: its receive antennas on the swipe. */
-void radio_select_rx(uint8_t rx)                 { (void)rx; }
-void radio_set_antenna(uint8_t ant, bool rx_ant) { (void)ant; (void)rx_ant; }
+/* The slice's antennas, by their place in its lists. A slice is one
+ * receiver: no second one to select. No RX ANT input either -- RX_A and
+ * RX_B are antennas of their own in its list. */
+void radio_select_rx(uint8_t rx) { (void)rx; }
+
+void radio_set_antenna(uint8_t ant, bool rx_ant)
+{
+    (void)rx_ant;
+    if (ant < N_ANTS) S.pending_rxant = (int8_t)ant;
+}
+
+void radio_set_tx_antenna(uint8_t ant)
+{
+    if (ant < N_ANTS) S.pending_txant = (int8_t)ant;
+}
 
 /* A radio has no talkgroup to lock or mute. */
 void radio_tg_lock(bool locked) { (void)locked; }
@@ -2231,25 +2637,60 @@ void radio_get_status(radio_status_t *o)
     o->n_choices  = S.n_choices;
     o->choice_default = S.choice_default;
     o->choices_seq = S.choices_seq;
+    /* Memory mode, the knob's: one list, no groups. */
+    o->has_memories = S.n_mem > 0 || S.mem_mode;
+    o->mem_all    = true;
+    o->mem_state  = S.mem_mode ? S.mem_state : RADIO_MEM_OFF;
+    o->mem_ch     = S.mem_idx;
+    if (S.mem_mode && S.mem_state == RADIO_MEM_READY) {
+        strlcpy(o->mem_name, S.mem_name, sizeof o->mem_name);
+        o->mem_duplex    = S.mem_duplex;
+        o->mem_offset_hz = S.mem_offset_hz;
+        o->mem_tone_dhz  = S.mem_tone_dhz;
+    }
+    /* The slice's antennas, by name, where it has more than one to choose. */
+    const int n_rx = flex_list_count(S.ants), n_tx = flex_list_count(S.tx_ants);
+    if (n_rx > 1) {
+        const int at = flex_list_find(S.ants, S.rxant);
+        o->n_ant    = (uint8_t)MIN(n_rx, N_ANTS);
+        o->ant      = at >= 0 ? (uint8_t)at : 0;
+        o->have_ant = at >= 0;
+        strlcpy(o->ant_names, S.ants, sizeof o->ant_names);
+    }
+    if (n_tx > 1) {
+        const int at = flex_list_find(S.tx_ants, S.txant);
+        o->n_tx_ant    = (uint8_t)MIN(n_tx, N_ANTS);
+        o->tx_ant      = at >= 0 ? (uint8_t)at : 0;
+        o->have_tx_ant = at >= 0;
+        strlcpy(o->tx_ant_names, S.tx_ants, sizeof o->tx_ant_names);
+    }
     strlcpy(o->mode, S.mode, sizeof o->mode);
     strlcpy(o->agc, S.agc, sizeof o->agc);
     strlcpy(o->last_close, S.last_close, sizeof o->last_close);
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
-/* --- SmartLink's radios, beside the configured ones (radio.h) --------- */
+/* --- radios beside the configured ones (radio.h) ------------------------
+ * First those on the LAN, by their discovery broadcast (discovery.c): one
+ * chosen joins the configured radios. Then SmartLink's. */
 
 int radio_found_count(void)
 {
     sl_init();
-    return sl_enabled() ? sl_count() : 0;
+    disc_start();                       /* listening from the first time anyone asks */
+    disc_news();
+    return disc_lan_count() + (sl_enabled() ? sl_count() : 0);
 }
+
+int radio_found_lan(void) { return disc_lan_count(); }
 
 bool radio_found_get(int i, char *name, size_t cap)
 {
+    const int nl = disc_lan_count();
+    if (i >= 0 && i < nl) return disc_lan_name(i, name, cap);
     sl_init();
     sl_radio_t r;
-    if (!sl_enabled() || !sl_get(i, &r)) {
+    if (!sl_enabled() || !sl_get(i - nl, &r)) {
         if (cap) name[0] = 0;
         return false;
     }
@@ -2268,7 +2709,7 @@ int radio_found_active(void)
     if (!a[0]) return -1;
     for (int i = 0; i < sl_count(); i++) {
         sl_radio_t r;
-        if (sl_get(i, &r) && !strcmp(r.serial, a)) return i;
+        if (sl_get(i, &r) && !strcmp(r.serial, a)) return disc_lan_count() + i;
     }
     return -1;
 }
@@ -2277,15 +2718,33 @@ esp_err_t radio_found_use(int i)
 {
     sl_init();
     if (i < 0) return sl_set_active("");
+    const int nl = disc_lan_count();
+    if (i < nl) {
+        /* On the LAN: one of the configured radios from now on, by its
+         * address -- and no longer one through SmartLink. */
+        const esp_err_t e = disc_lan_use(i);
+        return e == ESP_OK ? sl_set_active("") : e;
+    }
     sl_radio_t r;
-    if (!sl_get(i, &r)) return ESP_ERR_INVALID_ARG;
+    if (!sl_get(i - nl, &r)) return ESP_ERR_INVALID_ARG;
     return sl_set_active(r.serial);
 }
 
-/* The configuration page's SmartLink endpoints (webcfg's hook). */
+/* The configuration page's endpoints (webcfg's hook): SmartLink's, and the
+ * radios found on the LAN. */
 size_t radio_web_endpoints(const httpd_uri_t **out);
 size_t radio_web_endpoints(const httpd_uri_t **out)
 {
+    EXT_RAM_BSS_ATTR static httpd_uri_t all[8];
+    static size_t n;
     sl_init();
-    return sl_web_endpoints(out);
+    if (!n) {
+        const httpd_uri_t *u;
+        size_t k = sl_web_endpoints(&u);
+        for (size_t i = 0; i < k && n < sizeof all / sizeof all[0]; i++) all[n++] = u[i];
+        k = disc_web_endpoints(&u);
+        for (size_t i = 0; i < k && n < sizeof all / sizeof all[0]; i++) all[n++] = u[i];
+    }
+    *out = all;
+    return n;
 }

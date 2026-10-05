@@ -29,6 +29,17 @@ typedef struct {
 } uber_info_t;
 void uber_info(uber_info_t *out);
 
+/* A guest's time left, in seconds, as the receiver will end the session:
+ * its limit on a session, counted from the session's first socket -- on
+ * through a reconnect and every turn of the dial, as the receiver counts
+ * it; only LISTEN AGAIN starts it again -- or its allowance for the day,
+ * where that runs out sooner. In the last minute before an idle limit
+ * would end the session, that minute. -1 where no limit applies (the
+ * password, a LAN address, a receiver with none), before the session's
+ * first socket, and once it has ended. `why`, unless NULL: 'S' the
+ * session's limit, 'D' the day's, 'I' the idle one. */
+int  uber_time_left(char *why);
+
 /* What is on the dial's band that suits its mode, nearest the dial first
  * and then in frequency order: the DX cluster's spots; in a voice mode the
  * voices the receiver hears now, named or not; in CW the skimmer's spots.
@@ -51,7 +62,8 @@ int  uber_spots(uber_spot_t *out, int max, uint32_t *seq);
 void uber_tune_to(uint32_t hz, const char *mode);
 
 /* The knob turned or the glass was touched: an UberSDR with an idle timeout
- * counts only that as listening, as its own page does. */
+ * counts only that as listening, as its own page does -- and it gives an
+ * idle limit's last minute back (uber_time_left). */
 void uber_activity(void);
 
 /* SSTV pictures from the receiver's gallery, newest first: how many (-1: it
@@ -78,8 +90,9 @@ bool uber_sstv_get(uber_sstv_t *out, uint32_t after_seq);
 void uber_sstv_shown(uint32_t seq, bool taken);
 
 /* For the knob's page: the gallery's file names, newest first, and where the
- * receiver is ("https://name.tunnel.ubersdr.org"), for a browser to fetch
- * them from it directly -- each has a _thumb.jpg beside it. */
+ * receiver is ("https://name.tunnel.ubersdr.org", "http://192.168.1.50:8080"),
+ * for a browser to fetch them from it directly -- each has a _thumb.jpg
+ * beside it. */
 int  uber_sstv_files(char (*out)[72], int max);
 void uber_base_url(char *out, size_t cap);
 

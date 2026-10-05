@@ -40,10 +40,15 @@ static int               s_nfound;
 static volatile uint32_t s_ptt_taken;
 static volatile bool     s_hs_conn;     /* a headset is connected: its microphone is the only one */
 static volatile bool     s_hs_audio;    /* ...and its audio is open */
+static volatile bool     s_spk_audio;   /* a speaker's audio is open: it plays what the jack does */
+static volatile bool     s_av_full;     /* ...and its own volume is the knob's VOLUME: it is sent the
+                                           knob's audio before the VOLUME (AUDIO_DN_FULL) */
+static volatile uint8_t  s_av_at = 0xFF; /* ...where it says it plays, 0-127 (0xFF unsaid) */
 static volatile bool     s_mic;         /* keyed: the companion sends the microphone */
 static volatile bool     s_boom;        /* the boom arm is the PTT */
-/* The headset's audio: open whenever it is connected -- a radio's audio never
- * stops -- or, on the telephone, only while it says: its calls. */
+/* The headset's audio -- or the speaker's: open whenever it is connected, as
+ * a radio's audio never stops, or, on the telephone, only while it says: its
+ * calls. */
 #if VFO_RADIO_PHONE
 static volatile bool     s_want_audio = false;
 #else
@@ -100,6 +105,28 @@ static int64_t           s_allow_us;                    /* under s_lock */
 static bool              s_quiet;
 static bool            (*s_busy_cb)(void);
 
+/* A speaker's own volume, the knob's VOLUME (bt_link.h, bt_link_proto.h's
+ * BTL_AV_*). Under s_lock: the knob's loop says its VOLUME and takes the
+ * speaker's turns; link_task sends the one and hears the other. */
+static struct {
+    uint8_t knob;               /* the knob's VOLUME, as its loop last said; 0xFF not yet */
+    uint8_t sent;               /* ...as last sent to the companion, or taken from the speaker; 0xFF none
+                                   since the companion's hello */
+    uint8_t take;               /* a turn of the speaker's own, as the knob's VOLUME, for its loop; 0xFF none */
+    uint8_t turns;              /* the speaker's own turns, as the companion last counted them, */
+    bool    known;              /* ...since this speaker came: a change of them is one */
+    int64_t t_sent;             /* a VOLUME last sent, */
+    int64_t t_dial;             /* ...a new one */
+} s_av = { .knob = 0xFF, .sent = 0xFF, .take = 0xFF };
+/* The dial turning: its latest, no oftener than this; and the same again
+ * this often while a speaker takes it, for a frame lost on the wire. */
+#define AV_EVERY_US 250000
+#define AV_AGAIN_US 5000000
+/* A turn of the speaker's own this soon after a new VOLUME went: the two
+ * crossed on the wire -- the companion counted the turn before it had the
+ * dial's VOLUME, which it sets after -- and the dial's stands. */
+#define AV_CROSS_US 300000
+
 static bool send(uint8_t type, const void *p, uint16_t n)
 {
     static uint8_t *f;
@@ -137,7 +164,11 @@ static void hello(bool ask)
     static const char v[] = "knob";
     uint8_t p[2 + sizeof v];
     p[0] = BTL_PROTO;
-    p[1] = ask ? BTL_HELLO_ASK : 0;
+    /* SPEAKERS: a speaker connected, this knob keys its own microphone and
+     * takes none of the speaker's buttons -- so the companion may play to
+     * one. Without it, every device is a headset to this knob. AV_VOLUME:
+     * it sends a speaker that takes it its VOLUME, and its audio before it. */
+    p[1] = (ask ? BTL_HELLO_ASK : 0) | BTL_HELLO_SPEAKERS | BTL_HELLO_AV_VOLUME;
     memcpy(p + 2, v, sizeof v - 1);
     send(BTL_HELLO, p, sizeof p - 1);
 }
@@ -162,18 +193,28 @@ static void push_config(void)
     send(BTL_CMD_STATE, NULL, 0);
 }
 
-/* The playback task's: everything the jack plays, to the headset's ear, in
- * frames of 10 ms -- a frame lost on the wire is then 10 ms, not 21. */
+/* The playback task's: everything the jack plays, to the headset's ear --
+ * or the speaker's -- in frames of 10 ms: a frame lost on the wire is then
+ * 10 ms, not 21. Given before the VOLUME (audio_out.h), it applies it --
+ * but for a speaker whose own volume is the VOLUME. */
 #define DN_FRAME 240
-static void tap(const int16_t *stereo, size_t frames)
+static void tap(const int16_t *stereo, size_t frames, uint8_t volume)
 {
     /* What the headset is given, measured every 10 s: its chip runs dry
      * when this falls short of the knob's rate, or comes in lumps. */
     static int64_t  t0, t_last;
     static uint32_t sent, pause_max;
-    if (!s_hs_audio) {
+    /* The level sent, in thousandths, and its swell into full level (below):
+     * each stream starts from silence, as the first after a start does --
+     * else one that opens at full level jumps there. */
+    static int32_t g;
+    static bool    was, swell;
+    const bool spk = s_spk_audio;
+    if (!s_hs_audio && !spk) {
         t0 = t_last = 0;
         sent = pause_max = 0;
+        g = 0;
+        was = swell = false;
         return;
     }
     const int64_t now = esp_timer_get_time();
@@ -187,18 +228,59 @@ static void tap(const int16_t *stereo, size_t frames)
     sent += frames;
     if (now - t0 >= 10000000) {
         const double s = (double)(now - t0) / 1e6;
-        ESP_LOGI(TAG, "headset fed %lu samples in %.2f s: %+.0f ppm of %u Hz, longest pause %lu ms",
-                 (unsigned long)sent, s, ((double)sent / s / AUDIO_RATE_HZ - 1.0) * 1e6,
+        ESP_LOGI(TAG, "%s fed %lu samples in %.2f s: %+.0f ppm of %u Hz, longest pause %lu ms",
+                 spk ? "speaker" : "headset", (unsigned long)sent, s,
+                 ((double)sent / s / AUDIO_RATE_HZ - 1.0) * 1e6,
                  (unsigned)AUDIO_RATE_HZ, (unsigned long)pause_max);
         t0 = now;
         sent = pause_max = 0;
     }
+    /* A speaker beside the knob's own microphone: silent while that is keyed,
+     * or the over would carry it. The over itself, not the companion's
+     * microphone (s_mic), which a headset gone in the middle of one turns
+     * off. Not the telephone's: its call goes both ways at once, and its
+     * speakerphone holds the microphone back instead. */
+#if VFO_RADIO_PHONE
+    const bool hush = false;
+#else
+    const bool hush = spk && audio_in_active();
+#endif
+    /* A speaker whose own volume is the knob's VOLUME turns the audio down
+     * itself: it gets it at full level, marked so -- the companion plays
+     * that to such a speaker only. Less, in proportion, what it says it
+     * plays above the VOLUME asked: a step of its own, a set not answered
+     * yet -- the dial just turned down is heard at once. All else gets the
+     * jack's loudness. A VOLUME of 0 is silence on any speaker, whatever its
+     * own 0 is. And a speaker a quarter of all that, 12 dB down: it is a
+     * loudspeaker, and what the VOLUME gives the jack's earphones filled the
+     * room from one at 2 (the JLab, 2026-10-05). In thousandths of full
+     * scale. */
+    const bool full = spk && s_av_full, loud = full && volume;
+    int32_t    want = (int32_t)volume * 10;
+    if (loud) {
+        const uint8_t asked = btl_av_from_knob(volume), at = s_av_at;
+        want = at > asked && at <= 127 ? 1000 * asked / at : 1000;
+    }
+    if (spk) want /= 4;
+    /* Into full level -- the switch to it, or up from a VOLUME of 0 -- no
+     * faster than some 27 dB a second; anything else at once: it swells,
+     * never jumps, and a speaker that took the knob's VOLUME in word only is
+     * heard coming. */
+    if (loud && !was) swell = true;
+    was = loud;
     EXT_RAM_BSS_ATTR static int16_t mono[DN_FRAME];
     while (frames) {
         const size_t n = frames > DN_FRAME ? DN_FRAME : frames;
+        if (!swell || want <= g) {
+            g     = want;
+            swell = false;
+        } else if ((g += g / 32 + 1) >= want) {
+            g     = want;
+            swell = false;
+        }
         for (size_t i = 0; i < n; i++)
-            mono[i] = (int16_t)(((int32_t)stereo[2 * i] + stereo[2 * i + 1]) / 2);
-        send(BTL_AUDIO_DN, mono, (uint16_t)(n * 2));
+            mono[i] = hush ? 0 : (int16_t)((((int32_t)stereo[2 * i] + stereo[2 * i + 1]) / 2) * g / 1000);
+        send(full ? BTL_AUDIO_DN_FULL : BTL_AUDIO_DN, mono, (uint16_t)(n * 2));
         stereo += 2 * n;
         frames -= n;
     }
@@ -220,15 +302,32 @@ static const char *link_name(uint8_t l)
     return l == BTL_LINK_CONNECTED ? "connected" : l == BTL_LINK_CONNECTING ? "connecting" : "idle";
 }
 
+static const char *audio_name(uint8_t a)
+{
+    return a == BTL_AUDIO_SBC_44K    ? ", audio SBC 44.1 kHz"
+           : a == BTL_AUDIO_MSBC_16K ? ", audio mSBC 16 kHz"
+           : a == BTL_AUDIO_CVSD_8K  ? ", audio CVSD 8 kHz" : "";
+}
+
 /* While a headset is connected the knob's own microphone is off: keying
  * takes the headset's, or -- its audio not open yet -- silence, never the
- * knob's across the room. */
-static void headset(bool conn, bool audio)
+ * knob's across the room. A speaker leaves it on: keying takes the knob's
+ * own, as with nothing connected, and the speaker only listens. */
+static void device(const btl_state_t *s)
 {
-    s_hs_audio = conn && audio;
-    if (conn == s_hs_conn) return;
-    s_hs_conn = conn;
-    audio_in_use_ext(conn);
+    const bool conn = s->link == BTL_LINK_CONNECTED, open = s->audio != BTL_AUDIO_NONE;
+    const bool spk  = s->kind == BTL_KIND_SPEAKER;
+    /* Full level only to a speaker whose own volume the companion says is
+     * the knob's -- and off before anything else is on: the tap reads them
+     * as it goes. Where it plays first, for the tap's sums. */
+    const bool full = conn && spk && open && (s->av & BTL_AV_SET);
+    s_av_at     = full ? s->av_volume : 0xFF;
+    s_av_full   = full;
+    s_hs_audio  = conn && !spk && open;
+    s_spk_audio = conn && spk && open;
+    if ((conn && !spk) == s_hs_conn) return;
+    s_hs_conn = conn && !spk;
+    audio_in_use_ext(s_hs_conn);
 }
 
 static void on_state(const uint8_t *p, uint16_t n)
@@ -242,16 +341,68 @@ static void on_state(const uint8_t *p, uint16_t n)
     was = s_st.hs;
     s_st.hs = s;
     taskEXIT_CRITICAL(&s_lock);
-    if (s.link != was.link || s.audio != was.audio)
-        ESP_LOGI(TAG, "headset %s: %s%s", s.name[0] ? s.name : "-", link_name(s.link),
-                 s.audio == BTL_AUDIO_MSBC_16K ? ", audio mSBC 16 kHz"
-                 : s.audio == BTL_AUDIO_CVSD_8K ? ", audio CVSD 8 kHz" : "");
-    headset(s.link == BTL_LINK_CONNECTED, s.audio != BTL_AUDIO_NONE);
-    if (s.link == BTL_LINK_CONNECTED && (s.mic == 0) != (was.link == BTL_LINK_CONNECTED && was.mic == 0))
+    const bool spk = s.kind == BTL_KIND_SPEAKER;
+    if (s.link != was.link || s.audio != was.audio || s.kind != was.kind)
+        ESP_LOGI(TAG, "%s %s: %s%s", spk ? "speaker" : "headset", s.name[0] ? s.name : "-",
+                 link_name(s.link), audio_name(s.audio));
+    /* How far behind the jack a speaker plays: the telephone holds its
+     * microphone back that much longer after the far end. */
+    if (spk && s.audio == BTL_AUDIO_SBC_44K && s.delay_ms && s.delay_ms != was.delay_ms)
+        ESP_LOGI(TAG, "speaker %s: %u ms behind the jack", s.name[0] ? s.name : "-", (unsigned)s.delay_ms);
+    device(&s);
+    const bool hs     = s.link == BTL_LINK_CONNECTED && !spk;
+    const bool hs_was = was.link == BTL_LINK_CONNECTED && was.kind != BTL_KIND_SPEAKER;
+    if (hs && (s.mic == 0) != (hs_was && was.mic == 0))
         ESP_LOGI(TAG, "headset microphone %s", s.mic == 0 ? "muted" : "live");
-    /* A headset coming, there, or looked for, while an update goes over:
-     * it comes first. The chip calls no headset meanwhile, so this is one
-     * coming of its own -- switched on -- or the page's scan. */
+    /* A speaker's own volume. While it takes the knob's, a turn of its own
+     * -- the companion counts them -- comes back as the knob's VOLUME, and
+     * is not sent back to it; unless it crossed a new VOLUME of the dial's
+     * on the wire, which the companion sets after it. The companion keeps
+     * the knob's VOLUME for the next speaker that takes it. */
+    const bool takes       = s.link == BTL_LINK_CONNECTED && spk && (s.av & BTL_AV_TAKES);
+    const bool set         = takes && (s.av & BTL_AV_SET);
+    const bool refused     = takes && (s.av & BTL_AV_REFUSED);
+    const bool takes_was   = was.link == BTL_LINK_CONNECTED && was.kind == BTL_KIND_SPEAKER && (was.av & BTL_AV_TAKES);
+    const bool set_was     = takes_was && (was.av & BTL_AV_SET);
+    const bool refused_was = takes_was && (was.av & BTL_AV_REFUSED);
+    const int64_t now      = esp_timer_get_time();
+    uint8_t own = 0xFF;
+    bool crossed = false;
+    taskENTER_CRITICAL(&s_lock);
+    if (!takes) {
+        s_av.take  = 0xFF;
+        s_av.known = false;
+    } else {
+        if (set && s_av.known && s.av_turns != s_av.turns && s.av_volume <= 127) {
+            if (now - s_av.t_dial >= AV_CROSS_US) {
+                own = btl_av_to_knob(s.av_volume);
+                s_av.take = own;
+                s_av.sent = own;        /* where it is now */
+            } else {
+                crossed = true;
+            }
+        }
+        s_av.turns = s.av_turns;
+        s_av.known = true;
+    }
+    taskEXIT_CRITICAL(&s_lock);
+    const char *sn = s.name[0] ? s.name : "-";
+    if (takes && !takes_was) ESP_LOGI(TAG, "speaker %s takes its volume from the knob", sn);
+    if (set != set_was && (set || (s.link == BTL_LINK_CONNECTED && spk)))
+        ESP_LOGI(TAG, "speaker %s: %s", sn,
+                 set ? "its own volume is the knob's VOLUME -- its audio goes at full level"
+                     : "its audio at the knob's VOLUME again");
+    if (refused && !refused_was)
+        ESP_LOGI(TAG, "speaker %s did not take the knob's VOLUME: it keeps its own, the knob scales its audio", sn);
+    if (own != 0xFF)
+        ESP_LOGI(TAG, "speaker %s turned itself to %u of 127: the knob's VOLUME %u", sn, (unsigned)s.av_volume,
+                 (unsigned)own);
+    if (crossed)
+        ESP_LOGI(TAG, "speaker %s turned itself to %u of 127 as the dial turned: the dial's VOLUME stands", sn,
+                 (unsigned)s.av_volume);
+    /* A headset or a speaker coming, there, or looked for, while an update
+     * goes over: it comes first. The chip calls none meanwhile, so this is
+     * one coming of its own -- switched on -- or the page's scan. */
     if ((s.link != BTL_LINK_IDLE || s.scanning || s.audio != BTL_AUDIO_NONE) &&
         (U.ph == U_BEGIN || U.ph == U_SEND || U.ph == U_END))
         upd_stop_req(BTL_UPD_WHY_HEADSET);
@@ -313,7 +464,7 @@ static const char *hex8(char out[17], const uint8_t *b)
 static const char *why_words(uint8_t w)
 {
     switch (w) {
-    case BTL_UPD_WHY_HEADSET:    return "a headset";
+    case BTL_UPD_WHY_HEADSET:    return "a headset or a speaker";
     case BTL_UPD_WHY_TRIAL:      return "the firmware it runs is on trial";
     case BTL_UPD_WHY_BUSY:       return "another image is coming in";
     case BTL_UPD_WHY_SIZE:       return "its size";
@@ -330,7 +481,7 @@ static const char *why_words(uint8_t w)
     case BTL_UPD_WHY_RESTARTED:  return "it restarted";
     case BT_UPD_WHY_OVER:        return "an over";
     case BT_UPD_WHY_CALL:        return "a call";
-    case BT_UPD_WHY_PAGE:        return "the headset page";
+    case BT_UPD_WHY_PAGE:        return "the Bluetooth page";
     case BT_UPD_WHY_HELD:        return "the knob was busy";
     case BT_UPD_WHY_GONE:        return "the chip went quiet";
     case BT_UPD_WHY_NO_ANSWER:   return "no answer";
@@ -423,10 +574,10 @@ static void let_go(void)
     pub(BT_UPD_IDLE, 0);
 }
 
-/* Held for the next quiet moment. A headset in the way that never
- * connected -- a remembered one, switched off, which the chip calls every
- * minute for 5 s -- leaves the quiet as it was, and BEGIN goes again soon;
- * anything else starts the two minutes over. */
+/* Held for the next quiet moment. A headset or speaker in the way that
+ * never connected -- a remembered one, switched off, which the chip calls
+ * every minute for 5 s -- leaves the quiet as it was, and BEGIN goes again
+ * soon; anything else starts the two minutes over. */
 static void again(uint8_t why, int64_t now)
 {
     U.ph = U_WAIT;
@@ -749,8 +900,8 @@ static void wait_pass(int64_t now, uint8_t stop, bool allow)
     const bool headset_stop = stop == BTL_UPD_WHY_HEADSET || stop == BT_UPD_WHY_PAGE;
     if (headset_stop) U.retry_at = now + HEADSET_AGAIN_US;
     /* Quiet: the caller says so, no over or call, the chip there and ready
-     * for it, no headset connected or looked for. A headset the chip only
-     * calls breaks nothing: BEGIN waits for the call to end. */
+     * for it, no headset or speaker connected, none looked for. One the chip
+     * only calls breaks nothing: BEGIN waits for the call to end. */
     const bool quiet = allow && (!stop || headset_stop) && !U.busy && s_st.companion &&
                        (s_st.flags & BTL_HELLO_UPDATE) && s_upd.info && s_upd.chip.state != BTL_RUN_TRIAL &&
                        (U.forced || (s_upd.chip.flags & BTL_INFO_RELEASE)) &&
@@ -907,9 +1058,13 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
         strlcpy(s_st.version, v, sizeof s_st.version);
         /* Restarted: what it said of its firmware before is old news. */
         if (ask) s_upd.info = false;
+        /* The knob's VOLUME, for a speaker's own: said again (av_pass). */
+        s_av.sent = 0xFF;
         taskEXIT_CRITICAL(&s_lock);
-        if (first || ask) ESP_LOGI(TAG, "the companion %s: protocol %u, %s%s", ask ? "started" : "answers",
-                                   n ? p[0] : 0, v, (flags & BTL_HELLO_UPDATE) ? ", takes updates" : "");
+        if (first || ask) ESP_LOGI(TAG, "the companion %s: protocol %u, %s%s%s%s", ask ? "started" : "answers",
+                                   n ? p[0] : 0, v, (flags & BTL_HELLO_UPDATE) ? ", takes updates" : "",
+                                   (flags & BTL_HELLO_SPEAKERS) ? ", plays to speakers" : "",
+                                   (flags & BTL_HELLO_AV_VOLUME) ? ", sets their volume" : "");
         if (ask) {
             hello(false);
             upd_chip_started(now);
@@ -938,26 +1093,31 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
         if (n && (p[0] == BTL_BTN_HANGUP || p[0] == BTL_BTN_ANSWER)) {
             /* Only from a headset that is there: the second chip's firmware
              * changes by itself now, and none of it, faulty or not, keys the
-             * radio -- nor answers a call -- without one. */
+             * radio -- nor answers a call -- without one. A speaker's own
+             * hands-free link may send its buttons too: they key nothing. */
             taskENTER_CRITICAL(&s_lock);
-            const bool there = s_st.hs.link == BTL_LINK_CONNECTED;
+            const bool spk   = s_st.hs.kind == BTL_KIND_SPEAKER;
+            const bool there = s_st.hs.link == BTL_LINK_CONNECTED && !spk;
             if (there) s_st.presses++;
             taskEXIT_CRITICAL(&s_lock);
-            if (!there) ESP_LOGW(TAG, "a headset's button, with no headset connected: not taken");
+            if (spk)         ESP_LOGI(TAG, "a speaker's button: not taken -- a speaker keys nothing");
+            else if (!there) ESP_LOGW(TAG, "a headset's button, with no headset connected: not taken");
         }
         break;
     case BTL_EVT_VOLUME:
         /* The headset's own gains, as it changes them. A headset that mutes
-         * its microphone says so as a gain of 0 -- the Jabras do. */
+         * its microphone says so as a gain of 0 -- the Jabras do. A
+         * speaker's hands-free link may say them too: nothing is muted. */
         if (n >= 2) {
             taskENTER_CRITICAL(&s_lock);
             const bool was_muted = s_st.hs.mic == 0;
+            const bool spk       = s_st.hs.kind == BTL_KIND_SPEAKER;
             s_st.hs.spk = p[0];
             s_st.hs.mic = p[1];
             taskEXIT_CRITICAL(&s_lock);
-            if ((p[1] == 0) != was_muted)
+            if (!spk && (p[1] == 0) != was_muted)
                 ESP_LOGI(TAG, "headset microphone %s", p[1] == 0 ? "muted" : "live");
-            ESP_LOGD(TAG, "headset volume %u, microphone %u", p[0], p[1]);
+            ESP_LOGD(TAG, "%s volume %u, microphone %u", spk ? "speaker" : "headset", p[0], p[1]);
         }
         break;
     case BTL_EVT_LOG:
@@ -981,6 +1141,31 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
         ESP_LOGD(TAG, "frame 0x%02x, %u bytes", type, n);
         break;
     }
+}
+
+/* The knob's VOLUME to a companion that sets a speaker's own with it (its
+ * hello's AV_VOLUME), which keeps it for the speaker that takes it: after
+ * its hello, and as it changes -- the dial turning, its latest no oftener
+ * than AV_EVERY_US -- and the same again every AV_AGAIN_US while a speaker
+ * takes it, in case one was lost on the wire. Not while a turn of the
+ * speaker's own waits for the knob's loop: that is the VOLUME now. */
+static void av_pass(int64_t now)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const bool can   = s_st.companion && (s_st.flags & BTL_HELLO_AV_VOLUME);
+    const bool takes = can && s_st.hs.link == BTL_LINK_CONNECTED && s_st.hs.kind == BTL_KIND_SPEAKER &&
+                       (s_st.hs.av & BTL_AV_TAKES);
+    const uint8_t v    = s_av.knob;
+    const bool    news = v != s_av.sent;
+    const bool    go   = can && v <= 100 && s_av.take == 0xFF &&
+                         ((news && now - s_av.t_sent >= AV_EVERY_US) || (takes && now - s_av.t_sent >= AV_AGAIN_US));
+    if (go) {
+        if (news) s_av.t_dial = now;
+        s_av.sent   = v;
+        s_av.t_sent = now;
+    }
+    taskEXIT_CRITICAL(&s_lock);
+    if (go) send(BTL_CMD_AV_VOLUME, &v, 1);
 }
 
 static void link_task(void *arg)
@@ -1024,10 +1209,15 @@ static void link_task(void *arg)
             s_st.companion = false;
             memset(&s_st.hs, 0, sizeof s_st.hs);
             s_upd.info = false;
+            s_av.sent  = 0xFF;
+            s_av.take  = 0xFF;
+            s_av.known = false;
             taskEXIT_CRITICAL(&s_lock);
-            headset(false, false);
+            static const btl_state_t none;
+            device(&none);
             if (upd_quick()) stopped(BT_UPD_WHY_GONE, true, now);
         }
+        av_pass(now);
         upd_pass(now);
     }
 }
@@ -1045,9 +1235,32 @@ bool bt_link_headset_audio(void) { return s_hs_audio; }
 bool bt_link_headset_connected(void)
 {
     taskENTER_CRITICAL(&s_lock);
-    const bool c = s_st.companion && s_st.hs.link == BTL_LINK_CONNECTED;
+    const bool c = s_st.companion && s_st.hs.link == BTL_LINK_CONNECTED && s_st.hs.kind != BTL_KIND_SPEAKER;
     taskEXIT_CRITICAL(&s_lock);
     return c;
+}
+
+bool bt_link_speaker_connected(void)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const bool c = s_st.companion && s_st.hs.link == BTL_LINK_CONNECTED && s_st.hs.kind == BTL_KIND_SPEAKER;
+    taskEXIT_CRITICAL(&s_lock);
+    return c;
+}
+
+bool bt_link_speaker_audio(void) { return s_spk_audio; }
+
+/* A speaker whose companion says nothing of its delay: about what an A2DP
+ * sink keeps, with the companion's own buffer and the stream's tick. */
+#define SPK_DELAY_MS 250
+
+uint32_t bt_link_speaker_delay_ms(void)
+{
+    if (!s_spk_audio) return 0;
+    taskENTER_CRITICAL(&s_lock);
+    const uint32_t d = s_st.hs.delay_ms;
+    taskEXIT_CRITICAL(&s_lock);
+    return d ? d : SPK_DELAY_MS;
 }
 
 bool bt_link_boom_ptt(void) { return s_boom; }
@@ -1068,9 +1281,20 @@ void bt_link_set_boom_ptt(bool on)
 bool bt_link_headset_muted(void)
 {
     taskENTER_CRITICAL(&s_lock);
-    const bool m = s_st.companion && s_st.hs.link == BTL_LINK_CONNECTED && s_st.hs.mic == 0;
+    const bool m = s_st.companion && s_st.hs.link == BTL_LINK_CONNECTED && s_st.hs.kind != BTL_KIND_SPEAKER &&
+                   s_st.hs.mic == 0;
     taskEXIT_CRITICAL(&s_lock);
     return m;
+}
+
+int bt_link_battery(void)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const bool known = s_st.companion && s_st.hs.link == BTL_LINK_CONNECTED && s_st.hs.batt != BTL_BATT_NONE &&
+                       s_st.hs.batt_pct <= 100;
+    const int pct = known ? s_st.hs.batt_pct : -1;
+    taskEXIT_CRITICAL(&s_lock);
+    return pct;
 }
 
 int bt_link_found(btl_found_t *out, int max)
@@ -1082,8 +1306,8 @@ int bt_link_found(btl_found_t *out, int max)
     return n;
 }
 
-/* The page's headset buttons: someone at the headsets, which come first --
- * an update of the second chip going steps aside. */
+/* The page's Bluetooth buttons: someone at the headsets and speakers, which
+ * come first -- an update of the second chip going steps aside. */
 void bt_link_scan(uint8_t seconds)
 {
     upd_stop_req(BT_UPD_WHY_PAGE);
@@ -1118,6 +1342,53 @@ void bt_link_forget(const uint8_t bda[6])
 {
     upd_stop_req(BT_UPD_WHY_PAGE);
     send(BTL_CMD_FORGET, bda, 6);
+}
+
+bool bt_link_set_kind(const uint8_t bda[6], uint8_t kind)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const bool can = s_st.companion && (s_st.flags & BTL_HELLO_SPEAKERS);
+    taskEXIT_CRITICAL(&s_lock);
+    if (!can) return false;                     /* a companion before speakers: it knows headsets only */
+    upd_stop_req(BT_UPD_WHY_PAGE);
+    uint8_t p[7];
+    memcpy(p, bda, 6);
+    p[6] = kind == BTL_KIND_SPEAKER ? BTL_KIND_SPEAKER : BTL_KIND_HEADSET;
+    return send(BTL_CMD_KIND, p, sizeof p);
+}
+
+void bt_link_set_volume(uint8_t vol)
+{
+    taskENTER_CRITICAL(&s_lock);
+    s_av.knob = vol > 100 ? 100 : vol;
+    taskEXIT_CRITICAL(&s_lock);
+}
+
+bool bt_link_take_volume(uint8_t *vol)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const uint8_t t = s_av.take;
+    if (t != 0xFF) {
+        s_av.knob = t;                  /* the VOLUME from now on: nothing to send back */
+        s_av.take = 0xFF;
+    }
+    taskEXIT_CRITICAL(&s_lock);
+    if (t == 0xFF || !vol) return false;
+    *vol = t;
+    return true;
+}
+
+uint8_t bt_link_speaker_volume(void)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const bool    spk = s_st.companion && s_st.hs.link == BTL_LINK_CONNECTED && s_st.hs.kind == BTL_KIND_SPEAKER;
+    const uint8_t av  = s_st.hs.av;
+    taskEXIT_CRITICAL(&s_lock);
+    return !spk                    ? BT_VOL_NONE
+           : (av & BTL_AV_SET)     ? BT_VOL_KNOB
+           : (av & BTL_AV_REFUSED) ? BT_VOL_REFUSED
+           : (av & BTL_AV_TAKES)   ? BT_VOL_ASKING
+                                   : BT_VOL_OWN;
 }
 
 bool bt_link_take_ptt(void)

@@ -18,6 +18,13 @@ If the knob already knows a WiFi network, it spends up to 25 seconds joining
 it, and goes straight to [the firmware list](#4-choose-your-radios-firmware).
 Otherwise it opens a hotspot of its own.
 
+Unplugged, on its own battery, the knob shows its charge at the top, over
+each screen's title, as a phone does: full to empty by the quarter, green
+from half its charge up, yellow under that, red at a fifth and below. On USB
+power the charge cannot be read, and none shows.
+
+![On its own battery: the knob's charge over the title](setup/15-battery.svg)
+
 ## 2. Join the knob's hotspot with your phone
 
 The knob comes up as an open WiFi network, **VFOKnob**, and says so.
@@ -89,8 +96,9 @@ guide for that firmware.
 To install another radio's firmware, go back to the list from the knob itself.
 
 1. Hold a finger on the S-meter, at the top of the face, until the knob
-   clicks: the address card comes up — the firmware and its version, then
-   the knob's addresses. Let go.
+   clicks: the address card comes up — the firmware and its version, the
+   knob's power (**on USB power**, or **battery 85 %**), then its
+   addresses. Let go.
 
    ![The address card, held up on the S-meter](setup/11-address-card.svg)
 
@@ -145,10 +153,10 @@ checked as for a download. So:
 - with the update server out of reach, the setup firmware lists what is on
   the card, **From the SD card**, and installs from it.
 
-The card keeps the second chip's firmware too, the Bluetooth headset's: the
-setup firmware puts it there with the others, and a radio's firmware hands it
-to the chip by itself when it is newer than the one the chip runs — see
-[the headset guide](headset.md#the-second-chip).
+The card keeps the second chip's firmware too, the Bluetooth headset's and
+speaker's: the setup firmware puts it there with the others, and a radio's
+firmware hands it to the chip by itself when it is newer than the one the
+chip runs — see [the headset guide](headset.md#the-second-chip).
 
 Everything of the knob's is in one folder on the card, `VFO-KNOB`; nothing
 else on it is touched. A knob without a card works as before, downloading
@@ -161,6 +169,6 @@ each time.
 | **Could not join** *network*: **wrong password?** | Check the password on the phone's page and connect again. |
 | **Could not join** *network*: **network not found** | The network is out of reach, or a 5 GHz-only one: the knob uses 2.4 GHz. |
 | **None found. Is the network online? Trying again.** | The knob is on the network but cannot reach the update server; it keeps trying. |
-| **WiFi would not start.** | Power the knob off and on again. |
+| **WiFi would not start.** | Restart the knob. |
 | **WIFI SETUP**: **None of its networks is in reach** (a radio's firmware) | Join **VFOKnob** with your phone and add the network where the knob is now, or take it back within reach of one it knows. |
 | **Needs WiFi** (from a radio's firmware) | The way back to the list is over WiFi: set up WiFi on that firmware's page, or use **Set up again**. |

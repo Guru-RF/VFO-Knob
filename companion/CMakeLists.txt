@@ -1,7 +1,8 @@
 # The knob's second chip: the ESP32 (ESP32-U4WDH) beside the ESP32-S3, with
 # classic Bluetooth, which the S3 has not. This firmware makes it the audio
-# gateway for a Bluetooth headset, and talks to the S3 over the UART between
-# them (components/bt_link/include/bt_link_proto.h, shared with the knob).
+# gateway for a Bluetooth headset and the music source for a speaker, and
+# talks to the S3 over the UART between them
+# (components/bt_link/include/bt_link_proto.h, shared with the knob).
 #
 #   idf.py -B build build               (IDF 5.5, target esp32)
 #
@@ -36,8 +37,10 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # gives the audio gateway one -- but it registers two servers (the headset and
 # the hands-free profiles) and, calling a headset, needs a record more. Built
 # without the hands-free client, whose record covered for it, the call fails:
-# "Out of Service Records", then "MX service not found". Room for all three.
-idf_build_set_property(COMPILE_DEFINITIONS "BTM_SEC_MAX_SERVICE_RECORDS=6" APPEND)
+# "Out of Service Records", then "MX service not found". Room for all three,
+# and for A2DP's: its AVDTP registers up to three more, its AVCTP up to two
+# (384 bytes, the six more).
+idf_build_set_property(COMPILE_DEFINITIONS "BTM_SEC_MAX_SERVICE_RECORDS=12" APPEND)
 project(vfo-knob-companion)
 # The defaults only seed a new sdkconfig: one made before the updates keeps
 # its unsigned, rollback-less settings, and its image -- once on a chip --
@@ -49,5 +52,11 @@ if(NOT CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE OR NOT CONFIG_BOOTLOADER_PROJECT_VE
    OR NOT CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME OR NOT CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT
    OR NOT CONFIG_BOOTLOADER_WDT_DISABLE_IN_USER_CODE OR CONFIG_ESP_MAIN_TASK_STACK_SIZE LESS 8192)
     message(FATAL_ERROR "this build directory's sdkconfig predates the second chip's updates -- "
+                        "delete it (defaults only seed a new one)")
+endif()
+# Nor one made before speakers: built without A2DP, a firmware that tells the
+# knob it plays to speakers (main.c's hello) would have nothing to play them.
+if(NOT CONFIG_BT_A2DP_ENABLE)
+    message(FATAL_ERROR "this build directory's sdkconfig predates speakers (no CONFIG_BT_A2DP_ENABLE) -- "
                         "delete it (defaults only seed a new one)")
 endif()

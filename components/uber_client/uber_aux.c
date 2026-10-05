@@ -638,7 +638,7 @@ static bool s_started;
 static void aux_task(void *arg)
 {
     (void)arg;
-    uws_t dx = { .fd = -1 };
+    uws_t dx = { 0 };
     bool dx_open = false;
     uint32_t dx_gen = 0;
     int64_t dx_retry = 0, t_voice = 0, t_expire = 0, t_bands = 0;

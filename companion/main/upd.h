@@ -25,7 +25,7 @@ void upd_knob_hello(bool ask);
 /* link_rx: BTL_UPD_BEGIN .. BTL_UPD_ASK. Fast work only: never the flash,
  * never NVS, never an image check. */
 void upd_on_frame(uint8_t type, const uint8_t *p, uint16_t n);
-/* hfp: a headset's link came up. */
+/* hfp: a headset's or a speaker's link came up. */
 void upd_headset_came(void);
 /* The main loop, every 100 ms: the trial's watchdog, its keeping, its
  * deadline. */

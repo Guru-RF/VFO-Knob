@@ -23,34 +23,13 @@ No firmware on the device can close this. It needs an application-layer lease:
 - Roughly 50 lines and a timer, at a hook that is already there and already
   does the right thing.
 
-**Action:** file an issue against `aethersdr/AetherSDR` describing the failure
-mode and proposing the lease. Measure the real duration first (unplug the
-device while keyed into a dummy load and time how long the rig stays keyed)
-so the report carries a number rather than a theory.
+**Filed** upstream as [aethersdr#5985](https://github.com/aethersdr/AetherSDR/issues/5985),
+describing the failure mode and proposing the lease. A measured duration
+(unplug the device while keyed into a dummy load and time how long the rig
+stays keyed) would give it a number rather than a theory.
 
 Until this lands, the README says — and should keep saying — that this device
 is not a primary PTT source for unattended operation.
-
-## Upstream: expose compressor gain reduction over TCI
-
-Smaller than the PTT lease, and worth bundling into the same conversation.
-
-`tx_sensors` carries exactly five fields — `mic_dbm`, `fwd_watts`,
-`peak_watts`, `swr`, `alc_dbfs` — and there is no compressor reading anywhere
-in AetherSDR's TCI surface. ALC is available and useful, but it is **not**
-compression: ALC is the radio limiting drive to protect itself, whereas a
-speech compressor deliberately reduces dynamic range to raise average power.
-An operator setting compression needs the gain-reduction figure, and AetherSDR
-already computes one for its own meter (`meter.gainReduction` exists in the
-theme).
-
-Note that `peak_watts` is currently the same cached value as `fwd_watts`
-("peak ≈ avg for now"), so a sixth field is not the only thing worth revisiting
-in that payload.
-
-**Action:** ask whether a compressor gain-reduction field can be appended to
-`tx_sensors`. Index-based parsers ignore trailing fields, which is exactly how
-`alc_dbfs` was added, so it is backward compatible by construction.
 
 ## Upstream: compressor gain reduction, and a real peak-power figure
 
@@ -106,8 +85,8 @@ Ticked once the knob has worked with the radio itself, not only built for it.
       RF gain and power from the left, its tuner from the right, and the web
       page's controls
 - [ ] IC-7760
-- [ ] IC-9700
-- [ ] IC-R8600 — a receiver: no PTT
+- [x] IC-9700 — 2 m, 70 cm and 23 cm, each band's power in its own watts
+- [x] IC-R8600 — a receiver: no PTT; its three antennas on the swipe
 - [ ] IC-7300 MK2
 
 **Yaesu**, through the YAESU SCU-LAN10 interface, which these need:
@@ -178,21 +157,75 @@ network protocols as well as Icom's: a reference for those clients.
       with its call button or optionally its boom arm, the PTT; the slab shows
       it, mute in red. Tried with a Jabra Evolve2 65: listening and keying on
       the IC-705, overs through the SvxLink parrot (TG 9990).
-      - [ ] the companion's updates through the knob: today it goes on the
-        second chip over the USB-C turned over. Its partition table already
-        has two OTA slots: the S3 could carry its image in the release and
-        send it over the link, the companion writing it to the other slot.
-      - [ ] the headset's battery: the Jabra offers Apple's `+XAPL` battery
-        reports (answered with an error today); answering them would put its
-        charge on the configuration page.
+      - [x] the companion's updates through the knob (v1.18.0): signed
+        images over the link into the chip's other slot, kept only once the
+        new one has started and talked to the knob
+        (COMPANION-UPDATE-PLAN.md). Each knob's second chip needs the bench
+        step once, by cable, before it takes them.
+      - [x] a Bluetooth speaker (A2DP), tried with a JLab speaker
+        (2026-10-04): told from a headset by its class, its services and how
+        it drops a call's audio, or by hand on the page (**Use as**); the
+        knob's own microphone again while a speaker plays, and the speaker
+        silent on the air;
+      - [x] the speaker's volume from the knob's (AVRCP absolute volume), and
+        any speaker sent a quarter of the level (12 dB less): tried with the
+        JLab, 2026-10-05 -- VOLUME 2 sets it to 3 of 127, "ideal";
+      - [x] the headset's or speaker's battery, beside the Bluetooth logo on
+        every face -- green from half its charge up, yellow under half, red
+        at a fifth and below; white on the red slab -- and its charge on the
+        configuration page (decided 2026-10-04): built; the JLab speaker's
+        battery seen on the knob (2026-10-05).
+        The second chip answers Apple's `AT+XAPL` as an iPhone does, wanting
+        the battery alone, and takes `AT+IPHONEACCEV` (in tenths) -- the
+        Jabra offers the one, the JLab speaker sends both on its hands-free
+        link. HFP's own indicator, `AT+BIEV`, only comes unasked: ESP-IDF
+        5.5's Bluedroid offers a headset no HF indicators (its `+BRSF` masks
+        the bit out, and it has no `AT+BIND`). Unknown AT commands, answered
+        with nothing until now (`esp_hf_ag_unknown_at_send` refuses a NULL),
+        get ERROR. The charge goes with the hands-free link it came over: a
+        speaker that closes that link and plays on shows none, not a stale
+        one.
+- [ ] **The knob's own battery** (asked 2026-10-05): its charge at the top of
+      the arc, over the S-meter's reading, as a phone's status bar has it, on
+      every face, the setup firmware's too, while the knob runs on it -- a
+      headset's battery's glyph and colours; none on USB power, where the rail
+      is the cable's and the cell cannot be read, nor on a radio's face on the
+      air, where the transmit scale's numbers are. The 5 V rail through
+      BATT_ADC (GPIO1, halved by R62/R63): the battery under 4.20 V, which no
+      cell exceeds, USB from 4.30, and between them as it was; two readings
+      in a row for a plug or an unplug (measured 4.46-4.56 V on USB,
+      4.08-4.10 just off a full charge). A USB port at its spec's lowest,
+      4.75 V, gives about 4.30 past the diode, a weak one less: taken for
+      the battery. The charge from a 4.2 V Li-ion curve less the knob's load,
+      4.05 V full to 3.40 where the 3V3 regulator gives out, shown in fives:
+      settling its first half minute on the battery, then smoothed over some
+      30 s, and only down (`components/board/knob_batt.c`, its test in
+      `test/host`). No reading at all without the chip's ADC calibration. The
+      address card says **battery 85 %** or **on USB power**, the page and
+      `/api/status` the same with the rail's volts; the AetherSDR firmware's
+      FLIP USB-C only with power on the cable. `[PWR]` in the log once a
+      minute and on a plug or an unplug. Built, every face checked on the PC
+      (`tools/lvhost` slab-check); on the knob since 2026-10-05, its run-down
+      under way:
+      - [ ] unplugged just off a full charge: the battery within two
+        seconds, full and green, 100 % on the card; plugged in again: gone
+        within two, **on USB power**;
+      - [ ] plugged in with the battery yellow or red, on an ordinary cable:
+        the page's **Power** says **on USB power**, its volts well over
+        4.30 -- a rail near or under it would be taken for the battery;
+      - [ ] a long run-down, the `[PWR]` lines a minute apart: the curve
+        against the cell's own, and the rail where the knob stops -- the
+        table moves to fit.
 - [ ] **Endurance soak.** Nothing has run for 24 h. Watch free internal heap,
       task high-water marks, `hap_drops`, WS closes and audio underruns.
-- [ ] **Tabular-figure font.** Montserrat is proportional, so digits shift
-      width as they change and the readout shimmers slightly while tuning. A
-      subset of a monospaced-digit face to `0-9 . M k H z` is about 18 kB.
-- [ ] **On-screen provisioning.** WiFi and host currently come from Kconfig via
-      NVS seeding. A SoftAP captive portal plus an on-screen host editor would
-      remove the reflash-to-change-networks step.
+- [x] **Tabular-figure font.** Montserrat is proportional, so digits shifted
+      width as they changed and the readout shimmered while tuning. The
+      readout is now Hack, fixed width, at 46 px: eleven glyphs, 4 kB of flash
+      (`components/ui/font_hack_46.c`, its licence in THIRD_PARTY_LICENSES);
+      seen on the knob 2026-10-04.
+- [ ] **On-screen provisioning.** No reflash to change networks: the setup
+      firmware's hotspot and sign-in page set the WiFi. Left: the radio's
+      address, the last item below.
       - [x] the setup firmware (`VFO_RADIO=setup`): the **VFOKnob** hotspot
         with a captive portal for the WiFi, then the firmwares listed from
         `firmware/index.json` on the dial, one installed with the WiFi kept;
@@ -200,8 +233,8 @@ network protocols as well as Icom's: a reference for those clients.
         seconds on the S-meter or the card, a buzz, and a turn of the knob;
       - [x] the hotspot and its sign-in page from an Android phone: it was
         sent to the page, and the knob joined the network given there;
-      - [ ] the same from an iPhone, which looks for the portal differently
-        (`hotspot-detect.html`);
+      - [x] the same from an iPhone, which looks for the portal differently
+        (`hotspot-detect.html`): tried 2026-10-04, it works;
       - [ ] the radio's address, and an Icom's login, still come from the
         configuration page after that (a phone will do, at the address the
         arc shows): the sign-in page could ask for them too.
@@ -215,15 +248,14 @@ network protocols as well as Icom's: a reference for those clients.
 - [x] **OTA.** Signed images from the `firmware` branch: on WiFi the knob
       checks and asks on the dial; over USB the configuration page downloads
       and pushes the image.
-- [ ] **PTT slab as an antenna selector.** A setting on the configuration
-      page for what the bottom slab is: *PTT* (as now), *RX antenna* or
-      *TX antenna*. As an antenna selector it works like the mode and filter
-      editors — tap it, turn the knob to scroll through the radio's antennas,
-      tap to accept — and the slab shows the selected antenna in place of the
-      "PTT" text. First check what AetherSDR's TCI exposes for RX/TX antenna
-      selection; if nothing, it is an upstream request like the ones above.
-      With the slab repurposed the knob has no PTT at all, so the red TX
-      screen must still follow the radio when it is keyed from elsewhere.
+- [ ] **PTT slab as an antenna selector.** Decided 2026-10-04: no setting, the
+      slab stays the PTT. A press held on it half a second, until the knob
+      buzzes, opens the antennas -- RX ANT then TX ANT on the FlexRadio, the
+      antenna on the IC-7610 and the IC-R8600 -- and there a tap keys about
+      0.15 s after the finger lifts (the R8600 has nothing to key), so that a
+      hold can be told from a tap. Built and tried on the PC (`tools/lvhost` slab-check,
+      `tools/flexhost`); the knob's test left. AetherSDR's TCI not looked
+      at for antennas yet.
 - [ ] **Icom IC-705 / IC-7300 MK2.** Same repo, the radio chosen at build
       time: everything but the radio's client is shared. Both ways in are
       worth having — over WiFi straight to the radio, which is what makes it
@@ -299,7 +331,11 @@ network protocols as well as Icom's: a reference for those clients.
         loses power mid-over: the station is still there, so it may stay
         keyed (key from the knob into a dummy load, pull the knob's power);
       - [ ] finding the radio by its discovery broadcast, for a radio on the
-        same subnet (it is given by its IP address for now);
+        same subnet: built -- the knob listens on UDP 4992, and the
+        configuration page's **On this network** lists each radio heard (its
+        name, model, address and who is on it) with **Add**; tried on the PC
+        against `tools/mock_flex.py`; the knob's test left (the FLEX-6600 at
+        Lombardsijde, on the knob's own LAN);
       - [x] SmartLink, for a radio away from home (`smartlink.c`, from
         AetherSDR's SmartLinkClient and WanConnection): the account's password
         grant, keeping only the refresh token; the server's register, radio
@@ -316,7 +352,11 @@ network protocols as well as Icom's: a reference for those clients.
         dial for another station (its list comes only after registering
         there), and hole punching (neither a forwarded port nor UPnP);
       - [ ] the radio's memory channels, and its receive antennas on the
-        swipe (`rx_ant_list`).
+        swipe (`rx_ant_list`): built -- RX ANT and TX ANT on the swipe down
+        (and held on the slab), the memories on V/M as an Icom's channels,
+        each by `memory apply` with its shift and tone then set by the knob
+        (the radio leaves the last memory's offset, AetherSDR #1871); tried
+        on the PC against `tools/mock_flex.py`; the knob's test left.
 - [ ] **More than one radio.** Up to four per firmware (not the reflector's):
       a list on the configuration page, each with a name, one in use; a swipe
       up chooses another and the knob restarts into it -- the clients have no
@@ -352,12 +392,36 @@ network protocols as well as Icom's: a reference for those clients.
       - [x] seen on the glass (2026-10-01): the face, BALANCE (its 0 read
         "0 >" until the chain was fixed), the SSTV viewer (its "fetching"
         unreadable over a picture until it got a pill of its own);
-      - [ ] the slab with voices, the spot chooser, TIME UP;
-      - [ ] the session's end (an hour without the password), and the
+      - [x] the slab with voices, the spot chooser (live as it turns, since
+        v1.18.4), TIME UP;
+      - [x] the session's end (an hour without the password), and the
         dial's LISTEN AGAIN;
-      - [ ] a receiver on a LAN, in the clear;
-      - [ ] the time a session has left, on the face, for a guest;
-      - [ ] the dial for UberSDR's own page in a browser, both ways: a
+      - [x] a receiver on a LAN, in the clear: `http://<address>:8080`
+        on a socket of its own (no esp-tls, 2 kB of internal RAM a connection
+        spared), `https://` over TLS as before, the scheme kept with the
+        address; tried on the PC against `tools/mock_ubersdr.py`
+        (`make -C tools/uberhost test`: registered and bypassed, Opus
+        streaming, tuned, NR2, spots and voices, an SSTV picture, TIME UP for
+        a guest, the password's answers), and on the knob: no underruns;
+      - [ ] the time a session has left, on the face, for a guest, at the
+        left end of the slab (decided 2026-10-04): built, the knob's test
+        left. Counted as ka9q_ubersdr counts it -- the session's limit from
+        its first socket, on through a reconnect under the same UUID and the
+        dial; a day's allowance where the receiver keeps one (/connection
+        says what is left of it); an idle limit's last minute, which the
+        knob's use gives back. "52 min", the seconds too in the last five
+        minutes, in amber, red in the last; on the radio page and in
+        `GET /api/radio` (`time_left_s`, `time_left_by`). A spot's call too
+        long to stay centred beside it moves aside, whole; only one too long
+        for the room left is cut with dots. Closed on 0:00, the session asks
+        /connection again at once -- once: a receiver that plays on (its
+        clock restarted) while its socket fails gets the backoff. Tried on
+        the PC: `make -C tools/uberhost test` against
+        `tools/mock_ubersdr.py` (`--time-limit`, `--idle-timeout`,
+        `--day-limit`, `--day-check`, `/mock/restart`, `/mock/refuse`), the
+        face with `make -C tools/lvhost slab-check`;
+      - [ ] (later, the user's call, 2026-10-04) the dial for UberSDR's
+        own page in a browser, both ways: a
         small browser extension (Chrome and Firefox) on the page's
         documented API (`static/v2/BRIDGE_API.md`, page API 1.8 in
         0.1.66) relaying to the knob over WiFi. The dial and the taps
@@ -398,10 +462,18 @@ network protocols as well as Icom's: a reference for those clients.
         the day's listening limit per address (`ip_limit`), half an hour;
       - [x] streaming from the Web-888 (81.83.21.23:8077) on the IC-7610
         firmware, 2026-09-30;
-      - [ ] listened to on the dial: the RX chooser, the balance, the
-        levelling, the mute on transmit;
+      - [x] listened to on the dial: the RX chooser, the balance, the
+        levelling, the mute on transmit (the Icom firmware);
       - [ ] the UberSDR's Kiwi input (port 8073 on its own address, not the
-        https tunnel);
+        https tunnel): read in its source (kiwi_websocket.go) -- the knob's
+        path, login, ADPCM and S-meter fit it as they are; it centres CW on
+        the carrier (its load_cfg's -400..400) where a KiwiSDR centres it on
+        500 Hz, and makes its channel from the first SET mod, the passband
+        only from the next. The knob now reads where the receiver centres CW
+        and tunes the carrier that far below, as the Kiwi's own page does --
+        on a KiwiSDR its CW was 500 Hz off before -- and tunes again once the
+        audio flows; tried on the PC against the mock, both flavours; the
+        knob's test left (its `enable_kiwisdr` on);
       - [ ] on the multiflex and xiegu firmwares.
 
 ## Known hardware quirks

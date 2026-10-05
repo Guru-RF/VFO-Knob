@@ -6,6 +6,6 @@ set(_pages "www/index.html" "www/radio.html" "www/portal.html")
 idf_component_register(
     SRCS "webcfg.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_http_server net_prov radio ${radio_client} usb_net ui audio ota vfo_core esp_app_format mbedtls lwip espcoredump spi_flash sdr_rx bt_link
+    REQUIRES esp_http_server net_prov radio ${radio_client} usb_net ui audio ota vfo_core esp_app_format mbedtls lwip espcoredump spi_flash sdr_rx bt_link board
     EMBED_TXTFILES ${_pages}
 )

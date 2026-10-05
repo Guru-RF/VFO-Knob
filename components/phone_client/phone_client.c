@@ -15,7 +15,9 @@
  * headset through the second chip -- and 8 kHz G.711 on the wire, a halfband
  * filter between. Both ways at once, unlike a reflector: without a headset
  * the microphone is held back while the far end talks, against the speaker's
- * echo. One task does it all, on core 0 beside lwIP.
+ * echo. A Bluetooth speaker plays the call with the jack, a little behind
+ * it, and the knob's own microphone is the one, as without a headset: held
+ * back that much longer. One task does it all, on core 0 beside lwIP.
  */
 #include <math.h>
 #include <stdio.h>
@@ -391,8 +393,10 @@ static void level_push(const int16_t *pcm, int n)
     C.lvl[C.lvl_n++ % LEVELS] = db;
     C.t_audio = now_ms();
     /* Loud: when it will be heard -- behind what is queued, and the jack's
-     * 45 ms of DMA -- not when it came in. The echo hold runs from there. */
-    if (db > ECHO_DB) C.t_far = C.t_audio + audio_out_queued() * 1000u / AUDIO_RATE_HZ + 45;
+     * 45 ms of DMA -- not when it came in, and a Bluetooth speaker's lag,
+     * which plays it later still. The echo hold runs from there. */
+    if (db > ECHO_DB)
+        C.t_far = C.t_audio + audio_out_queued() * 1000u / AUDIO_RATE_HZ + 45 + bt_link_speaker_delay_ms();
 }
 
 static float level_now(uint64_t t)
@@ -1072,9 +1076,27 @@ static void headset_follow(void)
     }
 }
 
+/* A Bluetooth speaker playing a call: the knob's own microphone is the one,
+ * held back after the far end is heard, and longer by the speaker's lag
+ * (level_push). Said once a call, and again if the speaker says otherwise. */
+static void speaker_follow(void)
+{
+    static uint32_t said;
+    if (C.call == RADIO_CALL_IDLE || C.call == RADIO_CALL_ENDED) {
+        said = 0;
+        return;
+    }
+    const uint32_t d = bt_link_speaker_delay_ms();
+    if (!d || d == said) return;
+    said = d;
+    ESP_LOGI(TAG, "a speaker: the call in it too, the microphone held back %lu ms longer after the far end",
+             (unsigned long)d);
+}
+
 static void requests(uint64_t t)
 {
     headset_follow();
+    speaker_follow();
     answer_due(t);
     const int32_t d = __atomic_exchange_n(&s_detents, 0, __ATOMIC_RELAXED);
     if (d && (C.call == RADIO_CALL_IDLE || C.call == RADIO_CALL_ENDED)) {

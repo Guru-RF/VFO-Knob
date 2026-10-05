@@ -18,13 +18,16 @@ permissive terms, with one exception noted at the end.
 | `espressif/mdns` | Apache-2.0 |
 | Font Awesome 5 Free, microphone glyph (`components/ui/font_mic_14.c`) | SIL OFL 1.1 |
 | Font Awesome 5 Free, lock and speaker glyphs (`components/ui/font_svx_icons_24.c`, svxconnect firmware) | SIL OFL 1.1 |
+| Hack 3.003 (Source Foundry), the frequency readout's digits (`components/ui/font_hack_46.c`; its licence texts in `components/ui/fonts/Hack-LICENSE.md`) | MIT, on Bitstream Vera Sans Mono under the Bitstream Vera License |
 | SVXConnect-CLI's protocol, talkgroup manager, node info and codec (`components/svx_client/svx/`, svxconnect firmware) | MIT |
 | Opus, via `esphome/micro-opus` (svxconnect and multiflex firmwares) | BSD-3-Clause; micro-opus itself Apache-2.0 |
 
-MIT and BSD-3-Clause both require their copyright notice and licence text to
-accompany binary distributions. Shipping a device means shipping those notices
-somewhere the buyer can reach them -- the manual, a legal-notices page, or this
-file in the source repository the device points at.
+MIT, BSD-3-Clause and the Bitstream Vera License all require their copyright
+notice and licence text to accompany binary distributions -- the Vera one with
+its trademark notice, in every copy of the font, a subset included. Shipping a
+device means shipping those notices somewhere the buyer can reach them -- the
+manual, a legal-notices page, or this file in the source repository the device
+points at.
 
 ## The display initialisation table
 

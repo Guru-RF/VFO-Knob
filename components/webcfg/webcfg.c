@@ -22,6 +22,7 @@
 
 #include "audio_in.h"
 #include "audio_out.h"
+#include "board.h"
 #include "bt_link.h"
 #include "net_prov.h"
 #include "ota.h"
@@ -184,10 +185,16 @@ static esp_err_t status_get(httpd_req_t *r)
     char tgname[72], talker[40];
     json_esc(st.tg_name, tgname, sizeof tgname);
     json_esc(st.talker[0] ? st.talker : st.last_talker, talker, sizeof talker);
-    /* A second receiver and the antennas, where the radio has them. */
+    /* A second receiver and the antennas, where the radio has them -- by
+     * their own names where the radio names them. */
     char ant[12] = "";
-    if (st.n_ant && st.have_ant)
+    if (st.n_ant && st.have_ant && !radio_list_item(st.ant_names, st.ant, ant, sizeof ant))
         snprintf(ant, sizeof ant, "ANT%u%s", st.ant + 1u, st.ant_rx ? "+RX" : "");
+    /* The knob's own power (board.h): on USB or not -- null while its first
+     * readings settle -- the rail as last read, mV (-1 none), and the charge
+     * the face shows on the battery (-1 on USB, where it cannot be read). */
+    board_power_t pw;
+    board_power_get(&pw);
 
     char buf[1300];
     int n = snprintf(buf, sizeof buf,
@@ -200,7 +207,8 @@ static esp_err_t status_get(httpd_req_t *r)
         "\"aud_frames\":%u,\"aud_dropped\":%u,"
         "\"heap_internal\":%u,\"heap_psram\":%u,\"boots\":%u,"
         "\"reflector\":%s,\"tg\":%lu,\"tgname\":\"%s\",\"talker\":\"%s\","
-        "\"talking\":%s,\"rx\":\"%s\",\"ant\":\"%s\"}",
+        "\"talking\":%s,\"rx\":\"%s\",\"ant\":\"%s\",\"vol\":%u,"
+        "\"on_usb\":%s,\"rail_mv\":%d,\"batt\":%d}",
         app->version,
         (long long)(esp_timer_get_time() / 1000000),
         link, (long long)st.f_display, st.mode,
@@ -217,7 +225,9 @@ static esp_err_t status_get(httpd_req_t *r)
         (unsigned)net_prov_boot_count(),
         st.reflector ? "true" : "false", (unsigned long)st.tg, tgname, talker,
         st.talker[0] ? "true" : "false",
-        st.n_rx > 1 ? (st.rx ? "SUB" : "MAIN") : "", ant);
+        st.n_rx > 1 ? (st.rx ? "SUB" : "MAIN") : "", ant, (unsigned)net_prov_volume(),
+        pw.src == KNOB_PWR_USB ? "true" : pw.src == KNOB_PWR_BATTERY ? "false" : "null", (int)pw.mv,
+        (int)pw.pct);
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
 }
@@ -855,17 +865,19 @@ static int radios_sel(void)
 }
 
 /* ,"radios":{"sel":0,"names":[...],"via":[...]} -- for the radio's JSON:
- * every radio, and how it is reached ("LAN", "SmartLink"). */
+ * every radio, and how it is reached ("LAN", "SmartLink"): the configured
+ * ones and those the client found on the LAN, then the others. */
 static size_t radios_names_json(char *j, size_t cap)
 {
-    const int nd = net_prov_radio_count(), nf = radio_found_count();
+    const int nd = net_prov_radio_count(), nf = radio_found_count(), nl = nd + radio_found_lan();
     int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"names\":[", radios_sel());
     for (int i = 0; i < nd + nf && o > 0 && (size_t)o < cap; i++) {
         static net_radio_t r;
         char nm[24] = "", n[68];
         if (i < nd) {
             if (!net_prov_radio_get(i, &r)) break;
-            strlcpy(nm, r.name[0] ? r.name : r.host, sizeof nm);
+            strlcpy(nm, r.name[0] ? r.name : r.host[0] ? net_prov_host_shown(r.host) : "NO ADDRESS",
+                    sizeof nm);
         } else if (!radio_found_get(i - nd, nm, sizeof nm)) {
             break;
         }
@@ -874,7 +886,7 @@ static size_t radios_names_json(char *j, size_t cap)
     }
     if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "],\"via\":[");
     for (int i = 0; i < nd + nf && o > 0 && (size_t)o < cap; i++)
-        o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", i < nd ? "LAN" : radio_found_via());
+        o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", i < nl ? "LAN" : radio_found_via());
     if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
     return o > 0 && (size_t)o < cap ? (size_t)o : 0;
 }
@@ -935,17 +947,27 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         memset(e, 0, sizeof *e);
         snprintf(key, sizeof key, "host%d", i);
         if (!field(body, key, v, sizeof v)) continue;
-        /* "http://host:port/" and "host:port" too, as for the SDRs. */
+        /* "http://host:port/" and "host:port" too, as for the SDRs. An
+         * UberSDR keeps its scheme with the name: https:// is TLS and http://
+         * in the clear, whatever the port -- a name alone is TLS on 443 only,
+         * as knobs kept it before. */
         const char *s = strstr(v, "://");
-        s = s ? s + 3 : v;
+        const char *a = v + strspn(v, " ");
+#if VFO_RADIO_UBERSDR
+        const char *scheme = !s ? "" : !strncasecmp(a, "https://", 8) ? "https://"
+                           : !strncasecmp(a, "http://", 7) ? "http://" : "";
+#else
+        const char *scheme = "";
+#endif
+        s = s ? s + 3 : a;
         const size_t hl = strcspn(s, ":/ ");
-        if (!hl || hl >= sizeof e->host) continue;
-        memcpy(e->host, s, hl);
-        e->host[hl] = 0;
+        if (!hl || strlen(scheme) + hl >= sizeof e->host) continue;
+        snprintf(e->host, sizeof e->host, "%s%.*s", scheme, (int)hl, s);
         long port = 0;
         snprintf(key, sizeof key, "port%d", i);
         if (field_num(body, key, &port) && port > 0 && port < 65536) e->port = (uint16_t)port;
         else if (s[hl] == ':') e->port = (uint16_t)clampl(strtol(s + hl + 1, NULL, 10), 1, 65535);
+        else if (scheme[0]) e->port = scheme[4] == 's' ? 443 : 80;
         else e->port = net_prov_cfg()->radio_port;
         snprintf(key, sizeof key, "name%d", i);
         field(body, key, e->name, sizeof e->name);
@@ -1006,7 +1028,7 @@ static esp_err_t radios_switch_h(httpd_req_t *r)
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "to=N: a radio in the list");
         return ESP_FAIL;
     }
-    if (to < nd) strlcpy(name, e.name[0] ? e.name : e.host, sizeof name);
+    if (to < nd) strlcpy(name, e.name[0] ? e.name : net_prov_host_shown(e.host), sizeof name);
     if (to == radios_sel()) return httpd_resp_sendstr(r, "already in use");
     if (radio_on_air()) {
         httpd_resp_set_status(r, "409 Conflict");
@@ -1219,7 +1241,7 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  * no radio, nor svxconnect's reflector. */
 #define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE)
 
-/* ------------------------------------------------------ Bluetooth headset */
+/* ------------------------------------------ Bluetooth headset or speaker */
 
 #if !VFO_RADIO_SETUP
 #define BT_URIS 3
@@ -1240,6 +1262,19 @@ static bool bda_parse(const char *s, uint8_t *b)
 static void hex8_text(const uint8_t *b, char *s)
 {
     for (int i = 0; i < 8; i++) snprintf(s + 2 * i, 3, "%02x", b[i]);
+}
+
+/* A device's services, as its scan answer listed them (BTL_SVC_*):
+ * "a2dp,hfp", or "" for none known. */
+static void svc_text(uint8_t v, char *s, size_t cap)
+{
+    static const struct { uint8_t bit; const char *name; } SVC[] = {
+        { BTL_SVC_A2DP, "a2dp" }, { BTL_SVC_HFP, "hfp" }, { BTL_SVC_HSP, "hsp" }, { BTL_SVC_AVRCP, "avrcp" },
+    };
+    size_t o = 0;
+    s[0] = 0;
+    for (size_t i = 0; i < sizeof SVC / sizeof SVC[0] && o < cap; i++)
+        if (v & SVC[i].bit) o += (size_t)snprintf(s + o, cap - o, "%s%s", o ? "," : "", SVC[i].name);
 }
 
 /* The second chip's own firmware, for /api/bt: what it runs and says of
@@ -1321,46 +1356,83 @@ static int bt_update_json(char *j, size_t cap, const bt_link_status_t *st)
                     can_fetch ? "true" : "false");
 }
 
-/* The headset, and what the last scan found. */
+/* The headset or speaker, and what the last scan found.
+ *
+ *   speakers   the second chip plays to speakers (its HELLO says so); one
+ *              that does not knows headsets only, and a found device's kind
+ *              is "" from it
+ *   kind       "headset" or "speaker", the device's ("" with none);
+ *   kind_why   how the chip came to it: "class" (its class and services),
+ *              "drops" (it hung up a call's audio at once), "no a2dp" (then
+ *              had no A2DP), "user" (this page), "" (nothing known)
+ *   svc        the services its scan answer listed: "a2dp,hfp,hsp,avrcp"
+ *   delay      ms a speaker plays behind the jack; 0 unless one plays
+ *   av_volume  the second chip sets a speaker's own volume at all (its HELLO)
+ *   volume     what a speaker connected does with the knob's VOLUME: "knob"
+ *              (its own volume is the VOLUME), "asking" (it takes it, which
+ *              is on its way), "own" (it keeps its own: the knob scales what
+ *              it sends), "refused" (it takes its source's, but answered the
+ *              knob's louder than asked, or not at all: it keeps its own, the
+ *              knob scales; the next VOLUME tries again), "" (no speaker
+ *              connected)
+ *   battery    the device's charge as it last reported it, 0-100 %; -1 not
+ *              known (none connected, nothing said yet, or a second chip
+ *              whose firmware came before batteries) */
 static esp_err_t bt_get_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     /* This task's stack is tight; internal RAM is the scarce one. */
     EXT_RAM_BSS_ATTR static bt_link_status_t st;
     EXT_RAM_BSS_ATTR static btl_found_t found[16];
-    EXT_RAM_BSS_ATTR static char j[3072];
+    EXT_RAM_BSS_ATTR static char j[4096];
     bt_link_status(&st);
     const int nf = bt_link_found(found, 16);
-    char name[72], ver[72], b[18] = "";
+    char name[72], ver[72], b[18] = "", svc[32];
     static const char *const links[]  = { "idle", "connecting", "connected" };
-    static const char *const audios[] = { "", "CVSD 8 kHz", "mSBC 16 kHz" };
+    static const char *const audios[] = { "", "CVSD 8 kHz", "mSBC 16 kHz", "SBC 44.1 kHz" };
+    static const char *const whys[]   = { "", "class", "drops", "no a2dp", "user" };
     static const uint8_t none[6];
+    const bool spks = (st.flags & BTL_HELLO_SPEAKERS) != 0;
+    static const char *const vols[] = { "", "own", "asking", "knob", "refused" };
+    const uint8_t sv = bt_link_speaker_volume();
     json_esc(st.hs.name, name, sizeof name);
     json_esc(st.version, ver, sizeof ver);
     if (memcmp(st.hs.bda, none, 6)) bda_text(st.hs.bda, b);
+    svc_text(b[0] ? st.hs.svc : 0, svc, sizeof svc);
+    const char *kind = !b[0] ? "" : st.hs.kind == BTL_KIND_SPEAKER ? "speaker" : "headset";
     int o = snprintf(j, sizeof j,
-                     "{\"companion\":%s,\"version\":\"%s\",\"link\":\"%s\",\"audio\":\"%s\","
-                     "\"name\":\"%s\",\"bda\":\"%s\",\"remembered\":%s,\"scanning\":%s,"
-                     "\"spk\":%u,\"mic\":%u,\"presses\":%lu,\"mic_frames\":%lu,\"boom\":%s,",
-                     st.companion ? "true" : "false", ver, links[st.hs.link % 3], audios[st.hs.audio % 3],
-                     name, b, st.hs.remembered ? "true" : "false", st.hs.scanning ? "true" : "false",
-                     st.hs.spk, st.hs.mic, (unsigned long)st.presses, (unsigned long)st.up_frames,
-                     bt_link_boom_ptt() ? "true" : "false");
+                     "{\"companion\":%s,\"version\":\"%s\",\"speakers\":%s,\"link\":\"%s\",\"audio\":\"%s\","
+                     "\"name\":\"%s\",\"bda\":\"%s\",\"kind\":\"%s\",\"kind_why\":\"%s\",\"svc\":\"%s\","
+                     "\"delay\":%lu,\"av_volume\":%s,\"volume\":\"%s\",\"battery\":%d,\"remembered\":%s,"
+                     "\"scanning\":%s,\"spk\":%u,\"mic\":%u,\"presses\":%lu,\"mic_frames\":%lu,\"boom\":%s,",
+                     st.companion ? "true" : "false", ver, spks ? "true" : "false", links[st.hs.link % 3],
+                     st.hs.audio < 4 ? audios[st.hs.audio] : "?", name, b, kind,
+                     b[0] && st.hs.kind_why < 5 ? whys[st.hs.kind_why] : "", svc,
+                     (unsigned long)bt_link_speaker_delay_ms(), (st.flags & BTL_HELLO_AV_VOLUME) ? "true" : "false",
+                     sv < 5 ? vols[sv] : "", bt_link_battery(), st.hs.remembered ? "true" : "false",
+                     st.hs.scanning ? "true" : "false", st.hs.spk, st.hs.mic, (unsigned long)st.presses,
+                     (unsigned long)st.up_frames, bt_link_boom_ptt() ? "true" : "false");
     o += bt_update_json(j + o, sizeof j - o, &st);
     o += snprintf(j + o, sizeof j - o, "\"found\":[");
-    for (int i = 0; i < nf && o < (int)sizeof j - 200; i++) {
+    /* An entry is 200 bytes at the most: room for it and the end. */
+    for (int i = 0; i < nf && o < (int)sizeof j - 256; i++) {
         json_esc(found[i].name, name, sizeof name);
         bda_text(found[i].bda, b);
+        svc_text(found[i].svc, svc, sizeof svc);
         const bool audio = ((found[i].cod >> 8) & 0x1F) == 4;   /* major class: audio/video */
-        o += snprintf(j + o, sizeof j - o, "%s{\"bda\":\"%s\",\"name\":\"%s\",\"rssi\":%d,\"audio\":%s}",
-                      i ? "," : "", b, name, found[i].rssi, audio ? "true" : "false");
+        o += snprintf(j + o, sizeof j - o,
+                      "%s{\"bda\":\"%s\",\"name\":\"%s\",\"rssi\":%d,\"audio\":%s,\"kind\":\"%s\",\"svc\":\"%s\"}",
+                      i ? "," : "", b, name, found[i].rssi, audio ? "true" : "false",
+                      !spks ? "" : found[i].kind == BTL_KIND_SPEAKER ? "speaker" : "headset", svc);
     }
     snprintf(j + o, sizeof j - o, "]}");
     return send_json(r, j);
 }
 
 /* do=scan, or do=connect|forget with bda=, or do=disconnect, or do=boom with
- * on=1|0. */
+ * on=1|0, or do=kind with bda= and kind=headset|speaker: the page's choice
+ * for that device, which the second chip keeps -- and the device connected
+ * is called again as that. */
 static esp_err_t bt_post_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
@@ -1378,6 +1450,7 @@ static esp_err_t bt_post_h(httpd_req_t *r)
     field(body, "bda", bs, sizeof bs);
     uint8_t bda[6];
     const bool have = bda_parse(bs, bda);
+    char kind[12] = "";
     if      (!strcmp(act, "scan"))               bt_link_scan(10);
     else if (!strcmp(act, "connect") && have)    bt_link_connect(bda);
     else if (!strcmp(act, "disconnect"))         bt_link_disconnect();
@@ -1387,8 +1460,18 @@ static esp_err_t bt_post_h(httpd_req_t *r)
         field(body, "on", on, sizeof on);
         bt_link_set_boom_ptt(on[0] == '1');
     }
+    else if (!strcmp(act, "kind") && have) {
+        field(body, "kind", kind, sizeof kind);
+        const bool spk = !strcmp(kind, "speaker");
+        if (!spk && strcmp(kind, "headset"))
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "kind: headset or speaker");
+        if (!bt_link_set_kind(bda, spk ? BTL_KIND_SPEAKER : BTL_KIND_HEADSET)) {
+            httpd_resp_send_custom_err(r, "409 Conflict", "the second chip's firmware knows headsets only");
+            return ESP_OK;
+        }
+    }
     else return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "do what");
-    ESP_LOGI(TAG, "bluetooth: %s %s", act, bs);
+    ESP_LOGI(TAG, "bluetooth: %s %s%s%s", act, bs, kind[0] ? " " : "", kind);
     return send_json(r, "{\"ok\":true}");
 }
 
@@ -1580,11 +1663,15 @@ static size_t uber_json(char *j, size_t cap)
     json_esc(in.name, nm, sizeof nm);
     json_esc(in.location, lc, sizeof lc);
     uber_base_url(url, sizeof url);
+    /* A guest's time left as the knob's slab counts it (-1: no limit), and
+     * whose: the session's limit, the day's, an idle limit's last minute. */
+    char by = 0;
+    const int left = uber_time_left(&by);
     int o = snprintf(j, cap, ",\"uber\":{\"name\":\"%s\",\"callsign\":\"%s\",\"location\":\"%s\","
-                     "\"version\":\"%s\",\"session_s\":%d,\"bypassed\":%s,\"url\":\"%s\","
-                     "\"sstv_n\":%d,\"spots\":[",
-                     nm, in.callsign, lc, in.version, in.max_session_s, in.bypassed ? "true" : "false", url,
-                     uber_sstv_count());
+                     "\"version\":\"%s\",\"session_s\":%d,\"bypassed\":%s,\"time_left_s\":%d,"
+                     "\"time_left_by\":\"%s\",\"url\":\"%s\",\"sstv_n\":%d,\"spots\":[",
+                     nm, in.callsign, lc, in.version, in.max_session_s, in.bypassed ? "true" : "false", left,
+                     by == 'S' ? "session" : by == 'D' ? "day" : by == 'I' ? "idle" : "", url, uber_sstv_count());
     const int n = uber_spots(sp, UBER_SPOTS, NULL);
     for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
         char call[16];
@@ -1607,7 +1694,7 @@ static size_t uber_json(char *j, size_t cap)
 #if VFO_RADIO_UBERSDR
 #define RADIO_JSON_BYTES 8192
 #else
-#define RADIO_JSON_BYTES 2560
+#define RADIO_JSON_BYTES 3072
 #endif
 
 static esp_err_t radio_get(httpd_req_t *r)
@@ -1656,6 +1743,16 @@ static esp_err_t radio_get(httpd_req_t *r)
                   st.rx_only ? "true" : "false",
                   st.has_squelch && st.have_squelch ? "true" : "false",
                   (unsigned)st.squelch_pct);
+    /* Antennas by the radio's own names, and a transmit antenna apart (the
+     * FlexRadio's slice); memories in one list, with no groups (its too). */
+    {
+        char an[48], tn[40];
+        json_str(an, sizeof an, st.ant_names);
+        json_str(tn, sizeof tn, st.tx_ant_names);
+        o += snprintf(j + o, sizeof j - o, ",\"ant_names\":\"%s\",\"n_tx_ant\":%u,\"tx_ant\":%u,"
+                      "\"tx_ant_names\":\"%s\",\"mem_all\":%s", an, (unsigned)st.n_tx_ant,
+                      (unsigned)st.tx_ant, tn, st.mem_all ? "true" : "false");
+    }
     for (int i = 0; i < st.n_gain_names && i < RADIO_GAIN_NAMES && o < sizeof j - 16; i++) {
         char gn[8];
         json_str(gn, sizeof gn, st.gain_names[i]);
@@ -1733,11 +1830,13 @@ static esp_err_t radio_set(httpd_req_t *r)
     if (field_num(q, "squelch", &n)) radio_set_squelch((uint8_t)clampl(n, 0, 100));
     if (field(q, "rx", v, sizeof v) && v[0])
         radio_select_rx(strcasecmp(v, "sub") == 0 || strcmp(v, "1") == 0);
-    if (field_num(q, "ant", &n) && n >= 1 && n <= 4) {
+    if (field_num(q, "ant", &n) && n >= 1 && n <= 12) {
         long rxant = 0;
         field_num(q, "rxant", &rxant);
         radio_set_antenna((uint8_t)(n - 1), rxant != 0);
     }
+    /* The transmit antenna, where it is chosen apart: its place, from 1. */
+    if (field_num(q, "txant", &n) && n >= 1 && n <= 12) radio_set_tx_antenna((uint8_t)(n - 1));
     if (field_num(q, "rit", &n)) radio_set_rit((int32_t)clampl(n, -9999, 9999));
 #if VFO_HAS_SDR
     /* What is heard: the radio alone ("local"), or a web SDR beside it -- by

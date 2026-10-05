@@ -100,4 +100,10 @@
 #define BOARD_PIN_SD_D2   GPIO_NUM_42
 #define BOARD_PIN_SD_D3   GPIO_NUM_2
 
+/* The board's 5 V rail, halved by two 10 kOhm resistors (R62, R63) into ADC1
+ * channel 0: Waveshare's BATT_ADC. On USB the rail is the cable's 5 V; on
+ * the battery, whatever the base board under CN1 passes on from it -- that
+ * board's schematic is not published. */
+#define BOARD_PIN_BATT_ADC GPIO_NUM_1
+
 #endif /* BOARD_PINS_H */

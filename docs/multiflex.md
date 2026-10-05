@@ -20,9 +20,16 @@ Open the knob's configuration page — hold a finger on the S-meter until the
 knob clicks, and browse to the address on the card; user `admin`, password
 `admin` until you change it.
 
-- **On the LAN:** under **FlexRadio**, the radio's IP address (it announces
-  itself by broadcast, which the knob does not look for yet) and port `4992`.
-  Up to four radios, with a name each for the dial.
+- **On the LAN:** a FlexRadio announces itself on its network, and the knob
+  listens. Under **FlexRadio**, **On this network** lists every one it hears —
+  its name, model, address, and who is on it — and **Add** puts one in the
+  list above, its name and address filled in; **Save** keeps it. Or type the
+  radio's IP address and port `4992` yourself: a radio on another subnet, or
+  reached over a VPN, is not heard. Up to four radios, with a name each for the
+  dial.
+- **A new knob,** with no address yet: swipe up on the dial. After **NO
+  ADDRESS** come the radios it hears on the LAN; tap the panel on one and it
+  joins the list, in use, and the knob restarts into it.
 - **Through SmartLink:** under **SmartLink**, your account's email address and
   password, and **Log in to SmartLink**. The password goes to FlexRadio's login
   service and is not kept: the knob keeps the login it is given, until you log
@@ -40,7 +47,7 @@ be — turn, and tap the panel:
 
 - **STATION OWN** — a station of its own: its own slice, which the radio gives
   back where it was after a restart; its own audio both ways, as Opus over WiFi,
-  so the knob's speaker and microphone are the station; its own transmit
+  so the knob's jack and microphone are the station; its own transmit
   settings.
 - **DIAL FOR** *station* — the dial and PTT for a station already there, like a
   FlexControl on its computer. The knob tunes that station's active slice and
@@ -60,6 +67,7 @@ always its own station.
 | Part | Tap | |
 |---|---|---|
 | **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
+| **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | FAST, MED, SLOW, OFF |
 | **RF.G** | the RF gain editor | the panadapter's RF gain, −8 to +32 dB |
 | **Band** | the band editor | the band's own frequency, on a tap on the panel |
@@ -68,7 +76,7 @@ always its own station.
 | **Frequency** | a digit: the tuning step | the underlined digit is the step |
 | **Step, RIT** | RIT: its editor | RIT in amber when set |
 | **Volume, mic gain** | their editors | the knob's own levels |
-| **PTT** | key, and key off | see [Transmitting](#transmitting) |
+| **PTT** | key, and key off; hold: the antennas | see [Transmitting](#transmitting) and [The antennas](#the-antennas) |
 
 Turn the knob to tune: a slow turn moves a step at a time, a flick crosses a
 band. Band and mode change on a tap *on the panel*; filter, AGC, RF gain, RIT,
@@ -76,12 +84,19 @@ volume and mic gain apply as you turn, and any tap closes them.
 
 ![RF.G: +8 dB](multiflex/05-rfg.svg)
 
+Unplugged, the knob runs on its own battery and shows its charge at the top
+of the arc, as a phone does — on every firmware's face. On USB power the
+charge cannot be read, and none shows. The address card says which:
+**battery 85 %**, or **on USB power**.
+
+![On its own battery: the knob's charge at the top of the arc](multiflex/17-battery.svg)
+
 ## Swipes
 
 | Swipe | Opens |
 |---|---|
 | **From the right** | the menu: **TUNE**, a carrier at the tune power, for an external tuner or to check SWR — PTT stops it, and it stops by itself after 30 s; **ATU**, one cycle of the radio's tuner; **MEM**, the tuner's memories, lit when on — a tap switches them and the menu stays. It opens on MEM: TUNE and ATU are a turn away |
-| **Down** | RX: LOCAL or a web SDR, when the knob has some |
+| **Down** | RX: LOCAL or a web SDR, when the knob has some; then the antennas, RX ANT and TX ANT; and last, with memories on the radio, V/M |
 | **From the left** | BALANCE, while a web SDR plays |
 | **Up** | RADIO: another radio — on the LAN or through SmartLink |
 
@@ -91,7 +106,54 @@ volume and mic gain apply as you turn, and any tap closes them.
 
 The same radio can be in the list twice, once on the LAN and once through
 SmartLink: **LAN** or **SmartLink** under the name says which. Chosen, the
-knob restarts into it.
+knob restarts into it. A radio heard on the LAN and not yet in the list comes
+after the knob's own, marked **LAN**: chosen, it joins them.
+
+![RADIO: Lombardsijde, heard on the LAN](multiflex/16-found.svg)
+
+## The antennas
+
+Hold **PTT** half a second, until the knob buzzes: in place of keying, the
+slice's antennas come up — its receive antenna first, **RX ANT**, from the
+slice's list: ANT1, ANT2, RX_A, RX_B, XVTA, XVTB on a FLEX-6600. Turn, and tap
+the panel; then the transmit antenna, **TX ANT** (ANT1, ANT2, XVTA, XVTB), and
+a tap on its panel again. A tap anywhere else leaves them as they were. The
+swipe down has them too, after RX.
+
+A tap on PTT is still PTT, and a press held half a second never keys, whether
+the antennas come up or not. The glass now and then loses a held finger for up
+to about 0.13 s; so that this is never taken for a tap, a tap keys 0.15 s after
+the finger lifts, and two taps closer together than that are one press. On the
+air a touch unkeys at once and no hold opens anything; and the knob switches no
+antenna under power — one chosen meanwhile waits for receive.
+
+| RX ANT | TX ANT |
+|---|---|
+| ![RX ANT: RX_A](multiflex/12-rx-ant.svg) | ![TX ANT: ANT1](multiflex/13-tx-ant.svg) |
+
+## Memories
+
+The radio's memories — the ones SmartSDR keeps — are on the dial as an Icom's
+memory channels are. Swipe down to **V/M**, last of the swipe, and choose
+**MEMORY**: the memory's name takes the frequency's place, and under it its
+number, frequency, shift and tone. Turn, and the knob steps through all of
+them, one a detent, in order of frequency, putting the slice on each with the
+radio's own *memory apply* — its frequency, mode and filter — and then setting
+the memory's shift and tone itself: *memory apply* leaves the transmitter's
+offset where the last memory left it, which would send a repeater's over, or a
+simplex one after it, on the wrong frequency. It starts on the memory the slice
+is on, else the one it showed last, else the nearest; on a radio with none yet,
+on the first one saved. **VFO** brings the dial back, simplex. Nothing moves
+the slice while the radio is on the air.
+
+The radio's memories have no groups: the band stands where an Icom's group
+would. Tuned elsewhere — the slice moved from SmartSDR, say — the knob leaves
+memory mode by itself, unless the slice landed on another memory; and with the
+connection lost, it starts again on the VFO.
+
+| V/M | A memory |
+|---|---|
+| ![V/M: MEMORY](multiflex/14-vm.svg) | ![ON0TEN, M02, 29.620 −0.1, T79.7](multiflex/15-memory.svg) |
 
 ## SmartLink
 
@@ -111,15 +173,25 @@ the left ear and the SDR in the right, both brought to the same loudness; the
 SDR's S-meter is the thin blue line outside the radio's, its reading the blue
 one under the radio's. The SDR is silent while you transmit.
 
+An UberSDR plays here through its Kiwi input: its own address on your
+network with port **8073**, its KiwiSDR compatibility switched on
+(`enable_kiwisdr` in its configuration). Its `https://` tunnel carries its
+own page only, not this. Its bypass password, where you need one, goes in
+**Password** — on its own network you need none — and the time-limit
+password is a KiwiSDR's only. In CW the knob centres the SDR where the
+receiver does: a KiwiSDR on its 500 Hz tone, an UberSDR on the carrier, with
+its own tone.
+
 | RX | Playing | BALANCE |
 |---|---|---|
 | ![RX: Web-888](multiflex/07-rx.svg) | ![The SDR's S-meter in blue](multiflex/08-sdr.svg) | ![BALANCE: L \| R](multiflex/09-balance.svg) |
 
 ## Transmitting
 
-**PTT** is a toggle: tap to key, tap again to unkey. It keys as the finger
-lifts from a tap — a swipe that starts on it never keys — and on the air a
-touch unkeys at once. The knob says why when the radio will not transmit:
+**PTT** is a toggle: tap to key, tap again to unkey. It keys 0.15 s after the
+finger lifts from a tap — a swipe that starts on it never keys, and a press
+held half a second opens [the antennas](#the-antennas) instead — and on the
+air a touch unkeys at once. The knob says why when the radio will not transmit:
 out of band, or another station on the air. The face turns red: SWR across
 the left half, forward power across the right, the microphone on the thin
 inner ring.
@@ -139,7 +211,9 @@ the same for other programs:
 ```
 GET /api/radio                        the state, as JSON
 GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
+    ...&ant=3&txant=2                 the antennas, by place in the slice's lists, from 1
 POST /api/radios/switch  to=1         another radio: the knob restarts into it
+GET /api/flexfound                    the FlexRadios heard on the LAN, as JSON
 ```
 
 ## A Bluetooth headset
@@ -148,8 +222,12 @@ With the companion firmware on the knob's second chip, a Bluetooth headset can
 be the knob's ear and microphone, and its call button the PTT: a press keys,
 the next unkeys. The slab keeps PTT, with the headset's logo at its right
 end — red while the headset has its microphone muted, when neither its button
-nor the slab keys — and the knob's own microphone is off. Pairing, the companion
+nor the slab keys — and the knob's own microphone is off. Its battery shows
+beside the logo, green, yellow or red, where the headset reports it
+([its battery](headset.md#its-battery)). Pairing, the companion
 firmware and the boom arm as the PTT: [the headset guide](headset.md).
+A Bluetooth speaker plays the knob's audio with the jack, and you transmit
+with the knob's own microphone: [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](multiflex/11-headset.svg)
 

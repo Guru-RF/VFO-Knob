@@ -1,24 +1,35 @@
-/* The headset. See hfp.h.
+/* The device -- a headset (classic Bluetooth's hands-free profile, this chip
+ * as its audio gateway) or a speaker (A2DP, a2dp.c) -- one at a time. See
+ * hfp.h.
  *
- * Classic Bluetooth's hands-free profile, with this chip as the audio gateway:
- * the phone's side. A headset only opens its audio for a call, so while the
- * knob wants it, there is one -- a call that is never dialled, as a phone's
- * own internet calls are. The headset's button hangs up a call; the knob
- * takes that as its PTT, and the call goes on.
+ * A headset: the phone's side of the hands-free profile. A headset only
+ * opens its audio for a call, so while the knob wants it, there is one -- a
+ * call that is never dialled, as a phone's own internet calls are. The
+ * headset's button hangs up a call; the knob takes that as its PTT, and the
+ * call goes on.
  *
  * Audio comes and goes through the host (HCI): the stack codes the mSBC (or
  * CVSD) and hands us 16-bit PCM at the headset's rate. The headset's packets
  * set the pace: each one heard from it is one sent to it, so what we send can
  * neither run ahead of the air nor fall behind it. The knob's audio is
  * converted to that rate on its way in, a little fast or slow as its own
- * clock needs (rs.h), and the microphone to the knob's rate on its way out. */
+ * clock needs (rs.h), and the microphone to the knob's rate on its way out.
+ *
+ * A speaker: an ear only. It gets the knob's audio over A2DP, converted to
+ * 44.1 kHz the same way, at the pace of the stack's own media tick; the knob
+ * keys its own microphone. Which a device is, kind.h: its class and services
+ * at the scan, its hanging up every call's audio at once, or the page's
+ * choice -- and a knob that does not say it knows speakers is given none:
+ * every device is a headset to it, as before. */
 #include "hfp.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "a2dp.h"
 #include "air.h"
+#include "batt.h"
 #include "bt_link_proto.h"
 #include "esp_bt.h"
 #include "esp_bt_device.h"
@@ -31,10 +42,19 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "kind.h"
 #include "link.h"
 #include "nvs.h"
 #include "rs.h"
 #include "upd.h"
+#include "bta/bta_ag_api.h"
+#include "stack/btm_api.h"
+
+/* bta_ag_int.h's, not on a component's include path: the stack's handle for
+ * a headset, which BTA_AgSetCodec() takes, and its override of the link
+ * settings it asks for (bta_ag_sco.c). */
+extern UINT16 bta_ag_idx_by_bdaddr(BD_ADDR peer_addr);
+extern void   bta_ag_set_esco_param(BOOLEAN set_reset, tBTM_ESCO_PARAMS *param);
 
 static const char *TAG = "hfp";
 
@@ -45,6 +65,13 @@ static const char *TAG = "hfp";
  * ride out the knob sending in 10-20 ms lumps. */
 #define DN_TARGET_MS 60
 #define DN_MAX_MS    200
+
+/* A speaker's stream, from its A2DP's connect, waits at most this long for
+ * its volume to be the knob's (a2dp_volume_settled): its remote control up
+ * -- the stack opens it 3.5 s on, if the speaker has not -- its events
+ * asked, the knob's VOLUME set. Before, it would play at its own volume --
+ * the loud one the knob's VOLUME was to tame -- until then. */
+#define AV_HOLD_US 5000000
 
 static SemaphoreHandle_t s_mx;              /* the state below */
 static struct {
@@ -67,27 +94,170 @@ static struct {
     int64_t       next_page_us, next_audio_us;
     int           conns, conn_audios;       /* headset links since boot; audio opens on this one */
     int64_t       conn_us;                  /* when this one was made */
+    int64_t       audio_us;                 /* when its audio opened, 0 while closed */
+    bool          audio_msbc;               /* ...in mSBC */
+    int           quick;                    /* audio it closed again at once, in a row */
+    bool          narrow;                   /* CVSD for it: its mSBC never stays open */
+    /* What bda is, and what goes with a speaker. link above is always the
+     * hands-free link -- a headset's, or a speaker's own; audio is the open
+     * audio of the device's kind: a headset's call, a speaker's stream. */
+    uint8_t       kind, kind_why, svc;      /* BTL_KIND_*, BTL_KWHY_*, BTL_SVC_* */
+    bool          knob_known;               /* a HELLO from the knob since this chip started */
+    bool          knob_speakers;            /* ...saying SPEAKERS: kinds apply */
+    uint8_t       av;                       /* the A2DP link: BTL_LINK_* */
+    esp_bd_addr_t av_conn;                  /* ...with whom */
+    int64_t       av_since_us;              /* ...since when, while it is being made */
+    bool          av_away;                  /* ...its page went unanswered: away, not a refusal */
+    bool          av_trial;                 /* a speaker by its drops since this chip started, its A2DP never up since */
+    int           av_fails;                 /* ...A2DP calls it answered and refused since: the fallback's test */
+    bool          held;                     /* it has held a call's audio open: a headset, whatever drops later */
+    bool          media_pending;            /* a start or suspend of its stream asked, not answered */
+    uint8_t       media_cmd;                /* ...which: A2DP_START or A2DP_SUSPEND */
+    bool          suspend_asked;            /* a suspend asked, its stream's close not come yet */
+    int           media_tries;              /* the sink's own suspends soon after a start, in a row */
+    int           media_fails;              /* starts refused, in a row */
+    bool          rekind;                   /* links going down for a kind change: called again in 1 s */
+    bool          told_av, told_hf;         /* the once-a-connection lines */
+    bool          told_delay;               /* ...and the once-a-stream one */
+    uint16_t      mtu;                      /* the A2DP link's packets, bytes */
+    uint16_t      sink_delay;               /* the sink's delay report, 1/10 ms; 0 none */
+    /* Its battery, as its hands-free link last said (batt.h) -- a headset's,
+     * or a speaker's own: unknown until a report comes, forgotten when that
+     * link closes, or another device is the one (batt_forget_locked). */
+    uint8_t       batt;                     /* BTL_BATT_*: NONE, unknown */
+    uint8_t       batt_pct;                 /* ...its charge, 0-100 % */
 } S = { .spk = 10, .mic = 10, .dn_rate = 24000, .up_rate = 24000 };
-static bool s_hold;                         /* an update coming in: the headset not called (s_mx) */
+
+/* A headset whose audio closes as soon as it is open is called with CVSD on
+ * plain packets instead, from the second such close in a row, remembered
+ * here until the chip restarts; the audio reopened every 2 s for ever
+ * before. A JLab Pop Party (2026-10-04) says it carries the EDR links the
+ * stack asks for -- 2-EV3, mSBC's T2 and CVSD's S4 alike -- and the
+ * controller drops each about 150 ms after it is up (reason 0x16, with no
+ * disconnect sent by the host): EV3 or HV3, no EDR, is what any headset
+ * carries. */
+#define QUICK_US   1500000                  /* an audio closed within this is "at once" */
+#define NARROW_MAX 4
+static esp_bd_addr_t s_narrow[NARROW_MAX];
+static int           s_nnarrow;
+
+static bool narrow_known(const uint8_t *bda)
+{
+    for (int i = 0; i < s_nnarrow; i++)
+        if (!memcmp(s_narrow[i], bda, 6)) return true;
+    return false;
+}
+
+static void narrow_add(const uint8_t *bda)
+{
+    if (narrow_known(bda)) return;
+    if (s_nnarrow < NARROW_MAX) s_nnarrow++;
+    memmove(s_narrow[1], s_narrow[0], (size_t)(s_nnarrow - 1) * sizeof s_narrow[0]);
+    memcpy(s_narrow[0], bda, 6);
+}
+
+/* Its next audio in CVSD (the stack negotiates that codec, +BCS:1, before it
+ * opens one), on EV3 or HV3 packets, no EDR. The link settings are the
+ * stack's for every headset: they go back to its own when any other one
+ * connects -- the chip has one at a time. */
+static void narrow_set(const uint8_t *bda)
+{
+    static tBTM_ESCO_PARAMS plain = {
+        .tx_bw          = BTM_64KBITS_RATE,
+        .rx_bw          = BTM_64KBITS_RATE,
+        .max_latency    = 10,
+        .voice_contfmt  = BTM_VOICE_SETTING_CVSD,
+        .packet_types   = BTM_SCO_PKT_TYPES_MASK_HV1 | BTM_SCO_PKT_TYPES_MASK_HV3 |
+                          BTM_SCO_PKT_TYPES_MASK_EV3 | BTM_SCO_PKT_TYPES_MASK_NO_2_EV3 |
+                          BTM_SCO_PKT_TYPES_MASK_NO_3_EV3 | BTM_SCO_PKT_TYPES_MASK_NO_2_EV5 |
+                          BTM_SCO_PKT_TYPES_MASK_NO_3_EV5,
+        .retrans_effort = BTM_ESCO_RETRANS_POWER,
+    };
+    bta_ag_set_esco_param(TRUE, &plain);
+    const UINT16 h = bta_ag_idx_by_bdaddr((uint8_t *)bda);
+    if (h) BTA_AgSetCodec(h, BTA_AG_CODEC_CVSD);
+}
+static bool s_hold;                         /* an update coming in: the device not called (s_mx) */
 
 #define LOCK()   xSemaphoreTake(s_mx, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_mx)
+
+/* A speaker to this knob: its verdict, unless the knob said hello without
+ * SPEAKERS -- then every device is a headset, as before. Before its first
+ * hello, a speaker is one, but is neither called nor said to be connected
+ * (hfp_tick, hfp_report_state). The one place the kind is read. (s_mx.) */
+static bool spk_locked(void)
+{
+    return S.kind == BTL_KIND_SPEAKER && !(S.knob_known && !S.knob_speakers);
+}
+
+/* The device's battery, forgotten: its hands-free link, which says it, went
+ * -- a speaker's A2DP may play on, but no word of its charge comes over
+ * that -- or another device is the one now. The next link says it again.
+ * (s_mx.) */
+static void batt_forget_locked(void)
+{
+    S.batt     = BTL_BATT_NONE;
+    S.batt_pct = 0;
+}
 
 /* What a scan found, for the names it learns later and the connect after. */
 #define FOUND_MAX 16
 static btl_found_t s_found[FOUND_MAX];
 static int         s_nfound;
-static int         s_name_next;             /* the next nameless headset to ask */
+static int         s_name_next;             /* the next nameless device to ask */
+
+static btl_found_t *found_get(const uint8_t *bda)
+{
+    for (int i = 0; i < s_nfound; i++)
+        if (!memcmp(s_found[i].bda, bda, 6)) return &s_found[i];
+    return NULL;
+}
+
+/* A found device's kind: its verdict kept here, else what its class and
+ * services make of it. */
+static void found_kind(btl_found_t *f)
+{
+    if (kind_lookup(f->bda, &f->kind, &f->kind_why)) return;
+    f->kind     = kind_classify(f->cod, f->svc);
+    f->kind_why = f->cod || f->svc ? BTL_KWHY_CLASS : BTL_KWHY_NONE;
+}
+
+/* S.kind, kind_why and svc for bda, the device now: whenever bda changes.
+ * Its verdict kept here, else what this boot's scan made of it, else a
+ * headset with nothing known -- as every device was before. A fallback's
+ * trial was the device before's. (s_mx.) */
+static void target_kind_locked(void)
+{
+    btl_found_t *f = S.have ? found_get(S.bda) : NULL;
+    S.svc      = f ? f->svc : 0;
+    S.av_trial = false;
+    S.av_fails = 0;
+    S.held     = S.have && kind_held(S.bda);
+    if (S.have && kind_lookup(S.bda, &S.kind, &S.kind_why)) return;
+    if (f) {
+        found_kind(f);
+        S.kind     = f->kind;
+        S.kind_why = f->kind_why;
+    } else {
+        S.kind     = BTL_KIND_HEADSET;
+        S.kind_why = BTL_KWHY_NONE;
+    }
+}
 
 /* Audio. */
-static rs_t           s_dn, s_up;           /* knob -> headset, headset -> knob */
+static rs_t           s_dn, s_up;           /* knob -> device, headset -> knob */
 static TaskHandle_t   s_pump;
 static volatile bool  s_audio_on, s_mic_on, s_first;
+static volatile bool  s_av_on;              /* ...the speaker's stream: the converter is the stack's media tick's */
+static volatile bool  s_delay_news;         /* the sink reported its delay: the main loop says so */
+static volatile uint16_t s_delay_value;     /* ...this, in 1/10 ms */
 static uint32_t       s_session;            /* audio opens since boot (s_mx) */
 static struct {                             /* the last one's, for its reports (s_mx) */
     esp_bd_addr_t bda;
     int           conns, audios;
     int64_t       conn_us;
+    int64_t       audio_us, close_us;       /* a speaker's: its stream opened, and closed */
 } s_open;
 static volatile int   s_knob_hellos;        /* the knob's, asking: since boot */
 static volatile int32_t s_credit;           /* bytes heard from the headset, not yet answered */
@@ -135,13 +305,55 @@ static void load_mem(void)
     nvs_close(h);
 }
 
+/* How far behind what it is sent a speaker plays: its own buffer, as it
+ * reports it (150 ms, a common one, without), the downlink's target, and up
+ * to a media tick. */
+static uint16_t delay_ms_locked(void)
+{
+    return (uint16_t)((S.sink_delay ? S.sink_delay / 10 : 150) + DN_TARGET_MS + 30);
+}
+
 void hfp_report_state(void)
 {
     btl_state_t s;
     memset(&s, 0, sizeof s);
     LOCK();
-    s.link  = S.link;
-    s.audio = S.audio;
+    const bool spk = spk_locked();
+    if (!spk) {
+        s.link  = S.link;
+        s.audio = S.audio;
+    } else {
+        /* Its A2DP link is its link; its own hands-free link alone, a link
+         * on the way. Nothing, to a knob that has not said it knows
+         * speakers: it would take the device for a headset. */
+        s.link  = !S.knob_speakers        ? BTL_LINK_IDLE
+                  : S.av != BTL_LINK_IDLE   ? S.av
+                  : S.link != BTL_LINK_IDLE ? BTL_LINK_CONNECTING
+                                            : BTL_LINK_IDLE;
+        s.audio = S.knob_speakers ? S.audio : BTL_AUDIO_NONE;
+    }
+    /* The kind of the links still up, even with the device forgotten, so
+     * the knob never takes a speaker's going for a headset's; what is
+     * known of it, only while there is one. */
+    s.kind     = spk ? BTL_KIND_SPEAKER : BTL_KIND_HEADSET;
+    s.kind_why = S.have ? S.kind_why : BTL_KWHY_NONE;
+    s.svc      = S.have ? S.svc : 0;
+    s.delay_ms = s.audio == BTL_AUDIO_SBC_44K ? delay_ms_locked() : 0;
+    /* Its battery, as it last said, where it has. */
+    if (S.have && S.batt != BTL_BATT_NONE) {
+        s.batt     = S.batt;
+        s.batt_pct = S.batt_pct;
+    }
+    /* A speaker's own volume, while its A2DP is up: whether it takes the
+     * knob's, and has it (a2dp.c) -- its own remote control, none other. */
+    uint8_t av_vol, av_turns;
+    const uint8_t av = a2dp_volume_state(spk && S.knob_speakers && S.av == BTL_LINK_CONNECTED ? S.av_conn : NULL,
+                                         &av_vol, &av_turns);
+    if (av) {
+        s.av        = av;
+        s.av_volume = av_vol;
+        s.av_turns  = av_turns;
+    }
     if (S.have) memcpy(s.bda, S.bda, 6);
     s.rssi  = 0;
     s.spk   = S.spk;
@@ -153,9 +365,14 @@ void hfp_report_state(void)
     link_send(BTL_EVT_STATE, &s, sizeof s);
 }
 
+/* A speaker's own hands-free link sends its buttons too: the knob takes them
+ * from a headset only. */
 static void button(uint8_t b, const char *what)
 {
-    link_log("headset button: %s", what);
+    LOCK();
+    const bool spk = spk_locked();
+    UNLOCK();
+    link_log("%s button: %s", spk ? "speaker" : "headset", what);
     link_send(BTL_EVT_BUTTON, &b, 1);
 }
 
@@ -170,18 +387,59 @@ static void call_up(void)
     esp_hf_ag_audio_connect(S.bda);
 }
 
+/* A call's audio is a headset's: a speaker's stream is not the hands-free
+ * profile's to close. */
+static bool sco_open_locked(void)
+{
+    return S.audio == BTL_AUDIO_CVSD_8K || S.audio == BTL_AUDIO_MSBC_16K;
+}
+
 static void call_down(void)
 {
-    if (S.audio != BTL_AUDIO_NONE) esp_hf_ag_audio_disconnect(S.bda);
+    if (sco_open_locked()) esp_hf_ag_audio_disconnect(S.bda);
     if (S.call) {
         S.call = false;
         esp_hf_ag_ciev_report(S.bda, ESP_HF_IND_TYPE_CALL, ESP_HF_CALL_STATUS_NO_CALLS);
     }
 }
 
+/* The open audio, gone with its link or its kind: the converters stand
+ * aside. (s_mx.) */
+static void audio_gone_locked(void)
+{
+    if (S.audio == BTL_AUDIO_SBC_44K) s_open.close_us = esp_timer_get_time();
+    s_audio_on = false;
+    s_av_on    = false;
+    S.audio    = BTL_AUDIO_NONE;
+    S.audio_us = 0;
+}
+
+/* The device is to be something else now -- the page said so, it showed
+ * itself a speaker, or the knob's firmware changed -- and was it before
+ * (`was`, spk_locked() before the change). One rule: its links all go down,
+ * and it is called again as its new kind a second later. (s_mx.) */
+static void rekind_locked(bool was, int64_t now)
+{
+    if (spk_locked() == was) return;
+    if (S.link == BTL_LINK_IDLE && S.av == BTL_LINK_IDLE) return;
+    call_down();
+    if (S.audio != BTL_AUDIO_NONE) audio_gone_locked();
+    if (S.link != BTL_LINK_IDLE) esp_hf_ag_slc_disconnect(S.conn);
+    if (S.av != BTL_LINK_IDLE) a2dp_disconnect(S.av_conn);
+    S.rekind        = true;
+    S.next_page_us  = now + 1000000;
+    S.audio_tries   = 0;
+    S.audio_pending = false;
+    S.media_pending = false;
+    S.suspend_asked = false;
+    S.media_tries   = 0;
+    S.media_fails   = 0;
+    S.quick         = 0;
+}
+
 /* ---- audio ------------------------------------------------------------ */
 
-/* One frame for the headset's ear: n samples at its rate. */
+/* One frame for the device's ear: n samples at its rate. */
 static void dn_frame(int16_t *out, size_t n)
 {
     const uint32_t fill = rs_fill(&s_dn);
@@ -199,8 +457,11 @@ static void dn_frame(int16_t *out, size_t n)
     }
     /* The fill, smoothed over about a second, steers the rate: what is above
      * the target is played off over some four seconds, never more than half
-     * a percent fast or slow -- a pitch nobody hears. */
-    s_avg += ((float)rs_fill(&s_dn) - s_avg) * (1.0f / 128.0f);
+     * a percent fast or slow -- a pitch nobody hears. A call's frames 1/128
+     * of the way each, as ever; a speaker's by their length, a second's
+     * worth whatever the SBC frame -- 1/330 of it for one of 2.9 ms. */
+    const float k = s_av_on ? (float)n / (0.96f * (float)s_dn.out_rate) : 1.0f / 128.0f;
+    s_avg += ((float)rs_fill(&s_dn) - s_avg) * k;
     double c = ((double)s_avg - (double)s_dn_target) / (4.0 * (double)s_dn.in_rate);
     if (c > 0.005) c = 0.005;
     if (c < -0.005) c = -0.005;
@@ -212,10 +473,12 @@ static void dn_frame(int16_t *out, size_t n)
     }
 }
 
-/* The stack's: the headset's microphone, decoded. Its pace is the air's. */
+/* The stack's: the headset's microphone, decoded. Its pace is the air's.
+ * Not a speaker's call audio, which is closed as it opens: the downlink is
+ * its stream's then. */
 static void hf_incoming(const uint8_t *buf, uint32_t sz)
 {
-    if (!s_audio_on) return;
+    if (!s_audio_on || s_av_on) return;
     int16_t pcm[256];
     const uint32_t n = sz > sizeof pcm ? sizeof pcm : sz;
     memcpy(pcm, buf, n);                    /* buf need not be aligned */
@@ -231,7 +494,7 @@ static void hf_incoming(const uint8_t *buf, uint32_t sz)
 /* The stack's: a frame for the headset, if one is due. */
 static uint32_t hf_outgoing(uint8_t *p, uint32_t sz)
 {
-    if (!s_audio_on || sz > 512) return 0;
+    if (!s_audio_on || s_av_on || sz > 512) return 0;
     if (__atomic_load_n(&s_credit, __ATOMIC_RELAXED) < (int32_t)sz) return 0;
     __atomic_sub_fetch(&s_credit, (int32_t)sz, __ATOMIC_RELAXED);
     int16_t pcm[256];
@@ -250,7 +513,7 @@ static void pump_task(void *arg)
     static int16_t out[512];
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
-        if (!s_audio_on) continue;
+        if (!s_audio_on || s_av_on) continue;       /* a headset's call only */
         esp_hf_ag_outgoing_data_ready();
         size_t n;
         while ((n = rs_pull_some(&s_up, out, sizeof out / sizeof out[0])) > 0)
@@ -258,12 +521,19 @@ static void pump_task(void *arg)
     }
 }
 
-/* The converters, for the headset's rate and the knob's, emptied. */
-static void audio_rates(bool msbc)
+/* The device's rate of an open audio, BTL_AUDIO_*: 8, 16 or 44.1 kHz. */
+static uint32_t air_rate(uint8_t audio)
 {
-    const uint32_t air = msbc ? 16000 : 8000;
+    return audio == BTL_AUDIO_SBC_44K ? 44100 : audio == BTL_AUDIO_MSBC_16K ? 16000 : 8000;
+}
+
+/* The converters, for the device's rate and the knob's, emptied: the
+ * microphone's only for a headset -- a speaker has none, and each filter
+ * takes its tens of milliseconds to design. */
+static void audio_rates(uint32_t air, bool mic)
+{
     rs_init(&s_dn, S.dn_rate, air);
-    rs_init(&s_up, air, S.up_rate);
+    if (mic) rs_init(&s_up, air, S.up_rate);
     s_dn_target = S.dn_rate * DN_TARGET_MS / 1000;
     s_dn_max    = S.dn_rate * DN_MAX_MS / 1000;
     s_primed    = false;
@@ -272,8 +542,9 @@ static void audio_rates(bool msbc)
 static void audio_open(bool msbc)
 {
     s_audio_on = false;
+    s_av_on    = false;
     __atomic_store_n(&s_credit, 0, __ATOMIC_RELAXED);
-    audio_rates(msbc);
+    audio_rates(msbc ? 16000 : 8000, true);
     s_first  = true;
     s_under = s_skips = s_frames_in = s_frames_out = 0;
     s_session++;
@@ -281,9 +552,36 @@ static void audio_open(bool msbc)
     s_audio_on = true;
 }
 
+/* A speaker's stream open: the downlink converted to 44.1 kHz, for the
+ * stack's media tick to pull (hfp_dn_pull). No microphone. */
+static void spk_open(void)
+{
+    s_audio_on = false;
+    s_av_on    = true;
+    audio_rates(44100, false);
+    s_under = s_skips = s_frames_in = s_frames_out = 0;
+    a2dp_counts_reset();
+    s_session++;
+    s_audio_on = true;
+}
+
+void hfp_dn_pull(int16_t *out, size_t n)
+{
+    /* Never an empty answer: the stream stays whole, as a call's does --
+     * silence while the converter is rebuilt, or before it is open. */
+    if (s_audio_on && s_av_on) dn_frame(out, n);
+    else memset(out, 0, n * sizeof *out);
+}
+
 /* ---- scanning --------------------------------------------------------- */
 
 static bool is_audio(uint32_t cod) { return esp_bt_gap_get_cod_major_dev(cod) == ESP_BT_COD_MAJOR_DEV_AV; }
+
+/* An audio device, by its class or the services it lists. */
+static bool found_audio(const btl_found_t *f)
+{
+    return is_audio(f->cod) || (f->svc & (BTL_SVC_HFP | BTL_SVC_HSP | BTL_SVC_A2DP));
+}
 
 static btl_found_t *found_slot(const uint8_t *bda)
 {
@@ -326,6 +624,8 @@ static void on_found(const esp_bt_gap_cb_param_t *p)
                 memcpy(eir_name, nm, n);
                 eir_name[n] = 0;
             }
+            /* The services it lists: what it is, beside its class. */
+            f->svc = kind_eir_services(q->val);
             break;
         }
         default:
@@ -333,15 +633,18 @@ static void on_found(const esp_bt_gap_cb_param_t *p)
         }
     }
     if (!f->name[0] && eir_name[0]) strlcpy(f->name, eir_name, sizeof f->name);
+    /* What it would be on a connect: its verdict kept here, else its class
+     * and services' -- as the page shows it. */
+    found_kind(f);
     link_send(BTL_EVT_FOUND, f, sizeof *f);
 }
 
-/* After the scan, the names it did not hear, one headset at a time. */
+/* After the scan, the names it did not hear, one audio device at a time. */
 static bool ask_next_name(void)
 {
     for (; s_name_next < s_nfound; s_name_next++) {
         btl_found_t *f = &s_found[s_name_next];
-        if (!f->name[0] && is_audio(f->cod)) {
+        if (!f->name[0] && (found_audio(f) || f->kind == BTL_KIND_SPEAKER)) {
             esp_bt_gap_read_remote_name(f->bda);
             s_name_next++;
             return true;
@@ -357,9 +660,13 @@ static void scan_over(void)
     UNLOCK();
     link_send(BTL_EVT_SCAN_DONE, NULL, 0);
     hfp_report_state();
-    int audio = 0;
-    for (int i = 0; i < s_nfound; i++) audio += is_audio(s_found[i].cod);
-    link_log("scan done: %d devices, %d of them audio", s_nfound, audio);
+    int headsets = 0, speakers = 0;
+    for (int i = 0; i < s_nfound; i++) {
+        if (s_found[i].kind == BTL_KIND_SPEAKER) speakers++;
+        else if (found_audio(&s_found[i])) headsets++;
+    }
+    link_log("scan done: %d devices: %d headset%s, %d speaker%s", s_nfound, headsets, headsets == 1 ? "" : "s",
+             speakers, speakers == 1 ? "" : "s");
 }
 
 /* ---- the stack's events ------------------------------------------------- */
@@ -428,6 +735,16 @@ static void gap_cb(esp_bt_gap_cb_event_t ev, esp_bt_gap_cb_param_t *p)
     case ESP_BT_GAP_READ_RSSI_DELTA_EVT:
         air_signal(p->read_rssi_delta.stat == ESP_BT_STATUS_SUCCESS, p->read_rssi_delta.rssi_delta);
         break;
+    case ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT:
+        /* No link to the speaker being called: its page went unanswered --
+         * away, or switched off. Its A2DP's failure, which follows, is no
+         * refusal (hfp_av_conn). */
+        if (p->acl_conn_cmpl_stat.stat != ESP_BT_STATUS_SUCCESS) {
+            LOCK();
+            if (S.av == BTL_LINK_CONNECTING && same(p->acl_conn_cmpl_stat.bda, S.av_conn)) S.av_away = true;
+            UNLOCK();
+        }
+        break;
     case ESP_BT_GAP_MODE_CHG_EVT:
         /* A call keeps the link awake (air.c); one that sleeps all the same,
          * or is woken as its audio opens, says so. The interval says whose
@@ -435,12 +752,15 @@ static void gap_cb(esp_bt_gap_cb_event_t ev, esp_bt_gap_cb_param_t *p)
          * cleared; 250-500 ms its own between calls, asked a moment before
          * this one opened; anything else most likely the headset's. */
         if (s_audio_on) {
+            /* A speaker's stream too: the stack keeps it awake while it
+             * plays (its AV power policy), so a sleep is news there as well. */
             const esp_bt_pm_mode_t m = p->mode_chg.mode;
+            const char *during = s_av_on ? "while the speaker played" : "during the call";
             if (m == ESP_BT_PM_MD_SNIFF)
-                link_log("the link went to sniff during the call, every %u ms",
+                link_log("the link went to sniff %s, every %u ms", during,
                          (unsigned)(p->mode_chg.interval * 5u / 8u));
             else
-                link_log("the link went %s during the call", m == ESP_BT_PM_MD_ACTIVE ? "active" : "to another mode");
+                link_log("the link went %s %s", m == ESP_BT_PM_MD_ACTIVE ? "active" : "to another mode", during);
         }
         break;
     case ESP_BT_GAP_PIN_REQ_EVT: {
@@ -483,13 +803,37 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
         memcpy(S.conn, bda, 6);
         break;
     case ESP_HF_CONNECTION_STATE_SLC_CONNECTED: {
-        if (!same(bda, S.bda)) {            /* our remembered headset, calling us */
+        if (!S.have || !same(bda, S.bda)) { /* our remembered device, calling us */
             memcpy(S.bda, bda, 6);
             strlcpy(S.name, S.mem_name, sizeof S.name);
             S.have = true;
+            target_kind_locked();
+            batt_forget_locked();
         }
         S.link          = BTL_LINK_CONNECTED;
         memcpy(S.conn, bda, 6);
+        if (spk_locked()) {
+            /* A speaker's own hands-free link (the JLab opens one: AT+BAC,
+             * AT+XAPL, AT+IPHONEACCEV). Kept -- refused, it is only asked
+             * again, and its volume and battery come over it -- but never a
+             * call on it. It is in reach: its A2DP next, unless it opens
+             * that itself. */
+            if (S.av == BTL_LINK_IDLE) S.next_page_us = now + 2000000;
+            S.user_off = false;
+            const bool tell      = !S.told_hf;
+            const bool need_name = !S.name[0];
+            S.told_hf = true;
+            char name[32];
+            strlcpy(name, S.name, sizeof name);
+            UNLOCK();
+            upd_headset_came();
+            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+            if (need_name) esp_bt_gap_read_remote_name((uint8_t *)bda);
+            if (tell) link_log("%s opened the hands-free profile too: kept, never a call", name[0] ? name : "the speaker");
+            hfp_report_state();
+            return;
+        }
+        S.rekind        = false;
         S.page_fails    = 0;
         S.user_off      = false;
         S.audio_tries   = 0;
@@ -498,16 +842,28 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
         S.conns++;
         S.conn_us       = now;
         S.conn_audios   = 0;
+        S.audio_us      = 0;
+        S.quick         = 0;
+        S.narrow        = narrow_known(bda);
         if (!S.remembered || !same(S.mem, S.bda) || strcmp(S.mem_name, S.name)) {
             memcpy(S.mem, S.bda, 6);
             strlcpy(S.mem_name, S.name, sizeof S.mem_name);
             S.remembered = true;
             save_mem();
         }
+        /* Its verdict, kept from its first connection on: a scan later
+         * changes nothing for a device in use. Not for a knob that knows
+         * headsets only, whose table stays as it was. */
+        if (S.knob_speakers) kind_store(S.bda, S.kind, S.kind_why);
         const bool need_name = !S.name[0];
         char name[32];
         strlcpy(name, S.name, sizeof name);
+        const bool narrow = S.narrow;
         UNLOCK();
+        /* After the SLC: its AT+BAC, during it, chose mSBC again. Any other
+         * headset gets the stack's own link settings back. */
+        if (narrow) narrow_set(bda);
+        else bta_ag_set_esco_param(FALSE, NULL);
         upd_headset_came();                 /* a firmware on trial: proven enough to keep */
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
         if (need_name) esp_bt_gap_read_remote_name((uint8_t *)bda);
@@ -517,13 +873,33 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
     }
     case ESP_HF_CONNECTION_STATE_DISCONNECTED: {
         const uint8_t was = S.link;
-        S.link  = BTL_LINK_IDLE;
-        S.audio = BTL_AUDIO_NONE;
-        S.call  = false;
-        s_audio_on = false;
+        S.link    = BTL_LINK_IDLE;
+        S.call    = false;
+        S.told_hf = false;
+        /* A headset's call went with it; a speaker's stream goes on. */
+        if (sco_open_locked()) audio_gone_locked();
+        /* The link its battery came over: the battery goes with it. */
+        if (same(S.conn, S.bda)) batt_forget_locked();
         if (!same(S.conn, S.bda)) {
             /* Left for another one, which the knob asked for: call it now. */
             S.next_page_us = now + 300000;
+            UNLOCK();
+            hfp_report_state();
+            return;
+        }
+        if (spk_locked()) {
+            /* A speaker's own hands-free link: its A2DP link decides -- a
+             * second from now, if this one went down for it to be called
+             * as a speaker. */
+            if (S.rekind && S.av == BTL_LINK_IDLE) S.next_page_us = now + 1000000;
+            UNLOCK();
+            ESP_LOGI(TAG, "%s: its hands-free link closed", bda_str(bda, b));
+            hfp_report_state();
+            return;
+        }
+        if (S.rekind) {
+            /* Down to be called again as a headset. */
+            S.next_page_us = now + 1000000;
             UNLOCK();
             hfp_report_state();
             return;
@@ -545,6 +921,7 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
             /* A new headset that did not answer: back to the one we know. */
             memcpy(S.bda, S.mem, 6);
             strlcpy(S.name, S.mem_name, sizeof S.name);
+            target_kind_locked();
         } else if (!S.remembered && S.page_fails >= 2) {
             S.have = false;                 /* a new one, never reached: give up */
         }
@@ -559,10 +936,21 @@ static void on_connection(const uint8_t *bda, esp_hf_connection_state_t st)
 
 static void on_audio_state(esp_hf_audio_state_t st, const uint8_t *bda)
 {
+    char b[18];
     LOCK();
     switch (st) {
     case ESP_HF_AUDIO_STATE_CONNECTED:
     case ESP_HF_AUDIO_STATE_CONNECTED_MSBC: {
+        if (spk_locked()) {
+            /* A speaker never has a call's audio: it would take the knob's
+             * audio off its stream. */
+            char name[32];
+            strlcpy(name, S.name, sizeof name);
+            UNLOCK();
+            esp_hf_ag_audio_disconnect((uint8_t *)bda);
+            link_log("%s opened a call's audio by itself: closed -- a speaker", name[0] ? name : bda_str(bda, b));
+            return;
+        }
         const bool msbc = st == ESP_HF_AUDIO_STATE_CONNECTED_MSBC;
         S.audio         = msbc ? BTL_AUDIO_MSBC_16K : BTL_AUDIO_CVSD_8K;
         S.audio_pending = false;
@@ -571,25 +959,142 @@ static void on_audio_state(esp_hf_audio_state_t st, const uint8_t *bda)
         s_open.conns    = S.conns;
         s_open.conn_us  = S.conn_us;
         s_open.audios   = ++S.conn_audios;
+        S.audio_us      = esp_timer_get_time();
+        S.audio_msbc    = msbc;
         audio_open(msbc);
         UNLOCK();
         link_log("audio open: %s", msbc ? "mSBC, 16 kHz" : "CVSD, 8 kHz");
         hfp_report_state();
         return;
     }
-    case ESP_HF_AUDIO_STATE_DISCONNECTED:
+    case ESP_HF_AUDIO_STATE_DISCONNECTED: {
+        const int64_t now = esp_timer_get_time();
+        if (spk_locked() && !sco_open_locked()) {
+            /* A speaker's, closed as it opened: its stream is what is open. */
+            UNLOCK();
+            ESP_LOGI(TAG, "%s: a call's audio closed", bda_str(bda, b));
+            return;
+        }
+        /* The headset's own doing, at once: the knob still wanted it and the
+         * call was still up (call_down() takes the call down first). */
+        const bool quick = S.audio_us && now - S.audio_us < QUICK_US && S.want_audio && S.call;
+        S.quick    = quick ? S.quick + 1 : 0;
+        S.audio_us = 0;
+        bool narrow_now = false;
+        if (quick && !S.narrow && S.quick >= 2) {
+            S.narrow   = true;
+            S.quick    = 0;
+            narrow_now = true;
+            narrow_add(bda);
+        }
+        /* Closing at once even so: ask less and less often, a minute apart
+         * at most, rather than every 2 s for ever. */
+        int64_t wait = 2000000;
+        if (S.quick >= 2) wait <<= S.quick - 1 < 5 ? S.quick - 1 : 5;
+        if (wait > 60000000) wait = 60000000;
         s_audio_on      = false;
         S.audio         = BTL_AUDIO_NONE;
         S.audio_pending = false;
-        S.next_audio_us = esp_timer_get_time() + 2000000;
+        S.next_audio_us = now + wait;
+        /* Narrowed, and closing at once all the same: no call's audio stays
+         * open on it in any codec -- a speaker that calls itself a headset
+         * (the JLab Pop Party, 2026-10-04: every link closed by it 85-100 ms
+         * after it opened, mSBC and CVSD alike). To a knob that keeps its
+         * own microphone with one, it is a speaker: its music profile next.
+         * Never over the page's choice, nor for a device whose complete
+         * service list has no A2DP, nor one that had no A2DP to play to --
+         * nor a headset that has held a call's audio before: its drops are
+         * something else's doing, a phone of its own taking it, say. */
+        const bool to_spk = quick && S.narrow && S.quick >= 2 && S.knob_speakers && !S.held &&
+                            S.kind_why != BTL_KWHY_USER && S.kind_why != BTL_KWHY_NO_A2DP &&
+                            !((S.svc & BTL_SVC_KNOWN) && !(S.svc & BTL_SVC_A2DP));
+        if (to_spk) {
+            const bool was = spk_locked();
+            S.kind     = BTL_KIND_SPEAKER;
+            S.kind_why = BTL_KWHY_DROPS;
+            S.av_trial = true;                  /* its A2DP's test, below (hfp_av_conn) */
+            S.av_fails = 0;
+            kind_store(S.bda, S.kind, S.kind_why);
+            rekind_locked(was, now);
+        }
+        char name[32];
+        strlcpy(name, S.name, sizeof name);
+        const int q = S.quick;
         UNLOCK();
-        link_log("audio closed");
+        if (to_spk) {
+            link_log("%s hangs up a call's audio at once, mSBC and CVSD alike: a speaker -- calling it again as one",
+                     name[0] ? name : "the headset");
+        } else if (narrow_now) {
+            narrow_set(bda);
+            link_log("%s drops its audio at once: CVSD, 8 kHz, on plain EV3/HV3 links for it from now on",
+                     name[0] ? name : "the headset");
+        } else if (q >= 2) {
+            link_log("audio closed at once again (%d in a row): next try in %d s", q, (int)(wait / 1000000));
+        } else {
+            link_log("audio closed");
+        }
         hfp_report_state();
         return;
+    }
     default:
         break;
     }
     UNLOCK();
+}
+
+/* The commands the stack does not know (batt.h): the device's battery.
+ * Apple's AT+XAPL is answered as an iPhone answers it, wanting the battery
+ * alone; its AT+IPHONEACCEV, and the hands-free profile's AT+BIEV, are
+ * taken: OK, each. Anything else gets ERROR, as the stack answers what it
+ * does not know itself -- never esp_hf_ag_unknown_at_send() with no answer,
+ * whatever its comment says: it refuses a NULL and sends nothing, and the
+ * device waited out its own time for an answer that never came. AT+BIEV
+ * only ever comes unasked: the stack offers a headset no indicators (its
+ * +BRSF leaves the bit out, and it has no AT+BIND). A speaker's own
+ * hands-free link alike: its battery counts, and it carries no call. */
+static void unknown_at(uint8_t *bda, const char *at)
+{
+    char b[18];
+    batt_at_t a;
+    batt_at_parse(at, &a);
+    if (!a.ok) {
+        ESP_LOGI(TAG, "unknown AT: %s", at ? at : "");
+        esp_hf_ag_cmee_send(bda, ESP_HF_AT_RESPONSE_CODE_ERR, ESP_HF_CME_OPERATION_NOT_SUPPORTED);
+        return;
+    }
+    if (a.cmd == BATT_AT_XAPL) esp_hf_ag_unknown_at_send(bda, BATT_XAPL_ANSWER);
+    esp_hf_ag_cmee_send(bda, ESP_HF_AT_RESPONSE_CODE_OK, ESP_HF_CME_AG_FAILURE);
+    LOCK();
+    const bool it    = S.have && same(bda, S.bda);
+    const bool first = it && S.batt == BTL_BATT_NONE;
+    const bool news  = it && a.pct >= 0 && (first || S.batt_pct != a.pct);
+    if (news) {
+        S.batt     = a.cmd == BATT_AT_BIEV ? BTL_BATT_HFP : BTL_BATT_APPLE;
+        S.batt_pct = (uint8_t)a.pct;
+    }
+    char name[32];
+    strlcpy(name, it && S.name[0] ? S.name : bda_str(bda, b), sizeof name);
+    UNLOCK();
+    if (a.cmd == BATT_AT_XAPL) {
+        link_log("%s speaks Apple's AT+XAPL (%s, features %d): answered as an iPhone%s", name, a.id, a.features,
+                 (a.features & BATT_XAPL_BATTERY) ? ", for its battery" : " -- it reports no battery");
+        return;
+    }
+    if (a.pct < 0) {
+        ESP_LOGI(TAG, "%s: %s -- no battery in it", name, at);
+        return;
+    }
+    if (!it) {
+        ESP_LOGI(TAG, "%s: battery %d %% -- not the device's: not taken", name, a.pct);
+        return;
+    }
+    if (!news) return;
+    if (first)
+        link_log("%s reports its battery: %d %% (%s)", name, a.pct,
+                 a.cmd == BATT_AT_BIEV ? "the hands-free profile's indicator" : "Apple's AT+IPHONEACCEV");
+    else
+        link_log("%s: battery %d %%", name, a.pct);
+    hfp_report_state();
 }
 
 static void hf_cb(esp_hf_cb_event_t ev, esp_hf_cb_param_t *p)
@@ -621,8 +1126,7 @@ static void hf_cb(esp_hf_cb_event_t ev, esp_hf_cb_param_t *p)
         esp_hf_ag_cmee_send(p->cnum_rep.remote_addr, ESP_HF_AT_RESPONSE_CODE_OK, ESP_HF_CME_AG_FAILURE);
         break;
     case ESP_HF_UNAT_RESPONSE_EVT:
-        ESP_LOGI(TAG, "unknown AT: %s", p->unat_rep.unat ? p->unat_rep.unat : "");
-        esp_hf_ag_unknown_at_send(p->unat_rep.remote_addr, NULL);
+        unknown_at(p->unat_rep.remote_addr, p->unat_rep.unat);
         break;
     case ESP_HF_VOLUME_CONTROL_EVT: {
         LOCK();
@@ -669,14 +1173,349 @@ static void hf_cb(esp_hf_cb_event_t ev, esp_hf_cb_param_t *p)
     }
 }
 
+/* ---- a speaker's A2DP (a2dp.c's events) ----------------------------------- */
+
+/* A2DP calls unanswered: as a headset's -- 10 s, 20, 40, then a minute --
+ * but 2 s for the first two while its own hands-free link says it is in
+ * reach. (s_mx.) */
+static int64_t av_backoff_locked(void)
+{
+    const int f = S.page_fails < 1 ? 1 : S.page_fails;
+    if (S.link != BTL_LINK_IDLE && f <= 2) return 2000000;
+    return f >= 4 ? 60000000 : 10000000LL << (f - 1);
+}
+
+void hfp_av_conn(const uint8_t *bda, uint8_t link, uint16_t mtu)
+{
+    char b[18];
+    const int64_t now = esp_timer_get_time();
+    LOCK();
+    /* A stranger calling us -- we are connectable for our own device -- is
+     * refused once it is up, as on the hands-free side. */
+    const bool ours = (S.have && same(bda, S.bda)) || (S.remembered && same(bda, S.mem));
+    if (link == BTL_LINK_CONNECTING) {
+        const bool news = ours && S.av == BTL_LINK_IDLE;
+        if (news) {                         /* it calling us; ours is CONNECTING already */
+            S.av          = BTL_LINK_CONNECTING;
+            memcpy(S.av_conn, bda, 6);
+            S.av_since_us = now;
+            S.av_away     = false;
+        }
+        UNLOCK();
+        if (news) hfp_report_state();
+        return;
+    }
+    if (link == BTL_LINK_CONNECTED) {
+        if (!ours) {
+            UNLOCK();
+            link_log("refused a connection from %s", bda_str(bda, b));
+            a2dp_disconnect(bda);
+            return;
+        }
+        if (!S.have || !same(bda, S.bda)) { /* our remembered device, calling us */
+            memcpy(S.bda, bda, 6);
+            strlcpy(S.name, S.mem_name, sizeof S.name);
+            S.have = true;
+            target_kind_locked();
+            batt_forget_locked();
+        }
+        S.av            = BTL_LINK_CONNECTED;
+        memcpy(S.av_conn, bda, 6);
+        S.mtu           = mtu;
+        S.media_pending = false;
+        char name[32];
+        strlcpy(name, S.name, sizeof name);
+        if (!spk_locked()) {
+            /* A headset's own: now that this chip is a music source too, a
+             * headset may open A2DP to it, as to a phone. Accepted, never
+             * started -- its calls are what it is for. */
+            const bool tell = !S.told_av;
+            S.told_av = true;
+            UNLOCK();
+            if (tell) link_log("%s opened A2DP too: not used -- a headset", name[0] ? name : bda_str(bda, b));
+            return;
+        }
+        S.rekind        = false;
+        S.page_fails    = 0;
+        S.av_fails      = 0;
+        S.av_trial      = false;            /* a speaker indeed */
+        S.user_off      = false;
+        S.told_av       = true;
+        S.media_tries   = 0;
+        S.media_fails   = 0;
+        S.next_audio_us = now + 500000;     /* a moment for the speaker to settle */
+        S.conns++;
+        S.conn_us       = now;
+        S.conn_audios   = 0;
+        S.audio_us      = 0;
+        if (!S.remembered || !same(S.mem, S.bda) || strcmp(S.mem_name, S.name)) {
+            memcpy(S.mem, S.bda, 6);
+            strlcpy(S.mem_name, S.name, sizeof S.mem_name);
+            S.remembered = true;
+            save_mem();
+        }
+        if (S.knob_speakers) kind_store(S.bda, S.kind, S.kind_why);
+        const bool need_name = !S.name[0];
+        UNLOCK();
+        upd_headset_came();                 /* a firmware on trial: proven enough to keep */
+        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+        if (need_name) esp_bt_gap_read_remote_name((uint8_t *)bda);
+        link_log("speaker connected: %s (%s), packets of %u bytes", name[0] ? name : "?", bda_str(bda, b),
+                 (unsigned)mtu);
+        hfp_report_state();
+        return;
+    }
+    /* Gone, or never made. */
+    if (S.av == BTL_LINK_IDLE || !same(bda, S.av_conn)) {
+        UNLOCK();
+        ESP_LOGI(TAG, "%s: A2DP disconnected", bda_str(bda, b));
+        return;
+    }
+    const uint8_t was = S.av;
+    S.av            = BTL_LINK_IDLE;
+    S.told_av       = false;
+    S.told_delay    = false;
+    S.media_pending = false;
+    S.suspend_asked = false;
+    S.sink_delay    = 0;
+    if (S.audio == BTL_AUDIO_SBC_44K) audio_gone_locked();     /* its stream went with it */
+    if (!same(S.av_conn, S.bda)) {
+        /* Left for another one, which the knob asked for: call it now. */
+        S.next_page_us = now + 300000;
+        UNLOCK();
+        hfp_report_state();
+        return;
+    }
+    if (!spk_locked()) {
+        /* A headset's own: its hands-free link decides. */
+        UNLOCK();
+        ESP_LOGI(TAG, "%s: its A2DP closed", bda_str(bda, b));
+        return;
+    }
+    if (S.rekind) {
+        /* Down to be called again as a speaker. */
+        S.next_page_us = now + 1000000;
+        UNLOCK();
+        hfp_report_state();
+        return;
+    }
+    if (was == BTL_LINK_CONNECTED) {
+        /* Switched off, or out of reach: call it again in a while. */
+        S.next_page_us = now + 10000000;
+        UNLOCK();
+        link_log("speaker gone: %s", bda_str(bda, b));
+        hfp_report_state();
+        return;
+    }
+    char name[32];
+    strlcpy(name, S.name, sizeof name);
+    /* Its page unanswered: away, or switched off. Answered, it took no
+     * A2DP: it has none, or plays for another already. */
+    const bool away = S.av_away;
+    if (S.av_trial && !away && ++S.av_fails >= 2) {
+        /* Taken for a speaker since this chip started, for hanging up its
+         * call's audio, and in reach -- but no A2DP from it, twice: a
+         * headset after all, for good; the page can say otherwise. Never
+         * for a verdict an earlier start came to: a speaker switched off
+         * then is only away. */
+        const bool was_spk = spk_locked();
+        S.kind         = BTL_KIND_HEADSET;
+        S.kind_why     = BTL_KWHY_NO_A2DP;
+        S.av_trial     = false;
+        S.page_fails   = 0;
+        kind_store(S.bda, S.kind, S.kind_why);
+        rekind_locked(was_spk, now);
+        S.next_page_us = now + 1000000;
+        UNLOCK();
+        link_log("%s has no A2DP to play to: a headset after all", name[0] ? name : bda_str(bda, b));
+        hfp_report_state();
+        return;
+    }
+    /* A call that was not answered, or not taken. */
+    S.page_fails++;
+    S.next_page_us  = now + av_backoff_locked();
+    const int fails = S.page_fails;
+    if (S.remembered && !same(S.bda, S.mem)) {
+        /* A new one that did not answer: back to the one we know. */
+        memcpy(S.bda, S.mem, 6);
+        strlcpy(S.name, S.mem_name, sizeof S.name);
+        target_kind_locked();
+    } else if (!S.remembered && S.page_fails >= 2) {
+        S.have = false;                     /* a new one, never reached: give up */
+    }
+    UNLOCK();
+    /* In reach, and no A2DP time after time: a headset its class made a
+     * speaker of -- a car kit, say. Use as, on the page, says otherwise. */
+    if (away) link_log("no answer from %s (%d)", bda_str(bda, b), fails);
+    else link_log("%s is in reach but took no A2DP (%d)", name[0] ? name : bda_str(bda, b), fails);
+    hfp_report_state();
+}
+
+void hfp_av_audio(const uint8_t *bda, bool started)
+{
+    char b[18];
+    const int64_t now = esp_timer_get_time();
+    LOCK();
+    if (S.av != BTL_LINK_CONNECTED || !same(bda, S.av_conn)) {
+        UNLOCK();
+        return;
+    }
+    if (started) {
+        /* Ours opened at its start's answer, which comes first -- or, no
+         * longer wanted by then, is being suspended. One the sink started
+         * itself the stack stops at once (btc_av.c): this chip is the
+         * source, and starts its own. */
+        const bool open = S.audio == BTL_AUDIO_SBC_44K, ours = S.suspend_asked;
+        UNLOCK();
+        if (!open && !ours) ESP_LOGI(TAG, "%s started its stream itself: the stack stops it", bda_str(bda, b));
+        return;
+    }
+    /* Stopped. A suspend of ours is answered as the stack stops the stream,
+     * before this (btc_a2dp_source_aa_stop_tx): asked is told here, not by
+     * the answer. Wanted again meanwhile -- the telephone's next call --
+     * it starts again at once. */
+    const bool asked = S.suspend_asked;
+    S.suspend_asked  = false;
+    if (asked && S.want_audio) S.next_audio_us = 0;
+    if (S.audio != BTL_AUDIO_SBC_44K) {     /* nothing of ours was open */
+        UNLOCK();
+        return;
+    }
+    const bool brief = now - S.audio_us < 10000000;
+    audio_gone_locked();
+    int again_s = 0;
+    if (!asked && S.want_audio && spk_locked()) {
+        /* The sink's own doing: started again in a moment -- later and later
+         * if it keeps stopping soon after. */
+        S.media_tries = brief ? S.media_tries + 1 : 1;
+        int64_t wait = 2000000LL << (S.media_tries - 1 < 5 ? S.media_tries - 1 : 5);
+        if (wait > 60000000) wait = 60000000;
+        S.next_audio_us = now + wait;
+        again_s         = (int)(wait / 1000000);
+    }
+    UNLOCK();
+    if (again_s) link_log("the speaker stopped its audio itself: again in %d s", again_s);
+    else link_log("speaker audio closed");
+    hfp_report_state();
+}
+
+void hfp_av_media(uint8_t cmd, bool ok)
+{
+    const int64_t now = esp_timer_get_time();
+    LOCK();
+    if (cmd == A2DP_SUSPEND) {
+        /* Its stream's own event, after this, says what closed
+         * (hfp_av_audio). Refused, nothing closes. */
+        if (S.media_pending && S.media_cmd == A2DP_SUSPEND) S.media_pending = false;
+        if (!ok) S.suspend_asked = false;
+        UNLOCK();
+        return;
+    }
+    if (S.media_cmd == A2DP_START) S.media_pending = false;
+    if (!ok) {
+        S.media_fails++;
+        int64_t wait = 2000000LL << (S.media_fails - 1 < 5 ? S.media_fails - 1 : 5);
+        if (wait > 60000000) wait = 60000000;
+        S.next_audio_us = now + wait;
+        const int fails = S.media_fails;
+        UNLOCK();
+        link_log("speaker audio would not start (%d): again in %d s", fails, (int)(wait / 1000000));
+        return;
+    }
+    /* Started: a start answered is a stream going -- one the stack had
+     * started already too, which says so without an event of its own. */
+    if (S.audio == BTL_AUDIO_SBC_44K || S.av != BTL_LINK_CONNECTED) {
+        UNLOCK();                           /* open already, or its link gone since */
+        return;
+    }
+    if (!spk_locked() || !S.want_audio) {
+        /* ...and no longer wanted: the knob's call ended meanwhile, or the
+         * device is a headset now. */
+        S.media_pending = true;
+        S.media_cmd     = A2DP_SUSPEND;
+        S.suspend_asked = true;
+        S.next_audio_us = now + 4000000;
+        UNLOCK();
+        a2dp_suspend();
+        return;
+    }
+    S.audio         = BTL_AUDIO_SBC_44K;
+    S.media_fails   = 0;
+    S.suspend_asked = false;
+    S.told_delay    = false;
+    memcpy(s_open.bda, S.av_conn, 6);       /* for the reports, with spk_open()'s count */
+    s_open.conns    = S.conns;
+    s_open.conn_us  = S.conn_us;
+    s_open.audios   = ++S.conn_audios;
+    s_open.audio_us = now;
+    S.audio_us      = now;
+    spk_open();
+    const unsigned long rate = S.dn_rate;
+    /* Its first on this connection: how long it waited for its volume to be
+     * the knob's (AV_HOLD_US). */
+    const unsigned long after = S.conn_audios == 1 ? (unsigned long)((now - S.conn_us) / 100000) : 0;
+    UNLOCK();
+    if (after)
+        link_log("speaker audio open: SBC, 44.1 kHz, the knob's %lu Hz in both channels, %lu.%lu s after it connected",
+                 rate, after / 10, after % 10);
+    else
+        link_log("speaker audio open: SBC, 44.1 kHz, the knob's %lu Hz in both channels", rate);
+    hfp_report_state();
+}
+
+/* On the stack's BTU task: the value only, for the main loop to say. */
+void hfp_av_delay(uint16_t v)
+{
+    s_delay_value = v;
+    s_delay_news  = true;
+}
+
 /* ---- the knob's commands ------------------------------------------------ */
+
+/* "A2DP, hands-free", or "not listed". */
+static const char *svc_str(char *s, size_t n, uint8_t svc)
+{
+    static const struct { uint8_t bit; const char *name; } k[] = {
+        { BTL_SVC_A2DP, "A2DP" }, { BTL_SVC_HFP, "hands-free" }, { BTL_SVC_HSP, "headset" },
+        { BTL_SVC_AVRCP, "remote control" },
+    };
+    s[0] = 0;
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
+        if (svc & k[i].bit) snprintf(s + strlen(s), n - strlen(s), "%s%s", s[0] ? ", " : "", k[i].name);
+    if (!s[0]) strlcpy(s, "not listed", n);
+    else if (!(svc & BTL_SVC_KNOWN)) strlcat(s, " (a part list)", n);
+    return s;
+}
+
+/* Why a device is what it is, in words: "its class, loudspeaker; its
+ * services: A2DP, hands-free". f, its scan answer, if this boot heard one. */
+static const char *why_str(char *s, size_t n, uint8_t why, const btl_found_t *f)
+{
+    char sv[48];
+    switch (why) {
+    case BTL_KWHY_CLASS:
+        if (f) snprintf(s, n, "its class, %s; its services: %s", kind_minor_str(f->cod), svc_str(sv, sizeof sv, f->svc));
+        else strlcpy(s, "its class and services, when a scan heard it", n);
+        break;
+    case BTL_KWHY_DROPS:   strlcpy(s, "it hangs up a call's audio at once", n); break;
+    case BTL_KWHY_NO_A2DP: strlcpy(s, "it has no A2DP to play to", n);          break;
+    case BTL_KWHY_USER:    strlcpy(s, "set on the configuration page", n);      break;
+    default:               strlcpy(s, "nothing known of it yet", n);            break;
+    }
+    return s;
+}
 
 void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
 {
     char b[18];
     switch (type) {
     case BTL_AUDIO_DN:
-        if (s_audio_on) {
+    case BTL_AUDIO_DN_FULL:
+        /* FULL is the knob's audio before its VOLUME, for a speaker whose own
+         * volume is the knob's -- and nothing else: a headset, or a speaker
+         * no longer set, would play it at full level. Dropped there, a
+         * moment's silence until the knob has heard. */
+        if (s_audio_on && (type == BTL_AUDIO_DN || (s_av_on && a2dp_volume_full()))) {
             static int16_t pcm[BTL_MAX_PAYLOAD / 2];
             memcpy(pcm, p, n & ~1u);        /* the frame's payload is not aligned */
             rs_push(&s_dn, pcm, n / 2);
@@ -697,37 +1536,59 @@ void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
         if (n < 6) break;
         if (S.scanning) esp_bt_gap_cancel_discovery();
         LOCK();
-        const bool busy = S.link != BTL_LINK_IDLE;
-        const bool other = busy && S.have && !same(S.bda, p);
-        esp_bd_addr_t old;
+        const int64_t now  = esp_timer_get_time();
+        const bool hf_up   = S.link != BTL_LINK_IDLE;
+        const bool av_up   = S.av != BTL_LINK_IDLE;
+        const bool other   = (hf_up || av_up) && S.have && !same(S.bda, p);
+        const bool was_spk = spk_locked();
+        esp_bd_addr_t old, old_av;
         memcpy(old, S.bda, 6);
+        memcpy(old_av, S.av_conn, 6);
+        /* The one left: its audio goes with its links, below, and its
+         * battery now -- it is not this one's. */
+        if (other && S.audio != BTL_AUDIO_NONE) audio_gone_locked();
+        if (!S.have || !same(S.bda, p)) batt_forget_locked();
         memcpy(S.bda, p, 6);
         S.have = true;
         S.name[0] = 0;
         for (int i = 0; i < s_nfound; i++)
             if (same(s_found[i].bda, p)) strlcpy(S.name, s_found[i].name, sizeof S.name);
         if (!S.name[0] && S.remembered && same(S.mem, p)) strlcpy(S.name, S.mem_name, sizeof S.name);
+        target_kind_locked();
         S.user_off     = false;
         S.page_fails   = 0;
+        S.av_fails     = 0;
         S.next_page_us = 0;                 /* the tick calls it now */
+        /* The one connected, asked for again: a scan since may have said
+         * what it is. */
+        if (!other) rekind_locked(was_spk, now);
+        char name[32], why[96];
+        strlcpy(name, S.name, sizeof name);
+        const bool spk = S.kind == BTL_KIND_SPEAKER, speakers = S.knob_speakers;
+        why_str(why, sizeof why, S.kind_why, found_get(p));
         UNLOCK();
         if (other) {
-            link_log("leaving %s for %s", bda_str(old, b), S.name);
-            esp_hf_ag_slc_disconnect(old);
+            link_log("leaving %s for %s", bda_str(old, b), name[0] ? name : "?");
+            if (hf_up) esp_hf_ag_slc_disconnect(old);
+            if (av_up) a2dp_disconnect(old_av);
         }
+        if (speakers) link_log("%s (%s): a %s -- %s", name[0] ? name : "?", bda_str(p, b), spk ? "speaker" : "headset", why);
         hfp_report_state();
         break;
     }
-    case BTL_CMD_DISCONNECT:
+    case BTL_CMD_DISCONNECT: {
         LOCK();
         S.user_off = true;
+        const bool spk = spk_locked();
         if (S.link != BTL_LINK_IDLE && S.have) {
             call_down();
             esp_hf_ag_slc_disconnect(S.bda);
         }
+        if (S.av != BTL_LINK_IDLE && S.have) a2dp_disconnect(S.av_conn);
         UNLOCK();
-        link_log("headset hung up by the knob");
+        link_log("%s hung up by the knob", spk ? "speaker" : "headset");
         break;
+    }
     case BTL_CMD_FORGET: {
         if (n < 6) break;
         LOCK();
@@ -736,11 +1597,20 @@ void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
             call_down();
             esp_hf_ag_slc_disconnect(S.bda);
         }
+        if (S.av != BTL_LINK_IDLE && same(S.av_conn, p)) a2dp_disconnect(S.av_conn);
         if (S.remembered && same(S.mem, p)) {
             S.remembered = false;
             save_mem();
         }
-        if (cur) S.have = false;
+        if (cur) {
+            S.have = false;
+            batt_forget_locked();
+        }
+        /* Its verdict too: a scan makes of it what its class and services
+         * say, as for a device never met. */
+        kind_forget(p);
+        btl_found_t *f = found_get(p);
+        if (f) found_kind(f);
         UNLOCK();
         esp_bt_gap_remove_bond_device((uint8_t *)p);
         if (!S.remembered) esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
@@ -756,23 +1626,30 @@ void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
         if (dn < 8000 || dn > 48000) dn = 24000;
         if (up < 8000 || up > 48000) up = 24000;
         LOCK();
+        const bool wanted = S.want_audio;
         S.want_audio = p[0] != 0;
         S.audio_tries = 0;
+        if (S.want_audio && !wanted && spk_locked()) {
+            /* A speaker's stream wanted anew -- the telephone's next call:
+             * at once, the sink's stops before forgiven. */
+            S.media_tries = S.media_fails = 0;
+            if (!S.media_pending) S.next_audio_us = 0;
+        }
         const bool changed = dn != S.dn_rate || up != S.up_rate;
         S.dn_rate = dn;
         S.up_rate = up;
         const uint8_t audio = S.audio;
         UNLOCK();
-        /* Another firmware on the knob, another rate -- with the headset's
+        /* Another firmware on the knob, another rate -- with the device's
          * audio open all the while: the converters again. The stack's
          * callbacks stand aside for a moment while they are rebuilt. */
         if (changed && audio != BTL_AUDIO_NONE && s_audio_on) {
             s_audio_on = false;
             vTaskDelay(pdMS_TO_TICKS(20));
-            audio_rates(audio == BTL_AUDIO_MSBC_16K);
+            audio_rates(air_rate(audio), audio != BTL_AUDIO_SBC_44K);
             s_audio_on = true;
         }
-        if (changed) link_log("the knob's audio: %lu Hz to the headset, %lu Hz back",
+        if (changed) link_log("the knob's audio: %lu Hz to the device, %lu Hz back",
                               (unsigned long)dn, (unsigned long)up);
         break;
     }
@@ -784,7 +1661,9 @@ void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
         LOCK();
         S.spk = p[0] > 15 ? 15 : p[0];
         S.mic = p[1] > 15 ? 15 : p[1];
-        if (S.link == BTL_LINK_CONNECTED) {
+        /* A headset's gains. A speaker's own hands-free link would set its
+         * call volume, which nothing plays through. */
+        if (S.link == BTL_LINK_CONNECTED && !spk_locked()) {
             esp_hf_ag_volume_control(S.bda, ESP_HF_VOLUME_CONTROL_TARGET_SPK, S.spk);
             esp_hf_ag_volume_control(S.bda, ESP_HF_VOLUME_CONTROL_TARGET_MIC, S.mic);
         }
@@ -793,6 +1672,52 @@ void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
     case BTL_CMD_STATE:
         hfp_report_state();
         break;
+    case BTL_CMD_AV_VOLUME: {
+        /* The knob's VOLUME, kept for a speaker that takes it as its own --
+         * the one whose A2DP is up, at once, if it does; never a headset:
+         * its own A2DP, idle, plays nothing. */
+        if (n < 1) break;
+        esp_bd_addr_t spk;
+        LOCK();
+        const bool is = spk_locked() && S.knob_speakers && S.av == BTL_LINK_CONNECTED;
+        memcpy(spk, S.av_conn, sizeof spk);
+        UNLOCK();
+        a2dp_volume(p[0], is ? spk : NULL);
+        break;
+    }
+    case BTL_CMD_KIND: {
+        /* The page's choice for a device, kept: nothing automatic changes it
+         * after. The one connected is called again as that. */
+        if (n < 7) break;
+        const uint8_t kind = p[6] ? BTL_KIND_SPEAKER : BTL_KIND_HEADSET;
+        kind_store(p, kind, BTL_KWHY_USER);
+        LOCK();
+        const int64_t now = esp_timer_get_time();
+        btl_found_t *f = found_get(p);
+        if (f) found_kind(f);
+        char name[32] = "";
+        bool again = false;
+        if (S.have && same(S.bda, p)) {
+            const bool was = spk_locked();
+            S.kind      = kind;
+            S.kind_why  = BTL_KWHY_USER;
+            S.av_fails  = 0;
+            S.av_trial  = false;
+            again       = (S.link != BTL_LINK_IDLE || S.av != BTL_LINK_IDLE) && spk_locked() != was;
+            rekind_locked(was, now);
+            strlcpy(name, S.name, sizeof name);
+        } else if (f) {
+            strlcpy(name, f->name, sizeof name);
+        } else if (S.remembered && same(S.mem, p)) {
+            strlcpy(name, S.mem_name, sizeof name);
+        }
+        UNLOCK();
+        if (f) link_send(BTL_EVT_FOUND, f, sizeof *f);
+        link_log("%s (%s) set to a %s by the knob%s", name[0] ? name : "?", bda_str(p, b),
+                 kind == BTL_KIND_SPEAKER ? "speaker" : "headset", again ? " -- calling it again as one" : "");
+        hfp_report_state();
+        break;
+    }
     default:
         break;
     }
@@ -805,8 +1730,9 @@ void hfp_on_frame(uint8_t type, const uint8_t *p, uint16_t n)
  * history behind it. All from the main task, the lowest, a line a tick: a
  * line is longer than the console UART's 128-byte FIFO, and the console
  * waits on it a few milliseconds a line, more for one right after another
- * -- never in the pump, which feeds the headset. */
-enum { J_AUDIO = 1, J_FROM = 2, J_TO = 4, J_LINK = 8, J_HISTORY = 16 };   /* in this order */
+ * -- never in the pump, which feeds the headset. A speaker's stream has
+ * lines of its own: no air of a call to measure, but the stack's queue. */
+enum { J_AUDIO = 1, J_FROM = 2, J_TO = 4, J_LINK = 8, J_HISTORY = 16, J_SPK = 32, J_SPK_LINK = 64 };   /* in this order */
 static unsigned s_jobs;
 static struct {                             /* the audio's numbers, as taken */
     uint32_t in, out, fill, target, under, skips, bad;
@@ -816,8 +1742,23 @@ static struct {                             /* the history of the audio open */
     int     conns, audios;
     int64_t conn_us;
 } s_hist;
+static struct {                             /* a speaker's numbers, as taken: since the report before */
+    uint32_t made, due, under, skips, dropped, fill, target, waiting, most, ms, stack;
+    long     ppm;
+    bool     closed;
+} s_spk;
+static struct {                             /* ...where its counts stood then */
+    uint32_t made, under, skips, dropped;
+    int64_t  t_us;
+} s_spk_prev;
 
-void hfp_knob_hello(void) { s_knob_hellos++; }
+void hfp_knob_hello(void)
+{
+    s_knob_hellos++;
+    /* Started afresh, its VOLUME may be another: a speaker's is not the
+     * knob's until it says it again. */
+    a2dp_knob_started();
+}
 
 /* 42 s, 17 min, 5 h 12 min. */
 static const char *dur_str(char *s, size_t n, int64_t us)
@@ -858,6 +1799,78 @@ static void log_history(void)
              (unsigned)(heap_caps_get_minimum_free_size(caps) / 1024));
 }
 
+/* A speaker's, in the window since the report before: the SBC frames made of
+ * the knob's audio, against the 44.1 kHz the clock says were due; the
+ * downlink's as a call's; what waits in the stack's queue, made and not yet
+ * taken for the air -- the link keeping up, or not -- and what the queue
+ * dropped, memory running short (a2dp.c). */
+static void log_spk(void)
+{
+    link_log("speaker audio, %s%lu s: %lu frames made of %lu due, %lu dry, %lu skips, fill %lu (target %lu), "
+             "%+ld ppm; %lu waiting (most %lu), %lu dropped for memory",
+             s_spk.closed ? "last " : "", (unsigned long)((s_spk.ms + 500) / 1000), (unsigned long)s_spk.made,
+             (unsigned long)s_spk.due, (unsigned long)s_spk.under, (unsigned long)s_spk.skips,
+             (unsigned long)s_spk.fill, (unsigned long)s_spk.target, s_spk.ppm, (unsigned long)s_spk.waiting,
+             (unsigned long)s_spk.most, (unsigned long)s_spk.dropped);
+}
+
+/* Its link: the packets it takes, its own delay, and the stack's BTC task,
+ * which codes the SBC now besides its own work, with the stack it has; and
+ * the heap, which the stack's queue of packets lives on (a2dp.c). */
+static void log_spk_link(void)
+{
+    LOCK();
+    const unsigned mtu = S.mtu, delay = S.sink_delay;
+    UNLOCK();
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    char d[32], st[40];
+    if (delay) snprintf(d, sizeof d, "it plays %u ms behind", delay / 10);
+    else strlcpy(d, "no delay report", sizeof d);
+    if (s_spk.stack) snprintf(st, sizeof st, "BTC stack %lu bytes never used", (unsigned long)s_spk.stack);
+    else strlcpy(st, "BTC stack not measured yet", sizeof st);
+    link_log("speaker link: SBC 44.1 kHz, packets of %u bytes, %s, %s; heap %u kB free, %u kB lowest", mtu, d, st,
+             (unsigned)(heap_caps_get_free_size(caps) / 1024), (unsigned)(heap_caps_get_minimum_free_size(caps) / 1024));
+}
+
+/* A speaker's stream opened at t0: its counts start from nought there
+ * (spk_open). */
+static void spk_start(int64_t t0)
+{
+    a2dp_counts_t c;
+    a2dp_counts(&c);
+    memset(&s_spk_prev, 0, sizeof s_spk_prev);
+    s_spk_prev.t_us = t0;
+    s_spk.stack     = c.btc_stack_free;
+}
+
+/* Its numbers, taken now, up to `end` -- its close, for the last. */
+static void spk_take(bool closed, int64_t end)
+{
+    a2dp_counts_t c;
+    a2dp_counts(&c);
+    const uint32_t under = s_under, skips = s_skips;
+    const uint32_t ms    = (uint32_t)((end - s_spk_prev.t_us) / 1000);
+    s_spk.closed  = closed;
+    s_spk.ms      = ms;
+    s_spk.made    = c.made - s_spk_prev.made;
+    s_spk.due     = (uint32_t)(((uint64_t)ms * 441 + 5 * c.spf) / (10 * c.spf));   /* ms x 44.1 / its frame */
+    s_spk.under   = under - s_spk_prev.under;
+    s_spk.skips   = skips - s_spk_prev.skips;
+    s_spk.dropped = c.dropped - s_spk_prev.dropped;
+    s_spk.fill    = rs_fill(&s_dn);
+    s_spk.target  = s_dn_target;
+    s_spk.ppm     = lround((s_dn.step / s_dn.nominal - 1.0) * 1e6);
+    s_spk.waiting = c.waiting;
+    s_spk.most    = c.waiting_max;
+    s_spk.stack   = c.btc_stack_free;
+    s_spk_prev.made    = c.made;
+    s_spk_prev.under   = under;
+    s_spk_prev.skips   = skips;
+    s_spk_prev.dropped = c.dropped;
+    s_spk_prev.t_us    = end;
+    s_jobs |= J_SPK | J_SPK_LINK;
+}
+
 /* The numbers, taken now, all at once; their lines follow, one a tick. */
 static void report(void)
 {
@@ -875,10 +1888,11 @@ static void report(void)
 static void reports(void)
 {
     static uint32_t seen;                   /* the audio open reported on */
-    static bool     open, asked;
+    static bool     open, asked, spk;
     static int64_t  t_stat;
     LOCK();
     const bool     up  = S.audio != BTL_AUDIO_NONE;
+    const bool     sbc = S.audio == BTL_AUDIO_SBC_44K;
     const uint32_t ses = s_session;
     const __typeof__(s_open) o = s_open;
     UNLOCK();
@@ -887,49 +1901,64 @@ static void reports(void)
         /* Closed: the part since the last report -- unless it opened again
          * already, and the counts are the new one's. */
         open = false;
-        if (ses == seen) report();
+        if (ses == seen) {
+            if (spk) spk_take(true, o.close_us > s_spk_prev.t_us ? o.close_us : now);
+            else report();
+        }
     }
     if (up && ses != seen) {
         seen           = ses;
         open           = true;
         asked          = false;
+        spk            = sbc;
         t_stat         = now;
         s_hist.conns   = o.conns;
         s_hist.audios  = o.audios;
         s_hist.conn_us = o.conn_us;
-        air_opened(o.bda);
-        s_jobs |= J_LINK | J_HISTORY;
+        if (spk) {
+            spk_start(o.audio_us);
+            s_jobs |= J_SPK_LINK | J_HISTORY;
+        } else {
+            air_opened(o.bda);
+            s_jobs |= J_LINK | J_HISTORY;
+        }
     }
     if (open) {
-        /* Every 30 s from the open; the signal asked a second before, to be
-         * fresh in the report. */
-        if (!asked && now - t_stat >= 29000000) {
+        /* Every 30 s from the open; a call's signal asked a second before,
+         * to be fresh in the report. */
+        if (!spk && !asked && now - t_stat >= 29000000) {
             asked = true;
             air_ask_signal();
         }
         if (now - t_stat >= 30000000) {
             t_stat = now;
             asked  = false;
-            report();
+            if (spk) spk_take(false, now);
+            else report();
         }
     }
     const unsigned j = s_jobs & -s_jobs;    /* the first due */
     s_jobs &= ~j;
     switch (j) {
-    case J_AUDIO:   log_audio();    break;
-    case J_FROM:    air_log_from(); break;
-    case J_TO:      air_log_to();   break;
-    case J_LINK:    air_log_link(); break;
-    case J_HISTORY: log_history();  break;
-    default:                        break;
+    case J_AUDIO:    log_audio();    break;
+    case J_FROM:     air_log_from(); break;
+    case J_TO:       air_log_to();   break;
+    case J_LINK:     air_log_link(); break;
+    case J_HISTORY:  log_history();  break;
+    case J_SPK:      log_spk();      break;
+    case J_SPK_LINK: log_spk_link(); break;
+    default:                         break;
     }
 }
 
 /* ---- an update of this chip's firmware coming in (upd.c) ---------------- */
 
+/* No link to a device -- hands-free or A2DP -- no scan, no audio of either
+ * kind, nothing asked of either. */
 static bool idle_locked(void)
 {
-    return S.link == BTL_LINK_IDLE && !S.scanning && S.audio == BTL_AUDIO_NONE && !S.audio_pending && !S.call;
+    return S.link == BTL_LINK_IDLE && !S.scanning && S.audio == BTL_AUDIO_NONE && !S.audio_pending && !S.call &&
+           S.av == BTL_LINK_IDLE && !S.media_pending;
 }
 
 bool hfp_idle(void)
@@ -972,45 +2001,199 @@ bool hfp_audio_open(void)
 
 /* ---- now and then ------------------------------------------------------- */
 
+/* The sink's delay report, come on the stack's BTU task: said here, once a
+ * stream, and to the knob with the state while one plays. */
+static void delay_news(void)
+{
+    if (!s_delay_news) return;
+    s_delay_news = false;
+    const uint16_t v = s_delay_value;
+    LOCK();
+    if (S.av == BTL_LINK_IDLE) {            /* a report from a link gone since */
+        UNLOCK();
+        return;
+    }
+    const bool changed = v != S.sink_delay;
+    const bool tell    = !S.told_delay;
+    const bool open    = S.audio == BTL_AUDIO_SBC_44K;
+    S.sink_delay = v;
+    S.told_delay = true;
+    UNLOCK();
+    if (tell) link_log("the speaker plays %u ms behind what it is sent (its own report)", (unsigned)(v / 10));
+    if (open && changed) hfp_report_state();
+}
+
+/* A speaker's volume (a2dp.c): its sets unanswered, its lines -- said with
+ * its name, and only for a speaker, its own remote control. */
+static void volume_tick(void)
+{
+    char name[32];
+    esp_bd_addr_t spk;
+    LOCK();
+    const bool is = spk_locked() && S.knob_speakers && S.av == BTL_LINK_CONNECTED;
+    strlcpy(name, S.name, sizeof name);
+    memcpy(spk, S.av_conn, sizeof spk);
+    UNLOCK();
+    a2dp_tick(is ? name : NULL, is ? spk : NULL);
+}
+
 void hfp_tick(void)
 {
     char b[18];
     reports();
+    /* The verdicts to NVS, never while audio is open: a flash write holds
+     * both cores' caches a moment. */
+    if (S.audio == BTL_AUDIO_NONE) kind_flush();
+    delay_news();
+    volume_tick();
     const int64_t now = esp_timer_get_time();
     LOCK();
-    /* Call the headset, as a phone does its own when it comes in reach --
-     * not while an update comes in: the transfer would only stop for it. */
-    if (S.link == BTL_LINK_IDLE && S.have && !S.scanning && !S.user_off && now >= S.next_page_us && !s_hold) {
-        S.link         = BTL_LINK_CONNECTING;
-        memcpy(S.conn, S.bda, 6);
-        S.next_page_us = now + 30000000;    /* until the answer says otherwise */
+    /* A headset whose call's audio has stayed open: one for sure. Marked,
+     * so that drops of its audio later -- a phone of its own taking it, say
+     * -- never make it a speaker (on_audio_state). Only for a knob that
+     * knows speakers: the table of one that does not stays as it was. */
+    if (S.knob_speakers && !spk_locked() && !S.held && sco_open_locked() && S.audio_us &&
+        now - S.audio_us >= QUICK_US) {
+        S.held = true;
+        kind_set_held(S.bda, S.kind, S.kind_why);
         char name[32];
         strlcpy(name, S.name, sizeof name);
-        esp_bd_addr_t bda;
-        memcpy(bda, S.bda, 6);
         UNLOCK();
-        link_log("calling %s (%s)", name[0] ? name : "the headset", bda_str(bda, b));
-        esp_hf_ag_slc_connect(bda);
+        link_log("%s held a call's audio: never taken for a speaker by its drops", name[0] ? name : "the headset");
+        LOCK();
+    }
+    const bool spk = spk_locked();
+    /* Call the device, as a phone does its own when it comes in reach --
+     * not while an update comes in: the transfer would only stop for it. A
+     * headset on its hands-free link; a speaker on A2DP, once the knob has
+     * said it knows speakers. */
+    if (S.have && !S.scanning && !S.user_off && now >= S.next_page_us && !s_hold) {
+        if (!spk && S.link == BTL_LINK_IDLE) {
+            S.link         = BTL_LINK_CONNECTING;
+            memcpy(S.conn, S.bda, 6);
+            S.next_page_us = now + 30000000;    /* until the answer says otherwise */
+            S.rekind       = false;
+            char name[32];
+            strlcpy(name, S.name, sizeof name);
+            esp_bd_addr_t bda;
+            memcpy(bda, S.bda, 6);
+            UNLOCK();
+            link_log("calling %s (%s)", name[0] ? name : "the headset", bda_str(bda, b));
+            esp_hf_ag_slc_connect(bda);
+            hfp_report_state();
+            return;
+        }
+        if (spk && S.av == BTL_LINK_IDLE && S.knob_speakers) {
+            S.av           = BTL_LINK_CONNECTING;
+            memcpy(S.av_conn, S.bda, 6);
+            S.av_since_us  = now;
+            S.av_away      = false;
+            S.next_page_us = now + 30000000;    /* until the answer says otherwise */
+            S.rekind       = false;
+            char name[32];
+            strlcpy(name, S.name, sizeof name);
+            esp_bd_addr_t bda;
+            memcpy(bda, S.bda, 6);
+            UNLOCK();
+            link_log("calling the speaker %s (%s)", name[0] ? name : "?", bda_str(bda, b));
+            a2dp_connect(bda);
+            hfp_report_state();
+            return;
+        }
+    }
+    /* An A2DP link being made, and no word of it in 30 s: the stack lost the
+     * request (one that came while its state machine had no place for it).
+     * Taken as a call not answered. */
+    if (S.av == BTL_LINK_CONNECTING && now - S.av_since_us > 30000000) {
+        S.av = BTL_LINK_IDLE;
+        S.page_fails++;
+        S.next_page_us = now + av_backoff_locked();
+        const int fails = S.page_fails;
+        esp_bd_addr_t bda;
+        memcpy(bda, S.av_conn, 6);
+        UNLOCK();
+        link_log("no answer from %s (%d): no word of its A2DP in 30 s", bda_str(bda, b), fails);
         hfp_report_state();
         return;
     }
-    /* Its audio, while the knob wants it -- a few tries, then the knob asks. */
-    if (S.audio_pending && now > S.next_audio_us) S.audio_pending = false;
-    if (S.link == BTL_LINK_CONNECTED && S.want_audio && S.audio == BTL_AUDIO_NONE &&
-        !S.audio_pending && S.audio_tries < 4 && now >= S.next_audio_us) {
-        S.audio_tries++;
-        S.audio_pending = true;
-        S.next_audio_us = now + 4000000;
-        call_up();
+    if (!spk) {
+        /* Its audio, while the knob wants it -- a few tries, then the knob asks. */
+        if (S.audio_pending && now > S.next_audio_us) S.audio_pending = false;
+        if (S.link == BTL_LINK_CONNECTED && S.want_audio && S.audio == BTL_AUDIO_NONE &&
+            !S.audio_pending && S.audio_tries < 4 && now >= S.next_audio_us) {
+            S.audio_tries++;
+            S.audio_pending = true;
+            S.next_audio_us = now + 4000000;
+            call_up();
+        }
+        if (S.link == BTL_LINK_CONNECTED && !S.want_audio && S.call) call_down();
+        UNLOCK();
+        return;
     }
-    if (S.link == BTL_LINK_CONNECTED && !S.want_audio && S.call) call_down();
+    /* A speaker: never a call; its stream while the knob wants audio --
+     * always on a radio, the telephone for its calls -- and only once the
+     * knob has said it knows speakers: before its hello, the device is
+     * neither called nor said to be there, and plays nothing. And not at its
+     * own volume first: one that may take the knob's has it before it plays
+     * -- or AV_HOLD_US after it connected, whatever it is. */
+    if (S.call) call_down();
+    if (S.media_pending && now > S.next_audio_us) S.media_pending = false;     /* an answer lost */
+    if (S.av == BTL_LINK_CONNECTED && S.knob_speakers && S.want_audio && S.audio == BTL_AUDIO_NONE &&
+        !S.media_pending && now >= S.next_audio_us &&
+        (now - S.conn_us >= AV_HOLD_US || a2dp_volume_settled(S.av_conn))) {
+        S.media_pending = true;
+        S.media_cmd     = A2DP_START;
+        S.next_audio_us = now + 4000000;
+        UNLOCK();
+        a2dp_start();
+        return;
+    }
+    if (S.av == BTL_LINK_CONNECTED && !S.want_audio && S.audio != BTL_AUDIO_NONE && !S.media_pending) {
+        S.media_pending = true;
+        S.media_cmd     = A2DP_SUSPEND;
+        S.suspend_asked = true;
+        S.next_audio_us = now + 4000000;
+        UNLOCK();
+        a2dp_suspend();
+        return;
+    }
     UNLOCK();
+}
+
+void hfp_knob_flags(uint8_t flags)
+{
+    const bool speakers = flags & BTL_HELLO_SPEAKERS;
+    LOCK();
+    const bool first = !S.knob_known;
+    const bool fell  = S.knob_speakers && !speakers;
+    const bool was   = spk_locked();
+    S.knob_known     = true;
+    S.knob_speakers  = speakers;
+    /* A speaker to a knob that does not know speakers -- or the other way
+     * round -- is called again as what it is to this one. */
+    rekind_locked(was, esp_timer_get_time());
+    UNLOCK();
+    if (!speakers && (first || fell))
+        link_log("this knob's firmware plays to headsets only: every device is a headset to it");
+    /* One that plays to speakers but sets none's volume: they keep their
+     * own, never set from here unasked -- where their own controls left it,
+     * or a knob's firmware that did set it. Said when it starts so. */
+    static int8_t vol_was = -1;
+    const int8_t  vol     = speakers && (flags & BTL_HELLO_AV_VOLUME);
+    a2dp_knob_av(vol);
+    if (speakers && vol != vol_was && !vol)
+        link_log("this knob's firmware scales a speaker's sound itself: a speaker keeps its own volume, where its "
+                 "own controls -- or a knob's firmware before this -- left it");
+    vol_was = speakers ? vol : -1;
 }
 
 void hfp_init(void)
 {
     s_mx = xSemaphoreCreateMutex();
+    /* The verdicts first: the remembered device's is among them. */
+    kind_load();
     load_mem();
+    target_kind_locked();
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
     esp_bt_controller_config_t bc = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -1051,8 +2234,12 @@ void hfp_init(void)
 
     esp_hf_ag_register_callback(hf_cb);
     esp_hf_ag_init();
-    /* Reachable for our own headset, which calls the phone it knows when it
-     * is switched on; never discoverable: headsets do not look for phones. */
+    /* A speaker's music source beside it: one more profile on the same
+     * links. */
+    a2dp_init();
+    /* Reachable for our own device, which calls the phone it knows when it
+     * is switched on; never discoverable: headsets and speakers do not look
+     * for phones. */
     esp_bt_gap_set_scan_mode(S.remembered ? ESP_BT_CONNECTABLE : ESP_BT_NON_CONNECTABLE,
                              ESP_BT_NON_DISCOVERABLE);
     S.next_page_us = esp_timer_get_time() + 1500000;
@@ -1063,5 +2250,6 @@ void hfp_init(void)
     esp_bredr_tx_power_get(&lo, &hi);
     ESP_LOGI(TAG, "Bluetooth up as %s (%s), transmitting %+d to %+d dBm%s%s", DEVICE_NAME,
              bda_str(esp_bt_dev_get_address(), b), -12 + 3 * (int)lo, -12 + 3 * (int)hi,
-             S.remembered ? ", headset " : "", S.remembered ? S.mem_name : "");
+             !S.remembered ? "" : S.kind == BTL_KIND_SPEAKER ? ", speaker " : ", headset ",
+             S.remembered ? S.mem_name : "");
 }

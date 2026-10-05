@@ -13,7 +13,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [SVXConnect](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
 | [Telephone](phone.md) | `vfo-knob-phone` — a telephone on one SIP account: favourites on the dial, a keypad, a call history, Google Contacts |
 | [UberSDR](ubersdr.md) | `vfo-knob-ubersdr` — a dial for an UberSDR web receiver: its spots and voices, SSTV pictures, and a KiwiSDR beside it |
-| [A Bluetooth headset](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, on every firmware but setup |
+| [A Bluetooth headset or speaker](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, or a speaker as its ear, on every firmware but setup |
 
 ## The pictures
 
@@ -31,4 +31,8 @@ The pictures carry no scripts and no web fonts, and their ids are unique per
 file, so they work as images and inline alike. A value in an editor's panel
 is fitted as the knob fits it, with Montserrat's own widths read from LVGL's
 font files (under `managed_components/`, fetched by the first
-`idf.py build`), and a browser draws it that wide whatever font it has.
+`idf.py build`), and a browser draws it that wide whatever font it has. The
+frequency readout is the knob's Hack: each digit in the place `dig_place()`
+gives it, named in Hack, then in the faces nearest it (DejaVu Sans Mono,
+Menlo, Consolas) and last any monospace one, and drawn as wide as Hack's
+advance in `components/ui/font_hack_46.c`.

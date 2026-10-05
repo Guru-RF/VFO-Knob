@@ -16,6 +16,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/netdb.h"
 #include "lwip/sockets.h"
 
 static const char *TAG = "uber-net";
@@ -29,19 +30,81 @@ const char *unet_agent(void)
     return ua;
 }
 
-esp_tls_t *unet_connect(const uhost_t *h, int timeout_ms, char *why, size_t wn)
+/* In the clear: a socket of its own, connected as esp-tls connects one --
+ * within timeout_ms, then blocking, each read and write waiting as long --
+ * and to each address the name stands for in turn, as a browser would. */
+static bool clear_connect(unet_t *c, const uhost_t *h, int timeout_ms, char *why, size_t wn)
 {
+    struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM }, *ai = NULL;
+    char ps[8];
+    snprintf(ps, sizeof ps, "%u", (unsigned)h->port);
+    const struct timeval tv = { .tv_sec = timeout_ms / 1000, .tv_usec = (timeout_ms % 1000) * 1000 };
+    const char *w = "name not found";
+    int fd = -1, e = 0;
+    if (getaddrinfo(h->host, ps, &hints, &ai) == 0 && ai) {
+        for (const struct addrinfo *a = ai; a && fd < 0; a = a->ai_next) {
+            fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+            if (fd < 0) {
+                w = "no free socket";
+                e = errno;
+                break;
+            }
+            fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+            e = 0;
+            if (connect(fd, a->ai_addr, a->ai_addrlen) != 0) {
+                e = errno;
+                if (e == EINPROGRESS) {
+                    fd_set ws;
+                    FD_ZERO(&ws);
+                    FD_SET(fd, &ws);
+                    struct timeval t = tv;
+                    const int s = select(fd + 1, NULL, &ws, NULL, &t);
+                    socklen_t el = sizeof e;
+                    e = s < 0 ? errno : s == 0 ? ETIMEDOUT : 0;
+                    if (s > 0) getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &el);
+                }
+            }
+            if (e) {
+                w = e == ECONNREFUSED ? "refused" : "no answer";
+                close(fd);
+                fd = -1;
+            }
+        }
+        freeaddrinfo(ai);
+    }
+    if (fd < 0) {
+        ESP_LOGW(TAG, "%s:%u: %s (errno %d)", h->host, (unsigned)h->port, w, e);
+        snprintf(why, wn, "%s", w);
+        return false;
+    }
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    c->fd = fd;
+    c->up = true;
+    return true;
+}
+
+bool unet_connect(unet_t *c, const uhost_t *h, int timeout_ms, char *why, size_t wn)
+{
+    memset(c, 0, sizeof *c);
+    c->fd = -1;
+    if (!h->tls) return clear_connect(c, h, timeout_ms, why, wn);
     esp_tls_t *t = esp_tls_init();
     if (!t) {
         snprintf(why, wn, "no memory");
-        return NULL;
+        return false;
     }
     const esp_tls_cfg_t cfg = {
         .timeout_ms        = timeout_ms,
-        .is_plain_tcp      = !h->tls,
-        .crt_bundle_attach = h->tls ? esp_crt_bundle_attach : NULL,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
-    if (esp_tls_conn_new_sync(h->host, (int)strlen(h->host), h->port, &cfg, t) == 1) return t;
+    if (esp_tls_conn_new_sync(h->host, (int)strlen(h->host), h->port, &cfg, t) == 1) {
+        c->tls = t;
+        esp_tls_get_conn_sockfd(t, &c->fd);
+        c->up = true;
+        return true;
+    }
     esp_tls_error_handle_t eh = NULL;
     esp_err_t last = ESP_FAIL;
     int flags = 0;
@@ -59,29 +122,39 @@ esp_tls_t *unet_connect(const uhost_t *h, int timeout_ms, char *why, size_t wn)
              esp_err_to_name(last), flags);
     snprintf(why, wn, "%s", w);
     esp_tls_conn_destroy(t);
-    return NULL;
+    return false;
+}
+
+void unet_drop(unet_t *c)
+{
+    if (c->tls) esp_tls_conn_destroy(c->tls);       /* its socket with it */
+    else if (c->up) close(c->fd);
+    memset(c, 0, sizeof *c);
+    c->fd = -1;
 }
 
 /* A read: bytes, 0 once closed, -2 when there is nothing yet (a timeout on a
  * blocking socket, or nothing waiting on a non-blocking one), -1 an error.
- * esp-tls answers in its own codes for TLS, and as recv() does in the clear. */
-static ssize_t rd(esp_tls_t *t, bool tls, void *b, size_t n)
+ * esp-tls answers in its own codes for TLS, recv() in the clear. */
+static ssize_t rd(unet_t *c, void *b, size_t n)
 {
-    const ssize_t k = esp_tls_conn_read(t, b, n);
-    if (tls) {
+    if (c->tls) {
+        const ssize_t k = esp_tls_conn_read(c->tls, b, n);
         if (k == ESP_TLS_ERR_SSL_WANT_READ || k == ESP_TLS_ERR_SSL_WANT_WRITE) return -2;
         return k < 0 ? -1 : k;
     }
+    const ssize_t k = recv(c->fd, b, n, 0);
     if (k < 0) return errno == EAGAIN || errno == EWOULDBLOCK ? -2 : -1;
     return k;
 }
 
-bool unet_write(esp_tls_t *t, const void *b, size_t n)
+bool unet_write(unet_t *c, const void *b, size_t n)
 {
+    if (!c->up) return false;
     const uint8_t *p = b;
     const int64_t until = esp_timer_get_time() + 3000000;
     while (n) {
-        const ssize_t k = esp_tls_conn_write(t, p, n);
+        const ssize_t k = c->tls ? esp_tls_conn_write(c->tls, p, n) : send(c->fd, p, n, 0);
         if (k > 0) {
             p += k;
             n -= (size_t)k;
@@ -98,8 +171,7 @@ bool unet_write(esp_tls_t *t, const void *b, size_t n)
 /* ------------------------------------------------------------------ HTTP */
 
 typedef struct {
-    esp_tls_t *t;
-    bool       tls;
+    unet_t    *n;
     uint8_t    b[512];
     size_t     pos, len;
 } rbuf_t;
@@ -108,7 +180,7 @@ typedef struct {
 static int rb_getc(rbuf_t *r)
 {
     if (r->pos == r->len) {
-        const ssize_t k = rd(r->t, r->tls, r->b, sizeof r->b);
+        const ssize_t k = rd(r->n, r->b, sizeof r->b);
         if (k <= 0) return -1;
         r->pos = 0;
         r->len = (size_t)k;
@@ -143,7 +215,7 @@ static size_t rb_read(rbuf_t *r, uint8_t *dst, size_t n)
             got += k;
             continue;
         }
-        const ssize_t k = rd(r->t, r->tls, r->b, sizeof r->b);
+        const ssize_t k = rd(r->n, r->b, sizeof r->b);
         if (k <= 0) break;
         r->pos = 0;
         r->len = (size_t)k;
@@ -159,7 +231,7 @@ static void host_hdr(const uhost_t *h, char *out, size_t cap)
 
 /* One request on an open connection, and its answer: the status, or -1.
  * *reuse says whether the connection may carry another. */
-static int http_on(esp_tls_t *t, rbuf_t *r, const uhost_t *h, bool keep, const char *method,
+static int http_on(unet_t *c, rbuf_t *r, const uhost_t *h, bool keep, const char *method,
                    const char *path, const char *body, char *out, size_t cap, size_t *len,
                    bool *reuse, char *why, size_t wn)
 {
@@ -175,8 +247,8 @@ static int http_on(esp_tls_t *t, rbuf_t *r, const uhost_t *h, bool keep, const c
         n += snprintf(req + n, sizeof req - n,
                       "Content-Type: application/json\r\nContent-Length: %u\r\n", (unsigned)bl);
     if (n > 0 && n < (int)sizeof req) n += snprintf(req + n, sizeof req - n, "\r\n");
-    if (n <= 0 || n >= (int)sizeof req || !unet_write(t, req, (size_t)n) ||
-        (bl && !unet_write(t, body, bl))) {
+    if (n <= 0 || n >= (int)sizeof req || !unet_write(c, req, (size_t)n) ||
+        (bl && !unet_write(c, body, bl))) {
         snprintf(why, wn, "could not send");
         return -1;
     }
@@ -241,7 +313,7 @@ int unet_http(const uhost_t *h, const char *method, const char *path, const char
 
 void unet_close(uconn_t *c)
 {
-    if (c->tls) esp_tls_conn_destroy(c->tls);
+    unet_drop(&c->n);
     free(c->rb);
     memset(c, 0, sizeof *c);
 }
@@ -254,10 +326,9 @@ int unet_http_keep(uconn_t *c, const uhost_t *h, const char *method, const char 
         const int64_t now = esp_timer_get_time();
         bool fresh = false;
         /* An idle one the server may have let go: made again rather than tried. */
-        if (c->tls && now - c->last > 30 * 1000000LL) unet_close(c);
-        if (!c->tls) {
-            c->tls = unet_connect(h, timeout_ms, why, wn);
-            if (!c->tls) return -1;
+        if (c->n.up && now - c->last > 30 * 1000000LL) unet_close(c);
+        if (!c->n.up) {
+            if (!unet_connect(&c->n, h, timeout_ms, why, wn)) return -1;
             c->rb = heap_caps_malloc(sizeof(rbuf_t), MALLOC_CAP_SPIRAM);
             if (!c->rb) {
                 snprintf(why, wn, "no memory");
@@ -265,13 +336,12 @@ int unet_http_keep(uconn_t *c, const uhost_t *h, const char *method, const char 
                 return -1;
             }
             rbuf_t *r = c->rb;
-            r->t = c->tls;
-            r->tls = h->tls;
+            r->n = &c->n;
             r->pos = r->len = 0;
             fresh = true;
         }
         bool reuse = false;
-        const int st = http_on(c->tls, c->rb, h, true, method, path, body, out, cap, len,
+        const int st = http_on(&c->n, c->rb, h, true, method, path, body, out, cap, len,
                                &reuse, why, wn);
         c->last = esp_timer_get_time();
         if (st > 0) {
@@ -290,10 +360,7 @@ bool uws_open(uws_t *w, const uhost_t *h, const char *path, size_t rx_cap,
               int timeout_ms, char *why, size_t wn)
 {
     memset(w, 0, sizeof *w);
-    w->fd = -1;
-    w->tls = unet_connect(h, timeout_ms, why, wn);
-    if (!w->tls) return false;
-    w->is_tls = h->tls;
+    if (!unet_connect(&w->n, h, timeout_ms, why, wn)) return false;
 
     uint8_t key[16];
     esp_fill_random(key, sizeof key);
@@ -324,12 +391,11 @@ bool uws_open(uws_t *w, const uhost_t *h, const char *path, size_t rx_cap,
                            "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nUpgrade: websocket\r\n"
                            "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
                            "Sec-WebSocket-Version: 13\r\n\r\n", path, hh, unet_agent(), k64);
-    if (n <= 0 || (size_t)n >= rl || !unet_write(w->tls, req, (size_t)n)) {
+    if (n <= 0 || (size_t)n >= rl || !unet_write(&w->n, req, (size_t)n)) {
         snprintf(why, wn, "could not send");
         goto done;
     }
-    r->t = w->tls;
-    r->tls = h->tls;
+    r->n = &w->n;
     r->pos = r->len = 0;
     char line[160];
     if (!rb_line(r, line, sizeof line) || strncmp(line, "HTTP/1.", 7)) {
@@ -357,15 +423,13 @@ bool uws_open(uws_t *w, const uhost_t *h, const char *path, size_t rx_cap,
         memcpy(w->rx, r->b + r->pos, k);
         w->have = k;
     }
-    esp_tls_get_conn_sockfd(w->tls, &w->fd);
-    fcntl(w->fd, F_SETFL, fcntl(w->fd, F_GETFL, 0) | O_NONBLOCK);
+    fcntl(w->n.fd, F_SETFL, fcntl(w->n.fd, F_GETFL, 0) | O_NONBLOCK);
     ok = true;
 done:
     free(req);
     free(r);
     if (!ok) {
-        esp_tls_conn_destroy(w->tls);
-        w->tls = NULL;
+        unet_drop(&w->n);
         free(w->rx);
         w->rx = NULL;
     }
@@ -374,7 +438,7 @@ done:
 
 static bool ws_send(uws_t *w, uint8_t op, const void *p, size_t n)
 {
-    if (!w->tls || n > 1024) return false;
+    if (!w->n.up || n > 1024) return false;
     uint8_t f[1024 + 8];
     size_t hl = 0;
     f[hl++] = 0x80 | op;
@@ -391,7 +455,7 @@ static bool ws_send(uws_t *w, uint8_t op, const void *p, size_t n)
     hl += 4;
     const uint8_t *s = p;
     for (size_t i = 0; i < n; i++) f[hl + i] = s[i] ^ m[i & 3];
-    return unet_write(w->tls, f, hl + n);
+    return unet_write(&w->n, f, hl + n);
 }
 
 bool uws_text(uws_t *w, const char *s)
@@ -440,8 +504,7 @@ static int frame(uws_t *w, uint8_t *op, const uint8_t **p, size_t *n, bool *fin)
 
 int uws_recv(uws_t *w, int timeout_ms, uint8_t *op, const uint8_t **p, size_t *n)
 {
-    if (!w->tls) return -1;
-    const bool tls = w->is_tls;
+    if (!w->n.up) return -1;
     const int64_t until = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     for (;;) {
         if (w->used) {
@@ -467,23 +530,24 @@ int uws_recv(uws_t *w, int timeout_ms, uint8_t *op, const uint8_t **p, size_t *n
             }
             return 1;
         }
-        /* More from the network, as long as the time allows. */
+        /* More from the network, as long as the time allows. TLS may hold
+         * a record's bytes already read off the socket. */
         const int64_t left = until - esp_timer_get_time();
-        const bool held = tls && esp_tls_get_bytes_avail(w->tls) > 0;
+        const bool held = w->n.tls && esp_tls_get_bytes_avail(w->n.tls) > 0;
         if (!held) {
             if (left <= 0) return 0;
             fd_set rs;
             FD_ZERO(&rs);
-            FD_SET(w->fd, &rs);
+            FD_SET(w->n.fd, &rs);
             struct timeval tv = { .tv_sec = (time_t)(left / 1000000), .tv_usec = (suseconds_t)(left % 1000000) };
-            const int s = select(w->fd + 1, &rs, NULL, NULL, &tv);
+            const int s = select(w->n.fd + 1, &rs, NULL, NULL, &tv);
             if (s < 0) return -1;
             if (s == 0) return 0;
         }
         uint8_t *dst = w->skip ? w->rx : w->rx + w->have;
         const size_t room = w->skip ? (w->skip < w->cap ? w->skip : w->cap) : w->cap - w->have;
         if (!room) return -1;                       /* cannot happen: frame() let it go */
-        const ssize_t k = rd(w->tls, tls, dst, room);
+        const ssize_t k = rd(&w->n, dst, room);
         if (k == -2) continue;
         if (k <= 0) return -1;
         if (w->skip) w->skip -= (size_t)k;
@@ -493,12 +557,11 @@ int uws_recv(uws_t *w, int timeout_ms, uint8_t *op, const uint8_t **p, size_t *n
 
 void uws_close(uws_t *w)
 {
-    if (w->tls) {
+    if (w->n.up) {
         const uint8_t bye[2] = { 0x03, 0xE8 };     /* 1000: normal */
         ws_send(w, 0x8, bye, 2);
-        esp_tls_conn_destroy(w->tls);
+        unet_drop(&w->n);
     }
     free(w->rx);
     memset(w, 0, sizeof *w);
-    w->fd = -1;
 }

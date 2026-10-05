@@ -157,7 +157,8 @@ static volatile bool s_fill_stop, s_fill_running;
  * 20 s would count against the image, and three would mean safe mode.
  *
  * `i` counts the configured radios first, then those the client found for
- * itself (radio_found_count: SmartLink's). */
+ * itself (radio_found_count: the FlexRadio firmware's, on the LAN by their
+ * broadcast -- one chosen joins the configured ones -- and SmartLink's). */
 static void switch_radio(int i)
 {
     static net_radio_t r;
@@ -167,7 +168,7 @@ static void switch_radio(int i)
     if (i == cur) return;
     if (i < nd) {
         if (!net_prov_radio_get(i, &r)) return;
-        strlcpy(name, r.name[0] ? r.name : r.host, sizeof name);
+        strlcpy(name, r.name[0] ? r.name : net_prov_host_shown(r.host), sizeof name);
     } else if (!radio_found_get(i - nd, name, sizeof name)) {
         return;
     }
@@ -175,7 +176,9 @@ static void switch_radio(int i)
         ESP_LOGW(TAG, "radio not switched: on the air");
         return;
     }
-    ESP_LOGW(TAG, "switching to %s (%s)", name, i < nd ? r.host : radio_found_via());
+    ESP_LOGW(TAG, "switching to %s (%s)", name, i < nd ? r.host
+                                          : i < nd + radio_found_lan() ? "found on the LAN"
+                                          : radio_found_via());
     ui_switching(name);
     boot_ok_now();
     esp_err_t e;
@@ -931,9 +934,23 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "receiver -> %s", c.rx ? "SUB" : "MAIN");
                 radio_select_rx(c.rx);
             }
+            /* The radio as it stands, for the antennas' names and V/M. In
+             * PSRAM: this task's stack and internal RAM are both short. */
+            EXT_RAM_BSS_ATTR static radio_status_t cm;
+            if (c.have_ant || c.have_tx_ant || c.have_vm) radio_get_status(&cm);
             if (c.have_ant) {
-                ESP_LOGI(TAG, "antenna -> ANT%u%s", (unsigned)c.ant + 1, c.ant_rx ? "+RX" : "");
+                char nm[12];
+                if (radio_list_item(cm.ant_names, c.ant, nm, sizeof nm))
+                    ESP_LOGI(TAG, "antenna -> %s", nm);
+                else
+                    ESP_LOGI(TAG, "antenna -> ANT%u%s", (unsigned)c.ant + 1, c.ant_rx ? "+RX" : "");
                 radio_set_antenna(c.ant, c.ant_rx);
+            }
+            if (c.have_tx_ant) {
+                char nm[12];
+                radio_list_item(cm.tx_ant_names, c.tx_ant, nm, sizeof nm);
+                ESP_LOGI(TAG, "TX antenna -> %s", nm[0] ? nm : "?");
+                radio_set_tx_antenna(c.tx_ant);
             }
             switch (c.action) {
             case UI_ACT_TUNE:
@@ -990,13 +1007,9 @@ static void ui_task(void *arg)
 #endif
             /* V/M, last on the swipe down: into memory mode, or back to the
              * VFO -- only when it is not already that. */
-            if (c.have_vm) {
-                static radio_status_t m;
-                radio_get_status(&m);
-                if (c.vm_mem != (m.mem_state != RADIO_MEM_OFF)) {
-                    ESP_LOGI(TAG, "V/M -> %s", c.vm_mem ? "memory mode" : "VFO, simplex");
-                    radio_memory_mode(c.vm_mem);
-                }
+            if (c.have_vm && c.vm_mem != (cm.mem_state != RADIO_MEM_OFF)) {
+                ESP_LOGI(TAG, "V/M -> %s", c.vm_mem ? "memory mode" : "VFO, simplex");
+                radio_memory_mode(c.vm_mem);
             }
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
             if (c.have_radio) switch_radio(c.radio);
@@ -1030,6 +1043,11 @@ static void ui_task(void *arg)
                 hs_was = hs;
                 ui_set_levels(0xFF, hs ? net_prov_mic_gain_headset() : net_prov_mic_gain());
             }
+            /* A Bluetooth speaker whose own volume is the knob's VOLUME: a
+             * turn of its own buttons or knob is the VOLUME now -- the face,
+             * the page and the save follow, as for a turn of the dial. */
+            uint8_t spk_vol;
+            if (bt_link_take_volume(&spk_vol)) ui_set_levels(spk_vol, 0xFF);
             const uint8_t vol = ui_volume(), mic = ui_mic_gain();
             if (vol != applied_vol || mic != applied_mic) {
                 audio_out_set_volume(vol);
@@ -1038,6 +1056,9 @@ static void ui_task(void *arg)
                 applied_mic = mic;
                 changed_at  = esp_timer_get_time();
             }
+            /* ...and the VOLUME to such a speaker, which bt_link sends on as
+             * it changes. */
+            bt_link_set_volume(vol);
             net_prov_set_audio(vol, hs ? net_prov_mic_gain() : mic, hs ? mic : net_prov_mic_gain_headset());
             /* Into flash once they have settled -- and never on the air: a
              * flash write stops the audio's interrupts for up to ~100 ms, a
@@ -1110,9 +1131,10 @@ static void ui_task(void *arg)
             }
         }
 #if VFO_RADIO_PHONE
-        /* A telephone: a headset's button only ever hangs up, and its mute
-         * mutes the call -- the client reads that itself. No boom arm as a
-         * PTT. A call coming in buzzes, with the ring, every three seconds. */
+        /* A telephone: a headset's button answers a call ringing in and
+         * hangs up any other, and its mute mutes the call -- the client reads
+         * that itself. No boom arm as a PTT. A call coming in buzzes, with
+         * the ring, every three seconds. */
         if (bt_link_take_ptt()) {
             /* A call ringing in: the headset's button answers it. Otherwise
              * it hangs up -- a call up, or one being made. */
@@ -1261,6 +1283,13 @@ static void ui_task(void *arg)
         /* The address card, up under a finger held on the S-meter: a click
          * says it can let go. */
         if (ui_take_card_shown()) haptic(1);   /* strong click */
+        /* The antennas, up under a finger held on the slab: a buzz says the
+         * slab has not keyed, and the editor is there. (Never on the air:
+         * haptic() keeps the motor still then, and no hold opens it.) */
+        if (ui_take_slab_hold()) {
+            ESP_LOGI(TAG, "slab held: the antennas");
+            haptic(14);                         /* strong buzz */
+        }
 
 #if !VFO_RADIO_SETUP
         /* The addresses up, and a finger held three seconds on the S-meter or
@@ -1401,7 +1430,10 @@ static void ui_task(void *arg)
         else if (!st.rx_only && !(st.permit & PERMIT_TX_ENABLE)) warn = "TX DISABLED";
 #endif
 
-        ui_state_t u = {
+        /* Static, in PSRAM: the face's state has grown with every radio, and
+         * on this task's 5 kB stack it left a few hundred bytes to spare. */
+        EXT_RAM_BSS_ATTR static ui_state_t u;
+        u = (ui_state_t){
             .n_sstv        = -1,            /* no gallery: the ubersdr's says */
             .rx_only       = st.rx_only,
             .no_rit        = st.no_rit,
@@ -1422,6 +1454,7 @@ static void ui_task(void *arg)
             .mem_state     = st.mem_state,
             .mem_group     = st.mem_group,
             .mem_band      = st.mem_band,
+            .mem_all       = st.mem_all,
             .mem_ch        = st.mem_ch,
             .mem_duplex    = st.mem_duplex,
             .mem_offset_hz = st.mem_offset_hz,
@@ -1433,6 +1466,9 @@ static void ui_task(void *arg)
             .has_rx_ant    = st.has_rx_ant,
             .ant_rx        = st.ant_rx,
             .have_ant      = st.have_ant,
+            .n_tx_ant      = st.n_tx_ant,
+            .tx_ant        = st.tx_ant,
+            .have_tx_ant   = st.have_tx_ant,
             .has_tune      = st.has_tune,
             .has_atu       = st.has_atu,
             .atu_mem       = st.atu_mem,
@@ -1491,6 +1527,8 @@ static void ui_task(void *arg)
         u.n_gain_names = st.n_gain_names < UI_GAIN_NAMES ? st.n_gain_names : UI_GAIN_NAMES;
         memcpy(u.gain_names, st.gain_names, sizeof u.gain_names);
         strlcpy(u.mem_name, st.mem_name, sizeof u.mem_name);
+        strlcpy(u.ant_names, st.ant_names, sizeof u.ant_names);
+        strlcpy(u.tx_ant_names, st.tx_ant_names, sizeof u.tx_ant_names);
         strlcpy(u.tg_name, st.tg_name, sizeof u.tg_name);
         strlcpy(u.talker, st.talker, sizeof u.talker);
         strlcpy(u.talker_info, st.talker_info, sizeof u.talker_info);
@@ -1564,6 +1602,11 @@ static void ui_task(void *arg)
             uber_info(&in);
             u.has_spots = in.spots || in.voice;
             u.n_sstv    = (int16_t)uber_sstv_count();
+            /* A guest's time left, at the slab's left end. */
+            char why;
+            u.left_s    = uber_time_left(&why);
+            u.have_left = u.left_s >= 0;
+            u.left_idle = why == 'I';
         }
 #endif
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
@@ -1573,15 +1616,20 @@ static void ui_task(void *arg)
             const int nd = s_on_usb ? 0 : net_prov_radio_count();
             const int nf = s_on_usb ? 0 : radio_found_count();
             u.n_radios        = (uint8_t)(nd + nf < UI_RADIOS_MAX ? nd + nf : UI_RADIOS_MAX);
-            u.n_radios_direct = (uint8_t)nd;
+            /* The configured ones on the LAN, and the found ones that are. */
+            u.n_radios_direct = (uint8_t)(nd + (s_on_usb ? 0 : radio_found_lan()));
             strlcpy(u.radio_via, radio_found_via(), sizeof u.radio_via);
             u.radio_sel = (int8_t)(radio_found_active() >= 0 ? nd + radio_found_active()
                                                              : net_prov_radio_active());
             for (int i = 0; i < u.n_radios; i++) {
                 static net_radio_t r;       /* static: this stack is tight */
                 if (i < nd) {
+                    /* A new knob's one entry, with no address yet: said so,
+                     * beside a radio it found on the LAN. */
                     if (net_prov_radio_get(i, &r))
-                        strlcpy(u.radio_name[i], r.name[0] ? r.name : r.host, sizeof u.radio_name[i]);
+                        strlcpy(u.radio_name[i], r.name[0] ? r.name : r.host[0] ? net_prov_host_shown(r.host)
+                                                                                : "NO ADDRESS",
+                                sizeof u.radio_name[i]);
                 } else {
                     radio_found_get(i - nd, u.radio_name[i], sizeof u.radio_name[i]);
                 }
@@ -1589,15 +1637,49 @@ static void ui_task(void *arg)
         }
 #endif
 #if !VFO_RADIO_SETUP
-        /* A Bluetooth headset: its logo on the slab, while one is connected. */
+        /* A Bluetooth headset: its logo on the slab while one is connected; a
+         * speaker: a speaker there instead -- the knob's own microphone keys.
+         * Everything else that keys or mutes asks bt_link_headset_*(), which
+         * say no for a speaker. Either's battery beside it, where it reports
+         * one. */
         {
             static bt_link_status_t b;      /* static: this stack is tight */
             bt_link_status(&b);
-            u.headset       = b.companion && b.hs.link == BTL_LINK_CONNECTED;
+            const bool conn = b.companion && b.hs.link == BTL_LINK_CONNECTED;
+            u.speaker       = conn && b.hs.kind == BTL_KIND_SPEAKER;
+            u.headset       = conn && !u.speaker;
             u.headset_muted = u.headset && b.hs.mic == 0;
             u.headset_raise = u.headset && s_hs_raise;
+            const int batt  = bt_link_battery();
+            u.have_batt     = conn && batt >= 0;
+            u.batt          = batt >= 0 ? (uint8_t)batt : 0;
         }
 #endif
+        /* The knob's own power, a reading a second (board_power_poll): its
+         * battery on the face while it runs on it. In the log once a minute
+         * -- the rail as read, smoothed, and the charge shown, a run-down's
+         * curve -- and the moment it is plugged in or pulled out. */
+        {
+            static uint8_t said_src = KNOB_PWR_UNKNOWN;
+            static int64_t said_us;
+            board_power_poll();
+            board_power_t pw;
+            board_power_get(&pw);
+            const int64_t now_us = esp_timer_get_time();
+            if (pw.src != KNOB_PWR_UNKNOWN && (pw.src != said_src || now_us - said_us >= 60000000)) {
+                const char *what = said_src == KNOB_PWR_UNKNOWN || pw.src == said_src ? ""
+                                   : pw.src == KNOB_PWR_USB ? " -- plugged in" : " -- unplugged";
+                if (pw.src == KNOB_PWR_USB)
+                    ESP_LOGI(TAG, "[PWR] rail=%d mV: on USB%s", pw.mv, what);
+                else
+                    ESP_LOGI(TAG, "[PWR] rail=%d mV, %d smoothed: battery %d %%%s", pw.mv, pw.smooth_mv,
+                             pw.pct, what);
+                said_src = pw.src;
+                said_us  = now_us;
+            }
+            u.knob_batt = pw.src == KNOB_PWR_BATTERY && pw.pct >= 0;
+            u.knob_pct  = u.knob_batt ? (uint8_t)pw.pct : 0;
+        }
         ui_update(&u);
     }
 }
@@ -1715,16 +1797,19 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     strlcpy(ip, cfg->radio_host, iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (reflector %s) ---", cfg->radio_host);
 #elif VFO_RADIO_UBERSDR
-    /* An UberSDR by its name: TLS checks the certificate against it, and its
-     * tunnel finds the receiver by it. The client looks it up itself. */
+    /* An UberSDR by its name: through its tunnel TLS checks the certificate
+     * against it, and the tunnel finds the receiver by it; on a LAN it is
+     * reached in the clear. The client looks it up itself, and reads its
+     * scheme -- https:// or http:// -- from the address, which is handed
+     * over whole: a tunnel's name can be longer than ip[]. */
     if (!cfg->radio_host[0]) {
         static bool said;
         if (!said) ESP_LOGW(TAG, "  no receiver set: see the configuration page");
         said = true;
         return NULL;
     }
-    strlcpy(ip, cfg->radio_host, iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (UberSDR %s) ---", cfg->radio_host);
+    return cfg->radio_host;
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -2654,17 +2739,25 @@ RADIO_ONLY_FN static void net_task(void *arg)
         }
 
 #if CONFIG_VFO_USB_NET
-        /* No computer on the S3's side of the cable: the plug is the wrong way
-         * round, or it is a charger -- the knob cannot tell which, only that
-         * nobody is there, so it says what would fix it. With WiFi configured
-         * that is a few seconds' hint while WiFi takes over; without, there is
-         * nothing else the knob can do, so the hint stays up. A computer that
-         * is there but slow to set the adapter up never sees it: it sends
-         * frames, and usb_net_task counts those, not the adapter. */
+        /* No computer on the S3's side of the cable, and power on it -- the
+         * rail says so: the plug is the wrong way round, or it is a charger.
+         * The knob cannot tell those two apart, only that nobody is there, so
+         * it says what would fix the first. With WiFi configured that is a
+         * few seconds' hint while WiFi takes over; without, there is nothing
+         * else the knob can do, so the hint stays up. On its battery there
+         * is no cable at all, and nothing to turn over: it says nothing, and
+         * goes to WiFi -- or, knowing none, puts up its WiFi setup. While the
+         * rail's first readings settle it waits; with no reading at all, the
+         * ADC down, it says it as it always did. A computer that is there but
+         * slow to set the adapter up never sees it: it sends frames, and
+         * usb_net_task counts those, not the adapter. */
         {
             static int64_t flip_since;
             const int64_t now = esp_timer_get_time();
-            const bool nobody = !started && atomic_load(&s_cable) == CABLE_NONE;
+            board_power_t pw;
+            board_power_get(&pw);
+            const bool cable_power = pw.src == KNOB_PWR_USB || (pw.src == KNOB_PWR_UNKNOWN && pw.mv < 0);
+            const bool nobody = !started && atomic_load(&s_cable) == CABLE_NONE && cable_power;
             if (!nobody)          flip_since = 0;
             else if (!flip_since) flip_since = now;
             atomic_store(&s_flip_hint,
@@ -2688,9 +2781,17 @@ RADIO_ONLY_FN static void net_task(void *arg)
                                             "plug over%s",
                          cfg->ssid[0] ? ", or wait for WiFi." : ".");
             else {
-                char fw[40];
+                /* The firmware, the knob's own power under it -- nothing
+                 * while its readings settle -- then its addresses. */
+                char fw[40], pwr[16] = "";
                 firmware_line(fw, sizeof fw);
-                snprintf(info, sizeof info, "%s\nUSB   %s\nWiFi  %s\nsetup  http://%s", fw,
+                board_power_t pw;
+                board_power_get(&pw);
+                if (pw.src == KNOB_PWR_USB)
+                    snprintf(pwr, sizeof pwr, "on USB power\n");
+                else if (pw.src == KNOB_PWR_BATTERY && pw.pct >= 0)
+                    snprintf(pwr, sizeof pwr, "battery %d %%\n", pw.pct);
+                snprintf(info, sizeof info, "%s\n%sUSB   %s\nWiFi  %s\nsetup  http://%s", fw, pwr,
                          usb[0]  ? usb  : "-",
                          wifi[0] ? wifi : "-",
                          usb[0] ? usb : (wifi[0] ? wifi : "-"));
@@ -2702,8 +2803,9 @@ RADIO_ONLY_FN static void net_task(void *arg)
              * does a call, from its first ring to its end: a phone that
              * rings on a dark screen shows nobody who is calling, and one
              * that goes dark mid-call has its HANG UP under the tap meant
-             * to wake it. */
-            radio_status_t ds;
+             * to wake it. (Static, in PSRAM, as st below: the status grows
+             * with every radio, and this task's stack does not.) */
+            EXT_RAM_BSS_ATTR static radio_status_t ds;
             radio_get_status(&ds);
             ui_dim_tick(ds.tx || ds.ptt_state != PTT_IDLE || ds.call == RADIO_CALL_IN
                         || ds.call == RADIO_CALL_OUT || ds.call == RADIO_CALL_UP);
@@ -2713,7 +2815,7 @@ RADIO_ONLY_FN static void net_task(void *arg)
          * on the dial -- one with no client started yet is. */
         bool quiet_radio = true;
         if (started) {
-            radio_status_t st;
+            EXT_RAM_BSS_ATTR static radio_status_t st;
             radio_get_status(&st);
 
             /* A periodic check falls due: start it only while the radio is
@@ -2801,7 +2903,10 @@ RADIO_ONLY_FN static void net_task(void *arg)
                     (double)st.rx_level_db, ptt_state_name((ptt_state_t)st.ptt_state),
                     (unsigned)st.connects, (unsigned)st.closes, (unsigned)st.sends,
                     st.last_close[0] ? " last_close=" : "", st.last_close);
-            } else if (st.mem_state != RADIO_MEM_OFF)
+            } else if (st.mem_state != RADIO_MEM_OFF && st.mem_all)
+                snprintf(memtag, sizeof memtag, " MEM %02u%s%s", (unsigned)st.mem_ch,
+                         st.mem_name[0] ? " " : "", st.mem_name);
+            else if (st.mem_state != RADIO_MEM_OFF)
                 snprintf(memtag, sizeof memtag, " MEM %02u/%02u%s%s",
                          (unsigned)st.mem_group, (unsigned)st.mem_ch,
                          st.mem_name[0] ? " " : "", st.mem_name);
@@ -3112,6 +3217,7 @@ void app_main(void)
 
     bool have_board = bring_up("board", board_init);
     if (have_board) { report_memory(); probe_i2c(); haptic_bringup(); }
+    bring_up("power", board_power_init);
 
     bool have_panel = bring_up("panel", panel_init);
     bool have_touch = bring_up("touch", hal_touch_init);

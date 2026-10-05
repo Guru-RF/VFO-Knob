@@ -20,7 +20,6 @@ guides (docs/<firmware>.md) say what the pictures show.
 import functools
 import math
 import os
-import re
 import sys
 
 sys.dont_write_bytecode = True             # no __pycache__ left in tools/
@@ -33,7 +32,8 @@ PAD = 44                                  # room around the body for gestures
 W = H = 2 * md.BODY_R + 2 * PAD
 OX = OY = W / 2
 GESTURE = "#E0902A"                       # mkdisplay's ANNOT_HOT: a hand's doing
-VERSION = "1.14.0"                        # what the address card says it runs
+VERSION = "1.18.5"                        # what the address card says it runs
+POWER = "on USB power"                    # ...the knob's own power, under it
 ADDRESSES = "USB   -\nWiFi  192.168.1.40\nsetup  http://192.168.1.40"
 
 
@@ -58,84 +58,17 @@ EDIT_PAD = 2 + 16                         # its border, then the theme's padding
 STEPS = (48, 28, 20)                      # fit_text.c: its fonts, largest first
 
 
-def number(s):
-    """A C literal from a font file: decimal, or hex."""
-    return int(s, 16) if s.lstrip("-").startswith("0x") else int(s)
-
-
-class Montserrat:
-    """LVGL's Montserrat at one size, read from the file the firmware is
-    built with (lv_font_montserrat_<size>.c): each glyph's advance and the
-    kerning between two, summed the way lv_text_get_width() sums them -- so
-    a width here is the knob's, to the pixel."""
-
-    def __init__(self, size):
-        path = os.path.join(ROOT, "managed_components", "lvgl__lvgl", "src", "font",
-                            f"lv_font_montserrat_{size}.c")
-        if not os.path.exists(path):
-            sys.exit(f"{path} is missing: ESP-IDF's component manager fetches it -- build any "
-                     f"firmware once (idf.py build), then run this again")
-        with open(path) as f:
-            src = f.read()
-
-        def array(name):
-            body = re.search(r"\b" + name + r"\[\] = \{(.*?)\};", src, re.S).group(1)
-            return [number(v) for v in re.findall(r"-?(?:0x[0-9a-fA-F]+|\d+)", body)]
-
-        def field(name):
-            return int(re.search(r"\." + name + r"\s*=\s*(-?\d+)", src).group(1))
-
-        self.adv = [int(a) for a in re.findall(r"\.adv_w = (\d+)", src)]   # by glyph id, 1/16 px
-        self.cmaps = []
-        for m in re.finditer(r"\.range_start = (\d+), \.range_length = (\d+), \.glyph_id_start = (\d+),"
-                             r"\s*\.unicode_list = (\w+), \.glyph_id_ofs_list = NULL, "
-                             r"\.list_length = \d+, \.type = LV_FONT_FMT_TXT_CMAP_(\w+)", src):
-            start, length, gid0, codes, kind = m.groups()
-            if kind not in ("FORMAT0_TINY", "SPARSE_TINY"):
-                raise ValueError(f"{path}: a {kind} character map, not read here")
-            self.cmaps.append((int(start), int(length), int(gid0),
-                               array(codes) if codes != "NULL" else None))
-        self.left = array("kern_left_class_mapping")
-        self.right = array("kern_right_class_mapping")
-        self.pairs = array("kern_class_values")
-        self.right_cnt = field("right_class_cnt")
-        self.kern_scale = field("kern_scale")
-        self.line_height = field("line_height")
-        self.base_line = field("base_line")
-
-    def glyph(self, ch):
-        """get_glyph_dsc_id(): the glyph of a character, 0 for none."""
-        if not ch:
-            return 0
-        for start, length, gid0, codes in self.cmaps:
-            rcp = ord(ch) - start
-            if 0 <= rcp < length:
-                if codes is None:
-                    return gid0 + rcp
-                return gid0 + codes.index(rcp) if rcp in codes else 0
-        return 0
-
-    def advance(self, ch, nxt=""):
-        """lv_font_get_glyph_width(): whole pixels, kerned against the next
-        character; one the font lacks is LV_USE_FONT_PLACEHOLDER's box."""
-        g = self.glyph(ch)
-        if not g:
-            return self.line_height // 2 + 2
-        k, n = 0, self.glyph(nxt)
-        if n and self.left[g] and self.right[n]:
-            k = self.pairs[(self.left[g] - 1) * self.right_cnt + self.right[n] - 1]
-        return (self.adv[g] + ((k * self.kern_scale) >> 4) + 8) >> 4
-
-    def width(self, s, after=""):
-        """lv_text_get_width(s), no letter space; `after` is what follows s
-        in a longer text, for the last letter's kerning."""
-        t = s + after
-        return sum(self.advance(c, t[i + 1:i + 2]) for i, c in enumerate(s))
-
-
 @functools.lru_cache(maxsize=None)
 def montserrat(size):
-    return Montserrat(size)
+    """LVGL's Montserrat at one size, read from the file the firmware is
+    built with (lv_font_montserrat_<size>.c) by mkdisplay's LvglFont -- so
+    a width here is the knob's, to the pixel."""
+    path = os.path.join(ROOT, "managed_components", "lvgl__lvgl", "src", "font",
+                        f"lv_font_montserrat_{size}.c")
+    if not os.path.exists(path):
+        sys.exit(f"{path} is missing: ESP-IDF's component manager fetches it -- build any "
+                 f"firmware once (idf.py build), then run this again")
+    return md.LvglFont(path)
 
 
 def dotted(f, text, room):
@@ -301,11 +234,11 @@ def question(title, hint):
 
 
 def address_card(text):
-    """The address card: 20 px in the bright accent, 12 px of padding, a
+    """The address card: 20 px in the bright accent, 10 px of padding, a
     2 px accent border, centred 6 px above the middle."""
     rows = text.split("\n")
-    w = max(len(r) for r in rows) * 11.2 + 24
-    h = len(rows) * 24 + 24
+    w = max(len(r) for r in rows) * 11.2 + 20
+    h = len(rows) * 24 + 20
     x, y = 180 - w / 2, 174 - h / 2
     return (f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="14" '
             f'fill="{md.BG1}" stroke="{md.ACCENT}" stroke-width="2"/>'
@@ -498,7 +431,8 @@ def reflector(pal="svxconnect", **reading):
 
 # The editors that are lists of names (ui.c edit_render): the wider panel,
 # whatever font their value is in -- RX on LOCAL too. Told by the title's
-# first word, as the knob tells them by the editor.
+# first word, as the knob tells them by the editor -- but not the antennas'
+# (RX ANT, TX ANT), a value's panel.
 NAME_LISTS = ("RX", "RADIO", "SPOT", "SSTV", "CALLS")
 
 
@@ -507,19 +441,29 @@ def editor(title, value, size=48, hint="turn to choose  -  tap to accept", colou
     names -- where it fits (edit_panel), in the wider panel for a list of
     names (NAME_LISTS); V/M, at 28, keeps a value's."""
     return edit_panel(title, value, size, hint, colour or md.ACCENT_HI,
-                      title.split()[0] in NAME_LISTS)
+                      title.split()[0] in NAME_LISTS and not title.endswith(" ANT"))
+
+
+def hold_slab():
+    """A finger held on the slab: a wider ring than a tap's -- the caption
+    says how long."""
+    return tap(180, 300, ring=24)
 
 
 def warning(title, fw, net=ADDRESSES):
     """The warning panel: 268 x 134 in the danger colour, the warning at
     28 px, and under it at 14 px the address card's text -- the firmware and
-    its version (`fw`, e.g. "Icom"), then the addresses -- or, fw None, a
-    message in its place."""
-    text = f"{fw} {VERSION}\n{net}" if fw else net
+    its version (`fw`, e.g. "Icom"), the knob's power, then the addresses,
+    16 px a line, the last 10 px over the panel's foot as on the knob -- or,
+    fw None, a message in its place."""
+    if not fw:
+        text = lines(180, 199, net, 14, md.TEXT2, 17)
+    else:
+        rows = f"{fw} {VERSION}\n{POWER}\n{net}"
+        text = lines(180, 231 - 8 * len(rows.split("\n")), rows, 14, md.TEXT2, 16)
     return (f'<rect x="46" y="107" width="268" height="134" rx="18" fill="{md.BG1}" '
             f'stroke="{md.DANGER}" stroke-width="2"/>'
-            + md.text(180, 145, esc(title), 28, md.DANGER, 600)
-            + lines(180, 199, text, 14, md.TEXT2, 17))
+            + md.text(180, 145, esc(title), 28, md.DANGER, 600) + text)
 
 
 def swipe(direction):
@@ -661,7 +605,7 @@ def setup_pictures():
     face = radio_face()
     out["11-address-card"] = knob(
         "setup-11", "A radio firmware: the address card, held up on the S-meter",
-        dimmed(face) + address_card(f"Icom {VERSION}\n{ADDRESSES}"),
+        dimmed(face) + address_card(f"Icom {VERSION}\n{POWER}\n{ADDRESSES}"),
         tap(180, 40), "hold the S-meter until it clicks")
     out["12-firmware-question"] = knob(
         "setup-12", "Held again three seconds: back to the setup firmware?",
@@ -677,19 +621,28 @@ def setup_pictures():
                                                      "VFOKnob with your\nphone to add one,\n"
                                                      "or wait: it keeps looking."))
     md.use_palette("aethersdr")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show): over
+    # each screen's title -- the list of firmwares', up for minutes, here.
+    out["15-battery"] = knob("setup-15", "On its own battery: the knob's charge over the title",
+                             setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",
+                                          chooser("INSTALL", "SVXConnect 1.18.3")) + md.knob_battery(85),
+                             "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
 
 # --- the radios' firmwares ------------------------------------------------------
 
-def radio_parts(gain="P.AMP"):
-    """The face's parts, named: the left column and the right one."""
+def radio_parts(gain="P.AMP", hold=None):
+    """The face's parts, named: the left column and the right one -- and,
+    `hold`, what a press held on the slab opens."""
     # Each point at the edge of its part, the dot never on the words.
     left = [(64, 64, "S-meter · hold: the addresses"), (84, 77, "AGC"), (84, 123, "band"),
             (58, 172, "frequency · tap a digit: its step"), (54, 221, "tuning step"),
             (112, 300, "PTT · tap on, tap off")]
     right = [(204, 77, "S-units, dBm under"), (286, 77, gain), (204, 123, "mode"),
              (282, 123, "filter"), (176, 222, "RIT"), (244, 222, "volume"), (306, 222, "mic gain")]
+    if hold:
+        right.append((248, 300, hold))
     return left, right
 
 
@@ -735,14 +688,15 @@ def icom_pictures():
     R = dict(dbm=-85, band="40m", mode="LSB", filt="FIL2", digits="  7123" "00", active=5,
              step="1 kHz", agc="MID", gain_cap="P.AMP", gain="OFF")
     f = face("icom", **R)
-    left, right = radio_parts("P.AMP · the preamp")
+    left, right = radio_parts("P.AMP · the preamp", "PTT held: IC-7610's antenna")
     out = {}
     out["01-face"] = callouts("icom-01", "The Icom firmware's face", f, left, right)
     out["02-no-link"] = knob("icom-02", "NO LINK: the radio not reached yet",
                              face("icom", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
                              + warning("NO LINK", "Icom"))
     out["03-tune"] = knob("icom-03", "Turn to tune; tap a digit for its step", f,
-                          turn() + tap(236, 172), "tap a digit for the step  \u00b7  turn to tune")
+                          turn() + tap(md.dig_places()[0][5], 172),
+                          "tap a digit for the step  \u00b7  turn to tune")
     out["04-mode"] = knob("icom-04", "The mode, chosen on the dial",
                           f + editor("MODE", "USB"), turn(),
                           "tap the mode  \u00b7  turn  \u00b7  tap the panel")
@@ -796,6 +750,16 @@ def icom_pictures():
     out["22-squelch"] = knob("icom-22", "Swipe from the right: the IC-R8600's squelch",
                              r + editor("SQUELCH", "30%"), swipe_at("left"),
                              "in every mode  \u00b7  0% is OPEN  \u00b7  applies as you turn")
+    # The antennas, a press held on the slab away: the IC-7610's, here.
+    out["23-hold-antenna"] = knob("icom-23", "Hold the slab: the antenna, the quicker way",
+                                  f + editor("ANTENNA", "ANT2"), hold_slab(),
+                                  "hold PTT until it buzzes  \u00b7  turn  \u00b7  tap the panel")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show): at
+    # the top of the arc, over the S-units -- on every firmware's face.
+    md.use_palette("icom")
+    out["24-battery"] = knob("icom-24", "On its own battery: the knob's charge at the top of the arc",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
 
@@ -803,7 +767,7 @@ def multiflex_pictures():
     R = dict(dbm=-53, band="20m", mode="USB", filt="2700", digits=" 14200" "00", active=6,
              step="100 Hz", agc="MED", gain_cap="RF.G", gain="+8 dB")
     f = face("multiflex", **R)
-    left, right = radio_parts("RF.G · the RF gain")
+    left, right = radio_parts("RF.G · the RF gain", "PTT held: the antennas")
     out = {}
     out["01-face"] = callouts("flex-01", "The FlexRadio firmware's face", f, left, right)
     out["02-station"] = knob("flex-02", "At boot, with others on the radio: what to be",
@@ -828,6 +792,32 @@ def multiflex_pictures():
                                 filt="2700", digits=" 14200" "00"))
     out["11-headset"] = knob("flex-11", "A Bluetooth headset: its button is the PTT",
                              headset_face(f), "", "the headset's button: key, and key off")
+    # The slice's antennas: a press held on the slab, receive then transmit.
+    out["12-rx-ant"] = knob("flex-12", "Hold the slab: the receive antenna",
+                            f + editor("RX ANT", "RX_A"), hold_slab(),
+                            "hold PTT until it buzzes  \u00b7  turn  \u00b7  tap the panel")
+    out["13-tx-ant"] = knob("flex-13", "Then the transmit antenna",
+                            f + editor("TX ANT", "ANT1"), turn(),
+                            "then TX ANT  \u00b7  tap the panel  \u00b7  a tap elsewhere: as it was")
+    # The radio's memories: V/M, last on the swipe down, and one on the face.
+    out["14-vm"] = knob("flex-14", "Swipe down to V/M, for the radio's memories",
+                        f + editor("V/M", "MEMORY", 28), swipe_at("down"),
+                        "swipe down  \u00b7  ...  \u00b7  V/M  \u00b7  tap the panel")
+    out["15-memory"] = knob("flex-15", "Memory mode: the memory where the frequency was",
+                            face("multiflex", dbm=-79, band="10m", mode="FM", filt="16000", step="MEM",
+                                 agc="MED", gain_cap="RF.G", gain="+8 dB",
+                                 mem=("10m", "ON0TEN", "M02  29.620  -0.1  T79.7")),
+                            turn(), "turn: the next memory, in order of frequency")
+    # A new knob with no address yet: the radios it hears on the LAN, on the dial.
+    out["16-found"] = knob("flex-16", "Swipe up: a radio the knob heard on the LAN",
+                           face("multiflex", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
+                           + editor("RADIO", "Lombardsijde", 28, hint="LAN  -  tap to switch"),
+                           swipe_at("up"), "heard on the LAN  \u00b7  tap the panel: it joins the list, in use")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show).
+    md.use_palette("multiflex")
+    out["17-battery"] = knob("flex-17", "On its own battery: the knob's charge at the top of the arc",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
 
@@ -856,6 +846,11 @@ def aethersdr_pictures():
                                 filt="2800", digits="  7161" "73"))
     out["07-headset"] = knob("aether-07", "A Bluetooth headset: its button is the PTT",
                              headset_face(f), "", "the headset's button: key, and key off")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show).
+    md.use_palette("aethersdr")
+    out["08-battery"] = knob("aether-08", "On its own battery: the knob's charge at the top of the arc",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
 
@@ -884,6 +879,11 @@ def svxconnect_pictures():
     out["03-tx"] = knob("svx-03", "On the air: the microphone on the arc", tx)
     out["04-headset"] = knob("svx-04", "A Bluetooth headset: its button is the PTT",
                              headset_face(reflector()), "", "the headset's button: key, and key off")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show): over
+    # who is talking -- and on the air too, the arc being the audio's then.
+    out["05-battery"] = knob("svx-05", "On its own battery: the knob's charge over who is talking",
+                             reflector() + md.knob_battery(85), "",
+                             "its charge, by the quarter  \u00b7  on the air too  \u00b7  none on USB power")
     return out
 
 
@@ -947,6 +947,12 @@ def phone_pictures():
                                       telephone(call=2, headset=True, peer="Office",
                                                 peer_num="+441632960123"), "",
                                       "the headset's button answers  \u00b7  the slab declines")
+    # A speaker is no headset: the slab splits, the speaker under ANSWER --
+    # the finger beside it, clear of it.
+    out["15-incoming-speaker"] = knob("tel-15", "A call coming in with a speaker: the slab answers",
+                                      telephone(call=2, speaker=True, peer="Office",
+                                                peer_num="+441632960123"),
+                                      tap(216, 314), "it rings on the jack and the speaker  \u00b7  tap ANSWER")
     md.use_palette("phone")
     out["12-history"] = knob("tel-12", "Swipe from the left: the calls, newest first",
                              telephone() + editor("CALLS 1 / 6", "Mum", 28,
@@ -957,6 +963,11 @@ def phone_pictures():
     out["13-missed"] = knob("tel-13", "A call missed: said under the arc until looked at",
                             telephone(n_missed=2), "",
                             "2 missed  \u00b7  the history clears it")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show):
+    # between the meters' tops.
+    out["16-battery"] = knob("tel-16", "On its own battery: the knob's charge between the meters",
+                             telephone() + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
 
@@ -965,7 +976,8 @@ def phone_pictures():
 def headset_face(face_svg, **slab):
     """A transmitting firmware's face with a headset connected: the PTT slab
     keeps its caption, the headset's logo at its right end (mkdisplay
-    headset_slab), in the face's palette -- the one its drawing last set."""
+    headset_slab), in the face's palette -- the one its drawing last set.
+    With speaker=True, a speaker's: a speaker there instead."""
     return face_svg.replace(md.ptt_slab(md.BG1, "PTT", md.TEXT2), md.headset_slab(**slab))
 
 
@@ -975,7 +987,7 @@ def headset_pictures():
     out = {}
     out["01-connected"] = knob("hs-01", "A headset connected: its logo at the slab's end",
                                headset_face(face("icom", **R)), "",
-                               "its button is the PTT  \u00b7  a tap on the slab only unkeys")
+                               "its button is a PTT  \u00b7  the slab keys as always")
     out["02-muted"] = knob("hs-02", "Its microphone muted: the logo in red",
                            headset_face(face("icom", **R), muted=True), "",
                            "muted: the button does not key")
@@ -987,6 +999,20 @@ def headset_pictures():
                                 tx.replace(md.ptt_slab(md.TX_RED, "TX", "#FFFFFF"),
                                            md.headset_slab("TX", tx=True)), "",
                                 "the headset's button, or the boom up: back to receive")
+    out["05-speaker"] = knob("hs-05", "A speaker connected: a speaker at the slab's end",
+                             headset_face(face("icom", **R), speaker=True), "",
+                             "the knob's own microphone keys  \u00b7  the speaker plays, a little behind")
+    tx = tx_face("icom", swr=1.3, watts=50)
+    out["06-speaker-on-the-air"] = knob("hs-06", "On the air with a speaker",
+                                        tx.replace(md.ptt_slab(md.TX_RED, "TX", "#FFFFFF"),
+                                                   md.headset_slab("TX", tx=True, speaker=True)), "",
+                                        "the knob's own microphone  \u00b7  the speaker silent")
+    # Its battery beside the logo (ui.c s_hs_batt), in each of its colours.
+    for n, pct, colour, caption in ((7, 80, "green", "80 %: green, from half the charge up"),
+                                    (8, 40, "yellow", "40 %: yellow, under half"),
+                                    (9, 10, "red", "10 %: red, a fifth and under")):
+        out[f"{n:02d}-battery-{colour}"] = knob(f"hs-{n:02d}", f"The headset's battery: {pct} %, {colour}",
+                                                headset_face(face("icom", **R), batt=pct), "", caption)
     return out
 
 
@@ -1006,14 +1032,17 @@ def snr_colour(snr):
 
 def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 14215" "00", active=5,
               step="1 kHz", nr="NR4", spot=("LU7YZ", "14.215.0 USB  DX 2m  heard 12 dB", "green", "8 on 20m"),
-              kiwi=None, vol="40", headset=False):
+              kiwi=None, vol="40", headset=False, speaker=False, left=None):
     """The ubersdr firmware's face (ui.c, RX_FACE): the S-meter in UberSDR's
     colours, the SNR where the AGC is, the noise filter where the gain is, no
     RIT and no microphone, and on the slab the spot or voice nearest the dial:
     `spot` is (its call or frequency, where and what it is, "green" heard now
     / "bright" on it / "dim" elsewhere, how many on the band). `kiwi` is a
     KiwiSDR's level beside it; `headset`, a Bluetooth headset's logo at the
-    slab's right end (ui.c s_hs_bt)."""
+    slab's right end (ui.c s_hs_bt), and `speaker` a speaker's there. `left`
+    is a guest's time left at the slab's left end (ui.c left_slab): what it
+    says, and "dim", "warn" in the last five minutes, or "danger" in the last
+    one and an idle limit's."""
     md.use_palette("ubersdr")
     s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>',
          f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
@@ -1057,6 +1086,14 @@ def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 1421
               md.text(180, md.PTT_TOP + 64 + 12, esc(l3), 14, md.LABEL, extra=' xml:space="preserve"')]
     if headset:
         s.append(md.headset_logo(md.ACCENT, md.BG1))
+    if speaker:
+        s.append(md.speaker_logo(md.ACCENT))
+    if left:
+        # ui.c LEFT_X, LEFT_Y: Montserrat 14, its baseline 13 px down.
+        text, look = left
+        colour = {"dim": md.TEXT2, "warn": md.WARN, "danger": md.DANGER}[look]
+        s.append(md.text(44, md.PTT_TOP + 15 + 13, esc(text), 14, colour, anchor="start",
+                         extra=' xml:space="preserve"'))
     return "".join(s)
 
 
@@ -1088,16 +1125,19 @@ def ubersdr_pictures():
     f = uber_face()
     left = [(64, 64, "S-meter · hold: the addresses"), (84, 77, "SNR"), (84, 123, "band"),
             (58, 172, "frequency · tap a digit: its step"), (96, 221, "tuning step"),
-            (84, 276, "nearest spot or voice · tap: all"), (112, 300, "where, and what it is")]
+            (40, 270, "a guest's time left"),
+            (132, 280, "nearest spot or voice · tap: all"), (112, 300, "where, and what it is")]
     right = [(204, 77, "S-units, dBFS under"), (282, 77, "FIL · the noise filter"), (204, 123, "mode"),
              (282, 123, "filter"), (252, 222, "volume"), (228, 322, "how many on the band")]
     out = {}
-    out["01-face"] = callouts("uber-01", "The UberSDR firmware's face", f, left, right)
+    out["01-face"] = callouts("uber-01", "The UberSDR firmware's face", uber_face(left=("52 min", "dim")),
+                              left, right)
     md.use_palette("ubersdr")
     out["02-no-link"] = knob("uber-02", "The receiver not reached, and why",
                              uber_face(dbm=-127, snr=None, spot=None) + warning("RECEIVER FULL", "UberSDR"))
     out["03-tune"] = knob("uber-03", "Turn to tune; tap a digit for its step", f,
-                          turn() + tap(236, 172), "tap a digit for the step  \u00b7  turn to tune")
+                          turn() + tap(md.dig_places()[0][5], 172),
+                          "tap a digit for the step  \u00b7  turn to tune")
     out["04-filter"] = knob("uber-04", "FIL: the receiver's noise filter",
                             f + editor("NOISE FILTER", "NR4"), turn(),
                             "tap FIL  \u00b7  OFF, NR2, RN2, NR4  \u00b7  applies as you turn")
@@ -1134,6 +1174,22 @@ def ubersdr_pictures():
     out["15-headset"] = knob("uber-15", "A Bluetooth headset connected: its logo beside the spot",
                              uber_face(headset=True), "",
                              "the receiver in the headset  \u00b7  the spots stay")
+    out["16-speaker"] = knob("uber-16", "A Bluetooth speaker connected: a speaker beside the spot",
+                             uber_face(speaker=True), "",
+                             "the receiver in the speaker, a little behind  \u00b7  the spots stay")
+    out["17-time-left"] = knob("uber-17", "A guest's time left, at the slab's left end",
+                               uber_face(left=("52 min", "dim")), "",
+                               "a guest's time on the receiver  \u00b7  none with its password, or on its LAN")
+    out["18-last-minutes"] = knob("uber-18", "The last five minutes: the seconds too, in amber",
+                                  uber_face(left=("4:59", "warn")), "",
+                                  "the last five minutes in amber  \u00b7  the last one in red")
+    out["19-idle"] = knob("uber-19", "An idle limit's last minute, in red: use the knob",
+                          uber_face(left=("idle 0:42", "danger")), turn(),
+                          "a touch or a turn  \u00b7  the receiver hears from the knob, the minute goes")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show).
+    out["20-battery"] = knob("uber-20", "On its own battery: the knob's charge at the top of the arc",
+                             uber_face() + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
 

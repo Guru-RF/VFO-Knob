@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -67,7 +68,8 @@
 #define KEY_PORT     "ubport"
 #define KEY_USER     "ubuser"     /* unused: an UberSDR has no users */
 #define KEY_PASS     "ubpass"     /* its bypass password, where you have one */
-#define DEFAULT_HOST ""              /* https://<name>.tunnel.ubersdr.org, given on the page */
+#define DEFAULT_HOST ""              /* given on the page: https://<name>.tunnel.ubersdr.org,
+                                        or http://<host> on a LAN -- the scheme kept */
 #define DEFAULT_PORT 443             /* its tunnel's https; 8080 on a LAN */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
@@ -283,6 +285,13 @@ static esp_err_t radios_write(void)
 
 int  net_prov_radio_count(void)  { return s_nradios; }
 int  net_prov_radio_active(void) { return s_radio_sel; }
+
+bool net_prov_radio_known(const char *host)
+{
+    for (int i = 0; host && host[0] && i < s_nradios; i++)
+        if (!strcasecmp(s_radios[i].host, host)) return true;
+    return false;
+}
 
 bool net_prov_radio_get(int i, net_radio_t *out)
 {

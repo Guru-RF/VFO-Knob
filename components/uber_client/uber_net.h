@@ -1,7 +1,9 @@
 /* The UberSDR's connections: HTTP requests and WebSockets, over TLS to a
  * receiver behind its tunnel (https://<name>.tunnel.ubersdr.org, port 443) or
- * in the clear to one on the LAN (http://host:8080) -- esp-tls either way, so
- * the rest of the client never asks which.
+ * in the clear to one on the LAN (http://host:8080) -- the rest of the client
+ * never asks which. TLS is esp-tls's; in the clear the connection is a socket
+ * of its own, which spares the 2 kB of internal RAM an esp-tls connection
+ * takes even without TLS.
  *
  * Everything here blocks, for at most the timeout given; it is meant for the
  * client's own tasks, whose stacks are in PSRAM (nothing here touches flash).
@@ -19,16 +21,25 @@
 typedef struct {
     char     host[64];
     uint16_t port;
-    bool     tls;          /* port 443: https and wss */
+    bool     tls;          /* https and wss; else http and ws, in the clear */
 } uhost_t;
 
 /* "VFO-Knob/1.14.0 (+https://github.com/Guru-RF/VFO-Knob)" */
 const char *unet_agent(void);
 
-/* A connection, or NULL with `why` in a word or two ("name not found",
+/* A connection: esp-tls's over TLS, a plain socket in the clear. Zeroed, it
+ * is closed. */
+typedef struct {
+    esp_tls_t *tls;        /* over TLS */
+    int        fd;         /* its socket, either way */
+    bool       up;
+} unet_t;
+
+/* Connected, or false with `why` in a word or two ("name not found",
  * "no answer", "TLS failed"). */
-esp_tls_t *unet_connect(const uhost_t *h, int timeout_ms, char *why, size_t wn);
-bool       unet_write(esp_tls_t *t, const void *b, size_t n);
+bool unet_connect(unet_t *c, const uhost_t *h, int timeout_ms, char *why, size_t wn);
+bool unet_write(unet_t *c, const void *b, size_t n);
+void unet_drop(unet_t *c);
 
 /* One request, Connection: close. The body -- up to `cap` bytes, the rest
  * dropped -- into `out`, NUL-terminated when it fits; its length into *len.
@@ -42,7 +53,7 @@ int unet_http(const uhost_t *h, const char *method, const char *path, const char
  * gallery's pictures or the band's voices come one request after another. A
  * connection the server has closed meanwhile is made again, once. */
 typedef struct {
-    esp_tls_t *tls;
+    unet_t     n;
     void      *rb;          /* its read buffer */
     int64_t    last;        /* when it was last used, us */
 } uconn_t;
@@ -54,9 +65,7 @@ void unet_close(uconn_t *c);
 /* ------------------------------------------------------------ WebSocket */
 
 typedef struct {
-    esp_tls_t *tls;
-    bool       is_tls;     /* else in the clear */
-    int        fd;
+    unet_t     n;
     uint8_t   *rx;         /* frames as they arrive: PSRAM */
     size_t     cap, have;
     size_t     used;       /* the frame handed out last, dropped on the next call */

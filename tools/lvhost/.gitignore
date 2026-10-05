@@ -1,6 +1,15 @@
 obj/
 vu_compare
 chooser
+readout
 *.ppm
 *.png
 fit.tsv
+slab_flex
+slab_icom
+slab_svx
+slab_phone
+slab_uber
+slab_aether
+slab_xiegu
+slab_setup

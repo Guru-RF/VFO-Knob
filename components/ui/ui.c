@@ -60,6 +60,9 @@ LV_FONT_DECLARE(font_mic_14);
 /* The telephone's mute: the knob's microphone, live or struck through, at
  * 28 px (font_btmic_28.c). */
 LV_FONT_DECLARE(font_btmic_28);
+/* The frequency readout's digits and separators: Hack, monospaced, at 46 px,
+ * where its digits stand as tall as Montserrat 48's (font_hack_46.c). */
+LV_FONT_DECLARE(font_hack_46);
 #define SYM_MIC "\xEF\x84\xB0"
 #define SYM_MIC_OFF "\xEF\x84\xB1"                  /* U+F131, struck through */
 
@@ -216,6 +219,20 @@ LV_FONT_DECLARE(font_btmic_28);
 #define PWR_HEX     RFG_GOLD_HEX
 #endif
 #define C_BRAND     lv_color_hex(PWR_HEX)
+/* A Bluetooth headset's or speaker's battery: green from half its charge
+ * up, yellow under that, red at a fifth and below -- in Apple's tenths, 50
+ * to 100 % green, 30 and 40 yellow, 10 and 20 red. The face's own warning
+ * and danger colours, and its green -- but on the Icoms' face and the
+ * Xiegus', whose "green" is their meters' blue and orange, AetherSDR's.
+ * The knob's own battery wears the same. */
+#define BATT_HALF   50
+#define BATT_LOW    20
+#define BATT_W      25             /* Montserrat 20's battery, all its glyphs */
+#if VFO_RADIO_ICOM || VFO_RADIO_XIEGU
+#define C_BATT_OK   lv_color_hex(0x4DD87A)
+#else
+#define C_BATT_OK   C_GREEN
+#endif
 
 /* The svxconnect firmware's face: a reflector's talkgroup where a radio's
  * frequency is, and the audio level on the arc. */
@@ -289,6 +306,13 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define PTT_LEFT  0
 #define PTT_RIGHT 360
 
+/* The knob's own battery, while it runs on it: top centre, inside the arc,
+ * over the S-units -- its 13 rows of ink from y 41 to 53, clear of the
+ * ticks at the top of the telephone's arc above it, the S-units under it
+ * and the setup firmware's title (knob_batt_show()). */
+#define KNOB_BATT_X (CX - BATT_W / 2)
+#define KNOB_BATT_Y 37
+
 #define N_DIG 8
 static const int DIG_STEP[N_DIG] = {
     1000000, 1000000, 1000000, 100000, 10000, 1000, 100, 10,
@@ -310,8 +334,10 @@ static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl;
  * starts each as "\x01", which nothing sets. */
 EXT_RAM_BSS_ATTR static char s_ptt_lbl_shown[128], s_spot_sub_shown[128];
 static void set_text_cut(lv_obj_t *o, char *shown, size_t cap, const char *s);
-static lv_obj_t *s_hs_bt;      /* a Bluetooth headset connected: its logo, at the slab's right end */
+static lv_obj_t *s_hs_bt;      /* a headset connected: its logo, at the slab's right end; a speaker: a speaker */
+static lv_obj_t *s_hs_batt;    /* ...its battery left of it, where it reports one */
 static lv_obj_t *s_hs_raise;   /* ...the boom arm its PTT, and down: RAISE BOOM */
+static lv_obj_t *s_knob_batt;  /* the knob's own battery, top centre, while it runs on it */
 #if PHONE_FACE
 /* The telephone's face: see phone_build(). */
 /* The keypad's top row: the number, and the backspace right of it, both
@@ -370,8 +396,18 @@ static lv_obj_t *s_sdr_arc;
 #endif
 static lv_obj_t *s_agc_cap, *s_agc_val, *s_gain_cap, *s_gain_val;
 /* A receiver's slab: the nearest spot or voice, what and where it is, and
- * how many there are. */
-static lv_obj_t *s_spot_sub, *s_spot_n;
+ * how many there are; a guest's time left at its left end (left_slab()):
+ * in Montserrat 14, its foot inside the glass, its digits level with the
+ * device's logo at the other end, and the call kept clear of the widest it
+ * can say as it says it now. */
+static lv_obj_t *s_spot_sub, *s_spot_n, *s_left;
+#define LEFT_X       44
+#define LEFT_Y       (PTT_TOP + 15)
+#define LEFT_W       52            /* "48 min" */
+#define LEFT_W_HOURS 56            /* "48 h 48" */
+#define LEFT_W_DIGIT 9             /* ...and each digit the hours have beyond two */
+#define LEFT_W_SECS  32            /* "4:48": the last five minutes */
+#define LEFT_W_IDLE  62            /* "idle 0:48" */
 #if REFLECTOR_FACE
 /* The reflector face's lock and mute, in the talkgroup's row. */
 static lv_obj_t *s_lock_icon, *s_mute_icon;
@@ -723,11 +759,16 @@ static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
                ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER, ED_SQUELCH, ED_RXSRC,
-               ED_BALANCE, ED_RADIO, ED_VM, ED_SPOT, ED_SSTV, ED_CALLS } edit_t;
+               ED_BALANCE, ED_RADIO, ED_VM, ED_SPOT, ED_SSTV, ED_CALLS,
+               ED_TXANT } edit_t;
 static edit_t  s_edit;
 static int     s_edit_idx;
 static int     s_edit_from, s_edit_n;  /* where the receiver's opened; how many */
 static bool    s_edit_moved;           /* the knob has turned since it opened */
+/* The antennas' editors opened by a press held on the slab: the receive
+ * antenna, then the transmit one, and nothing after them -- not the swipe
+ * down's V/M. */
+static bool    s_ant_slab;
 /* The swipe menu (ED_MENU): its items, UI_ACT_*, as the radio offers them;
  * MEM's light, and when it was last tapped -- until the radio agrees, the
  * light is the tap's. */
@@ -738,8 +779,9 @@ static uint32_t s_mem_tapped;
 static char     s_ch_title[UI_CHOICES][12], s_ch_name[UI_CHOICES][24];
 static volatile int s_ch_answer = -1;
 /* The last state ui_update() saw, so the editors can open on the current
- * value. The touch callback runs on the LVGL task and cannot ask the client. */
-static ui_state_t s_last;
+ * value. The touch callback runs on the LVGL task and cannot ask the client.
+ * In PSRAM: it is most of a kilobyte, and internal RAM is the WiFi's. */
+EXT_RAM_BSS_ATTR static ui_state_t s_last;
 /* The spots on the band (ui_set_spots), and the chooser's own copy of them,
  * which holds still while it is open. */
 EXT_RAM_BSS_ATTR static ui_spot_t s_spots[UI_SPOTS_MAX];
@@ -759,6 +801,7 @@ static int     s_edit_pct;             /* RF GAIN and POWER, 0-100 */
 static int     s_edit_bal;             /* BALANCE, -100..100 */
 static bool    s_edit_lsb;   /* passband sits below the carrier */
 static uint8_t s_volume = 40;
+static uint8_t s_vol_drawn;            /* the VOLUME its editor shows */
 static bool    s_meters_on = true;      /* the telephone's call meters drawn */
 /* VOLUME's panel brought up by the dial alone (ui_volume_turn): it goes by
  * itself, and a tap is not spent on it. */
@@ -886,32 +929,33 @@ static int   s_dig_x[N_DIG];
 static int   s_active_dig = 5;
 static int32_t s_step_req;
 
-/* The digits' places: MMM.kkk.hh, the sub-kHz pair narrower -- or, from
- * 1 GHz up, MMMM.kkk.h, the separators one digit along -- or, from 10 GHz,
- * the same with "10" in a first place 50 wide and the rest closed up, so the
- * row keeps the 1 GHz one's 40-320 px: clear of the S-meter's ticks and, in
- * transmit, of the microphone's ring. */
+/* The digits' places: MMM.kkk.hh -- or, from 1 GHz up, MMMM.kkk.h, the
+ * separators one digit along -- or, from 10 GHz, the same with "10" in a
+ * first place two digits wide. Hack is monospaced: every digit has the same
+ * place, its font's own advance, and keeps its width as it turns over, so
+ * the gaps beside it stay put and no two digits ever touch -- Montserrat's
+ * ran from 13 px (a 1) to 31 (a 4), and two 4s in the old 28 px places
+ * overlapped. The widest row, from 10 GHz, is 42-317 px: clear of the
+ * S-meter's ticks and, in transmit, of the microphone's ring
+ * (tools/lvhost: make readout-check). */
 static uint8_t s_lay;                     /* 0; 1 from 1 GHz; 2 from 10 GHz */
 static int  s_underline_dig = -1;
-#define DIG_PITCH 33                      /* a digit's width */
-#define DIG_SMALL 28                      /* ...below 1 kHz */
-#define DIG_SEPW  11                      /* a separator's */
-#define DIG_TENS  50                      /* "10", from 10 GHz */
+#define DIG_PITCH 28                      /* a digit's width: Hack 46's advance */
+#define DIG_SEPW  12                      /* a separator's */
 static void dig_place(uint8_t lay)
 {
-    const int n_small = lay ? 1 : 2, sep_a = lay ? 3 : 2, sep_b = lay ? 6 : 5;
-    const int pitch = lay == 2 ? 31 : DIG_PITCH, small = lay == 2 ? 26 : DIG_SMALL,
-              sepw  = lay == 2 ? 9 : DIG_SEPW,   first = lay == 2 ? DIG_TENS : pitch;
-    const int total = first + (N_DIG - 1 - n_small) * pitch + n_small * small + 2 * sepw;
+    const int sep_a = lay ? 3 : 2, sep_b = lay ? 6 : 5;
+    const int first = lay == 2 ? 2 * DIG_PITCH : DIG_PITCH;
+    const int total = first + (N_DIG - 1) * DIG_PITCH + 2 * DIG_SEPW;
     int x = CX - total / 2, sep = 0;
     for (int i = 0; i < N_DIG; i++) {
-        const int w = i == 0 ? first : i >= N_DIG - n_small ? small : pitch;
+        const int w = i == 0 ? first : DIG_PITCH;
         s_dig_x[i] = x + w / 2;
         lv_obj_align(s_dig[i], LV_ALIGN_CENTER, s_dig_x[i] - CX, 170 - CY);
         x += w;
         if (i == sep_a || i == sep_b) {
-            lv_obj_align(s_sep[sep++], LV_ALIGN_CENTER, x + sepw / 2 - CX, 170 - CY);
-            x += sepw;
+            lv_obj_align(s_sep[sep++], LV_ALIGN_CENTER, x + DIG_SEPW / 2 - CX, 170 - CY);
+            x += DIG_SEPW;
         }
     }
     s_lay = lay;
@@ -926,6 +970,26 @@ static bool  s_ptt_armed;            /* a press on the slab, in receive: see tou
  * A flicker is a few tens of ms; a deliberate second tap is well over this. */
 #define PTT_REARM_MS 150
 static uint32_t s_released_at;       /* lv_tick of the last release */
+/* A press held on the slab opens the antennas, where the radio has a choice
+ * of them (pressing_cb): long enough to be no tap, short enough not to keep
+ * the finger waiting -- and a press held that long keys nothing, whatever
+ * comes of it. A tap is still the PTT. But the glass loses a finger now and
+ * then, for 35 to 130 ms (the CST816, in the knob's logs), and the release
+ * it makes then is like a tap's. So where a hold has the antennas, every
+ * release on the slab waits: it keys once the finger has stayed off
+ * PTT_REARM_MS (slab_cb), and a finger back sooner, in place, is the same
+ * press going on (touch_cb) -- a hold must never key by accident. The price
+ * is a tap keying that much after the lift, and two taps closer than that
+ * being one press. A radio with no antennas to choose keys as the finger
+ * lifts, as ever. */
+#define ANT_HOLD_MS  500
+static bool          s_press_ant;    /* this slab press may open the antennas */
+static uint32_t      s_slab_at;      /* ...and when, and where, it began */
+static lv_point_t    s_slab_pt;
+static uint32_t      s_slab_wait;    /* a release, waiting to be a tap: when; 0 none */
+static bool          s_slab_wait_key;/* ...and keying if it is */
+static bool          s_slab_finger;  /* the antennas came up under a finger still down */
+static volatile bool s_slab_hold;    /* the antennas came up under it: the buzz is owed */
 RADIO_ONLY static float s_meter_disp = -127.0f;
 static lv_display_t *s_disp;
 /* The panel is mounted upside down relative to the USB-C port: with the cable
@@ -1063,17 +1127,20 @@ static void shift_text(int8_t dup, int32_t hz, char *out, size_t n)
 /* What the memory face says: a channel, or why there is none yet. */
 RADIO_ONLY static void mem_texts(const ui_state_t *st, char *big, size_t nb, char *small, size_t ns)
 {
-    /* The IC-9700's group is the band it is on: named so. */
+    /* The IC-9700's group is the band it is on: named so. A FlexRadio's
+     * memories are one list, the radio's. */
     if (st->mem_state == UI_MEM_READING) {
         snprintf(big, nb, "MEMORIES");
-        if (st->mem_band) snprintf(small, ns, "reading the %s ones", band_of(st->freq_hz));
-        else              snprintf(small, ns, "reading group %02u", (unsigned)st->mem_group);
+        if (st->mem_all)       snprintf(small, ns, "reading them");
+        else if (st->mem_band) snprintf(small, ns, "reading the %s ones", band_of(st->freq_hz));
+        else                   snprintf(small, ns, "reading group %02u", (unsigned)st->mem_group);
         return;
     }
     if (st->mem_state == UI_MEM_EMPTY) {
         snprintf(big, nb, "NO MEMORIES");
-        if (st->mem_band) snprintf(small, ns, "on %s", band_of(st->freq_hz));
-        else              snprintf(small, ns, "in group %02u", (unsigned)st->mem_group);
+        if (st->mem_all)       snprintf(small, ns, "on the radio");
+        else if (st->mem_band) snprintf(small, ns, "on %s", band_of(st->freq_hz));
+        else                   snprintf(small, ns, "in group %02u", (unsigned)st->mem_group);
         return;
     }
     char f[24], sh[32] = "", tn[16] = "", t[24];
@@ -1105,6 +1172,33 @@ static int ant_index(const ui_state_t *st)
     return st->ant + (st->ant_rx ? st->n_ant : 0);
 }
 
+/* The `i`th name of a comma-separated list, as a radio that names its
+ * antennas gives them ("ANT1,ANT2,RX_A"): false past its end. */
+static bool list_item(const char *list, int i, char *out, size_t cap)
+{
+    out[0] = 0;
+    for (const char *p = list; *p; ) {
+        const size_t l = strcspn(p, ",");
+        if (l && i-- == 0) {
+            snprintf(out, cap, "%.*s", (int)l, p);
+            return true;
+        }
+        p += l;
+        if (*p) p++;
+    }
+    return false;
+}
+
+/* The antenna at `idx` in the editor: by the radio's own name -- the
+ * FlexRadio's RX_A, XVTA -- or ANT1 to ANTn, each also with the RX ANT input
+ * where the radio has one. */
+static void ant_text(int idx, char *out, size_t cap)
+{
+    if (list_item(s_last.ant_names, idx, out, cap)) return;
+    const int n = s_last.n_ant ? s_last.n_ant : 1;
+    snprintf(out, cap, "ANT%d%s", idx % n + 1, idx >= n ? "+RX" : "");
+}
+
 #if PHONE_FACE
 /* A call in the history, under its name: which way, how long, how long ago --
  * "in 2:47  -  3 h ago", "missed  -  12 min ago". */
@@ -1115,7 +1209,7 @@ static void call_line(const ui_call_t *c, char *out, size_t cap)
         snprintf(out, cap, "calls in and out land here");
         return;
     }
-    char dur[12] = "", age[16] = "";
+    char dur[12] = "", age[24] = "";    /* age: wide enough for the PC's 64-bit long too */
     if (c->secs) snprintf(dur, sizeof dur, " %u:%02u", (unsigned)(c->secs / 60), (unsigned)(c->secs % 60));
     const time_t now = time(NULL);
     if (c->when && now > 1700000000 && now >= (time_t)c->when) {
@@ -1173,6 +1267,7 @@ static void edit_render(void)
     case ED_VOL:
         title = "VOLUME";
         snprintf(v, sizeof v, "%d", s_volume);
+        s_vol_drawn = s_volume;
         break;
     case ED_MIC:
         title = s_last.headset ? "HEADSET MIC" : "MIC GAIN";
@@ -1197,12 +1292,16 @@ static void edit_render(void)
         title = s_ch_title[s_edit_idx];
         snprintf(v, sizeof v, "%s", s_ch_name[s_edit_idx]);
         break;
-    case ED_ANT: {
-        const int n = s_last.n_ant ? s_last.n_ant : 1;
-        title = "ANTENNA";
-        snprintf(v, sizeof v, "ANT%d%s", s_edit_idx % n + 1, s_edit_idx >= n ? "+RX" : "");
+    case ED_ANT:
+        /* The receive antenna, where the transmit one is chosen apart (the
+         * FlexRadio's slice); else the antenna, both ways (the Icoms). */
+        title = s_last.n_tx_ant || s_last.ant_names[0] ? "RX ANT" : "ANTENNA";
+        ant_text(s_edit_idx, v, sizeof v);
         break;
-    }
+    case ED_TXANT:
+        title = "TX ANT";
+        if (!list_item(s_last.tx_ant_names, s_edit_idx, v, sizeof v)) snprintf(v, sizeof v, "--");
+        break;
     case ED_RFGAIN:
         title = "RF GAIN";
         snprintf(v, sizeof v, "%d%%", s_edit_pct);
@@ -1380,6 +1479,8 @@ static void edit_open(edit_t what, const ui_state_t *st)
 {
     s_edit = what;
     s_edit_auto = false;
+    /* The slab's antennas go on to the transmit antenna, and end there. */
+    if (what != ED_TXANT) s_ant_slab = false;
     netinfo_show(false);                  /* it would peek out from behind */
     /* ...and a warning -- NO LINK, with the radio in use switched off --
      * would cover it: it waits until the editor closes. */
@@ -1422,6 +1523,10 @@ static void edit_open(edit_t what, const ui_state_t *st)
     case ED_ANT:
         s_edit_idx = ant_index(st);
         s_edit_n   = ant_choices(st);
+        break;
+    case ED_TXANT:
+        s_edit_idx = st->tx_ant;
+        s_edit_n   = st->n_tx_ant;
         break;
     case ED_MENU:
         s_menu_n = 0;
@@ -1595,6 +1700,10 @@ static void edit_fill(void)
         s_commit.ant_rx   = s_edit_idx >= n;
         break;
     }
+    case ED_TXANT:
+        s_commit.have_tx_ant = s_edit_moved;
+        s_commit.tx_ant      = (uint8_t)s_edit_idx;
+        break;
     default: break;      /* volume and mic gain are the knob's own */
     }
 }
@@ -1736,6 +1845,7 @@ static void edit_rotate_now(int32_t detents)
     case ED_CALLS:
     case ED_RX:
     case ED_ANT:
+    case ED_TXANT:
     case ED_MENU:
     case ED_CHOICE:
     case ED_TUNER:
@@ -1976,6 +2086,12 @@ static volatile bool s_picker_req;
 static lv_point_t    s_press_pt;
 static bool          s_press_tap;         /* this press may still be a tap */
 static bool          s_gestured;          /* ...and this one became a gesture */
+
+/* Where a press began, give or take what a tap may wander. */
+static bool in_place(lv_point_t p, lv_point_t at)
+{
+    return LV_ABS(p.x - at.x) <= TAP_SLOP && LV_ABS(p.y - at.y) <= TAP_SLOP;
+}
 
 static bool shown_at(lv_obj_t *o, lv_point_t p)
 {
@@ -2262,8 +2378,15 @@ static void tap(lv_point_t p, uint32_t held)
             if (s_last.n_ant)     { edit_open(ED_ANT, &s_last); return; }
         }
         if (was == ED_RX && s_last.n_ant) { edit_open(ED_ANT, &s_last); return; }
+        /* The receive antenna goes on to the transmit antenna, where the
+         * radio chooses that apart (the FlexRadio), as RF GAIN goes on to
+         * POWER -- the slab's hold as the swipe's. */
+        if (was == ED_ANT && s_last.n_tx_ant) { edit_open(ED_TXANT, &s_last); return; }
+        /* Held open from the slab: the antennas, and nothing after them. */
+        if (s_ant_slab) return;
         /* ...and last, on a radio with memories, V/M. */
-        if ((was == ED_RXSRC || was == ED_RX || was == ED_ANT) && s_last.has_memories)
+        if ((was == ED_RXSRC || was == ED_RX || was == ED_ANT || was == ED_TXANT) &&
+            s_last.has_memories)
             edit_open(ED_VM, &s_last);
         return;
     }
@@ -2313,9 +2436,11 @@ static void tap(lv_point_t p, uint32_t held)
     if (p.y >= 104 && p.y < 140) {
         if (REFLECTOR_FACE) return;
         if      (p.x < CX - 38) {
-            /* No group to choose where it is the band (the IC-9700): change
-             * the band in VFO mode. */
-            if (!(mem && s_last.mem_band)) edit_open(mem ? ED_GROUP : ED_BAND, &s_last);
+            /* No group to choose where it is the band (the IC-9700), or
+             * where there are none (the FlexRadio): change the band in VFO
+             * mode. */
+            if (!(mem && (s_last.mem_band || s_last.mem_all)))
+                edit_open(mem ? ED_GROUP : ED_BAND, &s_last);
         }
         else if (p.x > CX + 38) edit_open(ED_FILTER, &s_last);
         else                    edit_open(ED_MODE,   &s_last);
@@ -2350,12 +2475,36 @@ static void tap(lv_point_t p, uint32_t held)
 /* Still pressed. On the S-meter, as soon as the press is long enough, the
  * address card comes up and the motor clicks. With the addresses already
  * up, three seconds ask for the firmware picker, and they make way for the
- * question. Either once for the press, which is then no tap. */
+ * question. Either once for the press, which is then no tap. On the slab,
+ * half a second brings the antennas, with a buzz, in place of the PTT. */
 static void pressing_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_edit != ED_NONE || s_asking) return;
     const uint32_t held = lv_tick_elaps(s_pressed_at);
+    /* Held on the slab this long, towards the antennas, a press is no tap,
+     * whatever comes of it: it keys nothing -- with an editor or a question
+     * come up meanwhile too, which keep the antennas shut. */
+    if (s_press_ant && held >= ANT_HOLD_MS) s_ptt_armed = false;
+    if (s_edit != ED_NONE || s_asking) return;
+    if (s_press_ant && held >= ANT_HOLD_MS) {
+        lv_point_t q = s_press_pt;
+        lv_indev_t *indev = lv_indev_active();
+        if (indev) lv_indev_get_point(indev, &q);
+        /* Not for a finger on its way somewhere -- a swipe from the slab --
+         * nor once the radio is on the air, or gone. Nor, for now, with the
+         * finger away from where it pressed: a drag, or the glass misplacing
+         * it for one read -- asked again at the next. */
+        if (s_gestured || s_last.tx || s_last.keyed || !s_last.link_ok || !s_last.n_ant) {
+            s_press_ant = false;
+        } else if (in_place(q, s_press_pt)) {
+            s_press_ant   = false;
+            s_slab_hold   = true;            /* the motor says so: ui_take_slab_hold() */
+            s_slab_finger = true;            /* ...and its lift is no tap (touch_cb) */
+            edit_open(ED_ANT, &s_last);
+            s_ant_slab    = true;            /* the antennas, and nothing after them */
+            return;
+        }
+    }
     if (s_press_card && held >= NETINFO_HOLD_MS) {
         s_press_card = false;
         /* Not for a finger on its way somewhere: a swipe, or a drag. */
@@ -2389,9 +2538,15 @@ static void release_cb(lv_event_t *e)
                  s_press_picker ? " (towards the picker)" : "", (unsigned)held);
     s_press_picker = false;
     s_press_card   = false;
-    /* A press on the PTT slab in receive: a tap keys, a swipe does not. */
-    if (s_ptt_armed) {
+    /* A press on the PTT slab in receive: a tap keys, a swipe does not --
+     * and, with the antennas a hold away, a release may be the glass's. */
+    if (s_ptt_armed || s_press_ant) {
+        const bool ant = s_press_ant;
+        /* Held long enough for the antennas, it was no tap, whether they
+         * came up or not (pressing_cb). */
+        const bool armed = s_ptt_armed && !(ant && held >= ANT_HOLD_MS);
         s_ptt_armed = false;
+        s_press_ant = false;
         lv_point_t q = s_press_pt;
         lv_indev_t *indev = lv_indev_active();
         if (indev) lv_indev_get_point(indev, &q);
@@ -2402,6 +2557,15 @@ static void release_cb(lv_event_t *e)
                      (int)q.x, (int)q.y);
             return;
         }
+        /* With the antennas a hold away, a tap is keyed only once the finger
+         * has stayed off (slab_cb): back sooner, and the press goes on
+         * (touch_cb). No release is told from the glass's by its length. */
+        if (ant) {
+            s_slab_wait     = s_released_at | 1;
+            s_slab_wait_key = armed;
+            return;
+        }
+        if (!armed) return;                  /* a receiver: nothing to key */
 #if PHONE_FACE
         /* The keypad's number, typed: dialled, and the keypad put away. */
         if (s_kp_open && s_kp_digits[0] && (s_last.call == 0 || s_last.call == 4)) {
@@ -2434,6 +2598,30 @@ static void release_cb(lv_event_t *e)
             LV_ABS(q.y - s_press_pt.y) > TAP_SLOP) return;   /* a drag */
     }
     tap(s_press_pt, lv_tick_elaps(s_pressed_at));
+}
+
+/* A slab release that waited (release_cb), settled: a tap after all. With
+ * our PTT keyed meanwhile -- a tap just before this one, the headset's
+ * button -- it toggles as any tap does, as it did when taps keyed at the
+ * lift: it unkeys, which is never refused, and never leaves the radio on the
+ * air for a tap lost. Otherwise it keys -- unless the face has moved on
+ * meanwhile: a question up, an editor open, the link gone, or another
+ * station on the air. */
+static void slab_wait_settle(void)
+{
+    const bool key = s_slab_wait_key;
+    s_slab_wait = 0;
+    if (!key) return;
+    if (s_last.keyed || (!s_asking && s_edit == ED_NONE && s_last.link_ok && !s_last.tx))
+        s_ptt_tap = true;
+}
+
+/* ...once the finger has stayed off the glass PTT_REARM_MS: on the LVGL
+ * task, every 15 ms, as the touch callbacks are. */
+static void slab_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_slab_wait && lv_tick_elaps(s_slab_wait) >= PTT_REARM_MS) slab_wait_settle();
 }
 
 /* A swipe. Down chooses what is heard: LOCAL or a web SDR, and then, on a
@@ -2520,6 +2708,7 @@ static void touch_cb(lv_event_t *e)
     s_press_tap  = false;
     s_gestured   = false;
     s_ptt_armed  = false;
+    s_press_ant  = false;
     /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS. */
     s_press_picker = addresses_up() &&
                      (p.y < 104 || shown_at(s_netinfo, p) || shown_at(s_warn_panel, p));
@@ -2543,6 +2732,7 @@ static void touch_cb(lv_event_t *e)
         lv_obj_add_flag(s_ask_panel, LV_OBJ_FLAG_HIDDEN);
         s_asking = false;
         s_ptt_tap = false;
+        s_slab_wait = 0;
         /* Yes: the update screen at once. It is a separate screen, so PTT is
          * out of reach from this moment until the restart -- not whenever the
          * network task next looks. (The port lock is recursive.) A question
@@ -2554,6 +2744,44 @@ static void touch_cb(lv_event_t *e)
         }
         s_ask_answer = yes ? 1 : -1;
         return;
+    }
+
+    /* A slab release waiting to be a tap (release_cb), and a finger down
+     * again before it is: the glass lost that finger for a moment. In place
+     * -- on the slab's edge too -- it is the same press going on, timed from
+     * where it began, on its way to the antennas. Anywhere else the press
+     * was no tap, and this touch is nothing either: never a key the finger
+     * did not mean. */
+    if (s_slab_wait && lv_tick_elaps(s_released_at) < PTT_REARM_MS) {
+        const uint32_t up = lv_tick_elaps(s_released_at);
+        s_slab_wait    = 0;
+        s_press_picker = s_press_card = false;
+        if (in_place(p, s_slab_pt) && s_edit == ED_NONE && s_last.link_ok &&
+            !s_last.tx && !s_last.keyed) {
+            s_pressed_at = s_slab_at;
+            s_press_pt   = s_slab_pt;
+            s_ptt_armed  = s_slab_wait_key;
+            s_press_ant  = true;
+            note("slab: the finger back after %u ms, the same press", (unsigned)up);
+        } else {
+            note("slab: a touch at %d,%d %u ms after the lift: no tap, nothing",
+                 (int)p.x, (int)p.y, (unsigned)up);
+        }
+        return;
+    }
+    /* The antennas, come up under a held finger the glass then lost for a
+     * moment: that finger, back -- not a tap beside the panel, which would
+     * close them as it lifted. */
+    if (s_slab_finger) {
+        s_slab_finger = false;
+        if (lv_tick_elaps(s_released_at) < PTT_REARM_MS && in_place(p, s_slab_pt) &&
+            s_ant_slab && s_edit == ED_ANT) {
+            s_slab_finger  = true;
+            s_press_picker = s_press_card = false;
+            note("slab: the finger that held the antennas, back after %u ms",
+                 (unsigned)lv_tick_elaps(s_released_at));
+            return;
+        }
     }
 
     /* PTT keeps acting on the press: the whole slab, with a link, and not
@@ -2571,15 +2799,25 @@ static void touch_cb(lv_event_t *e)
             note("PTT press ignored: finger up only %u ms", (unsigned)up);
             return;
         }
+        /* A release still waiting to be a tap is one, this press a new one. */
+        if (s_slab_wait) slab_wait_settle();
         /* On the air, the press unkeys, at once. In receive it keys only
          * once the finger lifts without having moved: a swipe up begun on
          * the slab -- memory mode -- would otherwise key the transmitter on
          * its way, before anything could know it was a swipe. A tap's
-         * length, a tenth of a second, is all keying waits. */
+         * length, a tenth of a second, is all keying waits -- and, where a
+         * hold has the antennas, PTT_REARM_MS more (release_cb). Nor does
+         * any press on the air open the antennas. */
         if (s_last.tx || s_last.keyed) {
             s_ptt_tap = true;
             return;
         }
+        /* Held, it opens the antennas where the radio has a choice of them
+         * (pressing_cb) -- a receiver's too, which has nothing to key. Not
+         * the telephone's slab: that is the call's. */
+        s_press_ant = !PHONE_FACE && s_last.n_ant > 0;
+        s_slab_at   = s_pressed_at;
+        s_slab_pt   = p;
         /* A receiver has nothing to key. With a headset connected the glass
          * keys as before, beside the headset's button (the knob refuses it
          * while the headset's microphone is muted: app_main.c). */
@@ -3004,6 +3242,18 @@ static void build(void)
     s_srd  = mklabel(&lv_font_montserrat_20, C_TEXT,  CX, 76,  "S0");
     s_dbm  = mklabel(&lv_font_montserrat_14, C_LABEL, CX, 98,  "-127 dBm");
 
+    /* Over it, the knob's own battery while it runs on it, as a phone's
+     * status bar has one: a headset's battery's glyph and colours, the
+     * same 25 px, centred (knob_batt_show()). Under every full-face view
+     * made after it -- the SSTV viewer, the telephone's keypad, which have
+     * their own titles here -- but over the setup firmware's screen. */
+    s_knob_batt = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_knob_batt, &lv_font_montserrat_20, 0);
+    lv_obj_set_pos(s_knob_batt, KNOB_BATT_X, KNOB_BATT_Y);
+    lv_obj_remove_flag(s_knob_batt, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_knob_batt, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_knob_batt, LV_SYMBOL_BATTERY_FULL);
+
     /* Either side of it, a caption and the setting under it: the AGC, and
      * the front end's gain. Tapping either opens its editor. */
     s_agc_cap  = mklabel(&lv_font_montserrat_14, C_LABEL, CX - AUX_DX, 78, RX_FACE ? "SNR" : "AGC");
@@ -3034,15 +3284,17 @@ static void build(void)
 
     /* The 100 Hz and 10 Hz digits were montserrat_28 AND dimmed, which
      * together made them unreadable. Same size as the rest now; only the
-     * colour marks them as below the tuning step. Placed by dig_place(). */
+     * colour marks them as below the tuning step. Placed by dig_place().
+     * Hack centred on 170 puts its digits on the rows Montserrat 48's took,
+     * 153 to 186 (the round ones half a pixel over, as drawn). */
     for (int i = 0; i < N_DIG; i++)
-        s_dig[i] = mklabel(&lv_font_montserrat_48, C_TEXT, CX, 170, "0");
+        s_dig[i] = mklabel(&font_hack_46, C_TEXT, CX, 170, "0");
     for (int i = 0; i < 2; i++)
-        s_sep[i] = mklabel(&lv_font_montserrat_48, C_LABEL, CX, 170, ".");
+        s_sep[i] = mklabel(&font_hack_46, C_LABEL, CX, 170, ".");
     dig_place(0);
 
     s_underline = lv_obj_create(s_scr);
-    lv_obj_set_size(s_underline, DIG_PITCH - 9, 3);
+    lv_obj_set_size(s_underline, DIG_PITCH - 6, 3);
     lv_obj_set_style_bg_color(s_underline, C_ACCENT, 0);
     lv_obj_set_style_border_width(s_underline, 0, 0);
     lv_obj_set_style_radius(s_underline, 2, 0);
@@ -3148,6 +3400,10 @@ static void build(void)
         lv_obj_set_style_text_color(s_ptt_lbl, C_TEXT, 0);
         lv_label_set_long_mode(s_ptt_lbl, LV_LABEL_LONG_DOT);
         lv_obj_set_width(s_ptt_lbl, 290);
+        /* One line: a call too long for it is cut with dots, never wrapped
+         * onto the line under it -- as it is in the less room it has beside
+         * the time left or a device's battery (call_place()). */
+        lv_obj_set_height(s_ptt_lbl, lv_font_get_line_height(&lv_font_montserrat_28));
         lv_obj_set_pos(s_ptt_lbl, CX - 145, PTT_TOP + 8);
         set_text_cut(s_ptt_lbl, s_ptt_lbl_shown, sizeof s_ptt_lbl_shown, "");
         s_spot_sub = lv_label_create(s_scr);
@@ -3167,10 +3423,17 @@ static void build(void)
         lv_obj_set_pos(s_spot_n, CX - 95, PTT_TOP + 64);
         lv_obj_remove_flag(s_spot_n, LV_OBJ_FLAG_CLICKABLE);
         lv_label_set_text(s_spot_n, "");
+        s_left = lv_label_create(s_scr);
+        lv_obj_set_style_text_font(s_left, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_left, C_TEXT2, 0);
+        lv_obj_set_pos(s_left, LEFT_X, LEFT_Y);
+        lv_obj_remove_flag(s_left, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_left, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_left, "");
     }
     /* A Bluetooth headset connected, on every face: only its logo, at the
      * slab's right end, level with the caption -- the slab keeps its PTT,
-     * its spot, its call (headset_slab()). */
+     * its spot, its call (headset_slab()). A speaker shows a speaker there. */
     s_hs_bt = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_hs_bt, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_hs_bt, C_ACCENT, 0);
@@ -3178,13 +3441,23 @@ static void build(void)
     lv_obj_remove_flag(s_hs_bt, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_hs_bt, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_hs_bt, LV_SYMBOL_BLUETOOTH);
+    /* Its battery, where it reports one: left of the logo, level with it
+     * (headset_slab()). */
+    s_hs_batt = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_hs_batt, &lv_font_montserrat_20, 0);
+    lv_obj_remove_flag(s_hs_batt, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_hs_batt, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_hs_batt, LV_SYMBOL_BATTERY_FULL);
 
 #if PHONE_FACE
     phone_build();
 #endif
     /* Editor overlay: hidden until a field is tapped. */
     /* Network address card. Same treatment as the editor panel, and equally
-     * not clickable -- the tap that dismisses it lands on the screen. */
+     * not clickable -- the tap that dismisses it lands on the screen. Its
+     * padding 10 px: five lines -- the firmware, the knob's power, its three
+     * addresses -- keep its corners inside the glass's margin with the
+     * widest a LAN's address is, 192.168.254.248. */
     s_netinfo = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_netinfo, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_netinfo, C_ACCENT_HI, 0);
@@ -3194,7 +3467,7 @@ static void build(void)
     lv_obj_set_style_border_color(s_netinfo, C_ACCENT, 0);
     lv_obj_set_style_border_width(s_netinfo, 2, 0);
     lv_obj_set_style_radius(s_netinfo, 14, 0);
-    lv_obj_set_style_pad_all(s_netinfo, 12, 0);
+    lv_obj_set_style_pad_all(s_netinfo, 10, 0);
     lv_obj_align(s_netinfo, LV_ALIGN_CENTER, 0, -6);
     lv_obj_remove_flag(s_netinfo, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
@@ -3407,8 +3680,10 @@ void ui_setup_show(const char *title, const char *text)
     const bool panel = s_edit != ED_NONE || s_asking;
     lv_obj_align(s_setup_text, LV_ALIGN_CENTER, 0, panel ? 96 : 20);
     lv_obj_remove_flag(s_setup, LV_OBJ_FLAG_HIDDEN);
-    /* Under a question or an editor, if one is up. */
+    /* Under a question or an editor, if one is up; under the knob's own
+     * battery, which stays over the title, as on the face. */
     lv_obj_move_foreground(s_setup);
+    lv_obj_move_foreground(s_knob_batt);
     if (s_edit != ED_NONE) lv_obj_move_foreground(s_edit_panel);
     if (s_asking) lv_obj_move_foreground(s_ask_panel);
     lvgl_port_unlock();
@@ -3549,6 +3824,7 @@ esp_err_t ui_init(void)
     lvgl_port_lock(0);
     build();
     lv_timer_create(detents_cb, 15, NULL);        /* the knob's detents, applied here */
+    lv_timer_create(slab_cb, 15, NULL);           /* a slab release waiting to key */
     {
         /* LVGL's objects live in its own fixed pool, not the heap. */
         lv_mem_monitor_t mm;
@@ -3777,8 +4053,11 @@ static void phone_build(void)
     lv_label_set_text(s_hs_hint, "answer on the headset");
     lv_obj_remove_flag(s_hs_hint, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_hs_hint, LV_OBJ_FLAG_HIDDEN);
-    /* A headset's logo: build()'s, as on every face. Under the halves,
-     * which show only without a headset. */
+    /* A headset's logo, or a speaker, and its battery: build()'s, as on
+     * every face, and over the halves -- they show with a speaker, which is
+     * no headset; their place while they do is headset_slab()'s. */
+    lv_obj_move_foreground(s_hs_bt);
+    lv_obj_move_foreground(s_hs_batt);
     /* The keypad, over everything above the slab. */
     s_kp = lv_obj_create(s_scr);
     lv_obj_remove_style_all(s_kp);
@@ -4008,20 +4287,164 @@ static void phone_slab(const ui_state_t *st)
  * headset has its microphone muted, which the knob will not key -- not on a
  * receiver, which keys nothing; and white on the slab gone red: on the air,
  * or the telephone's HANG UP and DECLINE. And RAISE BOOM under the caption
- * while the boom arm, the PTT, waits to be raised. */
+ * while the boom arm, the PTT, waits to be raised.
+ *
+ * A speaker connected: a speaker in the logo's place, so that the operator
+ * sees the knob's own microphone keys -- the accent, white on the red slab,
+ * never red: there is no headset microphone to be muted.
+ *
+ * Either's battery, where the device reports one: left of the logo, level
+ * with it -- LVGL's battery, full to empty by the quarter, green, yellow or
+ * red by the charge (BATT_HALF, BATT_LOW); white on the red slab, as the
+ * logo is. Hidden while the device has said nothing of it. */
+#define BATT_GAP 4                 /* between its BATT_W and the logo's ink */
+
+#if RX_FACE
+/* A guest's time left on the receiver, at the slab's left end (the ubersdr
+ * firmware, uber_time_left): "52 min", "1 h 40" from a hundred minutes, and
+ * in the last five the seconds too, "4:59" -- the minutes whole ones, as
+ * UberSDR's page has them; an idle limit's last minute, "idle 0:42". The
+ * face's dim text, its warning colour in the last five minutes and its
+ * danger colour in the last one, and in an idle limit's. Hidden where no
+ * limit applies. */
+static int16_t left_room(const ui_state_t *st)
+{
+    if (st->left_idle)     return LEFT_W_IDLE;
+    if (st->left_s < 300)  return LEFT_W_SECS;
+    if (st->left_s < 6000) return LEFT_W;
+    int16_t w = LEFT_W_HOURS;
+    for (int32_t h = st->left_s / 3600; h >= 100; h /= 10) w += LEFT_W_DIGIT;
+    return w;
+}
+
+static void left_text(char *out, size_t cap, int32_t s, bool idle)
+{
+    if (s < 0) s = 0;
+    if (idle)          snprintf(out, cap, "idle %ld:%02ld", (long)(s / 60), (long)(s % 60));
+    else if (s < 300)  snprintf(out, cap, "%ld:%02ld", (long)(s / 60), (long)(s % 60));
+    else if (s < 6000) snprintf(out, cap, "%ld min", (long)(s / 60));
+    else               snprintf(out, cap, "%ld h %02ld", (long)(s / 3600), (long)(s / 60 % 60));
+}
+
+static void left_slab(const ui_state_t *st)
+{
+    vis(s_left, st->have_left);
+    if (!st->have_left) return;
+    char t[24];
+    left_text(t, sizeof t, st->left_s, st->left_idle);
+    set_text(s_left, t);
+    set_text_color(s_left, st->left_idle || st->left_s < 60 ? C_DANGER : st->left_s < 300 ? C_WARN : C_TEXT2);
+}
+
+/* The spot's call, as it reads now, in its room on the slab: from the time
+ * left, while that shows, to the device's battery, or its logo, while they
+ * do -- else the slab's 290 px (headset_slab()). Centred where it fits so;
+ * a longer one moved aside just as far as it must, so as to be whole; only
+ * one too long for the whole room cut with dots. Measured when the call or
+ * its room changes: headset_slab() gives the room, each time before this,
+ * and no room is the 0, 0 the first is measured against. What was
+ * measured, in PSRAM. */
+static int16_t s_call_l, s_call_r;
+EXT_RAM_BSS_ATTR static char s_call_said[24];
+
+static void call_place(void)
+{
+    static int16_t l, r;
+    if (s_call_l == l && s_call_r == r && strlen(s_ptt_lbl_shown) < sizeof s_call_said &&
+        !strcmp(s_call_said, s_ptt_lbl_shown))
+        return;
+    l = s_call_l;
+    r = s_call_r;
+    strlcpy(s_call_said, s_ptt_lbl_shown, sizeof s_call_said);
+    lv_point_t sz;
+    lv_text_get_size(&sz, s_ptt_lbl_shown, &lv_font_montserrat_28, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int32_t half = LV_MIN(CX - l, r - CX);
+    int32_t x, w;
+    if (sz.x <= 2 * half) {
+        w = 2 * half;
+        x = CX - half;
+    } else if (sz.x <= r - l) {
+        w = sz.x;
+        x = LV_CLAMP(l, CX - w / 2, r - w);
+    } else {
+        w = r - l;
+        x = l;
+    }
+    lv_obj_set_width(s_ptt_lbl, w);
+    lv_obj_set_x(s_ptt_lbl, x);
+}
+#endif
+
+static const char *batt_symbol(uint8_t pct)
+{
+    return pct >= 88   ? LV_SYMBOL_BATTERY_FULL
+           : pct >= 63 ? LV_SYMBOL_BATTERY_3
+           : pct >= 38 ? LV_SYMBOL_BATTERY_2
+           : pct >= 13 ? LV_SYMBOL_BATTERY_1
+                       : LV_SYMBOL_BATTERY_EMPTY;
+}
+
+static lv_color_t batt_colour(uint8_t pct)
+{
+    return pct >= BATT_HALF ? C_BATT_OK : pct > BATT_LOW ? C_WARN : C_DANGER;
+}
+
 static void headset_slab(const ui_state_t *st)
 {
-    const bool on = st->headset;
+    const bool on   = st->headset || st->speaker;
+    const bool batt = on && st->have_batt && st->batt <= 100;
     vis(s_hs_bt, on);
-    if (s_hs_raise) vis(s_hs_raise, on && st->headset_raise && !st->rx_only);
-    if (!on) return;
+    vis(s_hs_batt, batt);
+    if (s_hs_raise) vis(s_hs_raise, st->headset && st->headset_raise && !st->rx_only);
 #if PHONE_FACE
-    const bool red = st->call >= 1 && st->call <= 3;   /* phone_slab(), with a headset */
+    /* phone_slab(): HANG UP, DECLINE -- or, a speaker being no headset, the
+     * halves of a call ringing in; there the speaker goes under ANSWER, at
+     * the end it sat on its R. */
+    const bool red   = st->call >= 1 && st->call <= 3;
+    const bool under = st->speaker && st->call == 2;
 #else
-    const bool red = st->tx;
+    const bool red   = st->tx;
+    const bool under = false;
 #endif
+    /* The speaker is 23 px wide, the logo 16 at 1 px in: 6 px further left,
+     * their right ends meet. The battery's left of where its ink begins. */
+    const int x  = under ? CX + 78 - 11 : CX + (st->speaker ? 120 : 126);
+    const int y  = under ? PTT_TOP + 52 : PTT_TOP + 12;
+    const int bx = x + (st->speaker ? 0 : 1) - BATT_GAP - BATT_W;
+#if RX_FACE
+    /* The spot's call: its room, clear of the time left at the slab's left
+     * end and of the battery, or the logo, at its right end (call_place()). */
+    s_call_l = (int16_t)(st->have_left ? LEFT_X + left_room(st) + BATT_GAP : CX - 145);
+    s_call_r = (int16_t)(batt ? bx - BATT_GAP : on ? x + (st->speaker ? 0 : 1) - BATT_GAP : CX + 145);
+#endif
+    if (!on) return;
+    set_text(s_hs_bt, st->speaker ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_BLUETOOTH);
+    static int8_t at = -1;
+    const int8_t want = under ? 2 : st->speaker ? 1 : 0;
+    if (want != at) {
+        at = want;
+        lv_obj_set_pos(s_hs_bt, x, y);
+        lv_obj_set_pos(s_hs_batt, bx, y);
+    }
     set_text_color(s_hs_bt, red ? lv_color_white()
-                          : st->headset_muted && !RX_FACE && !st->rx_only ? C_DANGER : C_ACCENT);
+                   : st->headset && st->headset_muted && !RX_FACE && !st->rx_only ? C_DANGER : C_ACCENT);
+    if (!batt) return;
+    set_text(s_hs_batt, batt_symbol(st->batt));
+    set_text_color(s_hs_batt, red ? lv_color_white() : batt_colour(st->batt));
+}
+
+/* The knob's own battery (s_knob_batt), while it runs on it: by its charge,
+ * as a headset's -- full to empty by the quarter, green, yellow or red. Not
+ * on a radio's face on the air: the transmit scale's numbers are there, its
+ * SWR's 3 and the power's first peg. The reflector's arc stays the audio's
+ * on the air, and the battery with it. */
+static void knob_batt_show(const ui_state_t *st)
+{
+    const bool on = st->knob_batt && st->knob_pct <= 100 && (REFLECTOR_FACE || !st->tx);
+    vis(s_knob_batt, on);
+    if (!on) return;
+    set_text(s_knob_batt, batt_symbol(st->knob_pct));
+    set_text_color(s_knob_batt, batt_colour(st->knob_pct));
 }
 
 void ui_update(const ui_state_t *st)
@@ -4055,6 +4478,14 @@ void ui_update(const ui_state_t *st)
         s_edit_idx = ant_index(st);
         edit_render();
     }
+    if (s_edit == ED_TXANT && !s_edit_moved && st->have_tx_ant && st->tx_ant != s_edit_idx) {
+        s_edit_idx = st->tx_ant;
+        edit_render();
+    }
+
+    /* VOLUME's editor follows a VOLUME set elsewhere: the page, or a
+     * Bluetooth speaker's own buttons. */
+    if (s_edit == ED_VOL && s_vol_drawn != s_volume) edit_render();
 
 #if PHONE_FACE
     /* A call -- in, out from the page, up -- closes the history first: an
@@ -4072,6 +4503,11 @@ void ui_update(const ui_state_t *st)
             sv_close();
         }
     }
+    /* The knob's own battery, an editor up or not: it is clear of every
+     * panel, and goes or comes the moment the knob is plugged in or pulled
+     * out -- on the setup firmware the list of firmwares is up for minutes.
+     * Not behind the SSTV viewer, which covers it. */
+    if (!s_sv_open) knob_batt_show(st);
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter -- nor,
      * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter.
@@ -4258,8 +4694,9 @@ void ui_update(const ui_state_t *st)
     set_text(s_mute_icon, st->muted ? SYM_MUTED : SYM_SOUND);
     set_text_color(s_mute_icon, st->muted ? C_DANGER : C_LABEL);
 #else
-    if (mem && st->mem_band) {
-        set_text(s_band, band_of(f));          /* the IC-9700's group is its band */
+    if (mem && (st->mem_band || st->mem_all)) {
+        /* The IC-9700's group is its band; a FlexRadio's memories have none. */
+        set_text(s_band, band_of(f));
     } else if (mem) {
         char g[8];
         snprintf(g, sizeof g, "G%02u", (unsigned)st->mem_group);
@@ -4459,7 +4896,7 @@ void ui_update(const ui_state_t *st)
         }
     }
 #else
-    char sbuf[10];
+    char sbuf[16];                      /* "S9+%d", whatever the int */
     smeter_text(sig_pk, sbuf, sizeof sbuf);
 #if VFO_HAS_SDR
     /* A web SDR playing beside the radio: its S-meter, the thin blue line
@@ -4665,6 +5102,9 @@ void ui_update(const ui_state_t *st)
             st->tx ? lv_color_white() : C_TEXT2, 0);
     }
     headset_slab(st);
+#if RX_FACE
+    left_slab(st);
+#endif
 #if PHONE_FACE
     phone_update(st);
     phone_slab(st);
@@ -4695,6 +5135,9 @@ void ui_update(const ui_state_t *st)
             snprintf(l3, sizeof l3, "%u on %s", (unsigned)s_nspots, band_of(f));
             set_text(s_spot_n, l3);
         }
+#if RX_FACE
+        call_place();
+#endif
     } else if (st->rx_only)
         /* A receiver: the slab says so, dimmed, and keys nothing. */
         set_text_cut(s_ptt_lbl, s_ptt_lbl_shown, sizeof s_ptt_lbl_shown, "RECEIVER");
@@ -4735,6 +5178,7 @@ uint8_t ui_rotation(void) { return s_rot; }
 
 int32_t ui_take_step_request(void) { int32_t v = s_step_req; s_step_req = 0; return v; }
 bool    ui_take_ptt_tap(void)      { bool v = s_ptt_tap;     s_ptt_tap  = false; return v; }
+bool    ui_take_slab_hold(void)    { bool v = s_slab_hold;   s_slab_hold = false; return v; }
 bool    ui_take_lock_tap(void)     { bool v = s_lock_tap;    s_lock_tap = false; return v; }
 bool    ui_take_mute_tap(void)     { bool v = s_mute_tap;    s_mute_tap = false; return v; }
 

@@ -12,10 +12,20 @@
  *   <- SND: flags(1) seq(4 LE) S-meter(2 BE, 0.1 dB + 127) data -- IMA-ADPCM
  *      when flags has 0x10, else 16-bit big-endian PCM
  *
+ * In CW the receiver is told the carrier, as the Kiwi's own page tells it: the
+ * centre of its CW passband below the signal, which is then heard at that
+ * tone -- 500 Hz on a KiwiSDR (its 300..700). The receiver's configuration
+ * (load_cfg) says where it centres CW, and an UberSDR's Kiwi input (port 8073
+ * on its own address) centres it on the carrier (-400..400), making the tone
+ * itself. That input also makes its channel from the first SET mod with its
+ * own passband, and takes the one asked for only from the next: the tune goes
+ * again once the audio flows.
+ *
  * The task's stack is in PSRAM: it never touches flash (the list is saved by
  * whoever calls sdr_save, the selection by a timer). */
 #include "sdr_rx.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -340,8 +350,9 @@ static bool ws_open(int fd, const char *host, uint16_t port, bool new_path)
         k64[o++] = i + 2 < 16 ? B64[v & 63] : '=';
     }
     k64[o] = 0;
-    /* 32 bits of timestamp, as kiwiclient: a real Kiwi takes no more. */
-    const uint32_t ts = (uint32_t)(esp_timer_get_time() / 1000000) ^ esp_random();
+    /* 32 bits of timestamp, as kiwiclient: a real Kiwi takes no more. Ten
+     * digits, always: an UberSDR's Kiwi input takes the old path's only so. */
+    const uint32_t ts = 1000000000u + esp_random() % 3000000000u;
     char req[320];
     int n = snprintf(req, sizeof req,
         "GET %s%lu/SND HTTP/1.1\r\nHost: %s:%u\r\nUpgrade: websocket\r\n"
@@ -456,8 +467,9 @@ static int resample(dsp_t *d, const int16_t *x, int n, int16_t *out)
 
 /* ---------------------------------------------------------------- tuning */
 
-/* The radio's mode as the Kiwi names it, and a passband that makes sense. */
-static const char *kiwi_mode(const char *m, int32_t *lo, int32_t *hi)
+/* The radio's mode as the Kiwi names it, and a passband that makes sense: in
+ * CW, the radio's width centred where the receiver centres CW (`cw`, Hz). */
+static const char *kiwi_mode(const char *m, int32_t cw, int32_t *lo, int32_t *hi)
 {
     const char *k = "usb";
     if (!strcasecmp(m, "lsb") || !strcasecmp(m, "digl")) k = "lsb";
@@ -470,11 +482,10 @@ static const char *kiwi_mode(const char *m, int32_t *lo, int32_t *hi)
     int32_t l = *lo, h = *hi;
     if (!strcmp(k, "lsb") && l > 0) { const int32_t t = l; l = -h; h = -t; }
     if (!strcmp(k, "cw")) {
-        /* the Kiwi's CW is centred on a 500 Hz tone */
         int32_t w = h - l;
         if (w <= 0 || w > 3000) w = 500;
-        l = 500 - w / 2;
-        h = 500 + w / 2;
+        l = cw - w / 2;
+        h = cw + w / 2;
     }
     if (l >= h) {
         if (!strcmp(k, "lsb"))       { l = -2700; h = -300; }
@@ -487,7 +498,10 @@ static const char *kiwi_mode(const char *m, int32_t *lo, int32_t *hi)
     return k;
 }
 
-static bool send_tune(int fd, uint32_t *gen)
+/* The tune, the radio's: in CW the carrier, `cw` below the radio's frequency
+ * -- which is the signal's, heard at the tone -- as the Kiwi's own page
+ * tunes (freq_dsp_to_car). */
+static bool send_tune(int fd, int32_t cw, uint32_t *gen)
 {
     int64_t hz;
     char mode[8];
@@ -500,11 +514,44 @@ static bool send_tune(int fd, uint32_t *gen)
     *gen = s_tune.gen;
     taskEXIT_CRITICAL(&s_lock);
     if (hz <= 0) return true;
-    const char *k = kiwi_mode(mode, &lo, &hi);
+    const char *k = kiwi_mode(mode, cw, &lo, &hi);
+    const int64_t car = strcmp(k, "cw") ? hz : hz - cw;
     char cmd[112];
     snprintf(cmd, sizeof cmd, "SET mod=%s low_cut=%ld high_cut=%ld freq=%.3f",
-             k, (long)lo, (long)hi, (double)hz / 1000.0);
+             k, (long)lo, (long)hi, (double)car / 1000.0);
     return ws_text(fd, cmd);
+}
+
+/* Where the receiver centres its CW passband, from its configuration --
+ * load_cfg=, JSON URL-encoded, "passbands":{.."cw":{"lo":300,"hi":700}..} --
+ * or `dflt` where it says nothing of it. */
+static int hexv(int c) { return c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10; }
+
+static int32_t cw_centre(const uint8_t *s, size_t n, int32_t dflt)
+{
+    static const char key[] = "\"cw\":{";
+    char obj[48];
+    size_t k = 0, o = 0;                 /* the key matched so far; the object's text */
+    for (size_t i = 0; i < n;) {
+        int c = s[i++];
+        if (c == '%' && i + 1 < n && isxdigit(s[i]) && isxdigit(s[i + 1])) {
+            c = hexv(s[i]) << 4 | hexv(s[i + 1]);
+            i += 2;
+        }
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (k < sizeof key - 1) {
+            k = c == key[k] ? k + 1 : c == key[0] ? 1 : 0;
+            continue;
+        }
+        if (c == '}' || o + 1 >= sizeof obj) break;
+        obj[o++] = (char)c;
+    }
+    if (k < sizeof key - 1) return dflt;
+    obj[o] = 0;
+    const char *l = strstr(obj, "\"lo\":"), *h = strstr(obj, "\"hi\":");
+    if (!l || !h) return dflt;
+    const long lo = strtol(l + 5, NULL, 10), hi = strtol(h + 5, NULL, 10), c = (lo + hi) / 2;
+    return lo < hi && c >= -1000 && c <= 1500 ? (int32_t)c : dflt;
 }
 
 /* ---------------------------------------------------------------- session */
@@ -557,6 +604,8 @@ static int session(int idx, const sdr_cfg_t *c, bool new_path)
     dsp_t d = { .step = 0.5f };
     int rx_chans = 0;
     bool in = false, streaming = false;
+    bool retune = false;                    /* the tune to go again, as it is */
+    int32_t cw = 500;                       /* where it centres CW: a KiwiSDR's, until it says */
     size_t have = 0, skip = 0;
     uint32_t tgen = 0;
     int64_t t_open = esp_timer_get_time(), t_rx = t_open, t_ka = 0, t_tuned = 0;
@@ -569,8 +618,9 @@ static int session(int idx, const sdr_cfg_t *c, bool new_path)
         if (!in && now - t_open > ANSWER_MS * 1000LL) { end = END_NO_ANSWER; break; }
         if (now - t_rx > QUIET_MS * 1000LL) { set_state(idx, "went quiet", NULL); break; }
         if (in && now - t_ka > 1000000) { ws_text(fd, "SET keepalive"); t_ka = now; }
-        if (in && s_tune.gen != tgen && now - t_tuned > 100000) {
-            send_tune(fd, &tgen);
+        if (in && (s_tune.gen != tgen || retune) && now - t_tuned > 100000) {
+            send_tune(fd, cw, &tgen);
+            retune = false;
             t_tuned = now;
         }
 
@@ -620,6 +670,16 @@ static int session(int idx, const sdr_cfg_t *c, bool new_path)
             if (op == 0x9) ws_pong(fd, p, len);
             if ((op == 0x1 || op == 0x2) && len >= 3) {
                 if (!memcmp(p, "MSG", 3) && len > 4) {
+                    /* Its configuration, longer than msg[]: where it centres
+                     * CW, and the tune again if that is not where it went. */
+                    if (len > 13 && !memcmp(p + 4, "load_cfg=", 9)) {
+                        const int32_t ctr = cw_centre(p + 13, len - 13, cw);
+                        if (ctr != cw) {
+                            ESP_LOGI(TAG, "%s centres CW on %ld Hz", c->host, (long)ctr);
+                            cw = ctr;
+                            retune = true;
+                        }
+                    }
                     char msg[384], v[48];
                     const size_t ml = len - 4 < sizeof msg - 1 ? len - 4 : sizeof msg - 1;
                     memcpy(msg, p + 4, ml);
@@ -637,7 +697,7 @@ static int session(int idx, const sdr_cfg_t *c, bool new_path)
                         ws_text(fd, "SET ident_user=VFO-Knob");
                         ws_text(fd, "SET compression=1");
                         ws_text(fd, "SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=50");
-                        send_tune(fd, &tgen);
+                        send_tune(fd, cw, &tgen);
                         t_tuned = now;
                         set_state(idx, "logged in", NULL);
                         s_path[idx] = new_path ? 1 : 2;
@@ -707,6 +767,9 @@ static int session(int idx, const sdr_cfg_t *c, bool new_path)
                             ESP_LOGI(TAG, "streaming from %s:%u (%s path), %.0f Hz",
                                      c->host, (unsigned)c->port, new_path ? "new" : "old",
                                      (double)(d.step * AUDIO_RATE_HZ));
+                            /* The passband, again: an UberSDR's Kiwi input
+                             * opened its channel with its own. */
+                            retune = true;
                         }
                         audio_out_feed_sdr(s_out, (size_t)o);
                     }

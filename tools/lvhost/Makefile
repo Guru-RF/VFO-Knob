@@ -5,9 +5,27 @@
 # components/ui/vu_band.c, plus partial-against-full redraw checks.
 #   make chooser-check OUT=dir     (writes dir/chooser-*.ppm and .png, the
 #                                   250 px panel's as before-*, and fit.tsv)
+#   make slab-check OUT=dir        (components/ui/ui.c itself, built for the
+#                                   FlexRadio's face and the Icoms', its touch
+#                                   driven: the slab's tap, its hold for the
+#                                   antennas; and for every face, the reflector's,
+#                                   the telephone's, the receiver's, AetherSDR's
+#                                   and the Xiegus' too, a Bluetooth device's
+#                                   battery beside its logo; on the receiver's,
+#                                   a guest's time left at the slab's left end;
+#                                   on all of them and the setup firmware's, the
+#                                   knob's own battery at the top of the arc;
+#                                   pictures in dir)
 # chooser: the editor panel as ui.c builds it, every value through
 # components/ui/fit_text.c, on the round glass -- the fonts it took, the
 # widths, the dots, the panel's margin to the glass's edge.
+#   make readout-check OUT=dir     (writes dir/readout-*.png: the face in
+#                                   Montserrat 48 left, in Hack 46 right, and
+#                                   -zoom.png, the readout's rows enlarged)
+# readout: the frequency readout as ui.c places it, in Montserrat 48 as it was
+# and in components/ui/font_hack_46.c, between its neighbours on the glass --
+# its ink, the gaps, the clearances, every place rolled through 0-9, and each
+# layout's envelope: every value in every place at once (readout-env-*).
 ROOT := ../..
 LVGL := $(ROOT)/managed_components/lvgl__lvgl
 UI   := $(ROOT)/components/ui
@@ -22,7 +40,8 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 # Warnings on for the code under test; LVGL's headers are LVGL's.
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
-all: vu_compare chooser
+SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup
+all: vu_compare chooser readout $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -45,6 +64,48 @@ chooser-check: chooser
 	for f in $(OUT)/chooser-*.ppm $(OUT)/before-*.ppm; do \
 	    [ -e "$$f" ] && magick "$$f" "$${f%.ppm}.png"; \
 	done; exit $$s
+# The firmware's own fonts beside LVGL's: the readout's, and the microphone's
+# on the row under it.
+UI_FONTS := obj/font_hack_46.o obj/font_mic_14.o
+obj/font_%.o: $(UI)/font_%.c lv_conf.h
+	@mkdir -p obj
+	@$(CC) $(CFLAGS) $(FONTS) -c $< -o $@
+readout: readout.c $(UI_FONTS) $(FONT_OBJS) $(OBJS)
+	$(CC) $(WFLAGS) readout.c $(UI_FONTS) $(FONT_OBJS) $(OBJS) -lm -o $@
+readout-check: readout
+	mkdir -p $(OUT)
+	./readout $(OUT); s=$$?; \
+	for f in $(OUT)/readout-*-old.ppm; do \
+	    n=$${f%-old.ppm}; \
+	    magick "$$f" "$$n-new.ppm" +append "$$n.png"; \
+	    magick "$$f" "$$n-new.ppm" -crop 360x120+0+108 +repage -append \
+	        -filter point -resize 300% "$$n-zoom.png"; \
+	done; exit $$s
+# slab: ui.c on the host, its ESP-IDF names from stub/ -- the display, the
+# touch and the lock the harness's (slab.c) -- once per face.
+UI_SRCS := $(UI)/ui.c $(UI)/fit_text.c $(UI)/vu_band.c $(UI)/font_mic_14.c $(UI)/font_btmic_28.c $(UI)/font_hack_46.c \
+           $(UI)/font_svx_icons_24.c
+SLAB_FLAGS := -O1 -g -DLV_CONF_INCLUDE_SIMPLE -Istub -I. -isystem $(LVGL) -I$(UI) -I$(UI)/include \
+              -I$(ROOT)/components/net_prov/include $(FONTS) -Wall -Wextra -Wno-unused-parameter
+slab_flex: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_MULTIFLEX=1 -DVFO_HAS_SDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_icom: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_ICOM=1 -DVFO_HAS_SDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_svx: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_SVXCONNECT=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_phone: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_PHONE=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_uber: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_UBERSDR=1 -DVFO_HAS_SDR=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_aether: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_AETHERSDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_xiegu: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_XIEGU=1 -DVFO_HAS_SDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_setup: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_SETUP=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab-check: $(SLABS)
+	mkdir -p $(OUT)
+	for s in $(SLABS); do ./$$s $(OUT) || exit 1; done
 clean:
-	rm -rf obj vu_compare chooser *.ppm *.png fit.tsv
-.PHONY: all clean chooser-check
+	rm -rf obj vu_compare chooser readout $(SLABS) *.ppm *.png fit.tsv
+.PHONY: all clean chooser-check readout-check slab-check

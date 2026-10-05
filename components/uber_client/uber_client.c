@@ -6,6 +6,7 @@
  *   POST /connection             {"user_session_id":<uuid>,"password":<pw>}
  *   wss  /ws?frequency=..&mode=..&bandwidthLow=..&bandwidthHigh=..
  *            &format=opus&version=4&user_session_id=<uuid>[&password=..]
+ *            (ws, in the clear, to a receiver on the LAN)
  *   <-   binary: an Opus packet of 20 ms behind a small header -- flags, a
  *        time stamp, on a resync the rate, and the signal and noise power
  *   ->   {"type":"tune",...} {"type":"set_dsp",...} {"type":"ping"}
@@ -52,6 +53,8 @@ static const char *TAG = "uber";
 #define PING_GAP_MS    10000      /* activity pings, at most this often */
 #define WS_RX_BYTES    (16 * 1024)
 #define PCM_MAX        2880       /* 120 ms at 24 kHz: Opus's longest */
+#define IDLE_WARN_S    60         /* an idle limit's last minute: on the face */
+#define OVERRUN_S      60         /* listening this long past the count: it was not the receiver's */
 
 /* Its modes, and the passband each opens with: UberSDR's own. */
 static const struct { const char *m; int16_t lo, hi; } MODES[] = {
@@ -94,6 +97,15 @@ static struct {
     uint32_t choices_seq;
     char     uuid[37];
     uint32_t uuid_gen;
+    /* The session's limits, as the receiver counts them (uber_time_left):
+     * when its first socket opened, our last word to it, the day's
+     * allowance -- its end while a socket is open, else what is left.
+     * Each registration says the day's before a socket can open. */
+    int64_t  t_first, t_said, day_end;
+    int32_t  day_left;            /* -1: none */
+    int32_t  idle_s;              /* an idle limit that can end it first; 0 none */
+    bool     overrun;             /* it outlived the count: the count is not shown */
+    char     ended;               /* the socket closed on 0:00, whose: it stays there */
     int64_t  srv_ns, srv_at;      /* the receiver's clock, and when we read it */
     uint32_t connects, closes, frames, dropped, texts;
     char     last_close[48];
@@ -291,6 +303,10 @@ static void new_uuid(void)
     taskENTER_CRITICAL(&S_LOCK);
     strlcpy(S.uuid, u, sizeof S.uuid);
     S.uuid_gen++;
+    /* A new session, to the receiver: its time counts from its first socket. */
+    S.t_first = 0;
+    S.overrun = false;
+    S.ended = 0;
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
@@ -323,6 +339,71 @@ void uber_dial(int64_t *hz, char *mode, size_t cap)
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
+/* ------------------------------------------------------------ time left */
+
+/* How UberSDR ends a guest's session (ka9q_ubersdr 0.1.66: session.go,
+ * main.go, ip_daily_time.go), and so how it is counted here:
+ *  - max_session_time runs from the moment the receiver first saw the
+ *    session's UUID on a socket, by the clock: a reconnect under the same
+ *    UUID, the dial, a ping -- nothing moves it. Checked every second; then
+ *    the UUID is shut out for an hour (TIME UP), and only a new one, LISTEN
+ *    AGAIN's, counts afresh. The receiver says the limit, never the time
+ *    used.
+ *  - max_daily_time_per_ip, where its owner set one: an address's time in
+ *    the last 24 hours, counted while one of its sockets is open, checked
+ *    every 30 s. /connection says what is left of it.
+ *  - session_timeout: a socket that has said nothing for so long. Every
+ *    message counts, a ping too, and the knob pings only while someone uses
+ *    it (uber_activity). /connection says it -- or, where there is none,
+ *    the session's limit in its place, which can never end a session first.
+ * A private address and the password are let past all three. */
+
+/* The time left in us, and whose (S_LOCK held): INT64_MAX where no limit
+ * applies; below zero once the count has run out. */
+static int64_t left_us(int64_t now, char *why)
+{
+    int64_t l = INT64_MAX;
+    *why = 0;
+    if (S.time_up || S.overrun || !S.t_first) return l;
+    /* Run out as the socket closed: 0:00 until the receiver says TIME UP,
+     * or another socket opens after all. */
+    if (S.ended) {
+        *why = S.ended;
+        return 0;
+    }
+    if (I.max_session_s > 0) {
+        l = S.t_first + I.max_session_s * 1000000LL - now;
+        *why = 'S';
+    }
+    const int64_t d = S.day_end ? S.day_end - now : S.day_left >= 0 ? S.day_left * 1000000LL : INT64_MAX;
+    if (d < l) {
+        l = d;
+        *why = 'D';
+    }
+    /* The idle limit only in its last minute: a touch gives it back. */
+    if (S.idle_s && S.link == RADIO_LINK_READY) {
+        const int64_t i = S.t_said + S.idle_s * 1000000LL - now;
+        if (i < l && i < IDLE_WARN_S * 1000000LL) {
+            l = i;
+            *why = 'I';
+        }
+    }
+    return l;
+}
+
+int uber_time_left(char *why)
+{
+    const int64_t now = esp_timer_get_time();
+    char k;
+    taskENTER_CRITICAL(&S_LOCK);
+    const int64_t l = left_us(now, &k);
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (why) *why = k;
+    if (l == INT64_MAX) return -1;
+    /* Whole seconds, rounded up as UberSDR's page counts them: 0:00 is the end. */
+    return l > 0 ? (int)((l + 999999) / 1000000) : 0;
+}
+
 /* What a refusal means for the next try. */
 enum { R_OK = 0, R_RETRY, R_WAIT, R_REREGISTER, R_NEW_UUID, R_TIME_UP, R_STOP };
 
@@ -332,10 +413,11 @@ static int classify(int status, const char *text, char *why, size_t wn)
     size_t i = 0;
     for (; text && text[i] && i + 1 < sizeof t; i++) t[i] = (char)tolower((unsigned char)text[i]);
     t[i] = 0;
-    if (strstr(t, "banned") || strstr(t, "access denied") || status == 401 || status == 403)
-                                             { snprintf(why, wn, "REFUSED");       return R_STOP; }
+    /* The password's two answers come with a 403 too: theirs before it. */
     if (strstr(t, "requires a password"))    { snprintf(why, wn, "PASSWORD?");     return R_STOP; }
     if (strstr(t, "invalid bypass password")){ snprintf(why, wn, "WRONG PASSWORD"); return R_STOP; }
+    if (strstr(t, "banned") || strstr(t, "access denied") || status == 401 || status == 403)
+                                             { snprintf(why, wn, "REFUSED");       return R_STOP; }
     if (status == 410 || strstr(t, "terminated")) { snprintf(why, wn, "TIME UP"); return R_TIME_UP; }
     if (strstr(t, "invalid session"))        { snprintf(why, wn, "NO LINK");       return R_REREGISTER; }
     if (strstr(t, "user_session_id") || strstr(t, "no active audio session"))
@@ -377,13 +459,25 @@ static int register_session(char *why, size_t wn)
     const char *e = ans + n;
     if (st == 200 && jo_bool(ans, e, "allowed")) {
         const bool byp = jo_bool(ans, e, "bypassed");
-        const int  mst = (int)jo_num(ans, e, "max_session_time", 0);
+        const int  mst = byp ? 0 : (int)jo_num(ans, e, "max_session_time", 0);
+        /* An idle limit only where it can end a session before its limit
+         * does: where there is none, UberSDR says the session's limit. */
+        int idle = byp ? 0 : (int)jo_num(ans, e, "session_timeout", 0);
+        if (idle < 0 || (mst && idle >= mst)) idle = 0;
+        const int day = byp ? -1 : (int)jo_num(ans, e, "daily_time_remaining_secs", -1);
         taskENTER_CRITICAL(&S_LOCK);
         I.bypassed = byp;
-        I.max_session_s = byp ? 0 : mst;
+        I.max_session_s = mst;
+        S.idle_s   = idle;
+        S.day_left = day >= 0 ? day : -1;
         taskEXIT_CRITICAL(&S_LOCK);
-        ESP_LOGI(TAG, "session %.8s registered%s%s", uuid, byp ? ", bypassed" : "",
-                 !byp && mst ? " (time-limited)" : "");
+        char lim[96] = "";
+        size_t o = 0;
+        if (mst)      o += snprintf(lim + o, sizeof lim - o, ", %d s a session", mst);
+        if (idle)     o += snprintf(lim + o, sizeof lim - o, ", idle after %d s", idle);
+        if (day >= 0) snprintf(lim + o, sizeof lim - o, ", %d s left today", day);
+        ESP_LOGI(TAG, "session %.8s registered%s%s", uuid, byp ? ", bypassed" : lim[0] ? " -- a guest" : "",
+                 lim);
         return R_OK;
     }
     char reason[96] = "";
@@ -540,6 +634,17 @@ static void on_text(const char *j, size_t n, char *close_why, size_t cwn)
     }
 }
 
+/* A message to the receiver on the audio socket: any of them is the
+ * activity its idle limit counts. */
+static bool say(const char *msg)
+{
+    const int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&S_LOCK);
+    S.t_said = now;
+    taskEXIT_CRITICAL(&S_LOCK);
+    return uws_text(&s_ws, msg);
+}
+
 static bool send_tune(const char *why_log)
 {
     int64_t f;
@@ -559,7 +664,7 @@ static bool send_tune(const char *why_log)
              "\"bandwidthHigh\":%ld}", (long long)f, m, (long)lo, (long)hi);
     ESP_LOGD(TAG, "%s: %s", why_log, msg);
     s_tunes_out++;
-    return uws_text(&s_ws, msg);
+    return say(msg);
 }
 
 static bool send_dsp(int8_t want)
@@ -571,11 +676,40 @@ static bool send_dsp(int8_t want)
     else
         snprintf(msg, sizeof msg, "{\"type\":\"set_dsp\",\"enabled\":false}");
     ESP_LOGI(TAG, "noise filter -> %s", want > 0 ? s_nr[want - 1] : "off");
-    return uws_text(&s_ws, msg);
+    return say(msg);
 }
 
 
 void uber_activity(void) { S.activity = true; }
+
+/* The time left as counted here, once a second while streaming: an idle
+ * limit's last minute said as it begins and ends. A session listened to a
+ * minute past its count -- the receiver's clock not ours after all (it was
+ * restarted, say) -- is counted no more: no time shown, rather than a
+ * wrong one. */
+static void count_check(bool *idle_said)
+{
+    const int64_t now = esp_timer_get_time();
+    char k;
+    taskENTER_CRITICAL(&S_LOCK);
+    const int64_t l = left_us(now, &k);
+    const bool over = l != INT64_MAX && l < -OVERRUN_S * 1000000LL;
+    if (over && k == 'I') S.idle_s = 0;
+    else if (over)        S.overrun = true;
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (over) {
+        if (k == 'I') *idle_said = false;
+        ESP_LOGW(TAG, "still listening %d s past the %s limit as counted here: counted no more",
+                 (int)(-l / 1000000), k == 'I' ? "idle" : k == 'D' ? "day's" : "session's");
+        return;
+    }
+    if ((k == 'I') != *idle_said) {
+        *idle_said = k == 'I';
+        if (*idle_said) ESP_LOGI(TAG, "idle: the receiver ends the session in %d s, unless the knob is used",
+                                 (int)((l + 999999) / 1000000));
+        else            ESP_LOGI(TAG, "the knob used: idle no more");
+    }
+}
 
 /* One session on the audio socket, until it ends: why, as the refusal
  * classes have it. */
@@ -618,20 +752,31 @@ static int stream(char *why, size_t wn)
         return classify(atoi(w), w, why, wn);
     }
     ESP_LOGI(TAG, "audio socket open: %lld Hz %s %ld..%ld", (long long)f, m, (long)lo, (long)hi);
-    uws_text(&s_ws, "{\"type\":\"get_status\"}");
+    /* The receiver's clocks: the session's from its first socket on, the
+     * day's while one is open, the idle one from each word we send. */
+    const int64_t t_open = esp_timer_get_time();
+    taskENTER_CRITICAL(&S_LOCK);
+    const bool first = !S.t_first;
+    if (first) S.t_first = t_open;
+    S.day_end = S.day_left >= 0 ? t_open + S.day_left * 1000000LL : 0;
+    S.ended = 0;
+    const int mst = I.max_session_s;
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (first && mst) ESP_LOGI(TAG, "a guest's session: %d s from now", mst);
+    say("{\"type\":\"get_status\"}");
     set_link(RADIO_LINK_GREETING, NULL);
     S.connects++;
     s_tunes_out = 0;
 
     v4_t h = { .power = -32768, .noise = -32768 };
-    uint32_t sent_gen, t_tuned = 0, t_dsp = 0, t_ping = now_ms(), t_audio = now_ms();
+    uint32_t sent_gen, t_tuned = 0, t_dsp = 0, t_ping = now_ms(), t_audio = now_ms(), t_count = 0;
     taskENTER_CRITICAL(&S_LOCK);
     sent_gen = S.gen;
     S.nr_on = 0;
     taskEXIT_CRITICAL(&S_LOCK);
     s_nr_sent = 0;
     int nr_rate = 0;
-    bool streaming = false;
+    bool streaming = false, idle_said = false;
     char close_why[96] = "";
     int end = R_RETRY;
     audio_out_flush();
@@ -701,11 +846,27 @@ static int stream(char *why, size_t wn)
         if (S.activity && t - t_ping >= PING_GAP_MS) {
             S.activity = false;
             t_ping = t;
-            uws_text(&s_ws, "{\"type\":\"ping\"}");
+            say("{\"type\":\"ping\"}");
+        }
+        /* The time left, once a second, for the log. */
+        if (streaming && t - t_count >= 1000) {
+            t_count = t;
+            count_check(&idle_said);
         }
     }
     uws_close(&s_ws);
     S.closes++;
+    /* A count run out stays at 0:00 (left_us). The day's clock stops with
+     * the socket: what is left of it, until /connection says again. */
+    const int64_t t_close = esp_timer_get_time();
+    char k;
+    taskENTER_CRITICAL(&S_LOCK);
+    if (left_us(t_close, &k) <= 0) S.ended = k;
+    if (S.day_end) {
+        S.day_left = S.day_end > t_close ? (int32_t)((S.day_end - t_close) / 1000000) : 0;
+        S.day_end = 0;
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
     set_link(RADIO_LINK_DOWN, why);
     return end;
 }
@@ -724,6 +885,11 @@ static void session_task(void *arg)
     }
     new_uuid();
     uber_aux_start();
+    /* After a socket closed on 0:00, one quick try -- another only after a
+     * new session, or one that ran a while: a receiver that lets the
+     * session go on (restarted, its clock not ours) while its socket fails
+     * gets the backoff, as anything else, not a try every moment. */
+    bool quick = true;
     for (;;) {
         set_link(RADIO_LINK_CONNECTING, NULL);
         if (!I.known) {
@@ -743,11 +909,18 @@ static void session_task(void *arg)
             taskEXIT_CRITICAL(&S_LOCK);
         }
         int r = register_session(why, sizeof why);
+        bool spent = false;
         if (r == R_OK) {
             const int64_t t0 = esp_timer_get_time();
             r = stream(why, sizeof why);
-            /* A session that ran a while earns a quick return. */
-            if (esp_timer_get_time() - t0 > 30 * 1000000LL) backoff = 2000;
+            /* A session that ran a while earns a quick return; one closed
+             * on 0:00, at once -- the receiver ended it, most likely, and
+             * says so: TIME UP. */
+            if (esp_timer_get_time() - t0 > 30 * 1000000LL) {
+                backoff = 2000;
+                quick = true;
+            }
+            spent = r == R_RETRY && uber_time_left(NULL) == 0;
         } else {
             set_link(RADIO_LINK_DOWN, why);
         }
@@ -762,14 +935,16 @@ static void session_task(void *arg)
             S.choices_seq++;
             taskEXIT_CRITICAL(&S_LOCK);
             while (!S.relisten) vTaskDelay(pdMS_TO_TICKS(200));
+            new_uuid();
             taskENTER_CRITICAL(&S_LOCK);
             S.time_up = false;
             taskEXIT_CRITICAL(&S_LOCK);
-            new_uuid();
             backoff = 2000;
+            quick = true;
             continue;
         case R_NEW_UUID:
             new_uuid();
+            quick = true;
             break;
         case R_REREGISTER:
             break;
@@ -783,6 +958,11 @@ static void session_task(void *arg)
             continue;
         default:
             break;
+        }
+        if (spent && quick) {
+            quick = false;
+            ESP_LOGI(TAG, "closed on 0:00: again at once");
+            continue;
         }
         ESP_LOGI(TAG, "again in %lu s", (unsigned long)(backoff / 1000));
         vTaskDelay(pdMS_TO_TICKS(backoff));
@@ -798,16 +978,22 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
 {
     (void)user;
     if (!host || !host[0]) return ESP_ERR_INVALID_ARG;
-    /* https://name/ as pasted, or name, or name:port. */
+    /* As the configuration page keeps it: https://name, through the tunnel,
+     * over TLS; http://host, a receiver on the LAN, in the clear -- whatever
+     * the port. A name alone, as knobs kept it before: TLS on 443, in the
+     * clear on any other. The port the address has, else the one given,
+     * else its scheme's. */
     const char *h = strstr(host, "://");
-    const bool https = h && !strncasecmp(host, "https", 5);
+    const bool scheme = h != NULL;
+    const bool tls    = scheme && (!strncasecmp(host, "https", 5) || !strncasecmp(host, "wss", 3));
     h = h ? h + 3 : host;
     const size_t hl = strcspn(h, ":/ ");
     if (!hl || hl >= sizeof g_uh.host) return ESP_ERR_INVALID_ARG;
     memcpy(g_uh.host, h, hl);
     g_uh.host[hl] = 0;
-    g_uh.port = h[hl] == ':' ? (uint16_t)atoi(h + hl + 1) : port ? port : (https ? 443 : 80);
-    g_uh.tls  = g_uh.port == 443 || https;
+    g_uh.port = h[hl] == ':' ? (uint16_t)atoi(h + hl + 1) : 0;
+    if (!g_uh.port) g_uh.port = port ? port : scheme && !tls ? 80 : 443;
+    g_uh.tls  = scheme ? tls : g_uh.port == 443;
     strlcpy(s_pass, pass ? pass : "", sizeof s_pass);
     load();
     const esp_timer_create_args_t ta = { .callback = save_cb, .name = "ubsave" };

@@ -15,7 +15,7 @@ the scale the firmware draws as bare ticks, and the dimensions -- in a neutral
 grey that reads on light and dark pages alike. Nothing is added to the glass
 that the device does not show.
 """
-import math, os
+import functools, math, os, re
 
 CX = CY = 180
 ARC_R0, ARC_ROT, ARC_SPAN = 170, 170, 200
@@ -32,9 +32,18 @@ ACCENT, ACCENT_HI = "#00B4D8", "#00C8F0"
 TEXT, TEXT2, LABEL, SUBTLE = "#C8D8E8", "#8EA8C0", "#506070", "#1A2330"
 WARN, DANGER, TX_RED, TX_TEXT = "#FFB84D", "#FF4D4D", "#E01010", "#F0C890"
 GREEN, DISABLED = "#4DD87A", "#3A4A5A"
+# A Bluetooth device's battery (ui.c C_BATT_OK): the face's green -- but the
+# Icoms' "green" is their meters' blue, so theirs is AetherSDR's.
+BATT_OK = GREEN
 RFG_GOLD = "#E9B61D"           # splash.h RFG_GOLD_HEX, the logo's gold
 PWR = RFG_GOLD                 # the power bar wears it
 FONT = "DejaVu Sans,Verdana,sans-serif"
+# The frequency readout's own face: Hack (components/ui/font_hack_46.c),
+# named first. Few viewers have it, so then its nearest kin -- DejaVu Sans
+# Mono (Linux) and Menlo (Apple) grew from Bitstream Vera Sans Mono, as Hack
+# did -- and Consolas (Windows), before whatever monospace face the browser
+# falls back on, which can be a typewriter's Courier.
+READOUT_FONT = "Hack,DejaVu Sans Mono,Menlo,Consolas,monospace"
 
 RXZONES = [(-127, -121, "#1A6B47"), (-121, -109, "#1F7A52"),
            (-109,  -97, "#2F9E6A"), (-97,   -85, "#4DD87A"),
@@ -53,13 +62,13 @@ MICZONES = [(-40, -10, "#4DD87A"), (-10, 0, "#FFB84D"), (0, 10, "#FF4D4D")]
 PALETTES = {
     "aethersdr": dict(BG=BG, BG1=BG1, BG_TX=BG_TX, ACCENT=ACCENT, ACCENT_HI=ACCENT_HI,
                       TEXT=TEXT, TEXT2=TEXT2, LABEL=LABEL, SUBTLE=SUBTLE, WARN=WARN,
-                      DANGER=DANGER, TX_RED=TX_RED, TX_TEXT=TX_TEXT, GREEN=GREEN,
+                      DANGER=DANGER, TX_RED=TX_RED, TX_TEXT=TX_TEXT, GREEN=GREEN, BATT_OK=GREEN,
                       DISABLED=DISABLED, PWR=PWR, RXZONES=RXZONES,
                       SWRZONES=SWRZONES, MICZONES=MICZONES),
     "icom": dict(BG="#000000", BG1="#141A24", BG_TX="#2A0508", ACCENT="#2F7BFF",
                  ACCENT_HI="#5A9BFF", TEXT="#FFFFFF", TEXT2="#C0C8D4",
                  LABEL="#707884", SUBTLE="#181C24", WARN="#FFB000", DANGER="#FF3030",
-                 TX_RED="#E60012", TX_TEXT="#FFFFFF", GREEN="#3FA9FF",
+                 TX_RED="#E60012", TX_TEXT="#FFFFFF", GREEN="#3FA9FF", BATT_OK="#4DD87A",
                  DISABLED="#3A4048", PWR="#3FA9FF",
                  RXZONES=[(-127, -121, "#0D3B8C"), (-121, -109, "#1350B0"),
                           (-109,  -97, "#1A68D4"), (-97,   -85, "#2A86F2"),
@@ -76,7 +85,7 @@ PALETTES = {
                        ACCENT_HI="#ECC34A", TEXT="#FFFFFF", TEXT2="#E2E8F0",
                        LABEL="#94A3B8", SUBTLE="#1B1F29", WARN="#D29922",
                        DANGER="#D13B3B", TX_RED="#D13B3B", TX_TEXT="#FFFFFF",
-                       GREEN="#2EA043", DISABLED="#475569", PWR="#E5A823",
+                       GREEN="#2EA043", BATT_OK="#2EA043", DISABLED="#475569", PWR="#E5A823",
                        RXZONES=[(-60, -48, "#1B5E2E"), (-48, -36, "#237A3B"),
                                 (-36, -24, "#2EA043"), (-24, -18, "#35B35A"),
                                 (-18, -12, "#9DBD3B"), (-12,  -6, "#D8C43A"),
@@ -92,7 +101,7 @@ PALETTES = {
                       ACCENT_HI="#62BBFF", TEXT="#FFFFFF", TEXT2="#C9D2DC",
                       LABEL="#7D8792", SUBTLE="#141C26", WARN="#FFB000",
                       DANGER="#F0302C", TX_RED="#E8262B", TX_TEXT="#FFFFFF",
-                      GREEN="#43B649", DISABLED="#3A424C", PWR="#43B649",
+                      GREEN="#43B649", BATT_OK="#43B649", DISABLED="#3A424C", PWR="#43B649",
                       RXZONES=[(-127, -121, "#0A3563"), (-121, -109, "#0F4C8A"),
                                (-109,  -97, "#1666B3"), (-97,   -85, "#1F82D9"),
                                (-85,   -73, "#2A9DF4"), (-73,   -53, "#F26A6A"),
@@ -108,7 +117,7 @@ PALETTES = {
                     ACCENT_HI="#4DB4FF", TEXT="#DFE5EE", TEXT2="#8D99AD",
                     LABEL="#5C6779", SUBTLE="#1A2130", WARN="#F2B544",
                     DANGER="#F2646A", TX_RED="#F2646A", TX_TEXT="#FFFFFF",
-                    GREEN="#45D69A", DISABLED="#2F3B4E", PWR="#08A2FB",
+                    GREEN="#45D69A", BATT_OK="#45D69A", DISABLED="#2F3B4E", PWR="#08A2FB",
                     RXZONES=[(-127, -121, "#F42525"), (-121, -109, "#F48C25"),
                              (-109,  -97, "#F4F425"), (-97,   -85, "#8CF425"),
                              (-85,   -73, "#25F425"), (-73,   -53, "#25F425"),
@@ -196,9 +205,95 @@ def tick(deg, length, colour, width=2):
             f'stroke="{colour}" stroke-width="{width}" stroke-linecap="round"/>')
 
 
-def text(x, y, s, size, colour, weight=400, anchor="middle", extra="", inner=""):
+# --- the firmware's fonts ----------------------------------------------------
+
+def number(s):
+    """A C literal from a font file: decimal, or hex."""
+    return int(s, 16) if s.lstrip("-").startswith("0x") else int(s)
+
+
+class LvglFont:
+    """An LVGL font as lv_font_conv writes it (a .c file) -- LVGL's own
+    Montserrat, or one of components/ui/'s: each glyph's advance and the
+    kerning between two, summed the way lv_text_get_width() sums them -- so
+    a width here is the knob's, to the pixel."""
+
+    def __init__(self, path):
+        with open(path) as f:
+            src = f.read()
+
+        def array(name):
+            body = re.search(r"\b" + name + r"\[\] = \{(.*?)\};", src, re.S).group(1)
+            return [number(v) for v in re.findall(r"-?(?:0x[0-9a-fA-F]+|\d+)", body)]
+
+        def field(name):
+            return int(re.search(r"\." + name + r"\s*=\s*(-?\d+)", src).group(1))
+
+        self.size = int(re.search(r"Size: (\d+) px", src).group(1))
+        self.adv = [int(a) for a in re.findall(r"\.adv_w = (\d+)", src)]   # by glyph id, 1/16 px
+        self.cmaps = []
+        for m in re.finditer(r"\.range_start = (\d+), \.range_length = (\d+), \.glyph_id_start = (\d+),"
+                             r"\s*\.unicode_list = (\w+), \.glyph_id_ofs_list = (\w+), "
+                             r"\.list_length = \d+, \.type = LV_FONT_FMT_TXT_CMAP_(\w+)", src):
+            start, length, gid0, codes, ofs, kind = m.groups()
+            if kind not in ("FORMAT0_TINY", "FORMAT0_FULL", "SPARSE_TINY"):
+                raise ValueError(f"{path}: a {kind} character map, not read here")
+            self.cmaps.append((int(start), int(length), int(gid0),
+                               array(codes) if codes != "NULL" else None,
+                               array(ofs) if ofs != "NULL" else None))
+        # Kerning by classes (--force-fast-kern-format), or none at all.
+        kerned = "kern_left_class_mapping" in src
+        self.left = array("kern_left_class_mapping") if kerned else None
+        self.right = array("kern_right_class_mapping") if kerned else None
+        self.pairs = array("kern_class_values") if kerned else None
+        self.right_cnt = field("right_class_cnt") if kerned else 0
+        self.kern_scale = field("kern_scale")
+        self.line_height = field("line_height")
+        self.base_line = field("base_line")
+
+    def glyph(self, ch):
+        """get_glyph_dsc_id(): the glyph of a character, 0 for none."""
+        if not ch:
+            return 0
+        for start, length, gid0, codes, ofs in self.cmaps:
+            rcp = ord(ch) - start
+            if 0 <= rcp < length:
+                if codes is not None:
+                    return gid0 + codes.index(rcp) if rcp in codes else 0
+                if ofs is not None:
+                    # A FULL map's missing character is a 0 past its first.
+                    return gid0 + ofs[rcp] if ofs[rcp] or not rcp else 0
+                return gid0 + rcp
+        return 0
+
+    def advance(self, ch, nxt=""):
+        """lv_font_get_glyph_width(): whole pixels, kerned against the next
+        character; one the font lacks is LV_USE_FONT_PLACEHOLDER's box."""
+        g = self.glyph(ch)
+        if not g:
+            return self.line_height // 2 + 2
+        k, n = 0, self.glyph(nxt)
+        if self.left and n and self.left[g] and self.right[n]:
+            k = self.pairs[(self.left[g] - 1) * self.right_cnt + self.right[n] - 1]
+        return (self.adv[g] + ((k * self.kern_scale) >> 4) + 8) >> 4
+
+    def width(self, s, after=""):
+        """lv_text_get_width(s), no letter space; `after` is what follows s
+        in a longer text, for the last letter's kerning."""
+        t = s + after
+        return sum(self.advance(c, t[i + 1:i + 2]) for i, c in enumerate(s))
+
+
+@functools.lru_cache(maxsize=None)
+def hack():
+    """The readout's font as the firmware has it: components/ui/font_hack_46.c."""
+    return LvglFont(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 "components", "ui", "font_hack_46.c"))
+
+
+def text(x, y, s, size, colour, weight=400, anchor="middle", extra="", inner="", family=None):
     return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" fill="{colour}" '
-            f'font-family="{FONT}" font-weight="{weight}" text-anchor="{anchor}"'
+            f'font-family="{family or FONT}" font-weight="{weight}" text-anchor="{anchor}"'
             f'{extra}>{s}{inner}</text>')
 
 
@@ -252,7 +347,7 @@ def stepped(x, y, labels, dur, size, colour, weight=400, colours=None):
     return "".join(out)
 
 
-def cycling_digit(x, y, size, colour, digits, dur, weight=700):
+def cycling_digit(x, y, size, colour, digits, dur, weight=700, family=None, extra=""):
     """SMIL cannot animate text content, so stack the glyphs and cross-fade."""
     n = len(digits)
     out = []
@@ -263,47 +358,72 @@ def cycling_digit(x, y, size, colour, digits, dur, weight=700):
             keys.append(f"{k / n:.4f}")
         out.append(
             f'<text x="{x}" y="{y}" font-size="{size}" fill="{colour}" '
-            f'font-family="{FONT}" font-weight="{weight}" '
-            f'text-anchor="middle" opacity="{1 if i == 0 else 0}">{d}'
+            f'font-family="{family or FONT}" font-weight="{weight}" '
+            f'text-anchor="middle" opacity="{1 if i == 0 else 0}"{extra}>{d}'
             f'<animate attributeName="opacity" dur="{dur}" repeatCount="indefinite" '
             f'calcMode="discrete" values="{";".join(vals)}" '
             f'keyTimes="{";".join(keys)}"/></text>')
     return "".join(out)
 
 
+# ui.c dig_place(): every digit a place DIG_PITCH wide -- Hack 46's advance --
+# a separator DIG_SEPW; the underline DIG_PITCH - 6 wide under the step's.
+DIG_PITCH, DIG_SEPW = 28, 12
+
+
+def dig_places(ghz=False):
+    """ui.c dig_place(): the centres of the eight digits' places (s_dig_x)
+    and of the two separators', below 1 GHz or from it (ghz)."""
+    seps = (3, 6) if ghz else (2, 5)
+    x = CX - (8 * DIG_PITCH + 2 * DIG_SEPW) // 2
+    digs, dots = [], []
+    for i in range(8):
+        digs.append(x + DIG_PITCH // 2)
+        x += DIG_PITCH
+        if i in seps:
+            dots.append(x + DIG_SEPW // 2)
+            x += DIG_SEPW
+    return digs, dots
+
+
 def readout(digits, cycle_idx=None, cycle_vals=None, dur="6s",
             colour=TEXT, sep_colour=LABEL, underline=None, after_colour=None,
             active_colour=None, ghz=False):
-    """Eight digits: three MHz with leading blanks, three kHz, two Hz.
-    PITCH 33 for the first six, 28 for the Hz pair, separators 11 wide.
-    From 1 GHz (ghz) four MHz, three kHz and the 100 Hz digit, the
-    separators one along (ui.c dig_place). Digits after the active one
-    "will roll" and are drawn in after_colour; the active one itself, when it
-    is not animated, in active_colour."""
-    PITCH, SMALL, SEPW, FS = 33, 28, 11, 44
-    n_small, seps = (1, (3, 6)) if ghz else (2, (2, 5))
-    total = (8 - n_small) * PITCH + n_small * SMALL + 2 * SEPW
-    x = CX - total / 2
-    out, xs = [], [0] * 8
-    for i in range(8):
-        w = SMALL if i >= 8 - n_small else PITCH
-        cx = x + w / 2
-        xs[i] = cx
+    """Eight digits: three MHz with leading blanks, three kHz, two Hz. From
+    1 GHz (ghz) four MHz, three kHz and the 100 Hz digit, the separators one
+    along (ui.c dig_place). In Hack as the knob draws it (font_hack_46.c):
+    each label centred on its place, its baseline where LVGL puts a label
+    centred on y 170, and drawn as wide as Hack's advance whatever monospace
+    face stands in for it. Digits after the active one "will roll" and are
+    drawn in after_colour; the active one itself, when it is not animated, in
+    active_colour."""
+    f = hack()
+    digs, dots = dig_places(ghz)
+    seps = (3, 6) if ghz else (2, 5)
+    base = 170 - f.line_height // 2 + f.line_height - f.base_line
+
+    def glyph(x, ch, c):
+        return text(x, base, ch, f.size, c, family=READOUT_FONT,
+                    extra=f' textLength="{f.width(ch)}" lengthAdjust="spacingAndGlyphs"')
+
+    out = []
+    for i, cx in enumerate(digs):
         ch = digits[i]
         if i == cycle_idx and cycle_vals:
-            out.append(cycling_digit(cx, 186, FS, ACCENT_HI, cycle_vals, dur))
+            out.append(cycling_digit(cx, base, f.size, ACCENT_HI, cycle_vals, dur, 400,
+                                     READOUT_FONT, f' textLength="{f.width("0")}" '
+                                     f'lengthAdjust="spacingAndGlyphs"'))
         elif ch != " ":
             late = after_colour and underline is not None and i > underline
             c = (active_colour if active_colour and i == underline
                  else after_colour if late else colour)
-            out.append(text(cx, 186, ch, FS, c, 700))
-        x += w
+            out.append(glyph(cx, ch, c))
         if i in seps:
-            out.append(text(x + SEPW / 2, 186, ".", FS, sep_colour))
-            x += SEPW
+            out.append(glyph(dots[seps.index(i)], ".", sep_colour))
     if underline is not None:
-        out.append(f'<rect x="{xs[underline] - (PITCH - 9) / 2:.1f}" y="196" '
-                   f'width="{PITCH - 9}" height="3" fill="{ACCENT}"/>')
+        w = DIG_PITCH - 6
+        out.append(f'<rect x="{digs[underline] - w // 2}" y="203" width="{w}" height="3" '
+                   f'rx="1" fill="{ACCENT}"/>')
     return "".join(out)
 
 
@@ -377,6 +497,94 @@ def headset_logo(colour, bg):
     return bluetooth(CX + 126, PTT_TOP + 12 + 18, colour, bg)
 
 
+# Font Awesome 5's volume-up, which LV_SYMBOL_VOLUME_MAX (U+F028) draws: its
+# outline in the font's 576 x 512 units, the baseline 448 down.
+VOLUME_UP = ("M215.03 71.05L126.06 160H24c-13.26 0-24 10.74-24 24v144c0 13.25 10.74 24 24 24h102.06"
+             "l88.97 88.95c15.03 15.03 40.97 4.47 40.97-16.97V88.02c0-21.46-25.96-31.98-40.97-16.97z"
+             "m233.32-51.08c-11.17-7.33-26.18-4.24-33.51 6.95-7.34 11.17-4.22 26.18 6.95 33.51 "
+             "66.27 43.49 105.82 116.6 105.82 195.58 0 78.98-39.55 152.09-105.82 195.58-11.17 7.32"
+             "-14.29 22.34-6.95 33.5 7.04 10.71 21.93 14.56 33.51 6.95C528.27 439.58 576 351.33 576 256"
+             "S528.27 72.43 448.35 19.97zM480 256c0-63.53-32.06-121.94-85.77-156.24-11.19-7.14-26.03"
+             "-3.82-33.12 7.46s-3.78 26.21 7.41 33.36C408.27 165.97 432 209.11 432 256s-23.73 90.03"
+             "-63.48 115.42c-11.19 7.14-14.5 22.07-7.41 33.36 6.51 10.36 21.12 15.14 33.12 7.46"
+             "C447.94 377.94 480 319.54 480 256zm-141.77-76.87c-11.58-6.33-26.19-2.16-32.61 9.45"
+             "-6.39 11.61-2.16 26.2 9.45 32.61C327.98 228.28 336 241.63 336 256c0 14.38-8.02 27.72"
+             "-20.92 34.81-11.61 6.41-15.84 21-9.45 32.61 6.44 11.66 21.05 15.8 32.61 9.45 28.23"
+             "-15.55 45.77-45 45.77-76.88s-17.54-61.32-45.78-76.86z")
+
+
+def speaker_glyph(x, y, colour):
+    """LV_SYMBOL_VOLUME_MAX as Montserrat 20 has it: Font Awesome's volume-up,
+    a speaker and its three waves, 23 x 19 px; (x, y) is the left end of the
+    label's baseline, as bluetooth() takes it. Checked against LVGL's own
+    rendering of it (tools/lvhost)."""
+    return (f'<path transform="translate({x:.1f},{y - 17.5:.1f}) scale(0.0390625)" '
+            f'd="{VOLUME_UP}" fill="{colour}"/>')
+
+
+def speaker_logo(colour, under_answer=False):
+    """A Bluetooth speaker connected (ui.c s_hs_bt): a speaker where a
+    headset's logo is, its box's top left at (CX + 120, PTT_TOP + 12) -- 6 px
+    left of the logo, so their right ends meet. Never red. On the
+    telephone's slab split for a call ringing in, under ANSWER instead
+    (CX + 78 - 11, PTT_TOP + 52)."""
+    if under_answer:
+        return speaker_glyph(CX + 78 - 11, PTT_TOP + 52 + 18, colour)
+    return speaker_glyph(CX + 120, PTT_TOP + 12 + 18, colour)
+
+
+# Font Awesome 5's battery, which LV_SYMBOL_BATTERY_EMPTY to _FULL (U+F244 to
+# U+F240) draw: its outline in the font's 640 x 512 units, the baseline 448
+# down, and in it a bar from x 96 -- none, a quarter, half, three quarters,
+# or all of its 416 units.
+BATTERY = ("M544 160v64h32v64h-32v64H64V160h480m16-64H48c-26.51 0-48 21.49-48 48v224"
+           "c0 26.51 21.49 48 48 48h512c26.51 0 48-21.49 48-48v-16h8c13.255 0 24-10.745 24-24V184"
+           "c0-13.255-10.745-24-24-24h-8v-16c0-26.51-21.49-48-48-48z")
+BATTERY_BARS = (0, 128, 224, 320, 416)
+
+
+def battery_glyph(x, y, pct, colour):
+    """The battery a charge shows (ui.c batt_symbol): Montserrat 20's, to the
+    nearest quarter, 25 x 13 px; (x, y) is the left end of the label's
+    baseline, as speaker_glyph() takes it. Checked against LVGL's own
+    rendering of it (tools/lvhost)."""
+    q = 4 if pct >= 88 else 3 if pct >= 63 else 2 if pct >= 38 else 1 if pct >= 13 else 0
+    bar = BATTERY_BARS[q]
+    d = BATTERY + (f"M{96 + bar} 192H96v128h{bar}V192z" if bar else "")
+    return (f'<path transform="translate({x:.1f},{y - 17.5:.1f}) scale(0.0390625)" '
+            f'd="{d}" fill="{colour}"/>')
+
+
+def battery_colour(pct):
+    """ui.c batt_colour(): green from half the charge up, yellow under that,
+    red at a fifth and below -- the face's own."""
+    return BATT_OK if pct >= 50 else WARN if pct > 20 else DANGER
+
+
+def battery_logo(pct, colour=None, speaker=False, under_answer=False):
+    """A Bluetooth device's battery (ui.c s_hs_batt), at its charge: left of
+    its logo, level with it, 4 px from where the logo's ink begins -- a
+    headset's, 1 px into its box at CX + 126, or a speaker's, at CX + 120 or
+    under ANSWER. In its charge's colour, or `colour`: white on the red
+    slab."""
+    x = CX + 78 - 11 if under_answer else CX + (120 if speaker else 127)
+    y = PTT_TOP + (52 if under_answer else 12) + 18
+    return battery_glyph(x - 4 - 25, y, pct, colour or battery_colour(pct))
+
+
+# The knob's own battery (ui.c s_knob_batt): its label's box at KNOB_BATT_X,
+# KNOB_BATT_Y -- the 25 px glyph centred, at the top of the arc.
+KNOB_BATT_X, KNOB_BATT_Y = CX - 25 // 2, 37
+
+
+def knob_battery(pct):
+    """The knob's own battery at its charge, while it runs on it (ui.c
+    knob_batt_show): a headset's glyph and colours, over the S-units, its ink
+    41 to 53 px down -- Montserrat 20's baseline is 18 px under the label's
+    top. Checked against LVGL's own rendering of it (tools/lvhost)."""
+    return battery_glyph(KNOB_BATT_X, KNOB_BATT_Y + 18, pct, battery_colour(pct))
+
+
 def microphone28(cx, top, colour, slash=False, bg="#000000"):
     """font_btmic_28's microphone (U+F130), or struck through (U+F131),
     centred on cx with its glyph's top at `top`: microphone() twice over."""
@@ -391,18 +599,25 @@ def microphone28(cx, top, colour, slash=False, bg="#000000"):
     return s
 
 
-def headset_slab(label="PTT", muted=False, raise_boom=False, tx=False):
+def headset_slab(label="PTT", muted=False, raise_boom=False, tx=False, speaker=False, batt=None):
     """The PTT slab while a Bluetooth headset is connected (ui.c
     headset_slab): its own caption, as without a headset, and the headset's
     logo at its right end -- the accent; red while the headset has its
     microphone muted, which the knob will not key; white on the slab gone
     red on the air. With the boom arm as the PTT and the headset come with
     it down, a red RAISE BOOM button under the caption, its top at
-    PTT_TOP + 48."""
+    PTT_TOP + 48. With `speaker`, a Bluetooth speaker's: a speaker in the
+    logo's place, never red, and no RAISE BOOM -- the knob's own microphone
+    keys. With `batt`, the device's charge, its battery left of the logo:
+    green, yellow or red by it, white on the red slab."""
+    b = "" if batt is None else battery_logo(batt, "#FFFFFF" if tx else None, speaker=speaker)
+    if speaker:
+        return (ptt_slab(TX_RED, label, "#FFFFFF") + speaker_logo("#FFFFFF") + b if tx
+                else ptt_slab(BG1, label, TEXT2) + speaker_logo(ACCENT) + b)
     if tx:
-        s = ptt_slab(TX_RED, label, "#FFFFFF") + headset_logo("#FFFFFF", TX_RED)
+        s = ptt_slab(TX_RED, label, "#FFFFFF") + headset_logo("#FFFFFF", TX_RED) + b
     else:
-        s = ptt_slab(BG1, label, TEXT2) + headset_logo(DANGER if muted else ACCENT, BG1)
+        s = ptt_slab(BG1, label, TEXT2) + headset_logo(DANGER if muted else ACCENT, BG1) + b
     if raise_boom:
         pw, top = approx_width("RAISE BOOM", 20) + 36, PTT_TOP + 48
         s += (f'<rect x="{180 - pw / 2:.1f}" y="{top}" width="{pw:.1f}" height="34" rx="17" '

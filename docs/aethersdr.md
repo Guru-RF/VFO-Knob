@@ -14,13 +14,17 @@ layout (`tools/mkdocs.py`); the orange marks are what your hand does.
 - **The USB-C cable (preferred).** Plugged into the computer running
   AetherSDR, the knob is a USB network adapter: it hands the computer an
   address and talks TCI over the cable. Windows 10 (1903 or later), Windows 11,
-  macOS and Linux need nothing installed.
+  macOS and Linux need nothing installed. The knob looks for the computer as
+  it starts: one already running on its battery stays on WiFi when it is
+  plugged in, until **Reboot** on its page, with the cable in, starts it on
+  the cable.
 - **WiFi.** Set an SSID and the AetherSDR computer on the configuration page,
-  and power the knob from any charger.
+  and power the knob from any charger, or run it on its battery.
 
 **The USB-C socket only works one way round.** The other way it reaches the
 board's second chip, the knob finds no computer, and says so. Turn the plug
-over.
+over. Unplugged, on its own battery, there is no cable to turn: the knob says
+nothing of it and goes to WiFi.
 
 ![FLIP USB-C: turn the plug over](aethersdr/02-flip.svg)
 
@@ -48,6 +52,7 @@ the computer's firewall is the usual reason: see the README's
 | Part | Tap | |
 |---|---|---|
 | **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
+| **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | OFF, SLOW, MED, FAST |
 | **RF.G** | — | greyed: AetherSDR's TCI does not carry the RF gain |
 | **Band** | the band editor | the band's own frequency, on a tap on the panel |
@@ -63,6 +68,13 @@ band. Band and mode change on a tap *on the panel*; filter, AGC, RIT, volume
 and mic gain apply as you turn, and any tap closes them.
 
 ![MODE: USB](aethersdr/04-mode.svg)
+
+Unplugged, the knob runs on its own battery and shows its charge at the top
+of the arc, as a phone does — on every firmware's face. On USB power the
+charge cannot be read, and none shows. The address card says which:
+**battery 85 %**, or **on USB power**.
+
+![On its own battery: the knob's charge at the top of the arc](aethersdr/08-battery.svg)
 
 ## Another computer
 
@@ -92,8 +104,12 @@ With the companion firmware on the knob's second chip, a Bluetooth headset can
 be the knob's ear and microphone, and its call button the PTT: a press keys,
 the next unkeys. The slab keeps PTT, with the headset's logo at its right
 end — red while the headset has its microphone muted, when neither its button
-nor the slab keys — and the knob's own microphone is off. Pairing, the companion
+nor the slab keys — and the knob's own microphone is off. Its battery shows
+beside the logo, green, yellow or red, where the headset reports it
+([its battery](headset.md#its-battery)). Pairing, the companion
 firmware and the boom arm as the PTT: [the headset guide](headset.md).
+A Bluetooth speaker plays the knob's audio with the jack, and you transmit
+with the knob's own microphone: [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](aethersdr/07-headset.svg)
 

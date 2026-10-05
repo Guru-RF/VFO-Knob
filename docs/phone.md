@@ -1,7 +1,7 @@
 # The Telephone firmware
 
 `vfo-knob-phone` turns the knob into a telephone on one SIP account, with no radio
-involved. The knob's microphone and speaker (or a Bluetooth headset) are the
+involved. The knob's microphone and the jack (or a Bluetooth headset) are the
 handset. The firmware has its own small SIP client:
 - it registers over UDP and finds its own way out through your router (no STUN, no port forwarding);
 - audio is G.722, HD voice up to 7 kHz, wherever the other side has it, and
@@ -12,7 +12,8 @@ handset. The firmware has its own small SIP client:
 The face is SVXConnect's, with your favourite contacts where the talkgroups were.
 
 The knob has no speaker of its own. A call plays on the 3.5 mm jack, for
-headphones or a powered speaker, or in a Bluetooth headset.
+headphones or a powered speaker, and in a Bluetooth speaker with it, or only
+in a Bluetooth headset.
 
 The pictures are the knob's own screens, drawn from the firmware's texts and
 layout (`tools/mkdocs.py`); the orange marks are what your hand does. Their
@@ -48,6 +49,7 @@ Until it is registered, the slab says **NO SERVICE** and a panel says why:
 | Part | Tap | |
 |---|---|---|
 | **The arc** | hold: the address card | two meters in dBFS: the other end's audio on the left half, your microphone (what they hear) on the right. Each fills up from its own end towards the top, with a peak that holds for a second, then falls |
+| **Battery** | — | the knob's own, between the meters' tops, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below; under the keypad, none. None on USB power |
 | **Under the arc** | — | the call's time and its state (*in call*, or *HD call* when it runs in G.722; *incoming call*; the seconds it has rung); at rest, the calls you missed (in red), or else how many favourites there are |
 | **The number's row** | — | the favourite's number at rest; in a call, the other end's number |
 | **Mute** | on, off | your microphone off: the other end hears silence, and you still hear them |
@@ -62,6 +64,13 @@ favourites or as their own phone gives it, or their number when there is no
 name. The arc shows both voices: theirs on the left half, yours on the right.
 
 ![A call: its time, who, and both voices](phone/06-call.svg)
+
+Unplugged, the knob runs on its own battery and shows its charge at the top
+of the arc, between the meters' tops, as a phone does; the keypad covers it.
+On USB power the charge cannot be read, and none shows. The address card says
+which: **battery 85 %**, or **on USB power**.
+
+![On its own battery: the knob's charge between the meters](phone/16-battery.svg)
 
 ## Calling
 
@@ -88,9 +97,9 @@ then tap **CALL**.
 **An incoming call:** the knob vibrates at full strength in the ring's own
 rhythm (two long pulses, then a rest), and its rim turns green. A screen that
 had dimmed or gone dark lights up, and stays lit until the call is over. It
-rings on the jack, and in a headset when one is connected. The slab splits in two:
-tap **ANSWER** on the right, which breathes green, to take the call, or
-**DECLINE** on the left.
+rings on the jack, and in a headset or a speaker when one is connected. The
+slab splits in two: tap **ANSWER** on the right, which breathes green, to take
+the call, or **DECLINE** on the left.
 
 ![A call coming in: DECLINE or ANSWER](phone/05-incoming.svg)
 
@@ -161,7 +170,8 @@ A call you missed shows under the arc, in red, until you open the history.
 With a headset paired ([A Bluetooth headset](headset.md)), it is the knob's ear
 and microphone during calls. Its logo shows at the slab's right end — white on
 the red slab of a call, red between calls while the headset has its
-microphone muted — and the slab stays the call's:
+microphone muted — with its battery beside it where the headset reports it
+([its battery](headset.md#its-battery)), and the slab stays the call's:
 - **The call is only in the headset,** its microphone live: the jack stays
   silent while a headset is connected. If the headset goes during a call, the
   call comes back to the jack, with the knob's microphone muted.
@@ -178,6 +188,21 @@ microphone muted — and the slab stays the call's:
 - **The headset's mute** only mutes. It never keys anything.
 
 ![A Bluetooth headset: its logo on the slab](phone/11-headset.svg)
+
+A Bluetooth speaker ([A Bluetooth speaker](headset.md#a-bluetooth-speaker))
+plays a call as the jack does, and with it — a fifth of a second or so
+behind. Its audio opens for calls only, as a headset's. The slab answers a
+call ringing in at once, split in **DECLINE** and **ANSWER** as without a
+headset, the speaker under **ANSWER**, and white on the red slab of a call.
+You talk into the knob's own microphone, muted at the start of each call: tap
+the microphone to talk. While the other end talks the knob holds its
+microphone back, as it does without a speaker, and longer by the speaker's
+lag, so that the other end does not hear itself. The speaker's buttons
+answer nothing; a speaker that takes its volume from what plays to it has the
+call's **VOLUME** for its own, its volume buttons turning the knob's
+([its volume](headset.md#a-bluetooth-speaker)).
+
+![A call coming in with a speaker: the slab answers](phone/15-incoming-speaker.svg)
 
 ## Favourites
 

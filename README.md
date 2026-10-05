@@ -63,35 +63,39 @@ both voices on the split arc. See [Telephone](#telephone).
 | | |
 |---|---|
 | **Tune** | Per-digit step selection: tap a digit to set the decade. Acceleration on top, so a flick crosses a band and a slow turn lands on 10 Hz. |
-| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
+| **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. On a radio with a choice of antennas — a FlexRadio's slice, the IC-7610, the IC-R8600 — a press held half a second opens them instead, with a buzz, and keys nothing; there a tap keys 0.15 s after the lift, so that the glass losing a held finger for a moment is never taken for a tap. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
-| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the UberSDR firmware, only for listening. |
+| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys, with its battery beside it — green, yellow or red — where the headset reports it; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the UberSDR firmware, only for listening. A Bluetooth speaker plays the knob's audio as well as the jack, a fifth of a second or so behind it, and the knob's own microphone transmits: a speaker shows at the slab's end, and it falls silent while you do; one that takes its volume from what plays to it has the knob's VOLUME for its own, both ways. The second chip tells a speaker from a headset by itself; the configuration page can say otherwise. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
-| **Memories** | On the IC-705 and the IC-9700, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another; on the IC-9700 the group is the band it is on). VFO again for the VFO, simplex. |
+| **Memories** | On the IC-705, the IC-9700 and the FlexRadio, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another; on the IC-9700 the group is the band it is on). A FlexRadio's memories have no groups: the knob steps through all of them in order of frequency, each put on the slice by the radio's own *memory apply*. VFO again for the VFO, simplex. |
 | **Radios** | Up to four per firmware on the configuration page — an IC-705, an IC-7610, an IC-9700 and an IC-R8600, two FlexRadios, AetherSDR on two computers — and, on the FlexRadio firmware, the SmartLink account's. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves; under the name, **LAN** or **SmartLink** says how it is reached. Not over the USB cable, which reaches one computer or one radio. |
 | **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns (with a web SDR chosen, BALANCE comes first). Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
-| **Web SDR** | On the Icom, Xiegu and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
-| **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.14.0`, or `… dev` for a build that is not a release) and the knob's addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
+| **Web SDR** | On the Icom and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
+| **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.18.5`, or `… dev` for a build that is not a release), the knob's power — **battery 85 %**, or **on USB power** — and its addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
+| **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
 
-The knob is USB-powered, so it is always plugged into something — and whatever
-runs AetherSDR is a computer with a USB port.
+The knob runs from USB as well as from its own battery — and whatever runs
+AetherSDR is a computer with a USB port.
 
 - **USB-C (preferred).** The knob enumerates as a **USB network adapter**
   (CDC-NCM), hands your machine an address and talks TCI over the cable. No
   configuration at all, and immune to what a machined metal case does to
   2.4 GHz.
 - **WiFi.** Configure an SSID on the configuration page and power the knob from
-  any charger.
+  any charger, or run it on its battery.
 
-The cable wins whenever a computer is on the other end of it — the knob then
-waits for AetherSDR there rather than switching networks. With no computer on
-its side of the cable — a charger, or the plug the wrong way round — it goes to
-WiFi straight away. When the cable is chosen, WiFi is shut down — that frees
+The cable wins whenever a computer is on the other end of it as the knob
+starts — the knob then waits for AetherSDR there rather than switching
+networks. With no computer on its side of the cable — a charger, the plug the
+wrong way round, or no cable at all — it goes to WiFi straight away. It looks
+only then: a knob already running on its battery stays on WiFi when it is
+plugged in, until **Reboot** on its page, with the cable in, starts it on the
+cable. When the cable is chosen, WiFi is shut down — that frees
 about 40 kB of internal RAM, which this board genuinely needs.
 
 ## First run
@@ -143,7 +147,9 @@ running AetherSDR (step by step: [the AetherSDR guide](docs/aethersdr.md)):
 
 1. Plug the knob into the computer running AetherSDR. Windows 10 (version 1903
    or later), Windows 11, macOS and Linux all bring it up as a network adapter
-   by themselves — there is nothing to install. **The USB-C socket only works
+   by themselves — there is nothing to install — as the knob starts: one
+   already running on its battery stays on WiFi until **Reboot** on its page
+   restarts it with the cable in. **The USB-C socket only works
    one way round:** the other way it reaches the board's second chip, the knob
    finds no computer, and it says **FLIP USB-C**. Turn the plug over.
 2. In AetherSDR, enable the TCI server — the `TCI` panel in the button bar —
@@ -158,8 +164,10 @@ running AetherSDR (step by step: [the AetherSDR guide](docs/aethersdr.md)):
 
 ## If the page does not open
 
-Give the knob about ten seconds after plugging in: for the first six it is a
-serial port, which keeps it flashable, and only then a network adapter.
+Give the knob about ten seconds after it starts with the cable in: for the
+first six it is a serial port, which keeps it flashable, and only then a
+network adapter. A knob already running on its battery when it is plugged in
+stays on WiFi: **Reboot** it from its page, with the cable in.
 
 1. **FLIP USB-C on the knob**, or the computer finds a *USB Serial* (CH340)
    port instead — `USB\VID_1A86…` in Windows' Device Manager: the plug is the
@@ -191,7 +199,7 @@ knob goes to WiFi by itself, a few seconds after powering up — so a charger is
 all it needs, once an SSID and the AetherSDR host have been set over the cable
 from a computer where it works. Plugged into a computer it stays on the cable
 even if that computer could not set the adapter up; keep a finger on the screen
-from plugging it in until the dial appears to skip USB networking for that
+from its start until the dial appears to skip USB networking for that
 boot.
 
 ## If the knob says NO LINK
@@ -243,7 +251,7 @@ on the dial what to be:
 
 - **STATION OWN** — a station of its own. Its own slice, which the radio gives
   back where it was after a restart; its own audio both ways, as Opus over
-  WiFi, so the speaker and the built-in microphone are the station; and its
+  WiFi, so the jack and the built-in microphone are the station; and its
   own transmit settings, which leave the other stations' alone.
 - **DIAL FOR** *station* — the dial and PTT for a station already there, like
   a FlexControl on its computer. The knob works that station's active slice,
@@ -257,11 +265,13 @@ nobody else on the radio the knob does not ask.
 |---|---|
 | **The dial** | Tunes the slice. Mode, filter, AGC, RIT and RF.G — the panadapter's RF gain, which the radio's API carries — are edited as on the other radios. |
 | **Swipe from the right** | **TUNE**, a carrier at the tune power, for an external tuner or to check SWR — PTT stops it, and it stops by itself after 30 s. **ATU**, one cycle of the radio's tuner. **MEM**, the tuner's memories, lit when on; a tap switches them and the menu stays. The menu opens on MEM: TUNE and ATU are a turn away. |
-| **PTT** | Refused with the reason when the radio will not transmit here: out of band, or another station on the air. |
+| **PTT** | Refused with the reason when the radio will not transmit here: out of band, or another station on the air. Held half a second, until it buzzes: the slice's antennas, **RX ANT** and then **TX ANT**, by the radio's own names (ANT1, ANT2, RX_A, XVTA ...). |
+| **Swipe down** | After the web SDRs, the antennas, and last **V/M**: the radio's memories on the dial, as an Icom's memory channels — the memory's name where the frequency was, one memory a detent in order of frequency, each put on the slice with the radio's own *memory apply*. |
 
-The radio is given by its IP address on the configuration page, and MultiFlex
-must be enabled on it. Finding the radio by its discovery broadcast is still to
-come.
+MultiFlex must be enabled on the radio. A FlexRadio announces itself on its
+network: the configuration page lists every one the knob hears, with **Add**,
+and the swipe up offers those not yet listed — or give the radio's IP address
+there, as for one on another subnet.
 
 ### SmartLink
 
@@ -283,18 +293,22 @@ the LAN, Opus audio and PTT included. A radio reachable only by hole punching
 
 ## Web SDRs
 
-On the Icom, Xiegu and FlexRadio firmwares the knob can listen to a web SDR
+On the Icom and FlexRadio firmwares the knob can listen to a web SDR
 beside the radio — a [KiwiSDR](http://kiwisdr.com/), a Web-888, or an
 [UberSDR](https://ubersdr.org/) through its Kiwi input; all three speak
 KiwiSDR's protocol. Up to four are kept, added on the configuration page with
 their address (`host:port` — **8073** on most KiwiSDRs), a password where the
 receiver has one, and its time-limit password, which lifts the listening limit
 some receivers put on each address. The address is the receiver's own plain
-`http://` one: not an `https://` link through a proxy or a tunnel.
+`http://` one: not an `https://` link through a proxy or a tunnel. An
+UberSDR's Kiwi input is port **8073** on its own address (its
+`enable_kiwisdr` on), its bypass password in the password; it centres CW on
+the carrier where a KiwiSDR centres it on a 500 Hz tone, and the knob tunes
+each as its own page would.
 
 | | |
 |---|---|
-| **Swipe down** | **RX**: turn through **LOCAL** and the receivers by name, tap to listen. The IC-7610 then goes on to MAIN/SUB and the antenna for the radio's side, whichever was chosen: with an SDR the radio still plays in the left ear. The IC-R8600 goes on to its antenna, the IC-705 and the IC-9700 to V/M. |
+| **Swipe down** | **RX**: turn through **LOCAL** and the receivers by name, tap to listen. The IC-7610 then goes on to MAIN/SUB and the antenna for the radio's side, whichever was chosen: with an SDR the radio still plays in the left ear. The IC-R8600 goes on to its antenna, the IC-705 and the IC-9700 to V/M, a FlexRadio to RX ANT, TX ANT and V/M. |
 | **Listening** | The SDR follows the radio: frequency, mode and passband, retuned as the dial turns. The radio is in the left ear and the SDR in the right, both levelled to the same loudness. |
 | **Its S-meter** | A thin blue line just outside the radio's S-meter, on the same scale, and its reading in blue under the radio's, where the dBm is otherwise: **S9+20** against the radio's **S7**. Dots while it connects; a word, in amber, when it cannot — *busy*, *no apps*, *password?*, *day limit*, *no answer*. |
 | **Balance** | First on the swipe from the left while an SDR is chosen; a tap on it goes on to RF GAIN and POWER. From **RADIO**, the radio alone, through **L \| R** to **SDR**, the SDR alone. |
@@ -318,11 +332,13 @@ The ubersdr firmware (`vfo-knob-ubersdr`) makes the knob a dial for an
 [UberSDR](https://ubersdr.org/): it talks to the receiver over its own
 protocol, as the receiver's web page does, with Opus audio. It reaches it
 through UberSDR's tunnel (`https://<name>.tunnel.ubersdr.org`, over TLS) or on
-your own network, and plays it on the jack. Receive only, in UberSDR's own
-dark theme. Step by step: [the UberSDR guide](docs/ubersdr.md).
+your own network (`http://<address>:8080`, in the clear, with no password and
+no time limit where UberSDR lets its own network past them, as it does as it
+comes), and plays it on the jack. Receive only, in UberSDR's own dark theme.
+Step by step: [the UberSDR guide](docs/ubersdr.md).
 
 <p align="center">
-  <img src="docs/ubersdr/01-face.svg" width="560" alt="The ubersdr face: S6 on 20 m, 14.215.00 USB, SNR 9 dB and the NR4 noise filter either side of the S-meter, the spot LU7YZ heard now on the bottom">
+  <img src="docs/ubersdr/01-face.svg" width="560" alt="The ubersdr face: S6 on 20 m, 14.215.00 USB, SNR 9 dB and the NR4 noise filter either side of the S-meter, the spot LU7YZ heard now on the bottom, and a guest's 52 min left at its left end">
 </p>
 
 | | |
@@ -331,7 +347,7 @@ dark theme. Step by step: [the UberSDR guide](docs/ubersdr.md).
 | **Spots and voices** | Along the bottom, where PTT is on a radio: the one nearest the dial on the band -- the DX cluster's spots and every voice the receiver's detector hears now, named or not (in CW, the CW skimmer's), green while it is heard. A tap puts them all on the dial; tap one and the receiver goes there in its mode. |
 | **SSTV** | Swipe from the right: the receiver's SSTV gallery, newest first, one picture a detent; any tap goes back to the dial. |
 | **A KiwiSDR beside it** | Swipe down for LOCAL or a KiwiSDR (or a Web-888), which follows the UberSDR: the UberSDR left, the KiwiSDR right, BALANCE from the left. |
-| **Its limits** | Without the receiver's password the knob listens as a guest: when the receiver ends a session, the dial asks before starting another, as UberSDR's own page does. |
+| **Its limits** | Without the receiver's password the knob listens as a guest: its time left at the slab's left end, counted as the receiver counts it, the seconds too in the last five minutes, in amber, red in the last one -- or an idle limit's last minute, which a touch gives back. When the receiver ends a session, the dial asks before starting another, as UberSDR's own page does. |
 
 ## SVXConnect
 
@@ -405,9 +421,10 @@ SVXConnect's face, read as a telephone:
 | **In a call** | The other end's name in the middle -- your favourites', or the caller's own -- and their number above it; no favourite until the call is over. |
 | **History** | Swipe from the left: the last 20 calls, missed ones in red. Turn through them, tap to call back. A missed call shows under the arc until you look. |
 | **Mute** | The microphone right of the number: the knob's own microphone off, and you still hear them. A headset's mute is the headset's. |
-| **Ringing** | A call coming in vibrates at full strength in the ring's rhythm, the ANSWER slab breathes green inside a green rim, and it rings on the jack and in a headset. |
+| **Ringing** | A call coming in vibrates at full strength in the ring's rhythm, the ANSWER slab breathes green inside a green rim, and it rings on the jack and in a headset or speaker. |
 | **Audio** | On the 3.5 mm jack, the knob's own microphone muted until you tap the microphone icon; or, with a headset connected, only in the headset, its microphone live. |
 | **Headset** | Its audio opens for calls only, from the ring or the dialling until the call is over. Its button answers a call ringing in and hangs up one that is up, the slab then declining; its own mute only mutes. |
+| **Speaker** | A Bluetooth speaker plays a call with the jack, a little behind it, its audio open for calls only; the slab answers, you talk into the knob's own microphone, and the knob holds it back while the other end talks, longer by the speaker's lag. |
 
 For other programs, `GET /api/phone` says what the telephone is doing, and
 `GET /api/phone/history` lists the recent calls, and `/api/phone/dial?number=…`,
@@ -420,13 +437,28 @@ S3 lacks, and a UART between the two. The companion firmware (`companion/`)
 makes it a headset's audio gateway, as a phone is: hands-free profile,
 wideband speech where the headset has it, the audio passed to and from the
 knob at its own rate. It comes on the second chip, and the knob keeps it up
-to date by itself, at a quiet moment with no headset connected; pair the
-headset on the configuration page, and the knob calls it whenever it is
-switched on. Step by step: [the headset guide](docs/headset.md).
+to date by itself, at a quiet moment with no headset or speaker connected;
+pair the headset on the configuration page, and the knob calls it whenever it
+is switched on. Step by step: [the headset guide](docs/headset.md).
 
-While a headset is connected its call button is the PTT, the glass only
-unkeys, and the knob unkeys by itself if the headset goes out of reach on the
-air.
+While a headset is connected its call button is a PTT beside the slab, which
+keys as always, and the knob unkeys by itself if the headset goes out of reach
+on the air. A headset or speaker that reports its battery, as most made for
+iPhones do, has it shown beside its logo on the slab — green, yellow or red —
+and its charge on the configuration page.
+
+A Bluetooth speaker is the knob's ear only: A2DP, as a phone plays music to
+it, the knob's audio in both its channels a fifth of a second or so behind
+the jack. You transmit with the knob's own microphone, as with nothing
+connected; the speaker falls silent while you do, its buttons key nothing,
+and a speaker shows at the slab's end in the headset logo's place. One that
+takes its volume from what plays to it, as most do, has the knob's **VOLUME**
+for its own: the knob sets it, and its own volume buttons turn the knob's;
+one that does not keeps its own, and the knob turns down what it sends. The second
+chip tells a speaker from a headset by its class and the services it lists,
+or by its hanging up a call's audio at once, as some speakers that call
+themselves headsets do; **Use as** on the configuration page switches it.
+More: [A Bluetooth speaker](docs/headset.md#a-bluetooth-speaker).
 
 ## Configuration page
 
@@ -465,6 +497,8 @@ GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
     ...&sdr=0&balance=-30             a web SDR beside the radio, "local" for none
 GET /api/radios                       the radios the knob knows, and the one in use
 POST /api/radios/switch  to=1         another in use: the knob restarts into it
+GET /api/status                       the knob itself, its power too: on_usb (null
+                                      while it settles), rail_mv, batt (-1 on USB)
 ```
 
 A POST with the same fields as a form does the same. Both need the page's
@@ -492,12 +526,12 @@ the hardware.
 - **Over USB** the knob has no route to the internet — it is the DHCP *server*
   on that link. The configuration page does the checking and the downloading
   instead, then pushes the image over. Same image, same signature check.
-- **The second chip's firmware** — the Bluetooth headset's — is the one update
+- **The second chip's firmware** — the Bluetooth headset's and speaker's — is the one update
   the knob installs without asking: it never transmits, and the chip checks
   its signature and falls back to the firmware before by itself. The same
   check finds a newer release of it, or the SD card has one; the knob fetches
   it, at its start where it can, and sends it to the chip at a quiet moment,
-  never during an over or a call, nor with a headset connected. On the USB
+  never during an over or a call, nor with a headset or speaker connected. On the USB
   cable the configuration page hands it over. An interval of 0 stops this
   look too; a copy on the SD card still goes. See
   [the headset guide](docs/headset.md#the-second-chip).
@@ -590,6 +624,21 @@ cmake -S test/host -B build_host && cmake --build build_host && (cd build_host &
 
 `tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
 paths without a radio.
+
+`tools/mock_ubersdr.py` is an UberSDR on the LAN, in the clear — its own
+protocol on 8080 with real Opus, spots, voices and an SSTV gallery, and its
+Kiwi input on 8073 — with a guest's limits (a session's, an idle one, a day's
+allowance), a restart, refused sockets and the bypass password to try.
+`make -C tools/uberhost test` runs the ubersdr firmware's client and the web
+SDR's (`components/uber_client`, `components/sdr_rx`) on the PC against it,
+scenario by scenario; `--host 0.0.0.0` puts it on the LAN for a knob.
+
+`tools/mock_flex.py` is a FlexRadio — its API on 4992 with memories and a
+slice's antennas, and its discovery broadcast — that never transmits, and
+says where the slice would after each command. `make -C tools/flexhost test`
+runs the multiflex firmware's client (`components/flex_client`) on the PC
+against it; `make -C tools/lvhost slab-check` the face's slab, its taps and
+holds, with the glass losing the finger.
 
 The companion firmware for the second chip is its own project (target
 `esp32`), reached over the USB-C the other way round. A knob's second chip

@@ -20,6 +20,9 @@ in that firmware's colours, so the two sets tell apart at a glance:
   phone       the Telephone, in SVXConnect's colours: a call up 2:47, the
               caller's name in the middle, both voices on the split arc --
               theirs left, ours right
+  ubersdr     UberSDR's own dark theme: S9+10 on 20 m, 14.215.00 USB, SNR 26 dB
+              and NR4 either side of the S-meter, the spot LU7YZ heard now on
+              the slab
 
 The body is a 66 mm cylinder, 22 mm deep: a blue anodised ring with diagonal
 knurling over a black base, the cover glass, and the 1.8" panel inside it --
@@ -67,6 +70,11 @@ RADIOS = {
     "phone": dict(name="Telephone", phone=True, call=3, secs=167, dbfs=-20,
                   rx_pk=-13, tx_db=-31, tx_pk=-23, peer="Mum",
                   peer_num="+447700900123"),
+    # A web receiver: the SNR and its noise filter either side of the S-meter,
+    # the spot nearest the dial on the slab. The guides' face, as
+    # tools/mkdocs.py uber_face() draws it, at this reading.
+    "ubersdr": dict(name="UberSDR", uber=dict(
+        dbm=-63, snr=26, spot=("LU7YZ", "14.215.0 USB  DX 2m  heard 26 dB", "green", "8 on 20m"))),
 }
 
 
@@ -144,12 +152,13 @@ KP_KEYS = "123456789*0#"
 
 # What phone_dial() draws unless told otherwise: idle, registered, a dozen
 # favourites with "Office" on the dial. ui_state_t's call: 0 idle, 1 calling
-# out, 2 ringing in, 3 talking, 4 ended.
+# out, 2 ringing in, 3 talking, 4 ended. `speaker`: a Bluetooth speaker
+# connected, which is no headset.
 PHONE = dict(call=0, secs=0, why="", peer="", peer_num="", fav_name="Office",
              fav_num="+441632960123", n_fav=12, n_missed=0, number="+447700900461",
              link="connected", muted=False, dbfs=-60, tx_db=-60, rx_pk=None,
              tx_pk=None, keypad=None,
-             flash=None, headset=False, vol="40", mic="100")
+             flash=None, headset=False, speaker=False, vol="40", mic="100")
 
 
 def split_arc(rx_db, tx_db, rx_pk=None, tx_pk=None):
@@ -288,6 +297,10 @@ def phone_dial(R):
         red = call in (1, 2, 3)
         s.append(D.headset_logo("#FFFFFF" if red else D.DANGER if P["muted"] else D.ACCENT,
                                 D.TX_RED if red else D.BG1))
+    elif P["speaker"]:                          # a speaker in its place, never red
+        # White on the red slab, and on the halves of a call ringing in --
+        # there under ANSWER, at the end it sat on its R (ui.c headset_slab).
+        s.append(D.speaker_logo("#FFFFFF" if call in (1, 2, 3) else D.ACCENT, under_answer=call == 2))
     # The keypad, over everything above the slab: the number -- eight
     # characters in the big type, more in the smaller -- the backspace, keys.
     if kp is not None:
@@ -393,6 +406,10 @@ def dial(radio):
         return reflector_dial(R)
     if R.get("phone"):
         return phone_dial(R)
+    if R.get("uber"):
+        # mkdocs imports this file: it is imported here, when wanted.
+        import mkdocs
+        return mkdocs.uber_face(**R["uber"])
     DBM = R["dbm"]
     s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
          f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '

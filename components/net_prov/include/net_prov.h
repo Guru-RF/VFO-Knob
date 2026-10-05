@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "esp_err.h"
 
@@ -47,14 +48,23 @@ esp_err_t net_prov_init(void);
 #define NET_PROV_RADIOS 4
 typedef struct {
     char     name[24];         /* on the dial; "" = its host */
-    char     host[64];
+    char     host[64];         /* an UberSDR's with its scheme: "http://host" */
     uint16_t port;
     char     user[33];
     char     pass[33];
 } net_radio_t;
+/* A radio's host as the dial and the page name it: without the "https://" or
+ * "http://" an UberSDR's keeps. */
+static inline const char *net_prov_host_shown(const char *host)
+{
+    const char *s = strstr(host, "://");
+    return s ? s + 3 : host;
+}
 int       net_prov_radio_count(void);
 int       net_prov_radio_active(void);
 bool      net_prov_radio_get(int i, net_radio_t *out);
+/* Whether a radio at this address -- its host as given -- is in the list. */
+bool      net_prov_radio_known(const char *host);
 esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active);
 esp_err_t net_prov_radio_activate(int i);
 

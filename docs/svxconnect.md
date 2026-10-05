@@ -2,7 +2,7 @@
 
 `vfo-knob-svxconnect` turns the knob into a node on an
 [SvxLink](https://www.svxlink.org/) reflector — no radio at all: the knob's
-microphone and speaker are the station. It speaks the reflector's protocol 3.0,
+microphone and the jack are the station. It speaks the reflector's protocol 3.0,
 with the reflector's own TLS and a client certificate, and Opus audio both
 ways. It is a port of [SVXConnect-CLI](https://github.com/Guru-RF/SVXConnect-CLI)'s
 reflector client, in [SVXConnect](https://svxconnect.app/)'s colours.
@@ -34,6 +34,7 @@ The radio face, read differently:
 | Part | Tap | |
 |---|---|---|
 | **The arc** | hold: the address card | the received audio in dBFS, and in transmit the microphone |
+| **Battery** | — | the knob's own, over who is talking, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below; on the air too. None on USB power |
 | **Who is talking** | — | with where they are when the reflector publishes it, or who spoke last and how long ago |
 | **Lock** | on, off | the talkgroup stays: no busier talkgroup takes you away, no quiet spell drops you to monitoring, and the others are not heard. The dial still switches, and the talkgroup it turns to is locked in its turn |
 | **Talkgroup** | — | `TG n`, its name from the reflector's portal where the frequency is, the reflector under it |
@@ -41,6 +42,13 @@ The radio face, read differently:
 | **Link** | — | **connected**, **connecting** or **disconnected** |
 | **Volume, mic gain** | their editors | the knob's own levels |
 | **PTT** | key, and key off | see [Transmitting](#transmitting) |
+
+Unplugged, the knob runs on its own battery and shows its charge at the top
+of the arc, over who is talking, as a phone does — on the air too. On USB
+power the charge cannot be read, and none shows. The address card says which:
+**battery 85 %**, or **on USB power**.
+
+![On its own battery: the knob's charge over who is talking](svxconnect/05-battery.svg)
 
 ## Talkgroups
 
@@ -78,8 +86,12 @@ With the companion firmware on the knob's second chip, a Bluetooth headset can
 be the knob's ear and microphone, and its call button the PTT: a press keys,
 the next unkeys. The slab keeps PTT, with the headset's logo at its right
 end — red while the headset has its microphone muted, when neither its button
-nor the slab keys — and the knob's own microphone is off. Pairing, the companion
+nor the slab keys — and the knob's own microphone is off. Its battery shows
+beside the logo, green, yellow or red, where the headset reports it
+([its battery](headset.md#its-battery)). Pairing, the companion
 firmware and the boom arm as the PTT: [the headset guide](headset.md).
+A Bluetooth speaker plays the knob's audio with the jack, and you transmit
+with the knob's own microphone: [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](svxconnect/04-headset.svg)
 

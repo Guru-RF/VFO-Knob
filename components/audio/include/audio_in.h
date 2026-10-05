@@ -54,7 +54,8 @@ void audio_in_set_gain(uint8_t percent);
  * headset's microphone is sent only then -- as the knob's own is only live
  * then. A headset lost in the middle of an over leaves it silent: whoever
  * keyed through the headset is unkeyed by app_main, not handed the knob's
- * microphone across the room. */
+ * microphone across the room. A Bluetooth speaker never turns it on: with
+ * one, keying takes the knob's own microphone, as with nothing connected. */
 void audio_in_use_ext(bool on);
 bool audio_in_ext(void);
 void audio_in_feed_ext(const int16_t *pcm, size_t n);
