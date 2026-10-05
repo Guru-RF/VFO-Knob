@@ -18,7 +18,7 @@
     {
       "radio": "ubersdr",
       "name": "UberSDR",
-      "version": "1.18.4"
+      "version": "1.18.5"
     },
     {
       "radio": "svxconnect",
