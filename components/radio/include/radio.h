@@ -351,4 +351,11 @@ void radio_choose(uint8_t i);
 void radio_tg_lock(bool locked);
 void radio_mute(bool muted);
 
+/* Someone at the knob: a finger on the glass or a turn of it, called from the
+ * face's task when ui_user_seq() moves -- never for a question answered, a
+ * page saved or a call. A web receiver whose owner limits idle listening
+ * hears of this alone, as its own page tells it of nothing else. A client
+ * with no such receiver need not have it: the default does nothing. */
+void radio_user_activity(void);
+
 #endif /* VFO_RADIO_H */

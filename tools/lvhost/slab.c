@@ -9,35 +9,44 @@
  * keying: not mid-hold, not with one read misplaced, not after the buzz,
  * when the antennas stay up. On the air any touch unkeys at once and no hold
  * opens anything; a radio with no antenna choice keys as the finger lifts,
- * as it always did. And the swipe down's row, the memory face, and pictures
- * of each (PPM, and PNG where ImageMagick is).
+ * as it always did. And the swipe down's row, the memory face, a web SDR's
+ * reading under the S-units -- playing, and quiet where it cannot reach the
+ * dial -- and pictures of each (PPM, and PNG where ImageMagick is). The
+ * other faces with a web SDR -- the Xiegu's, the UberSDR's, Kiwi888's -- for
+ * that reading too, between their neighbours at their widest.
  *
  * On every face that shows a Bluetooth headset's logo -- the radios', the
- * reflector's, the telephone's, the receiver's -- the device's battery
+ * reflector's, the telephone's, the receivers' -- the device's battery
  * beside it: hidden until the device has said its charge, then its glyph
  * and its colour for it (green, yellow, red; white on the red slab), and
  * where it lands: in the slab, well inside the glass, clear of the logo,
- * the caption, the spot, RAISE BOOM and the telephone's halves -- each
- * caption and state the slab has, a headset's and a speaker's.
+ * the caption, the spot, the receiver's name, RAISE BOOM and the
+ * telephone's halves -- each caption and state the slab has, a headset's
+ * and a speaker's.
  *
- * On the receiver's face, a guest's time left at the slab's other end:
+ * On the UberSDR's face, a guest's time left at the slab's other end:
  * every value it can say, its words and colour, its ink in the slab and
  * inside the glass, level with the logo, clear of the spot's call however
  * long -- beside no device, a headset's battery or a speaker's. And the
  * call in the room between them: centred where it fits so, else moved
  * aside just as far as it must, whole; only one too long for the room cut
- * with dots.
+ * with dots -- as Kiwi888's slab has the receiver's name. And with no link,
+ * the receiver the warning is about named under it -- NOT FOUND, then
+ * CONNECTING to the next -- between the warning and the address card, its
+ * panel inside the glass; a name too long, cut with dots inside the panel;
+ * with none, the panel as ever.
  *
  * And on every face, the setup firmware's too, the knob's own battery, while
  * it runs on it: none until its charge is known, nor on USB power; then its
  * glyph and colour for it, as a headset's, centred at the top of the arc
  * over the S-units -- clear of the arc, its ticks and its peak, the reading
- * under it however wide, a web SDR's line, the telephone's two meters at
- * full, the setup firmware's titles, and of what comes up over the middle:
- * an editor, a chooser, a question, a warning, the address card. Not on a
- * radio's face on the air, where the transmit scale's numbers are; on the
- * reflector's, whose arc stays the audio's. Under the full-face views, the
- * SSTV viewer and the telephone's keypad: no ink of it there.
+ * under it however wide, OV after it on Kiwi888's, a web SDR's line, the
+ * telephone's two meters at full, the setup firmware's titles, and of what
+ * comes up over the middle: an editor, a chooser, a question, a warning,
+ * the address card. Not on a radio's face on the air, where the transmit
+ * scale's numbers are; on the reflector's, whose arc stays the audio's.
+ * Under the full-face views, the SSTV viewer and the telephone's keypad: no
+ * ink of it there.
  *
  *   make slab-check OUT=dir     every face's runs, the pictures in dir */
 #include "lvgl.h"
@@ -770,6 +779,240 @@ SOME static void knob_radio(const char *dir, const char *face)
     st = keep; run(60);
 }
 
+/* ---- a web SDR beside the radio ---- */
+#if VFO_HAS_SDR
+
+/* Its colour on the face (ui.c's SDR_HEX), and the amber of a word for why
+ * it is not heard (C_WARN): each face's own. */
+#if VFO_RADIO_ICOM
+#define SDR_HEX  0x5A9BFF
+#define WARN_HEX 0xFFB000
+#elif VFO_RADIO_XIEGU
+#define SDR_HEX  0x4DA6FF
+#define WARN_HEX 0xFFD000
+#elif VFO_RADIO_UBERSDR
+#define SDR_HEX  0x8B7CF8
+#define WARN_HEX 0xF2B544
+#elif VFO_RADIO_KIWI
+#define SDR_HEX  0x99C9FF
+#define WARN_HEX 0xFFA500
+#else
+#define SDR_HEX  0x62BBFF
+#define WARN_HEX 0xFFB000
+#endif
+
+/* A visible label with this text on the row of the readings under the
+ * S-units (y 97). */
+static lv_obj_t *on_the_row(lv_obj_t *o, const char *text)
+{
+    if (lv_obj_check_type(o, &lv_label_class) && visible(o) && !strcmp(lv_label_get_text(o), text)) {
+        lv_area_t a;
+        lv_obj_get_coords(o, &a);
+        if (a.y1 <= 97 && a.y2 >= 97) return o;
+    }
+    for (uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *f = on_the_row(lv_obj_get_child(o, (int32_t)i), text);
+        if (f) return f;
+    }
+    return NULL;
+}
+
+/* The SDR's colour on its thin line, just outside the radio's S-meter. */
+static int sdr_line_px(void)
+{
+    lv_obj_invalidate(lv_screen_active());
+    lv_refr_now(disp);
+    const uint16_t c = lv_color_to_u16(lv_color_hex(SDR_HEX));
+    int n = 0;
+    for (int i = 0; i < W * H; i++) {
+        if (fb[i] != c) continue;
+        const double r = hypot(i % W + 0.5 - W / 2.0, i / W + 0.5 - H / 2.0);
+        n += r >= 171.0 && r <= 178.5;
+    }
+    return n;
+}
+
+/* Playing, the SDR's line and its S-units in its colour, under the radio's;
+ * a dial it cannot reach, the line gone and "can't reach" in amber in their
+ * place -- clear of the AGC and the gain either side at their widest. */
+static void sdr_reading(const char *dir, const char *face, const char *agc_wide, const char *gain_wide)
+{
+    char name[64];
+    st.n_sdr = 1;
+    strcpy(st.sdr_name[0], "KiwiSDR");
+    st.rxsrc = 0;
+    st.sdr_streaming = true;
+    st.sdr_dbm = -97.0f;
+    run(1200);
+    where = "a web SDR playing: its line, its S-units";
+    CHECK(sdr_line_px() > 0);
+    CHECK(on_the_row(lv_screen_active(), "S5") != NULL);
+    snprintf(name, sizeof name, "%s-sdr", face);
+    picture(dir, name);
+    where = "a web SDR that cannot reach the dial: its line gone, \"can't reach\" in amber";
+    st.sdr_streaming = false;
+    st.sdr_trouble = true;
+    strcpy(st.sdr_note, "can't reach");
+    run(200);
+    CHECK(sdr_line_px() == 0);
+    lv_obj_t *r = on_the_row(lv_screen_active(), "can't reach");
+    lv_obj_t *a = on_the_row(lv_screen_active(), agc_wide), *g = on_the_row(lv_screen_active(), gain_wide);
+    CHECK(r && a && g);
+    if (r && a && g) {
+        lv_area_t cr, ca, cg;
+        lv_obj_get_coords(r, &cr);
+        lv_obj_get_coords(a, &ca);
+        lv_obj_get_coords(g, &cg);
+        printf("%s: \"can't reach\" %d px wide (x %d..%d), %s ends at x %d, %s starts at x %d\n", face,
+               (int)lv_area_get_width(&cr), (int)cr.x1, (int)cr.x2, agc_wide, (int)ca.x2, gain_wide, (int)cg.x1);
+        CHECK(cr.x1 > ca.x2 + 4 && cr.x2 < cg.x1 - 4);
+        CHECK(lv_color_to_u16(lv_obj_get_style_text_color(r, LV_PART_MAIN)) ==
+              lv_color_to_u16(lv_color_hex(WARN_HEX)));
+    }
+    snprintf(name, sizeof name, "%s-sdr-out-of-range", face);
+    picture(dir, name);
+    st.rxsrc = -1;
+    st.n_sdr = 0;
+    st.sdr_trouble = false;
+    st.sdr_note[0] = 0;
+    run(200);
+}
+#endif /* VFO_HAS_SDR */
+
+#if VFO_RX_ONLY
+/* ---- a receiver's slab, the UberSDR's or Kiwi888's: its line in its room
+ * (ui.c call_place) ---- */
+
+/* What an UberSDR's time left for a guest says for s seconds: whole
+ * minutes, from a hundred of them hours, the seconds too in the last five;
+ * an idle limit's last minute. */
+static void left_says(char *out, size_t cap, int s, bool idle)
+{
+    if (idle)          snprintf(out, cap, "idle %d:%02d", s / 60, s % 60);
+    else if (s < 300)  snprintf(out, cap, "%d:%02d", s / 60, s % 60);
+    else if (s < 6000) snprintf(out, cap, "%d min", s / 60);
+    else               snprintf(out, cap, "%d h %02d", s / 3600, s / 60 % 60);
+}
+
+/* A visible label saying exactly this. */
+static lv_obj_t *label_is(lv_obj_t *o, const char *text)
+{
+    if (lv_obj_check_type(o, &lv_label_class) && visible(o) && !strcmp(lv_label_get_text(o), text)) return o;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *l = label_is(lv_obj_get_child(o, (int32_t)i), text);
+        if (l) return l;
+    }
+    return NULL;
+}
+
+/* The label of the spot's call that says `says`: found by its start, which
+ * dots never cut -- a frequency's five, so as not to be the line under it. */
+static lv_obj_t *call_label(const char *says)
+{
+    char prefix[6];
+    snprintf(prefix, sizeof prefix, "%.*s", says[0] >= '0' && says[0] <= '9' ? 5 : 3, says);
+    return label_from(lv_screen_active(), prefix);
+}
+
+static int text_w(const char *t, const lv_font_t *f)
+{
+    lv_point_t p;
+    lv_text_get_size(&p, t, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return p.x;
+}
+
+/* The widest the time left says in a kind of its own -- 0 whole minutes, 1
+ * the last five, 2 idle, 3 hours to 99 -- measured over all it can say
+ * there, once; and a digit's, the widest. */
+static int widest_of(int kind)
+{
+    static int w[5] = { -1, -1, -1, -1, -1 };
+    if (w[kind] >= 0) return w[kind];
+    char t[24];
+    w[kind] = 0;
+    if (kind == 4) {
+        for (char d = '0'; d <= '9'; d++) {
+            const char one[2] = { d, 0 };
+            if (text_w(one, &lv_font_montserrat_14) > w[4]) w[4] = text_w(one, &lv_font_montserrat_14);
+        }
+        return w[4];
+    }
+    const int from = kind == 0 ? 300 : kind == 3 ? 6000 : 0, to = kind == 0 ? 6000 : kind == 1 ? 300 : kind == 2 ? 61
+                                                                              : 100 * 3600;
+    for (int s = from; s < to; s += kind == 3 ? 60 : 1) {
+        left_says(t, sizeof t, s, kind == 2);
+        const int tw = text_w(t, &lv_font_montserrat_14);
+        if (tw > w[kind]) w[kind] = tw;
+    }
+    return w[kind];
+}
+
+/* What the time left keeps from the call: the widest it can say as it says
+ * it now -- the hours, a widest digit more for each beyond two. */
+static int left_keeps(void)
+{
+    if (st.left_idle) return widest_of(2);
+    if (st.left_s < 300) return widest_of(1);
+    if (st.left_s < 6000) return widest_of(0);
+    int w = widest_of(3);
+    for (int h = st.left_s / 3600; h >= 100; h /= 10) w += widest_of(4);
+    return w;
+}
+
+/* Where the device's logo's ink begins, a headset's or a speaker's: drawn
+ * once for each. */
+static int logo_ink(lv_obj_t *logo)
+{
+    static int at[2] = { -1, -1 };
+    const int k = st.speaker ? 1 : 0;
+    box_t b;
+    int room;
+    if (at[k] < 0 && ink_of(logo, &b, &room)) at[k] = b.x1;
+    return at[k];
+}
+
+static int calls_centred, calls_moved, calls_cut, call_least_l = 999, call_most_r = -1;
+
+/* The spot's call, saying `says` -- or Kiwi888's receiver's name -- where
+ * the face puts it (ui.c call_place): its room from 4 px past what the time
+ * left keeps (`left`, its label, when it shows), to 4 px short of the
+ * device's battery, or its logo's ink -- else the slab's 290 px. In it:
+ * centred where it fits so, and whole; else whole, its box its text's,
+ * moved aside just as far as it must, against the end it moved from; only
+ * one too long for the whole room cut with dots, the room its box. On one
+ * line, always. */
+static void call_check(const char *says, lv_obj_t *left)
+{
+    lv_obj_t *c = call_label(says);
+    CHECK(c != NULL);
+    if (!c) return;
+    const int l = left ? lv_obj_get_x(left) + left_keeps() + 4 : W / 2 - 145;
+    lv_obj_t *b = battery(lv_screen_active());
+    lv_obj_t *logo = !st.headset && !st.speaker ? NULL
+                     : label_is(lv_screen_active(), st.speaker ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_BLUETOOTH);
+    const int r = b ? lv_obj_get_x(b) - 4 : logo ? logo_ink(logo) - 4 : W / 2 + 145;
+    const int tw = text_w(says, &lv_font_montserrat_28);
+    const int x = lv_obj_get_x(c), w = lv_obj_get_width(c);
+    const int half = W / 2 - l < r - W / 2 ? W / 2 - l : r - W / 2;
+    const bool cut = strstr(lv_label_get_text(c), "...") != NULL;
+    CHECK(x >= l && x + w <= r);
+    CHECK(lv_obj_get_height(c) == lv_font_get_line_height(&lv_font_montserrat_28));
+    if (tw <= 2 * half) {
+        CHECK(!cut && abs(2 * x + w - W) <= 1);
+        calls_centred++;
+    } else if (tw <= r - l) {
+        CHECK(!cut && w == tw);
+        CHECK((x == l && W / 2 - tw / 2 < l) || (x + w == r && W / 2 - tw / 2 > r - tw));
+        calls_moved++;
+    } else {
+        CHECK(cut && x == l && x + w == r);
+        calls_cut++;
+    }
+    if (x < call_least_l) call_least_l = x;
+    if (x + w > call_most_r) call_most_r = x + w;
+}
+#endif
+
 #if VFO_RADIO_MULTIFLEX
 static void radio(void)
 {
@@ -1105,6 +1348,12 @@ static void runs(const char *dir)
     st.mem_state = 2; st.mem_ch = 7; strcpy(st.mem_name, "ON0TEN"); run(120);
     knob_check(dir, NULL);
     st.mem_state = 0; st.knob_batt = false; run(120);
+
+    radio();
+    strcpy(st.agc, "slow");
+    st.gain = 32;
+    settle(); quiet();
+    sdr_reading(dir, "flex", "SLOW", "+32 dB");
 }
 #elif VFO_RADIO_ICOM
 static void ic7610(void)
@@ -1221,11 +1470,17 @@ static void runs(const char *dir)
     batt_radio(dir, "icom");
     knob_sweep(dir, "icom");
     knob_radio(dir, "icom");
+
+    ic7610();
+    strcpy(st.agc, "slow");
+    settle(); quiet();
+    sdr_reading(dir, "icom", "SLOW", "OFF");
 }
 #elif VFO_RADIO_SVXCONNECT || VFO_RADIO_AETHERSDR || VFO_RADIO_XIEGU
 /* The reflector's face, AetherSDR's and the Xiegus': the slab as the
  * others', in each one's palette. On the reflector's, the knob's battery
- * over the talker, however long his call and where he is. */
+ * over the talker, however long his call and where he is; on the Xiegus',
+ * the web SDR's reading. */
 static void runs(const char *dir)
 {
     base(); run(120);
@@ -1248,6 +1503,12 @@ static void runs(const char *dir)
     batt_radio(dir, "xiegu");
     knob_sweep(dir, "xiegu");
     knob_radio(dir, "xiegu");
+    /* The web SDR's reading alone, between the AGC and the preamp. */
+    base();
+    strcpy(st.agc, "slow");
+    st.have_gain = true; st.gain = 0; st.gain_max = 1; st.gain_step = 1;
+    settle(); quiet();
+    sdr_reading(dir, "xiegu", "SLOW", "OFF");
 #endif
 }
 #elif VFO_RADIO_PHONE
@@ -1330,41 +1591,13 @@ static void runs(const char *dir)
 #elif VFO_RADIO_UBERSDR
 /* ---- a guest's time left, at the slab's left end (ui.c left_slab) ---- */
 
-/* What it says for s seconds, and in which colour: whole minutes, from a
- * hundred of them hours, the seconds too in the last five; an idle limit's
- * last minute. Dim, then yellow, red in the last minute and when idle. */
-static void left_says(char *out, size_t cap, int s, bool idle)
-{
-    if (idle)          snprintf(out, cap, "idle %d:%02d", s / 60, s % 60);
-    else if (s < 300)  snprintf(out, cap, "%d:%02d", s / 60, s % 60);
-    else if (s < 6000) snprintf(out, cap, "%d min", s / 60);
-    else               snprintf(out, cap, "%d h %02d", s / 3600, s / 60 % 60);
-}
+/* What it says for s seconds (left_says), and in which colour: dim, then
+ * yellow, red in the last minute and when idle. */
 static int left_colour(int s, bool idle) { return idle || s < 60 ? IS_RED : s < 300 ? IS_YELLOW : IS_OTHER; }
-
-/* A visible label saying exactly this. */
-static lv_obj_t *label_is(lv_obj_t *o, const char *text)
-{
-    if (lv_obj_check_type(o, &lv_label_class) && visible(o) && !strcmp(lv_label_get_text(o), text)) return o;
-    for (uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
-        lv_obj_t *l = label_is(lv_obj_get_child(o, (int32_t)i), text);
-        if (l) return l;
-    }
-    return NULL;
-}
 
 static int left_least_room = 99, left_least_gap = 99, left_widest[3];   /* minutes and hours, the seconds, idle */
 static lv_obj_t *s_call;                    /* the spot's call on the slab, as spot_is() last set it */
 static char s_call_says[24];                /* ...what it says, whole */
-
-/* The label of the spot's call that says `says`: found by its start, which
- * dots never cut -- a frequency's five, so as not to be the line under it. */
-static lv_obj_t *call_label(const char *says)
-{
-    char prefix[6];
-    snprintf(prefix, sizeof prefix, "%.*s", says[0] >= '0' && says[0] <= '9' ? 5 : 3, says);
-    return label_from(lv_screen_active(), prefix);
-}
 
 /* The spot nearest the dial, this call, as the slab shows it -- its label. */
 static void spot_is(const char *call)
@@ -1375,105 +1608,6 @@ static void spot_is(const char *call)
     run(60);
     snprintf(s_call_says, sizeof s_call_says, "%s", call);
     s_call = call_label(call);
-}
-
-/* ---- the spot's call in its room (ui.c call_place) ---- */
-
-static int text_w(const char *t, const lv_font_t *f)
-{
-    lv_point_t p;
-    lv_text_get_size(&p, t, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    return p.x;
-}
-
-/* The widest the time left says in a kind of its own -- 0 whole minutes, 1
- * the last five, 2 idle, 3 hours to 99 -- measured over all it can say
- * there, once; and a digit's, the widest. */
-static int widest_of(int kind)
-{
-    static int w[5] = { -1, -1, -1, -1, -1 };
-    if (w[kind] >= 0) return w[kind];
-    char t[24];
-    w[kind] = 0;
-    if (kind == 4) {
-        for (char d = '0'; d <= '9'; d++) {
-            const char one[2] = { d, 0 };
-            if (text_w(one, &lv_font_montserrat_14) > w[4]) w[4] = text_w(one, &lv_font_montserrat_14);
-        }
-        return w[4];
-    }
-    const int from = kind == 0 ? 300 : kind == 3 ? 6000 : 0, to = kind == 0 ? 6000 : kind == 1 ? 300 : kind == 2 ? 61
-                                                                              : 100 * 3600;
-    for (int s = from; s < to; s += kind == 3 ? 60 : 1) {
-        left_says(t, sizeof t, s, kind == 2);
-        const int tw = text_w(t, &lv_font_montserrat_14);
-        if (tw > w[kind]) w[kind] = tw;
-    }
-    return w[kind];
-}
-
-/* What the time left keeps from the call: the widest it can say as it says
- * it now -- the hours, a widest digit more for each beyond two. */
-static int left_keeps(void)
-{
-    if (st.left_idle) return widest_of(2);
-    if (st.left_s < 300) return widest_of(1);
-    if (st.left_s < 6000) return widest_of(0);
-    int w = widest_of(3);
-    for (int h = st.left_s / 3600; h >= 100; h /= 10) w += widest_of(4);
-    return w;
-}
-
-/* Where the device's logo's ink begins, a headset's or a speaker's: drawn
- * once for each. */
-static int logo_ink(lv_obj_t *logo)
-{
-    static int at[2] = { -1, -1 };
-    const int k = st.speaker ? 1 : 0;
-    box_t b;
-    int room;
-    if (at[k] < 0 && ink_of(logo, &b, &room)) at[k] = b.x1;
-    return at[k];
-}
-
-static int calls_centred, calls_moved, calls_cut, call_least_l = 999, call_most_r = -1;
-
-/* The spot's call, saying `says`, where the face puts it (ui.c call_place):
- * its room from 4 px past what the time left keeps (`left`, its label, when
- * it shows), to 4 px short of the device's battery, or its logo's ink --
- * else the slab's 290 px. In it: centred where it fits so, and whole; else
- * whole, its box its text's, moved aside just as far as it must, against
- * the end it moved from; only one too long for the whole room cut with
- * dots, the room its box. On one line, always. */
-static void call_check(const char *says, lv_obj_t *left)
-{
-    lv_obj_t *c = call_label(says);
-    CHECK(c != NULL);
-    if (!c) return;
-    const int l = left ? lv_obj_get_x(left) + left_keeps() + 4 : W / 2 - 145;
-    lv_obj_t *b = battery(lv_screen_active());
-    lv_obj_t *logo = !st.headset && !st.speaker ? NULL
-                     : label_is(lv_screen_active(), st.speaker ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_BLUETOOTH);
-    const int r = b ? lv_obj_get_x(b) - 4 : logo ? logo_ink(logo) - 4 : W / 2 + 145;
-    const int tw = text_w(says, &lv_font_montserrat_28);
-    const int x = lv_obj_get_x(c), w = lv_obj_get_width(c);
-    const int half = W / 2 - l < r - W / 2 ? W / 2 - l : r - W / 2;
-    const bool cut = strstr(lv_label_get_text(c), "...") != NULL;
-    CHECK(x >= l && x + w <= r);
-    CHECK(lv_obj_get_height(c) == lv_font_get_line_height(&lv_font_montserrat_28));
-    if (tw <= 2 * half) {
-        CHECK(!cut && abs(2 * x + w - W) <= 1);
-        calls_centred++;
-    } else if (tw <= r - l) {
-        CHECK(!cut && w == tw);
-        CHECK((x == l && W / 2 - tw / 2 < l) || (x + w == r && W / 2 - tw / 2 > r - tw));
-        calls_moved++;
-    } else {
-        CHECK(cut && x == l && x + w == r);
-        calls_cut++;
-    }
-    if (x < call_least_l) call_least_l = x;
-    if (x + w > call_most_r) call_most_r = x + w;
 }
 
 /* The time left as the face shows it now, at st.left_s: its text and
@@ -1678,6 +1812,58 @@ static void runs(const char *dir)
     left_check(dir, "uber-left-idle");
     st.headset = st.have_batt = st.have_left = st.left_idle = false; run(60);
 
+    /* No link: the warning, the receiver it is about under it -- the one in
+     * use NOT FOUND, then CONNECTING to the next -- and the address card's
+     * five lines under that, in the panel, the panel inside the glass. */
+    where = "no link: the receiver named under the warning";
+    ui_set_netinfo(CARD);
+    st.link_ok = false;
+    static const struct { const char *says, *name; } NAMED[] = {
+        { "NOT FOUND", "ON6URE-TEL-LAN" }, { "CONNECTING", "ON6URE-TEL" }, { "NO ANSWER", "WWWWWWWWWWWWWWWWWWWWWWW" },
+    };
+    for (size_t k = 0; k < sizeof NAMED / sizeof *NAMED; k++) {
+        st.warn = NAMED[k].says;
+        snprintf(st.warn_name, sizeof st.warn_name, "%s", NAMED[k].name);
+        run(60);
+        lv_obj_t *t = label_is(lv_screen_active(), NAMED[k].says), *nm = label_from(lv_screen_active(), "ON6URE"),
+                 *c = card_label();
+        if (!nm) nm = label_from(lv_screen_active(), "WWW");
+        CHECK(t && nm && c);
+        if (!t || !nm || !c) continue;
+        lv_area_t at, an, ac, ap;
+        lv_obj_get_coords(t, &at);
+        lv_obj_get_coords(nm, &an);
+        lv_obj_get_coords(c, &ac);
+        lv_obj_get_coords(lv_obj_get_parent(c), &ap);
+        const bool cut = strstr(lv_label_get_text(nm), "...") != NULL;
+        CHECK(cut == (k == 2));                        /* only the one too long, cut */
+        CHECK(lv_obj_get_height(nm) == lv_font_get_line_height(&lv_font_montserrat_20));   /* one line */
+        CHECK(an.y1 >= at.y2 + 2 && ac.y1 >= an.y2 + 2);   /* under the warning, over the card */
+        CHECK(an.x1 > ap.x1 + 8 && an.x2 < ap.x2 - 8);     /* inside the panel */
+        CHECK(ac.y2 <= ap.y2 - 4);
+        box_t ink;
+        int room;
+        CHECK(ink_of(nm, &ink, &room) && ink.x1 > ap.x1 + 8 && ink.x2 < ap.x2 - 8);
+        const float r = ink_reach(lv_obj_get_parent(c));
+        CHECK(r <= GLASS_R);
+        printf("  %-10s %-24s its line %d-%d, under the warning's %d, over the card's %d-%d; the panel %d-%d, "
+               "%.1f px from the middle at the most%s\n", NAMED[k].says, lv_label_get_text(nm), (int)an.y1,
+               (int)an.y2, (int)at.y2, (int)ac.y1, (int)ac.y2, (int)ap.y1, (int)ap.y2, (double)r, cut ? ", cut" : "");
+        if (k < 2) picture(dir, k ? "uber-warning-connecting" : "uber-warning-not-found");
+    }
+    where = "...with none named, the panel as ever";
+    st.warn = "NO LINK";
+    st.warn_name[0] = 0;
+    run(60);
+    {
+        lv_obj_t *c = card_label();
+        CHECK(c && !label_from(lv_screen_active(), "WWW") && !label_from(lv_screen_active(), "ON6URE"));
+        if (c) CHECK(lv_obj_get_height(lv_obj_get_parent(c)) == 134);
+    }
+    st.warn = NULL;
+    st.link_ok = true;
+    run(60);
+
     /* The knob's battery over the receiver's face, a KiwiSDR's line beside
      * it; none under the SSTV viewer, whose title is there. */
     knob_sweep(dir, "uber");
@@ -1693,7 +1879,31 @@ static void runs(const char *dir)
     tap_at(180, 180, 80); settle(); quiet();
     CHECK(ui_sstv_wanted(NULL) == -1);
     knob_check(dir, NULL);
-    st.n_sstv = -1; st.knob_batt = false; run(60);
+    /* The gallery gone with its receiver -- the next in the list taken, with
+     * none of its own, or none yet: the viewer closes, the dial is back. */
+    where = "...the SSTV viewer, its receiver's gallery gone: closed";
+    swipe(300, 180, 60, 180);
+    tap_at(PANEL_X, PANEL_Y, 80); run(60);
+    CHECK(ui_sstv_wanted(NULL) == 0);
+    st.n_sstv = -1; run(60);
+    CHECK(ui_sstv_wanted(NULL) == -1 && !ui_edit_active());
+    quiet();
+    st.knob_batt = false; run(60);
+
+    /* The KiwiSDR beside it, between the SNR where the AGC is -- below zero,
+     * its widest -- and the noise filter's name where the gain is. */
+    static const char *const NR[] = { "OFF", "NR2", "RN2", "NR4" };
+    for (int k = 1; k < 4; k++) {
+        base();
+        st.have_snr = true;
+        st.snr_db = -10.0f;
+        st.have_gain = true; st.gain = (int8_t)k; st.gain_max = 3; st.n_gain_names = 4;
+        for (int j = 0; j < 4; j++) strcpy(st.gain_names[j], NR[j]);
+        settle(); quiet();
+        char face[16];
+        snprintf(face, sizeof face, "uber-%s", NR[k]);
+        sdr_reading(dir, face, "-10 dB", NR[k]);
+    }
 
     printf("%s: the time left, %d px clear of anything else at the least, its box %d px from the call's; "
            "its ink at the widest %d px (minutes, hours), %d (the seconds), %d (idle)\n", "slab_uber",
@@ -1750,6 +1960,133 @@ static void runs(const char *dir)
     }
     ui_setup_hide(); run(60);
     st.knob_batt = false; run(60);
+}
+#elif VFO_RADIO_KIWI
+/* Kiwi888's face, the receiver in use on its slab -- its name, under it its
+ * antenna or address, and where it is -- with no PTT and no spots. */
+static void kiwi_base(void)
+{
+    static const char *const NR[] = { "OFF", "WDSP", "LMS", "SPEC" };
+    base();
+    strcpy(st.agc, "med");
+    st.have_gain = true; st.gain = 0; st.gain_max = 3; st.n_gain_names = 4;
+    for (int j = 0; j < 4; j++) strcpy(st.gain_names[j], NR[j]);
+    st.freq_hz = 7123000; st.mode = "lsb"; st.filt_lo = -2700; st.filt_hi = -300;
+    strcpy(st.server, "EchoTracer");
+    st.rx_line2 = "Web-888  192.168.1.88:8077";
+    st.rx_line3 = "Lombardsijde, Belgium";
+}
+
+/* The right ear's reading, between the AGC and the noise filter at their
+ * widest. Then the receiver's name on the slab, a Bluetooth device's logo
+ * and its battery at the slab's right end, the battery at every charge:
+ * the name kept clear of them as the UberSDR's spot is -- centred where it
+ * fits so, else moved aside, whole, and only one too long for its room cut
+ * with dots (call_check). And the knob's own battery over the S-units, as
+ * on every face: over the red peak mark at the top of the arc, the right
+ * ear's line and reading, and the reading at its widest with OV after it,
+ * in red. */
+static void runs(const char *dir)
+{
+    static const char *const AGC[] = { "fast", "slow" }, *const AGC_UP[] = { "FAST", "SLOW" };
+    static const char *const NR[] = { "OFF", "WDSP", "LMS", "SPEC" };
+    for (int a = 0; a < 2; a++)
+        for (int k = 1; k < 4; k += 2) {
+            base();
+            strcpy(st.agc, AGC[a]);
+            st.have_gain = true; st.gain = (int8_t)k; st.gain_max = 3; st.n_gain_names = 4;
+            for (int j = 0; j < 4; j++) strcpy(st.gain_names[j], NR[j]);
+            settle(); quiet();
+            char face[24];
+            snprintf(face, sizeof face, "kiwi-%s-%s", AGC_UP[a], NR[k]);
+            sdr_reading(dir, face, AGC_UP[a], NR[k]);
+        }
+
+    kiwi_base(); run(120);
+    /* In turn: centred on any slab; moved aside beside a speaker's battery;
+     * beside either device's; the same, a speaker's battery's room to two
+     * pixels; moved aside beside a logo alone, cut beside a battery; centred
+     * on a slab of its own, cut beside any device; cut on any slab. */
+    static const char *const NAMES[] = { "EchoTracer", "TerraBooster", "TerraBooster 2", "KiwiSDR Bruges",
+                                         "KiwiSDR ON4ABC", "Web-888 OctaLoop", "KiwiSDR ON4ABC Bruges" };
+    char pic[96];
+    for (size_t k = 0; k < sizeof NAMES / sizeof *NAMES; k++) {
+        printf("  the receiver %-28s %3d px\n", NAMES[k], text_w(NAMES[k], &lv_font_montserrat_28));
+        strcpy(st.server, NAMES[k]);
+        st.headset = st.speaker = st.have_batt = false; run(60);
+        snprintf(pic, sizeof pic, "the receiver %s, no device", NAMES[k]);
+        where = pic;
+        call_check(NAMES[k], NULL);
+        for (int spk = 0; spk < 2; spk++) {
+            st.headset = !spk; st.speaker = spk;
+            st.have_batt = false; run(60);
+            snprintf(pic, sizeof pic, "the receiver %s, beside the logo alone (%s)", NAMES[k],
+                     spk ? "speaker" : "headset");
+            where = pic;
+            call_check(NAMES[k], NULL);
+            st.have_batt = true;
+            snprintf(pic, sizeof pic, "the receiver %s, %s", NAMES[k],
+                     spk ? "a speaker's battery" : "a headset's battery");
+            where = pic;
+            for (int i = 0; i < NLEVELS; i++) {
+                st.batt = (uint8_t)LEVELS[i]; run(60);
+                batt_check(dir, NULL, false);
+            }
+            call_check(NAMES[k], NULL);
+        }
+    }
+
+    where = "pictures";
+    strcpy(st.server, "EchoTracer");
+    st.speaker = false; st.headset = true; st.have_batt = true; st.batt = 80; run(60);
+    batt_check(dir, "kiwi-batt-green", false);
+    where = "a long name while the battery shows: moved aside, whole, on one line";
+    strcpy(st.server, "KiwiSDR Bruges");
+    st.batt = 30; run(60);
+    lv_obj_t *l = label_from(lv_screen_active(), "KiwiSDR");
+    CHECK(l && shown("KiwiSDR Bruges") && 2 * lv_obj_get_x(l) + lv_obj_get_width(l) < W &&
+          lv_obj_get_height(l) == lv_font_get_line_height(&lv_font_montserrat_28));
+    batt_check(dir, "kiwi-batt-long", false);
+    call_check("KiwiSDR Bruges", NULL);
+    st.headset = false; st.speaker = true; st.batt = 10; run(60);
+    CHECK(shown("KiwiSDR Bruges"));
+    batt_check(dir, "kiwi-batt-speaker", false);
+    call_check("KiwiSDR Bruges", NULL);
+    where = "the battery gone: the name whole, centred again beside the speaker";
+    st.have_batt = false; run(60);
+    CHECK(!batt_shown() && shown("KiwiSDR Bruges"));
+    call_check("KiwiSDR Bruges", NULL);
+    where = "no device, a charge left over: no battery, the name centred";
+    st.speaker = false; st.have_batt = true; run(60);
+    CHECK(!batt_shown() && shown("KiwiSDR Bruges"));
+    call_check("KiwiSDR Bruges", NULL);
+    st.have_batt = false;
+    strcpy(st.server, "EchoTracer"); run(60);
+
+    /* The knob's own battery over Kiwi888's face, the right ear's line and
+     * reading beside it (knob_radio); and over the reading at its widest,
+     * OV after it -- and the right ear's "can't reach" in its place. */
+    knob_sweep(dir, "kiwi");
+    knob_radio(dir, "kiwi");
+    {
+        const ui_state_t keep = st;
+        st.knob_batt = true; st.knob_pct = 60;
+        where = "...over the reading at its widest, OV after it in red";
+        st.ovl = true; st.smeter_dbm = -13.0f; run(1500);
+        CHECK(shown("-13 dBm  OV"));
+        knob_levels(dir);
+        knob_check(dir, "kiwi-knob-batt-ov");
+        where = "...over the right ear's can't reach, in amber";
+        st.ovl = false; st.smeter_dbm = -85.0f;
+        st.n_sdr = 1; strcpy(st.sdr_name[0], "KiwiSDR");
+        st.rxsrc = 0; st.sdr_trouble = true; strcpy(st.sdr_note, "can't reach"); run(1500);
+        CHECK(shown("can't reach"));
+        knob_levels(dir);
+        st = keep; run(60);
+    }
+
+    printf("%s: the receiver's name %d times centred, %d moved aside, %d cut with dots; its box within %d-%d\n",
+           "slab_kiwi", calls_centred, calls_moved, calls_cut, call_least_l, call_most_r);
 }
 #endif
 

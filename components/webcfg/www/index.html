@@ -36,6 +36,7 @@ button:active{transform:translateY(1px)}
 .up{background:#4caf7d22;color:var(--ok)} .down{background:#e5534b22;color:var(--bad)}
 .off{background:#ffffff12;color:var(--dim)}
 button.pill{margin:0 0 0 6px;padding:1px 8px;border:0;font-weight:500}
+.lv{display:inline-block;min-width:4.2em;margin-left:6px;text-align:center}
 #msg{margin-top:10px;font-size:13px;min-height:18px}
 .warn{background:#e5534b1f;border:1px solid #e5534b66;color:#f0b3ae;
       border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
@@ -122,7 +123,11 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      On its own network the knob needs none: UberSDR, as it comes, lets private
      addresses past its limits. Without one the knob listens as a guest, and
      when the receiver ends the session the dial asks before listening again.
-     Changes here apply on the knob's next boot.</p>
+     With more than one listed, a receiver that cannot be reached &mdash; its
+     name not found, no answer &mdash; hands over to the next in the list, in
+     turn: the first that answers plays, and is <b>In use</b> from then on.
+     One that answers but turns the knob away (full, its password, its time
+     up) keeps its turn. Changes here apply on the knob's next boot.</p>
   <p class="note" id="svxnote" hidden>The reflector's name, as SvxLink knows it:
      its SRV record says which host and port to use (<b>be.svx.link</b> is
      <b>reflector.be.svx.link:5300</b>). The port counts only for a name
@@ -160,7 +165,14 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
 <section id="sdrsec" hidden>
   <h2 id="sdr">Web SDRs</h2>
   <div id="sdrlist"></div>
-  <button id="sdradd" class="ghost" type="button">Add a receiver</button>
+  <div class="sdrrow"><button id="sdradd" class="ghost" type="button">Add a receiver</button>
+    <button id="sdrrfg" class="ghost" type="button" hidden>Add RF.Guru's receivers</button>
+    <span id="sdrrfgres" class="note"></span></div>
+  <div class="grid"><div><label>Your name, for their owners</label><input id="sdrwho" maxlength="31"
+       placeholder="VFO-Knob" autocapitalize="characters" autocorrect="off" spellcheck="false"></div></div>
+  <p class="note">A KiwiSDR or a Web-888 lists who listens, for its owner: the knob goes by this
+     name there &mdash; your callsign, say. Left empty, <b>VFO-Knob</b>. Saved with <b>Save</b>, and
+     told at once to a receiver playing.</p>
   <p class="note" id="sdrradio">A second receiver beside the radio, following its frequency
      and mode: a KiwiSDR, a Web-888, or an UberSDR through its Kiwi input. On
      the knob, swipe down and turn to <b>LOCAL</b> or a receiver, then tap.
@@ -174,13 +186,72 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      receiver, then tap. With one playing, the UberSDR is in the left ear and
      the KiwiSDR in the right, both brought to the same loudness;
      <b>BALANCE</b>, a swipe from the left, fades from one to the other.</p>
-  <p class="note">The address is the receiver's own, with its port &mdash;
-     <b>host:8073</b> on most KiwiSDRs &mdash; not an https:// link through a
-     proxy or a tunnel. The time-limit password, where a receiver has one,
+  <p class="note" id="sdrkiwi" hidden>Up to four KiwiSDRs or Web-888s, each
+     by its address with its port: <b>host:8073</b> on most KiwiSDRs,
+     <b>81.83.21.23:8077</b> for one of the four at Lombardsijde &mdash;
+     <b>Add RF.Guru's receivers</b> fills in all four, and logs in to none of
+     them: <b>Save</b> keeps them. One behind the kiwisdr.com proxy or
+     Cloudflare goes by its <b>https://</b> link, pasted whole: the knob
+     speaks to it over TLS, and the first connection to it takes a few
+     seconds longer. An <b>http://</b> link it answers with a redirect to
+     https:// is followed, and kept. The password
+     is the receiver's own, where it has one; the time-limit password, where
+     its owner gave you one, exempts you from its time limits. <b>In use</b> is
+     the one the knob plays, and another takes over at once, with no restart:
+     choose it here and <b>Save</b>, or on the knob &mdash; swipe up, or tap the
+     receiver's name at the bottom of the face &mdash; turn to it and tap. A tap
+     on the one in use chooses it again, which is how one held back is asked
+     for once more. <b>Test</b> logs in for a few seconds and says what the
+     receiver is and how full, and names one that has no name yet as it names
+     itself; it never logs in to a receiver at its day limit, nor to one
+     playing in either ear. A receiver with no name goes on the knob by its antenna, once it
+     has said which, else by its address with the port &mdash; an <b>https://</b> link on
+     443 by its name alone.</p>
+  <p class="note" id="sdrkiwiright" hidden>A second receiver from this list can play in the
+     <b>right ear</b>, on the same frequency, mode and filter, the one in use in the
+     left: an antenna against another. On the knob swipe down and turn to <b>OFF</b> or a
+     receiver, then tap; <b>BALANCE</b>, a swipe from the left, fades from one ear to the
+     other. Its S-meter is the thin blue line outside the other's, its reading the blue
+     one under it. One receiver is never in both ears: each ear refuses the other's.
+     The radio page chooses it too.</p>
+  <p class="note" id="sdraddr">The address is the receiver's own, with its port &mdash;
+     <b>host:8073</b> on most KiwiSDRs &mdash; or, for one behind the
+     kiwisdr.com proxy or Cloudflare, its <b>https://</b> link, pasted whole:
+     the knob speaks to it over TLS, and the first connection to it takes a
+     few seconds longer. An <b>http://</b> link it answers with a redirect to
+     https:// is followed, and kept. The time-limit password, where a receiver has one,
      exempts you from its session limit. An UberSDR's Kiwi input is its address
      on your network with <b>8073</b>, its KiwiSDR compatibility switched on
      (<b>enable_kiwisdr</b>); its bypass password goes in <b>Password</b>.
      Saved with <b>Save</b> below.</p>
+  <p class="note" id="sdrkiwilim" hidden>Each owner's limits are kept. A
+     receiver that turns the knob away because its listening time for the
+     day is used up (<b>day limit</b>) is left alone, through restarts, until
+     its own status shows it has restarted &mdash; or, on a KiwiSDR, a day has
+     passed. Choosing it again is one more try, and the knob takes two such
+     refusals from a receiver at most: a Kiwi bars an address for good after
+     five. A receiver with time limits that leaves a login unanswered counts
+     as one too: its answer may have been such a refusal. One that ended the
+     session for idling (<b>time up</b>) or was sent away by its owner
+     (<b>kicked</b>) is not asked again until you say so: the knob asks
+     <b>LISTEN AGAIN</b>. One that refused the knob, or its password, or lets
+     no apps listen, waits to be chosen again; one that is full is asked again
+     every minute or two. The knob tries a receiver at most six times in ten
+     minutes on its own; after a crash, what held a receiver back still holds
+     it, and after a run of crashes the knob waits before it tries at all.
+     With its settings memory full (<b>MEMORY FULL</b>) it logs in to
+     a receiver with time limits only when you choose it.</p>
+  <p class="note" id="sdrlim">Its owner's limits are kept. A receiver that turns the knob
+     away because its listening time for the day is used up (<b>day limit</b>)
+     is left alone, through restarts, until its own status shows it has
+     restarted &mdash; or, on a KiwiSDR, a day has passed. Choosing it again,
+     on the knob or the radio page, is one more try: the knob takes two such
+     refusals from a receiver at most, as a Kiwi bars an address for good
+     after five; a login left unanswered by one with time limits counts as
+     one. One that ended the session for idling (<b>time up</b>), was sent
+     away by its owner (<b>kicked</b>) or refuses this address waits to be
+     chosen again too, even after a crash. <b>Test</b> never logs in to a
+     receiver at its day limit, nor to the one in use.</p>
 </section>
 
 <section id="btsec" hidden>
@@ -195,6 +266,12 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   <p class="note" id="btkindnote" hidden>The knob tells a speaker from a headset by itself &mdash; by
      its class and the services it lists, or by its hanging up a call's audio at once &mdash;
      and remembers it. <b>Use as</b> changes it.</p>
+  <p class="note" id="btlevelnote" hidden><b>Level</b> sets how loud the knob sends this
+     <span class="btspk">speaker or </span>headset its audio, on top of the VOLUME, from 24 dB
+     less to 12 dB more in steps of 3 dB: heard at once, and kept for it. Until one is set a
+     headset gets the jack's level<span class="btspk">, and a speaker 12 dB less &mdash; a
+     loudspeaker fills a room with what suits earphones</span>. Above 0 dB a loud passage that
+     would pass full scale is turned down to it smoothly, never clipped.</p>
   <label class="chk" id="btboomrow"><input type="checkbox" id="btboom"> The boom arm is the PTT</label>
   <p class="note" id="btboomnote">Lowering the boom &mdash; the headset's microphone live
      &mdash; transmits; raising it &mdash; muted &mdash; stops. Never by
@@ -395,12 +472,14 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   <h2>Audio</h2>
   <div class="grid">
     <div><label>Volume (0&ndash;100)</label><input id="vol" inputmode="numeric"></div>
-    <div><label>Mic gain, the knob's (0&ndash;200)</label><input id="mic" inputmode="numeric"></div>
+    <div id="microw"><label>Mic gain, the knob's (0&ndash;200)</label><input id="mic" inputmode="numeric"></div>
     <div id="michrow"><label>Mic gain, a headset's (0&ndash;200)</label><input id="mich" inputmode="numeric"></div>
   </div>
-  <p class="note">Volume and mic gain take effect immediately. The knob's own
+  <p class="note" id="micnote">Volume and mic gain take effect immediately. The knob's own
      microphone and a Bluetooth headset's each have their gain: the dial
      turns the one in use.</p>
+  <p class="note" id="volnote" hidden>The volume takes effect immediately. A receiver's
+     firmware has no microphone to set.</p>
   <div class="grid">
     <div><label>Dim after (minutes, 0 = never)</label>
          <input id="dim" inputmode="numeric"></div>
@@ -530,9 +609,10 @@ async function load(){
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
+  KIWI = c.radio === 'kiwi';              /* web receivers: the list below, one in use */
   PHONE = c.radio === 'phone';            /* a telephone: its SIP account is its own */
   /* The setup firmware has no radio: it installs one of the others. */
-  $('radiosec').hidden = c.radio === 'setup' || PHONE;
+  $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI;
   for (const id of ['phonesec','phonecall','phonefav','phonegoogle']) $(id).hidden = !PHONE;
   /* A telephone never transmits; its calls are what keep the screen lit. */
   $('dimnote').hidden = PHONE; $('dimphonenote').hidden = !PHONE;
@@ -544,7 +624,12 @@ async function load(){
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
   $('ubernote').hidden = !uber;
-  $('sdruber').hidden = !uber; $('sdrradio').hidden = uber;
+  $('sdruber').hidden = !uber; $('sdrradio').hidden = uber || KIWI;
+  /* The kiwi firmware's receivers are this list: one in use, switched live,
+     and another of them in the right ear. */
+  $('sdrkiwi').hidden = $('sdrkiwiright').hidden = $('sdrkiwilim').hidden = !KIWI;
+  $('sdrlim').hidden = $('sdraddr').hidden = KIWI;
+  $('sdr').textContent = KIWI ? 'Receivers' : 'Web SDRs';
   $('svxnote').hidden = !SVX;
   for (const id of ['svxstation','svxtg','svxcert']) $(id).hidden = !SVX;
   if (SVX) { document.documentElement.style.setProperty('--accent','#e5a823'); svxLoad(); }
@@ -558,7 +643,9 @@ async function load(){
   $('myip').textContent = 'my IP ' + myIp;
   $('hostusb').hidden = lan || SVX || flex || uber || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
-  LIST = !SVX && c.radio !== 'setup'; LAN = lan; UBER = uber;
+  LIST = !SVX && c.radio !== 'setup' && !KIWI; LAN = lan; UBER = uber; RXONLY = uber || KIWI;
+  /* A receiver's firmware has no microphone: no gain to set for one. */
+  $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY; $('volnote').hidden = !RXONLY;
   HOSTLBL = flex || xiegu ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
           : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
@@ -571,7 +658,9 @@ async function load(){
 /* ---- the Bluetooth headset or speaker, through the knob's second chip ---- */
 let BT=null, btTimer=0;
 async function btLoad(){
+  const at=Date.now();                  /* when asked: a level stepped here before it is in the answer */
   let s; try{ const r=await fetch('/api/bt',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
+  s.at=at;
   /* Only where the second chip runs the companion firmware. */
   $('btsec').hidden=!s.companion; BT=s;
   if(s.companion){ btShow(s); chipPush(s) }
@@ -628,6 +717,52 @@ const BT_VOL={knob:"the knob's VOLUME &mdash; it turns itself to it, its own but
               own:"its own &mdash; the knob turns down what it sends",
               refused:"its own &mdash; it did not take the knob's VOLUME, and the knob turns down what it sends;"
                       +" the next VOLUME tries again"};
+/* The device's level, dB, on top of the VOLUME: -24 to +12 in threes. A
+   step here shows at once and the next goes on from it, ahead of the knob's
+   word: one request at a time, the last step last. BTLV: {bda, db, busy,
+   done}, until an answer asked for after the last request has it. */
+const BT_LV_MIN=-24, BT_LV_MAX=12, BT_LV_STEP=3;
+let BTLV=null;
+function btLevel(s){
+  if(BTLV && !BTLV.busy && (BTLV.bda!==s.bda || (BTLV.done && s.at>BTLV.done))) BTLV=null;
+  return BTLV && BTLV.bda===s.bda ? BTLV.db : s.level;
+}
+const lvText=v=>`${v>0?'+':v<0?'&minus;':''}${Math.abs(v)} dB`;
+function btLevelRow(s){
+  if(!s.bda || typeof s.level!=='number') return '';
+  const db=btLevel(s);
+  const step=(d,t,can)=>`<button type="button" class="pill ${can?'up':'off'}" data-lv="${d}"${can?'':' disabled'}>${t}</button>`;
+  /* The note before the buttons and the level in a width of its own: the
+     row is right-aligned, so neither button moves under the pointer as the
+     note comes and goes or the figure changes. */
+  const dflt=db===s.level_default ? `<span class="note">${s.kind==='speaker'?"a speaker's":"a headset's"} default</span>` : '';
+  return row('Level', dflt+step(-BT_LV_STEP,'&minus;',db>BT_LV_MIN)+`<span class="lv">${lvText(db)}</span>`
+                      +step(BT_LV_STEP,'+',db<BT_LV_MAX));
+}
+function btLevelStep(d){
+  const s=BT; if(!s || !s.bda || typeof s.level!=='number') return;
+  const from=btLevel(s), db=Math.max(BT_LV_MIN, Math.min(BT_LV_MAX, from+d));
+  if(db===from) return;
+  if(!BTLV || BTLV.bda!==s.bda) BTLV={bda:s.bda, busy:false, done:0};
+  BTLV.db=db;
+  if(!BTLV.busy) btLevelSend(BTLV);       /* busy from here, its request on its way */
+  btShow(s);
+}
+async function btLevelSend(v){
+  v.busy=true;
+  let sent;
+  do{
+    sent=v.db;
+    let no='';
+    try{ const r=await fetch('/api/bt',{method:'POST',body:new URLSearchParams({do:'level',bda:v.bda,level:sent})});
+         if(!r.ok) no=await r.text() || ('The knob says no ('+r.status+')') }
+    catch(e){ no='The knob did not answer' }
+    if(no){ $('btmsg').textContent=no; if(BTLV===v) BTLV=null; break }
+  }while(v.db!==sent);
+  v.busy=false; v.done=Date.now();
+  if(BT) btShow(BT);
+  clearTimeout(btTimer); btTimer=setTimeout(btLoad, 300);
+}
 function btShow(s){
   /* SPK: the second chip plays to speakers -- its firmware says so. */
   const SPK = !!s.speakers, spk = s.kind==='speaker';
@@ -648,17 +783,20 @@ function btShow(s){
                              + (spk && BT_VOL[s.volume] ? row('Volume', BT_VOL[s.volume]
                                  + (s.volume==='own' && !s.av_volume ? ` <span class="note">(this second chip's firmware`
                                     + ` sets no speaker's volume: its update does)</span>` : '')) : '')
-                             + (UBER || spk ? '' : row('Microphone', s.mic===0 ? '<span class="pill down">muted</span>'
+                             + (RXONLY || spk ? '' : row('Microphone', s.mic===0 ? '<span class="pill down">muted</span>'
                                                                               : '<span class="pill up">live</span>')
                                                  + row('Button presses', s.presses)) : '')
     + use
+    + btLevelRow(s)
     + chipRows(s);
   for(const b of $('btrows').querySelectorAll('[data-kind]')) b.onclick=()=>{
     const k=b.dataset.kind;
     if(k!==s.kind) btDo('kind', s.bda, `${s.name||s.bda}: a ${k} from now on${s.link!=='idle'?' — calling it again…':''}`, {kind:k});
   };
+  for(const b of $('btrows').querySelectorAll('[data-lv]')) b.onclick=()=>btLevelStep(+b.dataset.lv);
   /* An old second chip: headsets only, until its update. */
   $('btold').hidden = SPK; $('btkindnote').hidden = !SPK;
+  $('btlevelnote').hidden = !s.bda;
   if(!SPK) $('btold').textContent = "This second chip's firmware knows headsets only: speakers come with its update"
     + (s.updates ? ', which the knob sends by itself at a quiet moment.'
                  : ', which needs the bench once — the headset guide, For developers.');
@@ -666,8 +804,8 @@ function btShow(s){
   for (const e of document.querySelectorAll('.btfind')) e.textContent = SPK ? 'Find headsets and speakers' : 'Find headsets';
   /* A receiver's knob: the headset is for listening, nothing more. A
      telephone's: no PTT, so no boom arm either. */
-  for (const id of ['btboomrow','btboomnote','bttxnote']) $(id).hidden = UBER || PHONE;
-  $('btrxnote').hidden = !UBER;
+  for (const id of ['btboomrow','btboomnote','bttxnote']) $(id).hidden = RXONLY || PHONE;
+  $('btrxnote').hidden = !RXONLY;
   $('btphonenote').hidden = !PHONE;
   $('btboom').checked = !!s.boom;
   $('btoff').hidden = s.link==='idle';
@@ -778,7 +916,7 @@ function foundAdd(i){
 }
 
 /* ---- the radios: one in use, a swipe up on the knob for another ---- */
-let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, UBER=false, HOSTLBL='Host';
+let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, UBER=false, KIWI=false, RXONLY=false, HOSTLBL='Host';
 /* An UberSDR's address as its page has it: https://name, its tunnel, over
    TLS; http://host:port a receiver on the LAN, in the clear. The knob keeps
    the scheme with the name, and the port in its box. Just typed, a scheme
@@ -909,19 +1047,88 @@ async function wifiSave(){
   return r.ok ? '' : await r.text();
 }
 
-/* ---- web SDRs, beside the radio: the Icom, Xiegu and FlexRadio firmwares ---- */
-let SDRS=null, sdrDirty=false;
+/* ---- web SDRs, beside the radio: the Icom, Xiegu and FlexRadio firmwares --
+   ---- and on the kiwi firmware its receivers, one of them In use, and
+   ---- another maybe in the right ear ---- */
+let SDRS=null, sdrDirty=false, SDR_USE=-1, sdrUseDirty=false, SDRSTATE='', WHO='', SDR_RIGHT=-1, RIGHTSTATE='';
+/* Beside a radio, the one listened to; and where that one, or the right
+   ear's, tunes: what it covers, said with "out of range". */
+let SDR_LISTEN=-1, SDRRANGE=null, RIGHTRANGE=null;
+/* The four Web-888s at Lombardsijde, an antenna each, on one address: the
+   kiwi firmware's button fills them in -- no login, no lookup; Save keeps
+   them. */
+const RFGURU=[['EchoTracer','81.83.21.23:8077'],['OctaLoop','81.83.21.23:8076'],
+              ['TerraBooster','81.83.21.23:8075'],['OctaLoop Mini','81.83.21.23:8074']];
+const sdrHas=h=>SDRS.some(x=>x.host.trim().toLowerCase()===h);
+/* A receiver's address as the page shows it, and takes it: https://name --
+   over TLS, 443 unless it says, a receiver behind the kiwisdr.com proxy or
+   Cloudflare -- http://name on 80, else host:port. A link pasted whole is
+   cut to that: its scheme, its name and its port. */
+function sdrShow(host,port,tls){
+  port=+port||(tls?443:8073);
+  return tls?'https://'+host+(port!==443?':'+port:''):port===80?'http://'+host:host+':'+port;
+}
+function sdrAddr(x){
+  const m=/^\s*(?:(https?):\/\/)?([^\/:?#\s]+)(?::(\d+))?/i.exec(x.host);
+  if(!m) return;
+  const s=(m[1]||'').toLowerCase();
+  x.host=s?sdrShow(m[2],m[3]||(s==='https'?443:80),s==='https'):m[2]+(m[3]?':'+m[3]:'');
+}
 async function sdrLoad(){
   let s; try{ const r=await fetch('/api/sdr',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
   $('sdrsec').hidden=false;
-  SDRS=s.list.map((x,i)=>({name:x.name,host:x.host+(x.port?':'+x.port:''),pass:'',ipl:'',
-                          hasPass:x.pass,hasIpl:x.ipl,clrPass:false,clrIpl:false,was:i}));
+  SDRS=s.list.map((x,i)=>({name:x.name,host:sdrShow(x.host,x.port,x.tls),pass:'',ipl:'',
+                          hasPass:x.pass,hasIpl:x.ipl,clrPass:false,clrIpl:false,was:i,
+                          mark:x.mark||null,hold:x.hold||''}));
   for(const x of SDRS) x.host0=x.host;
+  SDR_USE=KIWI?s.sel:-1; SDRSTATE=s.state||''; sdrUseDirty=false;
+  SDR_RIGHT=KIWI&&s.right?s.right.sel:-1; RIGHTSTATE=KIWI&&s.right?s.right.state||'':'';
+  SDR_LISTEN=KIWI?-1:s.sel; SDRRANGE=s.range||null; RIGHTRANGE=KIWI&&s.right?s.right.range||null:null;
+  WHO=s.ident||''; $('sdrwho').value=WHO; $('sdrrfgres').textContent='';
   sdrDirty=false; sdrRender();
 }
 const LOGIN={ok:'logged in','wrong password':'wrong password',busy:'all its channels are in use',
              refused:'the login refused','no answer':'no answer to the login',
-             'no apps':'its owner lets no apps listen, only browsers: it would cut the knob off after 10 s'};
+             'no apps':'its owner lets no apps listen, only browsers: it would cut the knob off after 10 s',
+             'apps full':'the channels its owner keeps for apps are all in use',
+             'in use':'playing now: no second login',
+             'day limit':'its listening time for the day is used up',
+             'not a kiwi':'something answers there, but not a KiwiSDR or a Web-888',
+             'one per ip':'its owner lets one connection per address, and one is open from here',
+             down:'its owner has it down for now',updating:'it is updating itself',
+             'try later':'it cannot take a login just now',kicked:'its owner sent the knob away',
+             moved:'it sends the knob to another address',
+             certificate:'its https:// certificate does not check out: not spoken to'};
+/* A receiver's state, on the kiwi firmware's list: in use and how, or what
+   holds it back until it is chosen again. */
+const HOLD={'no apps':'held: its owner lets no apps listen','password?':'held: the password is wrong',
+            refused:'held: it refuses this address','not a kiwi':'held: not a KiwiSDR or a Web-888',
+            moved:'held: it sends the knob to another address',
+            certificate:'held: its https:// certificate does not check out',
+            'time up':'held: time up \u2014 the knob asks LISTEN AGAIN','kicked':'held: its owner sent the knob away'};
+const sdrRight=x=>KIWI && x.was>=0 && x.was===SDR_RIGHT;
+/* A receiver that cannot reach the dial: what it covers. */
+const mhzSpan=r=>{const f=h=>+(h/1e6).toFixed(3);return f(r[0])+'-'+f(r[1])+' MHz'};
+const outOfRange=(st,r)=>st==='out of range'&&r&&r[1]>r[0]?'out of range: it covers '+mhzSpan(r):'';
+function sdrState(x,i){
+  const parts=[];
+  if(i===SDR_USE && !sdrUseDirty && SDRSTATE) parts.push('in use: '+SDRSTATE);
+  const far=outOfRange(RIGHTSTATE,RIGHTRANGE);
+  if(sdrRight(x)) parts.push('right ear'+(far?', '+far:RIGHTSTATE?': '+RIGHTSTATE:''));
+  if(x.mark) parts.push((x.mark.unsure?'its login went unanswered':'day limit')+sdrMark({mark:x.mark,model:''}));
+  if(x.hold && HOLD[x.hold]) parts.push(HOLD[x.hold]);
+  return parts.join(' \u00b7 ');
+}
+/* A receiver that refused the knob for its day limit -- or, with time limits,
+   left a login unanswered, which may have been such a refusal: what the knob
+   will do. A Kiwi bars an address after five such refusals, so the knob tries
+   it only when it is chosen again, and gives up after two. */
+function sdrMark(j){
+  const m=j.mark; if(!m) return '';
+  if(!m.held) return ` \u2014 ${m.tries===1?'one more try':(m.tries===2?'two':m.tries)+' more tries'} when you choose it again${KIWI?'':' on the knob'}`;
+  return ' \u2014 left alone '+(j.model==='KiwiSDR'?'for a day at most':j.model==='Web-888'?'until it restarts'
+                                 :'until it restarts or a day has passed');
+}
 function sdrRender(){
   const L=$('sdrlist'); L.innerHTML='';
   const pwf=(k,label,has)=>`<div><label>${label}${has?` <button type="button" class="pill down" data-clr="${k}">clear</button>`:''}</label>
@@ -929,16 +1136,27 @@ function sdrRender(){
      autocorrect="off" spellcheck="false"><button type="button" class="show">Show</button></div></div>`;
   SDRS.forEach((x,i)=>{
     const d=document.createElement('div'); d.className='sdr';
-    d.innerHTML=`<div class="grid">
-      <div><label>Name, on the knob</label><input data-k="name" maxlength="15" placeholder="its address"></div>
-      <div><label>Address</label><input data-k="host" placeholder="host:8073" autocapitalize="none"
+    const st=KIWI?sdrState(x,i):x.was>=0&&x.was===SDR_LISTEN?outOfRange(SDRSTATE,SDRRANGE):'';
+    /* The right ear's receiver is never the one in use as well. */
+    const right=sdrRight(x);
+    d.innerHTML=`${KIWI?`<label class="chk"${right?' title="in the right ear"':''}><input type="radio" name="suse"${i===SDR_USE?' checked':''}${right?' disabled':''}> In use</label>`:''}
+      <div class="grid">
+      <div><label>Name, on the knob</label><input data-k="name" maxlength="15" placeholder="${KIWI?'its antenna, or its address':'its address'}"></div>
+      <div><label>Address</label><input data-k="host" placeholder="host:8073, or https://\u2026" autocapitalize="none"
            autocorrect="off" spellcheck="false"></div>
       ${pwf('pass','Password',x.hasPass)}${pwf('ipl','Time-limit password',x.hasIpl)}</div>
+      ${st?`<p class="note">${esc(st)}</p>`:''}
       <div class="sdrrow"><button type="button" class="ghost" data-act="test">Test</button>
       <button type="button" class="ghost" data-act="rm">Remove</button><span class="sdrres note"></span></div>`;
+    /* In use: a tap chooses it -- the one in use too, which is how one its
+       owner's limits hold back is asked for once more. */
+    const use=d.querySelector('input[name=suse]');
+    if(use) use.onclick=use.onchange=()=>{ SDR_USE=i; sdrUseDirty=true; sdrDirty=true };
     for(const inp of d.querySelectorAll('input[data-k]')){
       const k=inp.dataset.k; inp.value=x[k];
       inp.oninput=()=>{ x[k]=inp.value; sdrDirty=true; if(k==='host') pwHint(d,x) };
+      /* A link pasted whole: its scheme, its name and its port. */
+      if(k==='host') inp.onchange=()=>{ sdrAddr(x); inp.value=x.host; pwHint(d,x) };
     }
     pwHint(d,x);
     for(const b of d.querySelectorAll('button.show')) b.onclick=()=>{
@@ -947,12 +1165,34 @@ function sdrRender(){
       if(b.dataset.clr==='pass'){ x.hasPass=false; x.clrPass=true } else { x.hasIpl=false; x.clrIpl=true }
       sdrDirty=true; sdrRender() };
     const res=d.querySelector('.sdrres');
-    d.querySelector('[data-act=rm]').onclick=()=>{ SDRS.splice(i,1); sdrDirty=true; sdrRender() };
-    d.querySelector('[data-act=test]').onclick=()=>sdrTest(x,res);
+    d.querySelector('[data-act=rm]').onclick=()=>{
+      SDRS.splice(i,1); SDR_USE=SDR_USE===i?-1:SDR_USE>i?SDR_USE-1:SDR_USE;
+      sdrDirty=true; sdrRender() };
+    /* One test at a time: a second press would be a second login. */
+    const tb=d.querySelector('[data-act=test]');
+    tb.onclick=async()=>{ tb.disabled=true; try{ await sdrTest(x,res,d) }finally{ tb.disabled=false } };
     L.appendChild(d);
   });
   $('sdradd').hidden=SDRS.length>=4;
+  $('sdrrfg').hidden=!KIWI||SDRS.length>=4||RFGURU.every(([,h])=>sdrHas(h));
 }
+$('sdrrfg').onclick=()=>{
+  /* Those not there yet, as far as there is room: four at most, as the knob
+     keeps -- rows with no address left out first, as Save leaves them out. */
+  const use=SDRS[SDR_USE];
+  SDRS=SDRS.filter(x=>x.host.trim()); SDR_USE=use?SDRS.indexOf(use):-1;
+  const added=[];
+  for(const [name,host] of RFGURU){
+    if(sdrHas(host)||SDRS.length>=4) continue;
+    SDRS.push({name,host,pass:'',ipl:'',hasPass:false,hasIpl:false,clrPass:false,clrIpl:false,was:-1});
+    added.push(name);
+  }
+  const left=RFGURU.filter(([,h])=>!sdrHas(h)).map(([n])=>n);
+  $('sdrrfgres').textContent=(added.length?added.join(', ')+' added \u2014 Save keeps them.':'')
+    +(left.length?' No room for '+left.join(', ')+': four receivers at most.':'');
+  if(added.length) sdrDirty=true;
+  sdrRender();
+};
 $('sdradd').onclick=()=>{
   SDRS.push({name:'',host:'',pass:'',ipl:'',hasPass:false,hasIpl:false,clrPass:false,clrIpl:false,was:-1});
   sdrDirty=true; sdrRender();
@@ -964,29 +1204,67 @@ function sdrPw(b,x,sfx){
   if(x.pass||x.clrPass) b.append('pass'+sfx,x.pass);
   if(x.ipl||x.clrIpl)   b.append('ipl'+sfx,x.ipl);
 }
-async function sdrTest(x,res){
-  const h=x.host.trim();
+async function sdrTest(x,res,d){
+  sdrAddr(x);
+  const h=x.host.trim(), same=x.was>=0&&h===x.host0;
   if(!h){ res.textContent='An address first'; res.style.color='var(--bad)'; return }
+  const hi=d&&d.querySelector('input[data-k=host]'); if(hi) hi.value=h;
   const b=new URLSearchParams({host:h,was:x.was}); sdrPw(b,x,'');
   res.style.color='var(--dim)';
-  res.textContent=/^https:/i.test(h) ? 'An https:// address is not spoken here: trying its Kiwi port, 8073…' : 'Testing…';
+  res.textContent=/^https:/i.test(h) ? 'Testing over TLS\u2026 the first connection takes a few seconds' : 'Testing\u2026';
   try{
     const r=await fetch('/api/sdr/test',{method:'POST',body:b});
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
-    if(j.error){ res.textContent='\u2717 '+j.error; res.style.color='var(--bad)'; return }
-    const who=[j.name,j.sw,j.users!=='?'?`${j.users} of ${j.users_max} channels in use`:''].filter(Boolean).join(' \u00b7 ');
-    res.textContent=(j.ok?'\u2713 ':'\u2717 ')+(LOGIN[j.login]||j.login)+(who?' \u2014 '+who:'');
+    /* An http:// one that sent it to https:// on its own host: spoken there,
+       and kept so -- the box says it, and Save keeps it -- whatever came of
+       the test after. */
+    const m=/^\s*(?:https?:\/\/)?([^\/:?#\s]+)/i.exec(h);
+    let tls='';
+    if(j.tls && m && !/^https:/i.test(h)){
+      /* The one saved at that address keeps it on the knob already. */
+      x.host=sdrShow(m[1],j.port,true); if(same) x.host0=x.host;
+      if(hi) hi.value=x.host; pwHint(d,x); tls=' \u2014 over https:// from now on, as it asks';
+    }
+    if(j.error){ res.textContent='\u2717 '+j.error+tls; res.style.color='var(--bad)'; return }
+    /* No name yet: the one it gives itself -- its antenna, else its own
+       name's first part (the knob's kiwi_status_name) -- for the dial; Save
+       keeps it. */
+    if(!x.name.trim() && j.fill){
+      x.name=j.fill; sdrDirty=true;
+      const n=d&&d.querySelector('input[data-k=name]'); if(n) n.value=j.fill;
+    }
+    /* On the kiwi firmware what it is: its antenna, model and whereabouts. */
+    const who=(KIWI?[j.antenna||j.name,j.model||j.sw,j.loc]:[j.name,j.sw])
+      .concat(j.users!=='?'?[`${j.users} of ${j.users_max} channels in use`]:[]).filter(Boolean).join(' \u00b7 ');
+    const said=j.login==='moved'&&j.moved?'it sends the knob to '+j.moved:LOGIN[j.login]||j.login;
+    res.textContent=(j.ok?'\u2713 ':'\u2717 ')+said+tls+(j.mark?sdrMark(j):'')+(who?' \u2014 '+who:'');
     res.style.color=j.ok?'var(--ok)':'var(--bad)';
   }catch(e){ res.textContent='The test failed: '+e.message; res.style.color='var(--bad)' }
 }
 async function sdrSave(){
-  if(!SDRS||!sdrDirty) return '';
-  const b=new URLSearchParams(); b.append('n',SDRS.length);
-  SDRS.forEach((x,i)=>{ b.append('name'+i,x.name.trim()); b.append('host'+i,x.host.trim());
-                        b.append('was'+i,x.was); sdrPw(b,x,i) });
+  const who=$('sdrwho').value.trim();
+  if(!SDRS||(!sdrDirty&&who===WHO)) return '';
+  const b=new URLSearchParams();
+  /* Who the owners see: on its own, it saves no list -- a list saved ends
+     the web SDR's session beside a radio, and this needs none ended. */
+  if(who!==WHO) b.append('ident',who);
+  if(sdrDirty){
+    /* Those with an address: the knob keeps no others, and counts places among these. */
+    const keep=SDRS.filter(x=>x.host.trim());
+    b.append('n',keep.length);
+    keep.forEach((x,i)=>{ b.append('name'+i,x.name.trim()); b.append('host'+i,x.host.trim());
+                          b.append('was'+i,x.was); sdrPw(b,x,i) });
+    /* In use, when it was changed here: choosing is an act of its own on the
+       knob -- of a receiver at its day limit, one of its tries -- so a save
+       of the list alone never chooses. */
+    const use=keep.indexOf(SDRS[SDR_USE]);
+    if(KIWI && sdrUseDirty && use>=0) b.append('sel',use);
+  }
   const r=await fetch('/api/sdr',{method:'POST',body:b});
-  return r.ok ? '' : await r.text();
+  /* 409: saved, but In use refused -- that one plays in the right ear. */
+  if(r.ok||r.status===409) WHO=who;
+  return r.ok ? '' : r.status===409 ? {saved:await r.text()} : await r.text();
 }
 let myIp='', LINKNAME='Radio', SVX=false;
 /* A stored password is only ever sent to the address it was given for: moved
@@ -1191,9 +1469,18 @@ $('forget').onclick=async()=>{
 $('myip').onclick=()=>{ $('host').value=myIp; $('host').focus() };
 
 $('save').onclick=async()=>{
+  /* Your name for the receivers' owners: the knob keeps 31 bytes of it, and
+     a letter like ë takes two -- said before anything is saved, so nothing
+     typed here is lost to the reload. */
+  const wb=new TextEncoder().encode($('sdrwho').value.trim()).length;
+  if(!$('sdrsec').hidden && wb>31){
+    say(`Not saved: your name for their owners is ${wb} bytes long, 31 at most — a letter like ë takes two.`,false);
+    $('sdrwho').focus(); return;
+  }
   const b=new URLSearchParams();
-  /* With a list of radios the one in use is saved with the list, below. */
-  for(const k of [...(LIST?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','user','otah','dim','blank'])
+  /* With a list of radios the one in use is saved with the list, below; the
+     kiwi firmware's receivers are the web SDRs' list. */
+  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','user','otah','dim','blank'])
     b.append(k,$(k).value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);
@@ -1214,7 +1501,8 @@ $('save').onclick=async()=>{
     const e=await rigsSave();
     if(e) say('Radios not saved: '+e,false);
     const e2=await sdrSave();
-    if(e2) say('Web SDRs not saved: '+e2,false);
+    if(e2&&e2.saved) say('Receivers saved, but not In use: '+e2.saved,false);
+    else if(e2) say((KIWI?'Receivers':'Web SDRs')+' not saved: '+e2,false);
     const e3=await wifiSave();
     if(e3) say('WiFi networks not saved: '+e3,false);
   }
@@ -1350,13 +1638,16 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'phone',     name:'Telephone (SIP)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
               {id:'ubersdr',   name:'UberSDR (a web receiver)'},
+              {id:'kiwi',      name:'Kiwi888 (KiwiSDR and Web-888 receivers)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
 function radios(){
   const list=RADIOS.some(r=>r.id===RADIO) ? RADIOS : [{id:RADIO,name:RADIO},...RADIOS];
-  $('radio').innerHTML=list.map(r=>`<option value="${esc(r.id)}"${r.soon?' disabled':''}>`
-    +esc(r.name)+(r.soon?' — coming':'')+'</option>').join('');
+  /* Not published yet: shown, not offered -- unless it is the one running. */
+  const soon=r=>r.soon&&r.id!==RADIO;
+  $('radio').innerHTML=list.map(r=>`<option value="${esc(r.id)}"${soon(r)?' disabled':''}>`
+    +esc(r.name)+(soon(r)?' — coming':'')+'</option>').join('');
   $('radio').value=RADIO; $('switch').hidden=true;
 }
 $('radio').onchange=()=>{ $('switch').hidden=$('radio').value===RADIO };

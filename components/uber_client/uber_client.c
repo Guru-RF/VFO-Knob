@@ -13,9 +13,22 @@
  *
  * Receive only: nothing here keys anything, and PTT is refused.
  *
+ * The knob may list up to four receivers (net_prov's: the configuration
+ * page's list). The client starts with the one in use; one it cannot reach
+ * -- its description not read: the name not found, no answer, refused, TLS
+ * failed, only its tunnel answering -- hands over to the next in the list,
+ * in turn, wrapping round, the one in use after a fair chance: two tries,
+ * some seconds apart. The first that answers plays, and is the one in use
+ * from then on. The one in use that answers but will not have us -- full,
+ * busy, its day spent, a password refused, its time up -- keeps its turn:
+ * that is the receiver's word, not a receiver gone. A stand-in that answers
+ * so, one the operator never chose, is passed by for the next. No restart:
+ * the session and the spots' task go on to the next.
+ *
  * The session task's stack is in PSRAM, so it never touches flash: what is
- * kept across a restart (the frequency, the mode, the filter) is saved by a
- * timer. See uber_aux.c for the spots and the SSTV pictures. */
+ * kept across a restart (the frequency, the mode, the filter, the receiver
+ * in use) is saved by a timer. See uber_aux.c for the spots and the SSTV
+ * pictures. */
 #include "radio.h"
 #include "uber.h"
 #include "uber_json.h"
@@ -39,6 +52,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "net_prov.h"
 #include "nvs.h"
 #include "ptt_fsm.h"
 #include "vfo_tune.h"
@@ -55,6 +69,9 @@ static const char *TAG = "uber";
 #define PCM_MAX        2880       /* 120 ms at 24 kHz: Opus's longest */
 #define IDLE_WARN_S    60         /* an idle limit's last minute: on the face */
 #define OVERRUN_S      60         /* listening this long past the count: it was not the receiver's */
+#define FAIR_TRIES     2          /* the receiver in use, tried before the next ... */
+#define FAIR_GAP_MS    4000       /* ...this far apart: a blip of WiFi or DNS passes */
+#define SAID_MS        2000       /* a receiver not reached, said this long before the next */
 
 /* Its modes, and the passband each opens with: UberSDR's own. */
 static const struct { const char *m; int16_t lo, hi; } MODES[] = {
@@ -64,8 +81,24 @@ static const struct { const char *m; int16_t lo, hi; } MODES[] = {
 };
 #define N_MODES ((int)(sizeof MODES / sizeof MODES[0]))
 
-uhost_t g_uh;
+/* The receiver: the session task's own to change, under S_LOCK, between
+ * sessions; the spots' task and the page have it by uber_rx(). */
+static uhost_t g_uh;
 static char s_pass[33];
+
+/* The knob's list of receivers (net_prov): the one the client is on, by its
+ * place in the list, its name as the dial has it and its address as the
+ * list has it -- -1 for a receiver not from the list, which the client keeps
+ * to. s_in_use: the one in use as the client knows it -- the one it started
+ * with, then each it saved (use_cb) -- not one chosen on the page meanwhile,
+ * for the next boot. s_from: the one in use as a hand-over began, -1 while
+ * none goes on. s_rx_gen moves on with each hand-over. */
+static int      s_at = -1, s_from = -1;
+static volatile int s_in_use = -1;
+EXT_RAM_BSS_ATTR static char s_at_name[24];
+EXT_RAM_BSS_ATTR static char s_at_host[64];
+static uint16_t s_at_port;
+static uint32_t s_rx_gen;
 
 /* What the receiver says of itself, and its noise filters. */
 static uber_info_t I;
@@ -117,6 +150,9 @@ static esp_timer_handle_t s_save_t;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
+/* Another receiver in the list to hand over to. */
+static bool others(void) { return s_at >= 0 && net_prov_radio_count() > 1; }
+
 static int mode_index(const char *m)
 {
     for (int i = 0; i < N_MODES; i++) if (m && !strcasecmp(MODES[i].m, m)) return i;
@@ -144,6 +180,10 @@ static void note(const char *n)
 
 static void set_link(radio_link_t l, const char *why)
 {
+    /* With other receivers listed, the face names the one it is about: on
+     * the way to it, CONNECTING. */
+    if ((!why || !why[0]) && (l == RADIO_LINK_CONNECTING || l == RADIO_LINK_GREETING) && others())
+        why = "CONNECTING";
     taskENTER_CRITICAL(&S_LOCK);
     S.link = l;
     strlcpy(S.why, why ? why : "", sizeof S.why);
@@ -222,11 +262,16 @@ static bool read_description(char *why, size_t wn)
 {
     const size_t cap = 24 * 1024;
     char *b = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
-    if (!b) return false;
+    if (!b) {
+        snprintf(why, wn, "no memory");
+        return false;
+    }
     size_t n = 0;
     const int st = unet_http(&g_uh, "GET", "/api/description", NULL, b, cap - 1, &n, 12000, why, wn);
     bool ok = false;
-    if (st == 200 && n > 2) {
+    /* Its JSON -- a page of HTML instead is no description: a tunnel's,
+     * say, for a receiver not there. */
+    if (st == 200 && n > 2 && b[strspn(b, " \t\r\n")] == '{') {
         const char *e = b + n;
         uber_info_t in = { .known = true };
         const char *rcv = jkey(b, e, "receiver");
@@ -274,7 +319,8 @@ static bool read_description(char *why, size_t wn)
                  in.sstv ? "yes" : "no", (unsigned)nn);
         ok = true;
     } else if (st > 0) {
-        snprintf(why, wn, "HTTP %d", st);
+        if (st == 200) snprintf(why, wn, "no description");
+        else           snprintf(why, wn, "HTTP %d", st);
     }
     free(b);
     return ok;
@@ -354,8 +400,9 @@ void uber_dial(int64_t *hz, char *mode, size_t cap)
  *    every 30 s. /connection says what is left of it.
  *  - session_timeout: a socket that has said nothing for so long. Every
  *    message counts, a ping too, and the knob pings only while someone uses
- *    it (uber_activity). /connection says it -- or, where there is none,
- *    the session's limit in its place, which can never end a session first.
+ *    it (radio_user_activity). /connection says it -- or, where there is
+ *    none, the session's limit in its place, which can never end a session
+ *    first.
  * A private address and the password are let past all three. */
 
 /* The time left in us, and whose (S_LOCK held): INT64_MAX where no limit
@@ -404,8 +451,19 @@ int uber_time_left(char *why)
     return l > 0 ? (int)((l + 999999) / 1000000) : 0;
 }
 
-/* What a refusal means for the next try. */
-enum { R_OK = 0, R_RETRY, R_WAIT, R_REREGISTER, R_NEW_UUID, R_TIME_UP, R_STOP };
+/* What a refusal means for the next try -- and R_GONE, none: the receiver
+ * not reached at all (the name not found, no answer, refused, TLS failed, or
+ * only its tunnel answering for it). */
+enum { R_OK = 0, R_RETRY, R_WAIT, R_REREGISTER, R_NEW_UUID, R_TIME_UP, R_STOP, R_GONE };
+
+/* A receiver not reached, by unet's word for why: whether it was the knob's
+ * own trouble -- no network, no free socket, no memory -- which no other
+ * receiver would mend, or the receiver's own word ("HTTP 429": busy). */
+static bool own_trouble(const char *w)
+{
+    return !net_prov_is_connected() || !strcmp(w, "no free socket") || !strcmp(w, "no memory") ||
+           !strcmp(w, "HTTP 429");
+}
 
 static int classify(int status, const char *text, char *why, size_t wn)
 {
@@ -452,9 +510,10 @@ static int register_session(char *why, size_t wn)
     char w[32];
     const int st = unet_http(&g_uh, "POST", "/connection", body, ans, sizeof ans - 1, &n, 12000, w, sizeof w);
     if (st < 0) {
-        snprintf(why, wn, "NO ANSWER");
+        /* Not reached: where the list has another, its turn may come. */
+        snprintf(why, wn, "%s", !strcmp(w, "name not found") ? "NOT FOUND" : "NO ANSWER");
         ESP_LOGW(TAG, "/connection: %s", w);
-        return R_RETRY;
+        return own_trouble(w) ? R_RETRY : R_GONE;
     }
     const char *e = ans + n;
     if (st == 200 && jo_bool(ans, e, "allowed")) {
@@ -483,6 +542,16 @@ static int register_session(char *why, size_t wn)
     char reason[96] = "";
     jo_str(ans, e, "reason", reason, sizeof reason);
     ESP_LOGW(TAG, "/connection: %d %s", st, reason);
+    /* No answer of an UberSDR's -- it says "allowed", always, a full one's
+     * 503 too -- but of what stands in front of one, its tunnel or a proxy,
+     * the receiver behind it gone ("502 Bad Gateway", "503 Service
+     * Unavailable"): not reached. A refusal by its status alone is still the
+     * receiver's: its ban comes without "allowed" (403, a page or
+     * {"error":...}), and so may a rate limit (429). */
+    if (!jkey(ans, e, "allowed") && st != 401 && st != 403 && st != 410 && st != 429) {
+        snprintf(why, wn, "NO ANSWER");
+        return R_GONE;
+    }
     return classify(st, reason, why, wn);
 }
 
@@ -679,8 +748,11 @@ static bool send_dsp(int8_t want)
     return say(msg);
 }
 
-
-void uber_activity(void) { S.activity = true; }
+/* The knob turned or the glass touched (radio.h): an UberSDR with an idle
+ * timeout counts only that as listening, as its own page does -- a ping, at
+ * most every PING_GAP_MS -- and it gives an idle limit's last minute back
+ * (uber_time_left). */
+void radio_user_activity(void) { S.activity = true; }
 
 /* The time left as counted here, once a second while streaming: an idle
  * limit's last minute said as it begins and ends. A session listened to a
@@ -871,6 +943,217 @@ static int stream(char *why, size_t wn)
     return end;
 }
 
+/* ---------------------------------------------------------- the receivers */
+
+/* An address as the configuration page keeps it, into `u`: https://name,
+ * through the tunnel, over TLS; http://host, a receiver on the LAN, in the
+ * clear -- whatever the port. A name alone, as knobs kept it before: TLS on
+ * 443, in the clear on any other. The port the address has, else the one
+ * given, else its scheme's. */
+static bool parse_host(uhost_t *u, const char *host, uint16_t port)
+{
+    uhost_t t = { 0 };
+    const char *h = strstr(host, "://");
+    const bool scheme = h != NULL;
+    const bool tls    = scheme && (!strncasecmp(host, "https", 5) || !strncasecmp(host, "wss", 3));
+    h = h ? h + 3 : host;
+    const size_t hl = strcspn(h, ":/ ");
+    if (!hl || hl >= sizeof t.host) return false;
+    memcpy(t.host, h, hl);
+    t.port = h[hl] == ':' ? (uint16_t)atoi(h + hl + 1) : 0;
+    if (!t.port) t.port = port ? port : scheme && !tls ? 80 : 443;
+    t.tls  = scheme ? tls : t.port == 443;
+    *u = t;
+    return true;
+}
+
+/* The receivers in the list with an address: a round, every one tried. */
+static int listed(void)
+{
+    int k = 0;
+    net_radio_t r;
+    uhost_t u;
+    for (int i = 0; i < net_prov_radio_count(); i++)
+        if (net_prov_radio_get(i, &r) && r.host[0] && parse_host(&u, r.host, r.port)) k++;
+    return k;
+}
+
+/* Receiver i of the list, at `u`, the one the client is on now: its address
+ * and its password, its description read afresh, a session of its own;
+ * nothing of the last one's kept but the dial, and the noise filter where
+ * this one runs it too -- the one chosen on the last, or, its filters never
+ * read (not reached at all), the one the last boot or hop left. Between
+ * sessions: nothing plays. */
+static void take(int i, const net_radio_t *r, const uhost_t *u)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    if (s_n_nr) {
+        if (S.nr_want > 0 && S.nr_want <= s_n_nr) strlcpy(s_nr_saved, s_nr[S.nr_want - 1], sizeof s_nr_saved);
+        else                                     s_nr_saved[0] = 0;
+    }
+    g_uh = *u;
+    memset(&I, 0, sizeof I);
+    s_n_nr = 0;
+    S.nr_want = S.nr_on = 0;
+    S.f_server = 0;
+    S.have_power = S.have_snr = false;
+    S.srv_ns = S.srv_at = 0;
+    S.idle_s = 0;
+    S.day_left = -1;
+    S.day_end = 0;
+    s_at = i;
+    strlcpy(s_at_name, r->name[0] ? r->name : net_prov_host_shown(r->host), sizeof s_at_name);
+    strlcpy(s_at_host, r->host, sizeof s_at_host);
+    s_at_port = r->port;
+    s_rx_gen++;
+    /* On the way to it: never the last one's state under its name. */
+    S.link = RADIO_LINK_CONNECTING;
+    strlcpy(S.why, "CONNECTING", sizeof S.why);
+    taskEXIT_CRITICAL(&S_LOCK);
+    strlcpy(s_pass, r->pass, sizeof s_pass);
+    new_uuid();
+}
+
+/* The next receiver in the list after the one the client is on, in turn,
+ * wrapping round, that has an address: the one the client is on now. */
+static bool hand_over(void)
+{
+    const int n = net_prov_radio_count();
+    for (int k = 1; k < n; k++) {
+        const int i = (s_at + k) % n;
+        net_radio_t r;
+        uhost_t u;
+        if (!net_prov_radio_get(i, &r) || !r.host[0] || !parse_host(&u, r.host, r.port)) continue;
+        if (s_from < 0) s_from = s_in_use;
+        take(i, &r, &u);
+        return true;
+    }
+    return false;
+}
+
+/* The receiver handed over to, saved as the one in use by a timer: the
+ * session's stack is in PSRAM, which must not touch flash. The timer's own
+ * stack is small: nothing of the list goes on it. */
+static esp_timer_handle_t s_use_t;
+enum { USE_DUE = 0, USE_SAVED, USE_OTHER, USE_FAILED };
+static volatile int  s_use_at = -1;
+static volatile int  s_use_res;
+static volatile esp_err_t s_use_err;
+static volatile unsigned  s_use_stack;      /* the timer task's stack never used, after the write */
+static int           s_use_from;
+EXT_RAM_BSS_ATTR static char s_use_host[64];
+static uint16_t      s_use_port;
+
+/* On the timer's task: the one in use from now on -- the list keeps its
+ * order -- unless another was chosen meanwhile, on the dial or the page, or
+ * the list no longer holds it where it was. What came of it: s_use_res. */
+static void use_cb(void *arg)
+{
+    (void)arg;
+    EXT_RAM_BSS_ATTR static net_radio_t r;
+    const int i = s_use_at;
+    if (i >= 0 && net_prov_radio_active() == s_use_from && net_prov_radio_get(i, &r) &&
+        !strcmp(r.host, s_use_host) && r.port == s_use_port) {
+        s_use_err   = net_prov_radio_activate(i);
+        s_use_stack = (unsigned)uxTaskGetStackHighWaterMark(NULL);
+        /* The list's one in use, as the client goes by it from now on --
+         * moved in RAM even where the write failed. */
+        if (net_prov_radio_active() == i) s_in_use = i;
+        s_use_res = s_use_err == ESP_OK ? USE_SAVED : USE_FAILED;
+    } else {
+        s_use_res = USE_OTHER;
+    }
+    s_use_at = -1;
+}
+
+/* Handed over to, and it lets the knob in: the one in use from now on, so
+ * that the knob starts with it next time -- saved now, before its session:
+ * the UberSDR not playing yet. (A KiwiSDR beside it may be: the firmware
+ * only receives -- no over for a flash write to hold up -- and the dial's
+ * own settings are saved while it plays too.) One that answers only to
+ * turn the knob away, or whose session is never reached, is not: the one
+ * in use stays what it was until another plays. */
+static void in_use_now(void)
+{
+    const int from = s_from;
+    if (from < 0) return;
+    s_from = -1;
+    if (s_at < 0 || s_at == from || !s_use_t) return;
+    s_use_res = USE_DUE;
+    s_use_from = from;
+    strlcpy(s_use_host, s_at_host, sizeof s_use_host);
+    s_use_port = s_at_port;
+    s_use_at = s_at;
+    if (esp_timer_start_once(s_use_t, 1) != ESP_OK) s_use_at = -1;
+    for (int k = 0; k < 150 && s_use_at >= 0; k++) vTaskDelay(pdMS_TO_TICKS(20));
+    switch (s_use_res) {
+    case USE_SAVED:
+        ESP_LOGI(TAG, "%s lets the knob in: in use from now on, saved (the timer's stack: %u bytes never used)",
+                 s_at_name, s_use_stack);
+        break;
+    case USE_FAILED:
+        ESP_LOGE(TAG, "%s lets the knob in: in use from now on, but not saved (%s)", s_at_name,
+                 esp_err_to_name(s_use_err));
+        break;
+    case USE_OTHER:
+        ESP_LOGW(TAG, "%s lets the knob in: not saved as the one in use -- another chosen meanwhile, or the "
+                      "list changed", s_at_name);
+        break;
+    default:
+        ESP_LOGW(TAG, "%s lets the knob in: not saved as the one in use -- the timer did not run", s_at_name);
+        break;
+    }
+}
+
+/* The receiver the client is on not reached, on a try: with others in the
+ * list, the one in use again after FAIR_GAP_MS, the first time (`missed`,
+ * the tries in a row); else the next in turn, its state said a moment
+ * first -- and once every one has had its turn since one last answered
+ * (`tried`), the backoff first, growing round by round as a single
+ * receiver's does. The pause, taken here. */
+static void not_reached(int *missed, int *tried, uint32_t *backoff)
+{
+    char was[24];
+    strlcpy(was, s_at_name, sizeof was);
+    if (s_at == s_in_use && ++*missed < FAIR_TRIES) {
+        ESP_LOGW(TAG, "%s not reached: again in %d s before another", was, FAIR_GAP_MS / 1000);
+        vTaskDelay(pdMS_TO_TICKS(FAIR_GAP_MS));
+        return;
+    }
+    *missed = 0;
+    if (++*tried >= listed()) {
+        *tried = 0;
+        ESP_LOGW(TAG, "%s not reached, nor any other in the list: again in %lu s", was,
+                 (unsigned long)(*backoff / 1000));
+        vTaskDelay(pdMS_TO_TICKS(*backoff));
+        *backoff = *backoff < 30000 ? *backoff * 2 : 60000;
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(SAID_MS));
+    }
+    if (hand_over())
+        ESP_LOGW(TAG, "%s not reached: on to %s at %s://%s:%u", was, s_at_name, g_uh.tls ? "https" : "http",
+                 g_uh.host, (unsigned)g_uh.port);
+}
+
+int uber_receiver(char *name, size_t cap)
+{
+    const bool named = others();
+    taskENTER_CRITICAL(&S_LOCK);
+    const int at = named ? s_at : -1;
+    if (name && cap) strlcpy(name, named ? s_at_name : "", cap);
+    taskEXIT_CRITICAL(&S_LOCK);
+    return at;
+}
+
+uint32_t uber_rx(uhost_t *out)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    *out = g_uh;
+    const uint32_t g = s_rx_gen;
+    taskEXIT_CRITICAL(&S_LOCK);
+    return g;
+}
+
 static void session_task(void *arg)
 {
     (void)arg;
@@ -890,19 +1173,29 @@ static void session_task(void *arg)
      * session go on (restarted, its clock not ours) while its socket fails
      * gets the backoff, as anything else, not a try every moment. */
     bool quick = true;
+    /* The receiver not reached, tries in a row; the receivers tried since
+     * one last answered (not_reached). */
+    int missed = 0, tried = 0;
     for (;;) {
         set_link(RADIO_LINK_CONNECTING, NULL);
         if (!I.known) {
-            char w[32];
+            char w[32] = "";
             if (!read_description(w, sizeof w)) {
+                set_link(RADIO_LINK_DOWN, !strcmp(w, "name not found") ? "NOT FOUND" : "NO ANSWER");
+                if (others() && !own_trouble(w)) {
+                    ESP_LOGW(TAG, "%s, %s:%u: no description (%s)", s_at_name, g_uh.host, (unsigned)g_uh.port, w);
+                    not_reached(&missed, &tried, &backoff);
+                    continue;
+                }
                 ESP_LOGW(TAG, "%s:%u: no description (%s); again in %lu s", g_uh.host,
                          (unsigned)g_uh.port, w, (unsigned long)(backoff / 1000));
-                set_link(RADIO_LINK_DOWN, !strcmp(w, "name not found") ? "NOT FOUND" : "NO ANSWER");
                 vTaskDelay(pdMS_TO_TICKS(backoff));
                 backoff = backoff < 30000 ? backoff * 2 : 60000;
                 continue;
             }
-            /* The noise filter chosen at the last boot, if it still runs. */
+            missed = tried = 0;
+            /* The noise filter chosen at the last boot -- or on the receiver
+             * handed over from -- if it runs here too. */
             taskENTER_CRITICAL(&S_LOCK);
             for (int i = 0; i < s_n_nr; i++)
                 if (s_nr_saved[0] && !strcmp(s_nr_saved, s_nr[i])) S.nr_want = (int8_t)(i + 1);
@@ -910,7 +1203,21 @@ static void session_task(void *arg)
         }
         int r = register_session(why, sizeof why);
         bool spent = false;
+        /* A stand-in -- handed over to, not the one in use -- that answers
+         * only to turn the knob away (full, busy, its day spent, a password)
+         * is passed by for the next, as one not reached, its refusal said a
+         * moment first: the operator's own keeps its turn. */
+        if ((r == R_WAIT || r == R_STOP) && s_at != s_in_use && others()) {
+            set_link(RADIO_LINK_DOWN, why);
+            ESP_LOGW(TAG, "%s: %s -- a stand-in, so on to the next", s_at_name, why);
+            not_reached(&missed, &tried, &backoff);
+            continue;
+        }
+        /* It answered, even to refuse: it keeps its turn. */
+        if (r != R_GONE && r != R_RETRY) missed = tried = 0;
         if (r == R_OK) {
+            /* Handed over to, it lets the knob in: in use from now on. */
+            in_use_now();
             const int64_t t0 = esp_timer_get_time();
             r = stream(why, sizeof why);
             /* A session that ran a while earns a quick return; one closed
@@ -925,6 +1232,14 @@ static void session_task(void *arg)
             set_link(RADIO_LINK_DOWN, why);
         }
         switch (r) {
+        case R_GONE:
+            /* Not reached: with others in the list, the next one's turn may
+             * come; a single receiver, again after the backoff, as ever. */
+            if (others()) {
+                not_reached(&missed, &tried, &backoff);
+                continue;
+            }
+            break;
         case R_TIME_UP:
             /* Ended by the receiver -- its time limit, or its owner: another
              * session only when the operator asks, as its own page does. */
@@ -977,29 +1292,29 @@ const char *radio_link_name(void) { return g_uh.tls ? "WSS" : "WS"; }
 esp_err_t radio_start(const char *host, uint16_t port, const char *user, const char *pass)
 {
     (void)user;
-    if (!host || !host[0]) return ESP_ERR_INVALID_ARG;
-    /* As the configuration page keeps it: https://name, through the tunnel,
-     * over TLS; http://host, a receiver on the LAN, in the clear -- whatever
-     * the port. A name alone, as knobs kept it before: TLS on 443, in the
-     * clear on any other. The port the address has, else the one given,
-     * else its scheme's. */
-    const char *h = strstr(host, "://");
-    const bool scheme = h != NULL;
-    const bool tls    = scheme && (!strncasecmp(host, "https", 5) || !strncasecmp(host, "wss", 3));
-    h = h ? h + 3 : host;
-    const size_t hl = strcspn(h, ":/ ");
-    if (!hl || hl >= sizeof g_uh.host) return ESP_ERR_INVALID_ARG;
-    memcpy(g_uh.host, h, hl);
-    g_uh.host[hl] = 0;
-    g_uh.port = h[hl] == ':' ? (uint16_t)atoi(h + hl + 1) : 0;
-    if (!g_uh.port) g_uh.port = port ? port : scheme && !tls ? 80 : 443;
-    g_uh.tls  = scheme ? tls : g_uh.port == 443;
+    if (!host || !parse_host(&g_uh, host, port)) return ESP_ERR_INVALID_ARG;
     strlcpy(s_pass, pass ? pass : "", sizeof s_pass);
+    /* The one in use in the knob's list, as this is: the others are handed
+     * over to when it cannot be reached. (Static: the supervisor's stack,
+     * this one's caller, has run out before.) */
+    EXT_RAM_BSS_ATTR static net_radio_t r;
+    const int a = net_prov_radio_active();
+    if (net_prov_radio_get(a, &r) && !strcmp(r.host, host)) {
+        s_at = s_in_use = a;
+        strlcpy(s_at_name, r.name[0] ? r.name : net_prov_host_shown(r.host), sizeof s_at_name);
+        strlcpy(s_at_host, r.host, sizeof s_at_host);
+        s_at_port = r.port;
+    }
     load();
     const esp_timer_create_args_t ta = { .callback = save_cb, .name = "ubsave" };
     esp_timer_create(&ta, &s_save_t);
+    const esp_timer_create_args_t tu = { .callback = use_cb, .name = "ubuse" };
+    esp_timer_create(&tu, &s_use_t);
     ESP_LOGI(TAG, "UberSDR at %s://%s:%u%s", g_uh.tls ? "https" : "http", g_uh.host,
              (unsigned)g_uh.port, s_pass[0] ? ", with its password" : "");
+    if (others())
+        ESP_LOGI(TAG, "%s, in use, of %d receivers in the list: the next in turn when it cannot be reached",
+                 s_at_name, net_prov_radio_count());
     ESP_RETURN_ON_FALSE(xTaskCreatePinnedToCoreWithCaps(session_task, "uber", 16384, NULL, 5, NULL, 0,
                                                         MALLOC_CAP_SPIRAM) == pdPASS,
                         ESP_ERR_NO_MEM, TAG, "task");

@@ -1,6 +1,7 @@
 obj/
 vu_compare
 chooser
+kiwi_face
 readout
 *.ppm
 *.png
@@ -13,3 +14,4 @@ slab_uber
 slab_aether
 slab_xiegu
 slab_setup
+slab_kiwi

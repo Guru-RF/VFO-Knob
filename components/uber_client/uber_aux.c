@@ -33,8 +33,10 @@ static portMUX_TYPE A_LOCK = portMUX_INITIALIZER_UNLOCKED;
 
 static int64_t now_s(void) { return esp_timer_get_time() / 1000000; }
 
-/* One connection for all of this task's requests, kept open between them. */
+/* One connection for all of this task's requests, kept open between them --
+ * to the receiver the session is on, as this task last took it (uber_rx). */
 static uconn_t s_conn;
+EXT_RAM_BSS_ATTR static uhost_t s_rx;
 
 /* ------------------------------------------------------------------ bands */
 
@@ -76,7 +78,7 @@ static void read_bands(void)
 {
     char *b = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM), why[32];
     size_t n = 0;
-    if (b && unet_http_keep(&s_conn, &g_uh, "GET", "/api/bands", NULL, b, 8191, &n, 10000, why, sizeof why) == 200) {
+    if (b && unet_http_keep(&s_conn, &s_rx, "GET", "/api/bands", NULL, b, 8191, &n, 10000, why, sizeof why) == 200) {
         const char *e = b + n, *it = b, *v;
         band_t t[BANDS_MAX];
         int k = 0;
@@ -263,7 +265,7 @@ static void read_voice(const char *band)
     snprintf(path, sizeof path, "/api/noisefloor/voice-activity?band=%s", band);
     char *b = heap_caps_malloc(32768, MALLOC_CAP_SPIRAM);
     size_t n = 0;
-    if (b && unet_http_keep(&s_conn, &g_uh, "GET", path, NULL, b, 32767, &n, 8000, why, sizeof why) == 200) {
+    if (b && unet_http_keep(&s_conn, &s_rx, "GET", path, NULL, b, 32767, &n, 8000, why, sizeof why) == 200) {
         const char *e = b + n, *it = jkey(b, e, "activities"), *v;
         voice_t t[VOICE_MAX];
         int k = 0;
@@ -476,10 +478,12 @@ int uber_sstv_files(char (*out)[72], int max)
 
 void uber_base_url(char *out, size_t cap)
 {
-    if (g_uh.port == (g_uh.tls ? 443 : 80))
-        snprintf(out, cap, "%s://%s", g_uh.tls ? "https" : "http", g_uh.host);
+    uhost_t h;
+    uber_rx(&h);
+    if (h.port == (h.tls ? 443 : 80))
+        snprintf(out, cap, "%s://%s", h.tls ? "https" : "http", h.host);
     else
-        snprintf(out, cap, "%s://%s:%u", g_uh.tls ? "https" : "http", g_uh.host, (unsigned)g_uh.port);
+        snprintf(out, cap, "%s://%s:%u", h.tls ? "https" : "http", h.host, (unsigned)h.port);
 }
 
 static void read_sstv_list(void)
@@ -489,7 +493,7 @@ static void read_sstv_list(void)
     size_t n = 0;
     char path[96];
     snprintf(path, sizeof path, "/addon/sstv/api/images?limit=%d&offset=0&complete=1", SSTV_MAX);
-    const int st = b ? unet_http_keep(&s_conn, &g_uh, "GET", path, NULL, b, cap - 1, &n, 10000, why, sizeof why) : -1;
+    const int st = b ? unet_http_keep(&s_conn, &s_rx, "GET", path, NULL, b, cap - 1, &n, 10000, why, sizeof why) : -1;
     s_sstv_at = now_s();
     if (st == 200) {
         const char *e = b + n, *it = b, *v;
@@ -576,7 +580,7 @@ static int fetch_picture(int idx, char *why, size_t wn)
     snprintf(path, sizeof path, "/addon/sstv/images/%s", x.file);
     size_t n = 0;
     const int64_t t0 = esp_timer_get_time();
-    const int st = unet_http_keep(&s_conn, &g_uh, "GET", path, NULL, (char *)png, PNG_MAX, &n, 15000,
+    const int st = unet_http_keep(&s_conn, &s_rx, "GET", path, NULL, (char *)png, PNG_MAX, &n, 15000,
                                   why, wn);
     const int64_t t1 = esp_timer_get_time();
     s_slot[slot].file[0] = 0;                   /* until it holds this one */
@@ -635,6 +639,26 @@ static void sstv_step(void)
 
 static bool s_started;
 
+/* Another receiver, handed over to: nothing of the last one's -- the
+ * connection, its bands, spots and voices, its gallery and the pictures
+ * fetched from it. The glass may still be drawing one: its pixels stay. */
+static void forget(void)
+{
+    unet_close(&s_conn);
+    taskENTER_CRITICAL(&A_LOCK);
+    s_nband = 0;
+    s_nspot = 0;
+    s_nvoice = 0;
+    s_voice_band[0] = 0;
+    s_spot_seq++;
+    s_nsstv = -1;
+    for (int i = 0; i < SLOTS; i++) s_slot[i].file[0] = 0;
+    V.file[0] = 0;
+    taskEXIT_CRITICAL(&A_LOCK);
+    s_sstv_at = 0;
+    s_failed[0] = 0;
+}
+
 static void aux_task(void *arg)
 {
     (void)arg;
@@ -644,7 +668,20 @@ static void aux_task(void *arg)
     int64_t dx_retry = 0, t_voice = 0, t_expire = 0, t_bands = 0;
     char voice_band[8] = "";
     int dx_backoff = 10;
+    uint32_t rx_gen = uber_rx(&s_rx);
     for (;;) {
+        /* The session gone on to another receiver: this task with it. */
+        const uint32_t g = uber_rx(&s_rx);
+        if (g != rx_gen) {
+            rx_gen = g;
+            if (dx_open) uws_close(&dx);
+            dx_open = false;
+            forget();
+            dx_retry = t_voice = t_bands = 0;
+            dx_backoff = 10;
+            voice_band[0] = 0;
+            ESP_LOGI(TAG, "on to %s:%u", s_rx.host, (unsigned)s_rx.port);
+        }
         uber_info_t in;
         uber_info(&in);
         if (!in.known) {
@@ -668,7 +705,7 @@ static void aux_task(void *arg)
         if (in.spots && !dx_open && reg && now >= dx_retry) {
             char path[96], why[64];
             snprintf(path, sizeof path, "/ws/dxcluster?user_session_id=%s", uuid);
-            if (uws_open(&dx, &g_uh, path, 16 * 1024, 10000, why, sizeof why)) {
+            if (uws_open(&dx, &s_rx, path, 16 * 1024, 10000, why, sizeof why)) {
                 dx_open = true;
                 dx_gen = gen;
                 dx_backoff = 10;

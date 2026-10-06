@@ -13,6 +13,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [SVXConnect](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
 | [Telephone](phone.md) | `vfo-knob-phone` — a telephone on one SIP account: favourites on the dial, a keypad, a call history, Google Contacts |
 | [UberSDR](ubersdr.md) | `vfo-knob-ubersdr` — a dial for an UberSDR web receiver: its spots and voices, SSTV pictures, and a KiwiSDR beside it |
+| [Kiwi888](kiwi.md) | `vfo-knob-kiwi` — a dial for KiwiSDR and Web-888 web receivers: up to four, another a swipe away, a second in the right ear, no radio needed |
 | [A Bluetooth headset or speaker](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, or a speaker as its ear, on every firmware but setup |
 
 ## The pictures

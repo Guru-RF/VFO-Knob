@@ -7,6 +7,7 @@
 #include "audio_in.h"
 #include "audio_out.h"
 #include "board_pins.h"
+#include "bt_level.h"
 #include "driver/uart.h"
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -127,6 +128,18 @@ static struct {
  * dial's VOLUME, which it sets after -- and the dial's stands. */
 #define AV_CROSS_US 300000
 
+/* Each device's level (bt_level.h), by its address. Under s_lock: the page
+ * sets them, and the link's task takes the one of each device that comes.
+ * To NVS (btlink/levels) from the supervisor, once a change has settled
+ * this long: a run of steps on the page is one write. */
+EXT_RAM_BSS_ATTR static bt_levels_t s_levels;
+EXT_RAM_BSS_ATTR static bool        s_levels_dirty;     /* under s_lock */
+EXT_RAM_BSS_ATTR static int64_t     s_levels_at;        /* ...its last change */
+#define LEVELS_SETTLE_US 2000000
+/* ...and the device's own, dB, as device() or the page last said: the
+ * tap's, which reads it as it goes. */
+static volatile int8_t   s_level = BT_LEVEL_HEADSET;
+
 static bool send(uint8_t type, const void *p, uint16_t n)
 {
     static uint8_t *f;
@@ -196,20 +209,30 @@ static void push_config(void)
 /* The playback task's: everything the jack plays, to the headset's ear --
  * or the speaker's -- in frames of 10 ms: a frame lost on the wire is then
  * 10 ms, not 21. Given before the VOLUME (audio_out.h), it applies it --
- * but for a speaker whose own volume is the VOLUME. */
+ * but for a speaker whose own volume is the VOLUME -- and the device's
+ * level on top. */
 #define DN_FRAME 240
+_Static_assert(DN_FRAME == BT_LEVEL_AHEAD, "a level above 0 dB holds back a block");
 static void tap(const int16_t *stereo, size_t frames, uint8_t volume)
 {
     /* What the headset is given, measured every 10 s: its chip runs dry
      * when this falls short of the knob's rate, or comes in lumps. */
     static int64_t  t0, t_last;
     static uint32_t sent, pause_max;
-    /* The level sent, in thousandths, and its swell into full level (below):
+    /* The gain sent (bt_level.h), and its swell into full level (below):
      * each stream starts from silence, as the first after a start does --
      * else one that opens at full level jumps there. */
     static int32_t g;
     static bool    was, swell;
+    /* Above 0 dB, the block the level holds back and how far it turned the
+     * gain down; and how often it did, measured with the rest. The playback
+     * task's alone. */
+    EXT_RAM_BSS_ATTR static struct {
+        bt_level_lim_t lim;
+        uint32_t       blocks, turned;
+    } L;
     const bool spk = s_spk_audio;
+    const int  db  = s_level;
     if (!s_hs_audio && !spk) {
         t0 = t_last = 0;
         sent = pause_max = 0;
@@ -220,20 +243,28 @@ static void tap(const int16_t *stereo, size_t frames, uint8_t volume)
     const int64_t now = esp_timer_get_time();
     if (!t0 || (t_last && now - t_last > 1000000)) {      /* a new stream */
         t0 = now;
-        sent = pause_max = 0;
+        sent = pause_max = L.blocks = L.turned = 0;
         t_last = 0;
+        /* What the level held back is the last stream's: not sent. */
+        bt_level_reset(&L.lim);
     }
     if (t_last && (uint32_t)((now - t_last) / 1000) > pause_max) pause_max = (uint32_t)((now - t_last) / 1000);
     t_last = now;
     sent += frames;
     if (now - t0 >= 10000000) {
         const double s = (double)(now - t0) / 1e6;
-        ESP_LOGI(TAG, "%s fed %lu samples in %.2f s: %+.0f ppm of %u Hz, longest pause %lu ms",
+        /* The playback task's alone: no other writes it. */
+        EXT_RAM_BSS_ATTR static char down[64];
+        down[0] = 0;
+        if (L.turned)
+            snprintf(down, sizeof down, ", %lu of %lu blocks turned down, never clipped",
+                     (unsigned long)L.turned, (unsigned long)L.blocks);
+        ESP_LOGI(TAG, "%s fed %lu samples in %.2f s: %+.0f ppm of %u Hz, longest pause %lu ms; level %+d dB%s",
                  spk ? "speaker" : "headset", (unsigned long)sent, s,
                  ((double)sent / s / AUDIO_RATE_HZ - 1.0) * 1e6,
-                 (unsigned)AUDIO_RATE_HZ, (unsigned long)pause_max);
+                 (unsigned)AUDIO_RATE_HZ, (unsigned long)pause_max, db, down);
         t0 = now;
-        sent = pause_max = 0;
+        sent = pause_max = L.blocks = L.turned = 0;
     }
     /* A speaker beside the knob's own microphone: silent while that is keyed,
      * or the over would carry it. The over itself, not the companion's
@@ -251,17 +282,13 @@ static void tap(const int16_t *stereo, size_t frames, uint8_t volume)
      * plays above the VOLUME asked: a step of its own, a set not answered
      * yet -- the dial just turned down is heard at once. All else gets the
      * jack's loudness. A VOLUME of 0 is silence on any speaker, whatever its
-     * own 0 is. And a speaker a quarter of all that, 12 dB down: it is a
-     * loudspeaker, and what the VOLUME gives the jack's earphones filled the
-     * room from one at 2 (the JLab, 2026-10-05). In thousandths of full
-     * scale. */
-    const bool full = spk && s_av_full, loud = full && volume;
-    int32_t    want = (int32_t)volume * 10;
-    if (loud) {
-        const uint8_t asked = btl_av_from_knob(volume), at = s_av_at;
-        want = at > asked && at <= 127 ? 1000 * asked / at : 1000;
-    }
-    if (spk) want /= 4;
+     * own 0 is. Then the device's level on top, set on the page for each:
+     * without one a speaker 12 dB down, a quarter -- it is a loudspeaker,
+     * and what the VOLUME gives the jack's earphones filled the room from
+     * the JLab at 2 (2026-10-05) -- and a headset at the jack's level. A
+     * new level is heard at once. */
+    const bool    full = spk && s_av_full, loud = full && volume;
+    const int32_t want = bt_level_want(volume, full, s_av_at, db);
     /* Into full level -- the switch to it, or up from a VOLUME of 0 -- no
      * faster than some 27 dB a second; anything else at once: it swells,
      * never jumps, and a speaker that took the knob's VOLUME in word only is
@@ -271,15 +298,14 @@ static void tap(const int16_t *stereo, size_t frames, uint8_t volume)
     EXT_RAM_BSS_ATTR static int16_t mono[DN_FRAME];
     while (frames) {
         const size_t n = frames > DN_FRAME ? DN_FRAME : frames;
-        if (!swell || want <= g) {
-            g     = want;
-            swell = false;
-        } else if ((g += g / 32 + 1) >= want) {
-            g     = want;
-            swell = false;
-        }
-        for (size_t i = 0; i < n; i++)
-            mono[i] = hush ? 0 : (int16_t)((((int32_t)stereo[2 * i] + stereo[2 * i + 1]) / 2) * g / 1000);
+        g = bt_level_swell(g, want, &swell);
+        /* Above 0 dB a block held back, and the gain turned down smoothly
+         * where a loud passage would pass full scale: never clipped, never
+         * a jump. At 0 dB and below nothing can, and nothing is held. */
+        const bool turned = bt_level_block(&L.lim, mono, stereo, n, g, db > 0);
+        if (hush) memset(mono, 0, n * sizeof mono[0]);
+        else if (turned) L.turned++;
+        L.blocks++;
         send(full ? BTL_AUDIO_DN_FULL : BTL_AUDIO_DN, mono, (uint16_t)(n * 2));
         stereo += 2 * n;
         frames -= n;
@@ -317,6 +343,10 @@ static void device(const btl_state_t *s)
 {
     const bool conn = s->link == BTL_LINK_CONNECTED, open = s->audio != BTL_AUDIO_NONE;
     const bool spk  = s->kind == BTL_KIND_SPEAKER;
+    /* Its level -- its own, or its kind's -- before its audio opens. */
+    taskENTER_CRITICAL(&s_lock);
+    s_level = (int8_t)bt_levels_level(&s_levels, s->bda, s->kind);
+    taskEXIT_CRITICAL(&s_lock);
     /* Full level only to a speaker whose own volume the companion says is
      * the knob's -- and off before anything else is on: the tap reads them
      * as it goes. Where it plays first, for the tap's sums. */
@@ -387,6 +417,16 @@ static void on_state(const uint8_t *p, uint16_t n)
     }
     taskEXIT_CRITICAL(&s_lock);
     const char *sn = s.name[0] ? s.name : "-";
+    /* Its level, as it connects or comes to be used as the other kind. */
+    if (s.link == BTL_LINK_CONNECTED && (was.link != BTL_LINK_CONNECTED || s.kind != was.kind)) {
+        int db = 0;
+        taskENTER_CRITICAL(&s_lock);
+        const bool mine = bt_levels_get(&s_levels, s.bda, &db);
+        taskEXIT_CRITICAL(&s_lock);
+        if (mine) ESP_LOGI(TAG, "%s %s: level %+d dB, its own", spk ? "speaker" : "headset", sn, db);
+        else     ESP_LOGI(TAG, "%s %s: level %+d dB, a %s's", spk ? "speaker" : "headset", sn,
+                          bt_level_default(s.kind), spk ? "speaker" : "headset");
+    }
     if (takes && !takes_was) ESP_LOGI(TAG, "speaker %s takes its volume from the knob", sn);
     if (set != set_was && (set || (s.link == BTL_LINK_CONNECTED && spk)))
         ESP_LOGI(TAG, "speaker %s: %s", sn,
@@ -1260,7 +1300,8 @@ uint32_t bt_link_speaker_delay_ms(void)
     taskENTER_CRITICAL(&s_lock);
     const uint32_t d = s_st.hs.delay_ms;
     taskEXIT_CRITICAL(&s_lock);
-    return d ? d : SPK_DELAY_MS;
+    /* ...and above 0 dB the block its level holds back (tap()). */
+    return (d ? d : SPK_DELAY_MS) + (s_level > 0 ? BT_LEVEL_AHEAD * 1000u / AUDIO_RATE_HZ : 0);
 }
 
 bool bt_link_boom_ptt(void) { return s_boom; }
@@ -1342,6 +1383,77 @@ void bt_link_forget(const uint8_t bda[6])
 {
     upd_stop_req(BT_UPD_WHY_PAGE);
     send(BTL_CMD_FORGET, bda, 6);
+    /* Its level with it: paired again, it starts from its kind's. */
+    const int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_lock);
+    if (bt_levels_forget(&s_levels, bda)) {
+        s_levels_dirty = true;
+        s_levels_at    = now;
+    }
+    if (!memcmp(s_st.hs.bda, bda, 6)) s_level = (int8_t)bt_level_default(s_st.hs.kind);
+    taskEXIT_CRITICAL(&s_lock);
+}
+
+bool bt_link_set_level(const uint8_t bda[6], int db)
+{
+    if (!bt_level_ok(db)) return false;
+    const int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_lock);
+    if (bt_levels_set(&s_levels, bda, db)) {
+        s_levels_dirty = true;
+        s_levels_at    = now;
+    }
+    /* The device there: heard at once. */
+    if (!memcmp(s_st.hs.bda, bda, 6)) s_level = (int8_t)db;
+    taskEXIT_CRITICAL(&s_lock);
+    return true;
+}
+
+int bt_link_level(const uint8_t bda[6], uint8_t kind, bool *own)
+{
+    int db = bt_level_default(kind);
+    taskENTER_CRITICAL(&s_lock);
+    const bool set = bt_levels_get(&s_levels, bda, &db);
+    taskEXIT_CRITICAL(&s_lock);
+    if (own) *own = set;
+    return db;
+}
+
+/* The supervisor's: its stack is internal, so NVS is safe here. */
+void bt_link_save_levels(bool (*ok)(int64_t settled))
+{
+    bt_level_rec_t r[BT_LEVEL_DEVICES];
+    int            n   = 0;
+    const int64_t  now = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_lock);
+    const int64_t settled = s_levels_dirty ? now - s_levels_at : -1;
+    taskEXIT_CRITICAL(&s_lock);
+    /* Settled, and the caller's word that flash may be written now: asked
+     * outside the lock. */
+    if (settled < LEVELS_SETTLE_US || (ok && !ok(settled))) return;
+    taskENTER_CRITICAL(&s_lock);
+    /* ...and no step on the page meanwhile, which settles first. */
+    const bool due = s_levels_dirty && now - s_levels_at >= LEVELS_SETTLE_US;
+    if (due) {
+        s_levels_dirty = false;
+        n = s_levels.n;
+        memcpy(r, s_levels.rec, sizeof r);
+    }
+    taskEXIT_CRITICAL(&s_lock);
+    if (!due) return;
+    nvs_handle_t h;
+    esp_err_t    e = nvs_open("btlink", NVS_READWRITE, &h);
+    if (e == ESP_OK) {
+        e = n ? nvs_set_blob(h, "levels", r, (size_t)n * sizeof r[0]) : nvs_erase_key(h, "levels");
+        if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+        if (e == ESP_OK) e = nvs_commit(h);
+        nvs_close(h);
+    }
+    /* Not tried again: an NVS too full for it would cost a flash erase at
+     * every try. What is in RAM holds until the knob restarts, and the next
+     * level set tries again. */
+    if (e == ESP_OK) ESP_LOGI(TAG, "levels saved: %d device%s", n, n == 1 ? "" : "s");
+    else             ESP_LOGW(TAG, "levels not saved: %s", esp_err_to_name(e));
 }
 
 bool bt_link_set_kind(const uint8_t bda[6], uint8_t kind)
@@ -1484,13 +1596,20 @@ void bt_link_update_record(const bt_link_upd_record_t *rec)
 
 esp_err_t bt_link_init(void)
 {
-    nvs_handle_t h;
-    uint8_t boom = 0;
+    nvs_handle_t   h;
+    uint8_t        boom = 0;
+    bt_level_rec_t lv[BT_LEVEL_DEVICES];
+    size_t         ln = sizeof lv;
     if (nvs_open("btlink", NVS_READONLY, &h) == ESP_OK) {
         nvs_get_u8(h, "boom", &boom);
+        if (nvs_get_blob(h, "levels", lv, &ln) != ESP_OK) ln = 0;
         nvs_close(h);
+    } else {
+        ln = 0;
     }
     s_boom = boom;
+    bt_levels_load(&s_levels, lv, ln);
+    if (s_levels.n) ESP_LOGI(TAG, "levels set for %d device%s", s_levels.n, s_levels.n == 1 ? "" : "s");
     s_tx = xSemaphoreCreateMutex();
     s_rx = heap_caps_calloc(1, sizeof *s_rx, MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(s_tx && s_rx, ESP_ERR_NO_MEM, TAG, "memory");

@@ -9,8 +9,14 @@
 extern int uh_verbose;                 /* ESP_LOGD and ESP_LOGV too */
 extern int uh_tls_inits;               /* esp_tls_init() calls: none in the clear */
 
-/* Whether the knob's log has said this, since the start. */
+/* Whether the knob's log has said this, since the start -- the debug lines
+ * too; how many times; and whether it said `then` after it first said
+ * `first`. */
 bool uh_logged(const char *needle);
+int  uh_log_count(const char *needle);
+bool uh_logged_after(const char *first, const char *then);
+/* When the log said it the nth time (from 0), in ms of the knob's clock: -1, never. */
+int64_t uh_log_ms(const char *needle, int nth);
 
 /* What reached the jack: the radio's samples (audio_out_feed_pcm16) and the
  * web SDR's (audio_out_feed_sdr), and their RMS. */
@@ -18,5 +24,9 @@ void uh_audio(uint64_t *radio, double *radio_rms, uint64_t *sdr, double *sdr_rms
 
 /* The last picture handed to the PNG decoder: its bytes and size. */
 void uh_png_last(size_t *n, int *w, int *h);
+
+/* How often the client made another receiver of the list the one in use
+ * (net_prov_radio_activate). */
+int uh_radio_uses(void);
 
 #endif /* UBERHOST_H */

@@ -27,7 +27,9 @@ the password `admin` until you change it. Under **UberSDR**:
 | **Password** | optional: the receiver's bypass password, where its owner gave you one |
 
 Up to four receivers can be listed; **In use** is the one the knob starts
-with. Changes apply on the knob's next boot.
+with. Changes apply on the knob's next boot. When the one in use cannot be
+reached, the knob goes on to the next in the list by itself
+([another receiver](#another-receiver)).
 
 `https://` is TLS and `http://` in the clear, whatever the port; an address
 without either is TLS on port 443 and in the clear on any other. An IP
@@ -45,6 +47,9 @@ and without its time limit. A guest's time left shows on the slab
 says why, with its own addresses:
 
 ![RECEIVER FULL: the receiver turned the knob away](ubersdr/02-no-link.svg)
+
+With more than one receiver listed, the receiver it is about is named under
+the warning, as the dial names it ([another receiver](#another-receiver)).
 
 ## The face
 
@@ -122,7 +127,9 @@ the next ones are fetched ahead while you look, so a turn is usually
 instant, and otherwise the last picture stays, dimmed, until the next is
 there. Any tap goes back to the dial. The receiver's gallery loses its
 oldest pictures as new ones come: if the one you are on goes, the viewer
-steps back to the last there is, and with none left the dial is back.
+steps back to the last there is, and with none left the dial is back. So it
+is when the knob goes on to another receiver
+([another receiver](#another-receiver)): its gallery is that one's.
 
 | SSTV | A picture |
 |---|---|
@@ -131,16 +138,70 @@ steps back to the last there is, and with none left the dial is back.
 ## A KiwiSDR beside it
 
 A KiwiSDR or a Web-888 can play beside the UberSDR, following its frequency,
-mode and passband. Add them under **Web SDRs** on the configuration page,
-each with a **Test**, then swipe down and choose one. The UberSDR is in the
-left ear and the KiwiSDR in the right, both brought to the same loudness.
-The KiwiSDR's S-meter is the thin violet line outside the UberSDR's, and its
-reading replaces the dBFS, in violet. **BALANCE**, a swipe from the left,
-fades from one to the other.
+mode and passband — in CW the station on the dial is heard at its CW tone,
+as on its own page: 500 Hz, unless its owner set another. Add them under
+**Web SDRs** on the configuration page, each with a **Test**, then swipe down
+and choose one. The UberSDR is in the left ear and the KiwiSDR in the right,
+both brought to the same loudness. The KiwiSDR's S-meter is the thin violet
+line outside the UberSDR's, and its reading replaces the dBFS, in violet.
+**BALANCE**, a swipe from the left, fades from one to the other.
+
+A KiwiSDR behind the kiwisdr.com proxy or Cloudflare is reached only over
+https: give it by its `https://` link, pasted whole
+(`https://n0bqv.proxy.kiwisdr.com`, `https://kiwisdr.on3rvh.be`), and the
+knob speaks to it over TLS, its certificate checked against the authorities
+a browser trusts, for its name (not its dates). The first connection to one
+takes a few seconds longer, the knob doing TLS in software; the next ones to
+the same receiver are quick where its front lets the knob resume. An
+`http://` link it answers with a redirect to https on its own host is
+followed at once, and kept: the page shows the `https://` link from then on.
+A redirect anywhere else is not followed (*moved*; the page's **Test** says
+where to), and a receiver whose certificate does not check out is not spoken
+to (*certificate*): both wait until it is chosen again or the list is saved.
+
+A KiwiSDR hears up to 30 MHz, a Web-888 to about 62 MHz. Where it cannot
+reach the UberSDR's frequency — 6 m, on an UberSDR that covers it — it goes
+quiet rather than play the top of its range: its thin line goes, and *can't
+reach* takes its reading's place, in amber. It stays logged in meanwhile,
+nothing sent to it at every turn of the dial, and plays again the moment the
+dial is back within its range — unless its owner's limit on idle listening
+has ended the session meanwhile (*time up*: choose it again); the radio page
+and the configuration page say what it covers (*out of range: it covers 0-30
+MHz*).
+
+![6 m: the KiwiSDR beside it cannot reach it, can't reach in amber where its reading was](ubersdr/23-kiwi-out.svg)
 
 | RX | Playing | BALANCE |
 |---|---|---|
 | ![RX: Web-888](ubersdr/08-rx.svg) | ![The KiwiSDR's S-meter in violet](ubersdr/09-kiwi.svg) | ![BALANCE: L \| R](ubersdr/10-balance.svg) |
+
+On the dial each receiver goes by the name you gave it on the page; without
+one, by the antenna its status page names, once the knob has read that, else
+by its address, with the port where another receiver shares it, so four
+receivers on one address stay apart. **Test** puts the name an unnamed one
+gives itself in its **Name** box, and **Save** keeps it. **Your name, for
+their owners**, under the list, is what each receiver's owner sees the knob
+as among those listening: your callsign, say; left empty, *VFO-Knob*.
+
+Its owner's limits are kept. A KiwiSDR or a Web-888 that turns the knob
+away because its listening time for the day is used up says *day limit*, and
+the knob leaves it alone, through restarts, until the receiver shows it has
+restarted or, on a KiwiSDR, a day has passed. Choosing it again (swipe down,
+tap) is one more try, and the knob takes two such refusals at most: a Kiwi
+bars an address for good after five. One that ended a session nobody used
+says *time up*, one whose owner sent the knob away *kicked*; both wait to be
+chosen again, even after a crash, as does one that refuses this address.
+A receiver with time limits that leaves the knob's login unanswered counts
+as such a refusal, in case its answer was one; and with its settings memory
+full (*memory full*) the knob logs in to one with time limits only when you
+choose it. The knob logs in as the receivers' own apps do, so an owner's
+limits on apps hold for it: a KiwiSDR whose status page lets no apps in says
+*no apps* at once, and one whose channels for apps are all taken says
+*busy*, *no apps* after the third time. A wrong password (*password?*) and an
+address where no Kiwi answers (*not a kiwi*) wait until it is chosen again
+or the list is saved; on its own the knob tries one receiver at most six
+times in ten minutes. **Test** never logs in to a receiver at its day limit,
+nor beside the knob's own login to one: the two never log in at once.
 
 ## A guest's time
 
@@ -186,6 +247,39 @@ panel, and the knob restarts into it.
 
 ![RADIO: ON6URE-TEL](ubersdr/14-radio.svg)
 
+The knob also goes on to the next by itself, with no restart, when the one
+in use cannot be reached: its name is not found, nothing answers, the
+connection is refused, its TLS fails, or only its tunnel or a proxy
+answers, the receiver behind it gone. Take a knob home from a station whose
+UberSDR it played on that station's own network: at home that receiver's
+name is not found, and the knob goes on to the next one, its tunnel, say.
+
+The one in use gets a fair chance first: a second try four seconds after the
+first, so that a moment without WiFi or DNS does not lose it. Then the
+others, once each, in the list's order — after the last, the first. The
+first that answers plays, and is **In use** from then on: the knob starts
+with it next time, and the noise filter you had goes with it where that
+receiver runs it too. The list keeps its order. Meanwhile the face names the
+receiver it is on, with its state: **NOT FOUND** or **NO ANSWER**, then
+**CONNECTING** with the next one's name.
+
+| Not found | The next |
+|---|---|
+| ![NOT FOUND: ON6URE-TEL-LAN, under the warning](ubersdr/21-not-found.svg) | ![CONNECTING: ON6URE-TEL](ubersdr/22-connecting.svg) |
+
+The receiver **In use** that answers but turns the knob away keeps its turn:
+**RECEIVER FULL**, **BUSY**, **DAY LIMIT**, a password refused, **TIME UP**
+are the receiver's word, not a receiver gone, and the knob waits on it as it
+would with that receiver alone. One the knob went on to that answers so — a
+stand-in you never chose — is passed by for the next, its refusal shown a
+moment first, and is not **In use** until it lets the knob in and plays. One
+lost in the middle of a session is the same as one not reached at the start:
+two tries, then the next. When none answers, the knob tries them all again,
+round after round, waiting a little longer between rounds each time, up to
+a minute. Nor does it hand over while the knob's own WiFi is down: no other
+receiver would answer then either. With a single receiver the knob keeps
+trying it, as ever.
+
 ## From a computer
 
 With the receiver connected, the knob's page opens on its controls, with
@@ -202,7 +296,12 @@ GET /api/radio/set?freq=14074000        Hz, or MHz with a point (14.074)
 `gain` is the noise filter by its place in the list: 0 off, then the
 receiver's. In the JSON, under `uber`, `time_left_s` is a guest's time left
 in seconds, as the slab counts it (-1 where no limit applies), and
-`time_left_by` whose limit it is: `session`, `day` or `idle`.
+`time_left_by` whose limit it is: `session`, `day` or `idle`. With no
+link, `why` says why, as the face does (`NOT FOUND`); with more than one
+receiver listed, `uber`'s `rx` and `rx_name` are the one the knob is on, by
+its place in the list and its name: the one in use, or the next it tries.
+The radio page says it at the top, where it says **connected** once the
+receiver plays.
 
 ## A Bluetooth headset
 

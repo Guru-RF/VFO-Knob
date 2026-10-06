@@ -9,16 +9,22 @@
 #                                   FlexRadio's face and the Icoms', its touch
 #                                   driven: the slab's tap, its hold for the
 #                                   antennas; and for every face, the reflector's,
-#                                   the telephone's, the receiver's, AetherSDR's
-#                                   and the Xiegus' too, a Bluetooth device's
-#                                   battery beside its logo; on the receiver's,
-#                                   a guest's time left at the slab's left end;
-#                                   on all of them and the setup firmware's, the
-#                                   knob's own battery at the top of the arc;
-#                                   pictures in dir)
+#                                   the telephone's, the receivers' -- UberSDR's
+#                                   and Kiwi888's -- AetherSDR's and the Xiegus'
+#                                   too, a Bluetooth device's battery beside its
+#                                   logo; on UberSDR's, a guest's time left at the
+#                                   slab's left end; on all of them and the setup
+#                                   firmware's, the knob's own battery at the top
+#                                   of the arc; on every face with a web SDR, its
+#                                   reading; pictures in dir)
 # chooser: the editor panel as ui.c builds it, every value through
 # components/ui/fit_text.c, on the round glass -- the fonts it took, the
 # widths, the dots, the panel's margin to the glass's edge.
+#   make kiwi-check OUT=dir        (writes dir/kiwi-*.ppm and .png)
+# kiwi_face: the kiwi face's S-meter in one vu_band with its red peak mark,
+# against the lv_arc stack, pixel by pixel; its partial redraws against full
+# ones; the readout with OV, NR beside it; the NOISE FILTER and SQUELCH
+# editors.
 #   make readout-check OUT=dir     (writes dir/readout-*.png: the face in
 #                                   Montserrat 48 left, in Hack 46 right, and
 #                                   -zoom.png, the readout's rows enlarged)
@@ -40,8 +46,8 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 # Warnings on for the code under test; LVGL's headers are LVGL's.
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
-SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup
-all: vu_compare chooser readout $(SLABS)
+SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup slab_kiwi
+all: vu_compare chooser kiwi_face readout $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -58,6 +64,14 @@ obj/fit_text.o: $(UI)/fit_text.c $(UI)/include/fit_text.h lv_conf.h
 	$(CC) $(WFLAGS) -c $< -o $@
 chooser: chooser.c $(UI)/include/fit_text.h obj/fit_text.o $(FONT_OBJS) $(OBJS)
 	$(CC) $(WFLAGS) chooser.c obj/fit_text.o $(FONT_OBJS) $(OBJS) -lm -o $@
+kiwi_face: kiwi_face.c $(UI)/include/vu_band.h $(UI)/include/fit_text.h obj/vu_band.o obj/fit_text.o $(FONT_OBJS) $(OBJS)
+	$(CC) $(WFLAGS) kiwi_face.c obj/vu_band.o obj/fit_text.o $(FONT_OBJS) $(OBJS) -lm -o $@
+kiwi-check: kiwi_face
+	mkdir -p $(OUT)
+	./kiwi_face $(OUT); s=$$?; \
+	for f in $(OUT)/kiwi-*.ppm; do \
+	    [ -e "$$f" ] && magick "$$f" "$${f%.ppm}.png"; \
+	done; exit $$s
 chooser-check: chooser
 	mkdir -p $(OUT)
 	./chooser $(OUT); s=$$?; \
@@ -103,9 +117,11 @@ slab_xiegu: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_XIEGU=1 -DVFO_HAS_SDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_setup: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_SETUP=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_kiwi: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_KIWI=1 -DVFO_HAS_SDR=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab-check: $(SLABS)
 	mkdir -p $(OUT)
 	for s in $(SLABS); do ./$$s $(OUT) || exit 1; done
 clean:
-	rm -rf obj vu_compare chooser readout $(SLABS) *.ppm *.png fit.tsv
-.PHONY: all clean chooser-check readout-check slab-check
+	rm -rf obj vu_compare chooser kiwi_face readout $(SLABS) *.ppm *.png fit.tsv
+.PHONY: all clean chooser-check kiwi-check readout-check slab-check

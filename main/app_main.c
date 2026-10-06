@@ -57,13 +57,22 @@
 #include "esp_attr.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
-/* Web SDRs as a second receiver: the Icom, Xiegu and FlexRadio firmwares. */
+/* Web SDRs as a second receiver: the Icom, Xiegu, FlexRadio and UberSDR
+ * firmwares -- and the kiwi one's right ear. */
 #if VFO_HAS_SDR
+#include "kiwi_mark.h"
 #include "sdr_rx.h"
 #endif
 /* The ubersdr firmware's receiver: spots, voices, SSTV. */
 #if VFO_RADIO_UBERSDR
 #include "uber.h"
+#endif
+/* The kiwi firmware's receivers: the web SDRs' list, one in use in the left
+ * ear, and another in the right. */
+#if VFO_RADIO_KIWI
+#include "kiwi.h"
+#include "kiwi_mark.h"
+#include "sdr_rx.h"
 #endif
 #include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
@@ -123,6 +132,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "FlexRadio";
 #elif VFO_RADIO_UBERSDR
     const char *name = "UberSDR";
+#elif VFO_RADIO_KIWI
+    const char *name = "Kiwi888";
 #elif VFO_RADIO_SETUP
     const char *name = "Setup";
 #else
@@ -150,7 +161,7 @@ static volatile bool s_in_call;   /* calling, ringing or talking: the dial is th
  * an install stops it first -- one download at a time. */
 static volatile bool s_fill_stop, s_fill_running;
 
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_KIWI
 /* Another radio, chosen with a swipe up: in use from the next boot, and the
  * knob restarts into it at once -- the clients have no restart path. Never
  * while transmitting. The boot is confirmed first: a restart inside its first
@@ -351,6 +362,7 @@ static void encoder_task(void *arg)
         }
 
         ui_note_activity();
+        ui_note_user();                 /* someone is listening: see radio_user_activity */
         /* Turning the knob answers a question on the dial: "update?" no, and
          * the knob tunes on; "firmware?" yes, and the turn is spent on it. */
         if (ui_ask_knob_moved()) continue;
@@ -745,6 +757,21 @@ static bool audio_busy(void)
 #endif
 }
 
+/* The volume and the microphone's gain may go to flash, settled `settled` us
+ * ago: with nothing on the air -- though a web receiver plays for hours on
+ * end, so on the kiwi firmware at its quiet moment, or 30 s after the change.
+ * Asked only once a flush is due: on the phone firmware audio_busy() copies
+ * the whole status. */
+static bool flush_ok(int64_t settled)
+{
+#if VFO_RADIO_KIWI
+    return !kiwi_audible() || settled > 30000000;
+#else
+    (void)settled;
+    return !audio_busy();
+#endif
+}
+
 #if VFO_RADIO_PHONE
 /* A probe, for now: what holds the audio up. One sentinel per core wakes
  * every 10 ms above every task of ours and says so when it woke over 60 ms
@@ -998,10 +1025,19 @@ static void ui_task(void *arg)
                 uber_tune_to(c.spot_hz, c.spot_mode);
             }
 #endif
+            bool refused = false;
 #if VFO_HAS_SDR
+            /* A tap on RX chooses, even the receiver already chosen: that is
+             * how one held back by its owner's limits is asked for again. On
+             * the kiwi firmware it is the right ear's, never the left ear's
+             * receiver too: refused, with the triple click. */
             if (c.have_rxsrc) {
+#if VFO_RADIO_KIWI
+                ESP_LOGI(TAG, "right ear -> %s", c.rxsrc < 0 ? "OFF" : "a receiver");
+#else
                 ESP_LOGI(TAG, "rx -> %s", c.rxsrc < 0 ? "LOCAL" : "web SDR");
-                sdr_rx_select(c.rxsrc);
+#endif
+                refused |= !sdr_rx_choose(c.rxsrc);
             }
             if (c.have_balance) sdr_rx_set_balance(c.balance);
 #endif
@@ -1011,10 +1047,16 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "V/M -> %s", c.vm_mem ? "memory mode" : "VFO, simplex");
                 radio_memory_mode(c.vm_mem);
             }
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
+#if VFO_RADIO_KIWI
+            /* Another receiver, at once -- or the one in use chosen again,
+             * which is how one held back by its owner's limits is asked for
+             * again. Not the right ear's. */
+            if (c.have_radio) refused |= !kiwi_rx_use(c.radio, true);
+#elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
             if (c.have_radio) switch_radio(c.radio);
 #endif
-            if (!c.live) haptic(7);         /* soft bump: value committed */
+            if (refused)      haptic(12);   /* triple click: refused */
+            else if (!c.live) haptic(7);    /* soft bump: value committed */
         }
 
         /* Volume and mic gain live in the UI -- the dial's editors and the
@@ -1062,23 +1104,28 @@ static void ui_task(void *arg)
             net_prov_set_audio(vol, hs ? net_prov_mic_gain() : mic, hs ? mic : net_prov_mic_gain_headset());
             /* Into flash once they have settled -- and never on the air: a
              * flash write stops the audio's interrupts for up to ~100 ms, a
-             * hole in a call or an over (heard as one, 2026-10-01). */
-            if (changed_at && esp_timer_get_time() - changed_at > 2000000 && !audio_busy()) {
+             * hole in a call or an over (heard as one, 2026-10-01). A web
+             * receiver plays for hours on end: its quiet moment, or 30 s at
+             * the latest. */
+            const int64_t settled = changed_at ? esp_timer_get_time() - changed_at : 0;
+            if (changed_at && settled > 2000000 && flush_ok(settled)) {
                 net_prov_flush_audio();          /* no-op when unchanged */
                 changed_at = 0;
             }
         }
 
-#if VFO_RADIO_UBERSDR
-        /* Someone at the knob: an UberSDR with an idle timer counts that. */
+        /* Someone at the knob -- a finger on the glass, a detent, nothing
+         * else: a web receiver with an idle timer counts only that as
+         * listening. A question answered or a page saved is no listener. */
         {
             static uint32_t seen;
-            const uint32_t use = ui_last_use();
+            const uint32_t use = ui_user_seq();
             if (use != seen) {
                 seen = use;
-                uber_activity();
+                radio_user_activity();
             }
         }
+#if VFO_RADIO_UBERSDR
         /* The SSTV viewer: the picture it wants, and the one to show. */
         {
             static uint32_t shown;
@@ -1365,10 +1412,16 @@ static void ui_task(void *arg)
         ask_choice(&st);        /* the setup firmware asks its own, directly */
 #endif
 #if VFO_HAS_SDR
-        /* The web SDR follows the radio; retuned only when something moved. */
+        /* The web SDR follows the radio; retuned only when something moved.
+         * On the kiwi firmware the right ear follows the knob's own dial,
+         * which is there with the left ear's receiver down too. */
+#if VFO_RADIO_KIWI
+        if (st.f_display > 0)
+#else
         if (st.link == RADIO_LINK_READY || st.link == RADIO_LINK_DEGRADED)
+#endif
             sdr_rx_tune(st.f_display, st.mode, st.filt_lo, st.filt_hi);
-        static sdr_status_t sd;
+        EXT_RAM_BSS_ATTR static sdr_status_t sd;
         sdr_rx_status(&sd);
         audio_out_sdr_mute(st.tx || st.ptt_state != PTT_IDLE);
 #endif
@@ -1403,6 +1456,7 @@ static void ui_task(void *arg)
                               st.link == RADIO_LINK_DEGRADED);
         static int64_t  s_warn_until;
         const char     *warn = NULL;
+        bool            warn_link = false;      /* the warning is the link's */
         int64_t nowms = esp_timer_get_time() / 1000;
 
         if (st.ptt_refusals != s_seen_refusals) {
@@ -1423,9 +1477,17 @@ static void ui_task(void *arg)
                                                                          : "TX REFUSED";
         else if (nowms < s_note_until && st.note[0]) warn = st.note;
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
+#if VFO_RADIO_KIWI
+        /* A receiver on its way, with nothing said against it: no warning
+         * over the face -- its slab says "connecting...". */
+        else if ((st.link == RADIO_LINK_CONNECTING || st.link == RADIO_LINK_GREETING) &&
+                 !st.link_why[0]) { }
+#endif
         else if (!(st.link == RADIO_LINK_READY ||
-                   st.link == RADIO_LINK_DEGRADED))    warn = st.link_why[0] ? st.link_why : "NO LINK";
-        else if (st.slice_locked)                    warn = "VFO LOCKED";
+                   st.link == RADIO_LINK_DEGRADED)) {
+            warn = st.link_why[0] ? st.link_why : "NO LINK";
+            warn_link = true;
+        } else if (st.slice_locked)                  warn = "VFO LOCKED";
 #if !VFO_RX_ONLY
         else if (!st.rx_only && !(st.permit & PERMIT_TX_ENABLE)) warn = "TX DISABLED";
 #endif
@@ -1546,10 +1608,15 @@ static void ui_task(void *arg)
         strlcpy(u.fav_num, st.fav_num, sizeof u.fav_num);
 #if VFO_HAS_SDR
         u.n_sdr = (uint8_t)sdr_count();
-        for (int i = 0; i < u.n_sdr && i < UI_SDR_MAX; i++) {
-            sdr_cfg_t c;
-            if (sdr_get(i, &c)) strlcpy(u.sdr_name[i], c.name[0] ? c.name : c.host, sizeof u.sdr_name[i]);
-        }
+        /* By the page's names; else what each says it is, or its address
+         * with the port kept: four receivers on one address told apart --
+         * on the kiwi firmware as the left ear's chooser names them. */
+        for (int i = 0; i < u.n_sdr && i < UI_SDR_MAX; i++)
+#if VFO_RADIO_KIWI
+            kiwi_rx_label(i, u.sdr_name[i], sizeof u.sdr_name[i]);
+#else
+            sdr_rx_label(i, u.sdr_name[i], sizeof u.sdr_name[i]);
+#endif
         u.rxsrc         = (int8_t)sdr_rx_selected();
         u.sdr_streaming = sd.streaming;
         u.sdr_trouble   = sd.trouble;
@@ -1558,6 +1625,18 @@ static void ui_task(void *arg)
         u.balance       = sdr_rx_balance();
 #else
         u.rxsrc = -1;
+#endif
+#if VFO_RADIO_KIWI
+        /* The slab: under the receiver's name, its antenna or its address,
+         * and where it is -- or that it is on its way. In PSRAM: only
+         * ui_update reads the lines, under the LVGL lock, never a callback. */
+        {
+            EXT_RAM_BSS_ATTR static kiwi_info_t ki;
+            kiwi_info(&ki);
+            u.rx_line2 = ki.line2;
+            u.rx_line3 = ki.line3;
+            u.ovl      = ki.ovl;
+        }
 #endif
 #if VFO_RADIO_UBERSDR
         /* The slab: the spots and voices on the band, a second at a time or
@@ -1607,9 +1686,25 @@ static void ui_task(void *arg)
             u.left_s    = uber_time_left(&why);
             u.have_left = u.left_s >= 0;
             u.left_idle = why == 'I';
+            /* With more than one receiver in the list, the one the link's
+             * warning is about -- the one in use, or the next tried -- named
+             * under it. */
+            if (warn_link) uber_receiver(u.warn_name, sizeof u.warn_name);
         }
+#else
+        (void)warn_link;
 #endif
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
+#if VFO_RADIO_KIWI
+        /* The receivers, another a swipe up away: switched live, the knob
+         * running on. */
+        {
+            const int n = sdr_count();
+            u.n_radios        = (uint8_t)(n < UI_RADIOS_MAX ? n : UI_RADIOS_MAX);
+            u.n_radios_direct = u.n_radios;
+            u.radio_sel       = (int8_t)kiwi_rx_active();
+            for (int i = 0; i < u.n_radios; i++) kiwi_rx_label(i, u.radio_name[i], sizeof u.radio_name[i]);
+        }
+#elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
         /* The radios to choose from with a swipe up: not over the cable,
          * which reaches one computer or one radio. */
         {
@@ -1810,6 +1905,12 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     }
     ESP_LOGI(TAG, "--- transport: WiFi (UberSDR %s) ---", cfg->radio_host);
     return cfg->radio_host;
+#elif VFO_RADIO_KIWI
+    /* Its receivers are the configuration page's list, each by its own
+     * address: the client looks each one up itself, every address it has.
+     * With none yet, the client says NO RECEIVER, with the knob's address. */
+    strlcpy(ip, "Kiwi", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (Kiwi888) ---");
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -2019,6 +2120,7 @@ static const struct { const char *radio, *name; } FIRMWARES[] = {
     { "icom",       "Icom"      },
     { "multiflex",  "FlexRadio" },
     { "ubersdr",    "UberSDR"   },
+    { "kiwi",       "Kiwi888"   },
     { "svxconnect", "SVXConnect" },
     { "phone",      "Telephone" },
 };
@@ -2549,12 +2651,12 @@ RADIO_ONLY_FN static void second_chip_boot(bool wifi)
  * upload of this chip's own; the headset's part bt_link knows best, and
  * keeps. Said every pass: a pass that does not come -- an install, the WiFi
  * setup -- stops a transfer by its silence. Then what the knob remembers of
- * it, an image fetched to hand over, and -- the boot window having missed
- * it, or the offer new since -- a fetch now, after two quiet minutes, at
- * most once in half an hour and three times a boot, with internal RAM to
- * spare, and stopped by an over or a call. `idle`: the radio idle, no
- * question on the dial; one with no client yet is. `session`: the radio's
- * client runs. */
+ * it, and of the levels set for headsets and speakers, an image fetched to
+ * hand over, and -- the boot window having missed it, or the offer new
+ * since -- a fetch now, after two quiet minutes, at most once in half an
+ * hour and three times a boot, with internal RAM to spare, and stopped by
+ * an over or a call. `idle`: the radio idle, no question on the dial; one
+ * with no client yet is. `session`: the radio's client runs. */
 static void second_chip(bool idle, bool session)
 {
     EXT_RAM_BSS_ATTR static bt_link_status_t st;
@@ -2593,6 +2695,11 @@ static void second_chip(bool idle, bool session)
     bt_link_update_status(&u);
     comp_record_note(&u);
     comp_record_save(busy);
+    /* A headset's or speaker's level set on the page, heard at once: into
+     * NVS the same way, once it has settled -- never during an over or a
+     * call, and on the kiwi firmware at a quiet moment or 30 s on, as a turn
+     * of the dial's VOLUME (flush_ok). */
+    if (!busy) bt_link_save_levels(flush_ok);
     const bool keep_up = comp_auto(&st, &u);
     ota_companion_offer(&o);
     if (keep_up) comp_say(&st, &u, &o);
@@ -3018,6 +3125,12 @@ static bool bring_up(const char *what, esp_err_t (*fn)(void))
     return false;
 }
 
+#if VFO_RADIO_KIWI
+/* The receivers' day-limit marks, under the left ear's name ("kiwi"): the
+ * table is named by whoever brings it up first. */
+static esp_err_t kiwi_marks_init(void) { return kiwi_mark_init("kiwi"); }
+#endif
+
 #if CONFIG_VFO_USB_NET
 /* Deferred so that every boot has a flashing window -- see the comment at the
  * call site. */
@@ -3195,6 +3308,14 @@ void app_main(void)
     return;
 #else
     bring_up("nvs", net_prov_init);
+#if VFO_RADIO_KIWI
+    /* The receivers, for the page and the face before the client starts:
+     * read here, where the stack may touch flash -- and their day-limit
+     * marks, the left ear's to name in the log before the right ear's
+     * session (sdr_rx_init) is brought up. */
+    bring_up("receivers", sdr_list_init);
+    bring_up("day-limit marks", kiwi_marks_init);
+#endif
 #if VFO_RADIO_SETUP
     /* tools/install-setup.sh's one-time mark in the settings it wrote. */
     s_flashed_now = net_prov_take_once("sdwipe");
@@ -3242,7 +3363,18 @@ void app_main(void)
         bring_up("mic", audio_in_init);
 #endif
 #if VFO_HAS_SDR
+#if VFO_RADIO_KIWI
+        bring_up("right ear", sdr_rx_init);
+#else
         bring_up("web SDR", sdr_rx_init);
+#endif
+        /* Its day-limit marks go to flash, but never during an over. */
+        kiwi_mark_busy_cb(audio_busy);
+#if VFO_RADIO_KIWI
+        /* The right ear's choice and the balance to flash at a quiet moment:
+         * a web receiver plays for hours on end. */
+        sdr_rx_quiet_cb(kiwi_audible);
+#endif
 #endif
 #if !VFO_RADIO_SETUP
         /* The second chip, for a Bluetooth headset. An update of its own

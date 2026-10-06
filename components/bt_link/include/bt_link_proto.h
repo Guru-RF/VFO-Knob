@@ -23,10 +23,10 @@
  * names: the companion converts to and from the headset's own (16 kHz with
  * mSBC, 8 kHz with CVSD), and its clock -- or to a speaker's, 44.1 kHz SBC,
  * the one channel in both of its. Blocks are whatever the sender has; the
- * receiver buffers. What goes to the device is at the jack's loudness, the
- * knob's VOLUME applied (AUDIO_DN) -- but a speaker whose own volume the
- * knob sets gets it before the VOLUME (AUDIO_DN_FULL), its own amplifier
- * turning it down. */
+ * receiver buffers. What goes to the device has the knob's VOLUME and the
+ * device's level applied (AUDIO_DN) -- but a speaker whose own volume the
+ * knob sets gets it before the VOLUME, its level only (AUDIO_DN_FULL), its
+ * own amplifier turning it down. */
 #ifndef BT_LINK_PROTO_H
 #define BT_LINK_PROTO_H
 

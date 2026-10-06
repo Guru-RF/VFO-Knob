@@ -167,6 +167,31 @@ LV_FONT_DECLARE(font_hack_46);
 #define C_GREEN     lv_color_hex(0x45D69A)   /* --good                  */
 #define PWR_HEX     0x08A2FB
 #define SDR_HEX     0x8B7CF8                 /* --violet: a KiwiSDR beside it */
+#elif VFO_RADIO_KIWI
+/* --- KiwiSDR / Web-888 palette ---------------------------------------------
+ * The receivers' own web page, which both servers share: black as its
+ * spectrum and waterfall, its grey buttons, its highlight yellow, and its
+ * S-meter's lime bar. It only receives: nothing here is drawn in transmit,
+ * though the colours have to exist. */
+#define C_BG        lv_color_hex(0x000000)   /* its spectrum and waterfall */
+#define C_BG1       lv_color_hex(0x373737)   /* its buttons: the slab      */
+#define C_BG_TX     lv_color_hex(0x2A0C0C)   /* never shown                */
+#define C_ACCENT    lv_color_hex(0xFFFF50)   /* its highlight yellow       */
+#define C_ACCENT_HI lv_color_hex(0xFFFF80)
+#define C_TEXT      lv_color_hex(0xFFFFFF)
+#define C_TEXT2     lv_color_hex(0xD3D3D3)
+#define C_LABEL     lv_color_hex(0x909090)   /* its dim text               */
+#define C_DISABLED  lv_color_hex(0x575757)
+#define C_SUBTLE    lv_color_hex(0x262626)   /* its panels                 */
+#define C_WARN      lv_color_hex(0xFFA500)
+#define C_DANGER    lv_color_hex(0xFF3030)
+#define C_TX_BORDER lv_color_hex(0xFF3030)
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xFFFFFF)
+#define C_TX_RED    lv_color_hex(0xFF3030)
+#define C_GREEN     lv_color_hex(0x00FF00)   /* lime                       */
+#define PWR_HEX     0x00FF00
+#define SDR_HEX     0x99C9FF                 /* its page's link blue       */
 #elif SVX_LOOK
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
@@ -262,6 +287,18 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #else
 #define RX_FACE 0
 #endif
+/* ...and which receiver: the UberSDR's spots, SNR and SSTV, or a KiwiSDR's
+ * slab with its name, an AGC to set, and its receivers a tap away. */
+#if VFO_RADIO_UBERSDR
+#define UBER_FACE 1
+#else
+#define UBER_FACE 0
+#endif
+#if VFO_RADIO_KIWI
+#define KIWI_FACE 1
+#else
+#define KIWI_FACE 0
+#endif
 /* A web SDR beside the radio: blue -- the Icom's and the Maestro's own. */
 #ifndef SDR_HEX
 #if VFO_RADIO_ICOM
@@ -328,11 +365,14 @@ static const int DIG_STEP_GHZ[N_DIG] = {
 
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
-static lv_obj_t *s_meter, *s_ring, *s_ptt, *s_ptt_lbl;
-/* What two dot-cut labels were last given (set_text_cut(), below): every
+static lv_obj_t *s_ring, *s_ptt, *s_ptt_lbl;
+#if !KIWI_FACE
+static lv_obj_t *s_meter;            /* the S-meter's track; its zones are s_rx_zone */
+#endif
+/* What three dot-cut labels were last given (set_text_cut(), below): every
  * write to them goes through it, so these never go stale. In PSRAM; build()
  * starts each as "\x01", which nothing sets. */
-EXT_RAM_BSS_ATTR static char s_ptt_lbl_shown[128], s_spot_sub_shown[128];
+EXT_RAM_BSS_ATTR static char s_ptt_lbl_shown[128], s_spot_sub_shown[128], s_spot_n_shown[64];
 static void set_text_cut(lv_obj_t *o, char *shown, size_t cap, const char *s);
 static lv_obj_t *s_hs_bt;      /* a headset connected: its logo, at the slab's right end; a speaker: a speaker */
 static lv_obj_t *s_hs_batt;    /* ...its battery left of it, where it reports one */
@@ -376,7 +416,14 @@ EXT_RAM_BSS_ATTR static ui_call_t s_calls[UI_CALLS_MAX];
 static uint8_t       s_ncalls;
 static volatile bool s_calls_seen;
 #endif
-static lv_obj_t *s_warn_panel, *s_warn_net;
+static lv_obj_t *s_warn_panel, *s_warn_net, *s_warn_name;
+/* The warning's panel: tall enough for the card's five lines under the
+ * warning -- and for a line more between them, the radio it is about, where
+ * the client names one (warn_name), cut with dots where it is too long. */
+#define WARN_W       268
+#define WARN_H       134
+#define WARN_H_NAMED 160
+EXT_RAM_BSS_ATTR static char s_warn_name_shown[24];
 
 /* "Update?" -- see ui_ask_update(). */
 #define ASK_MS     10000
@@ -516,7 +563,10 @@ typedef struct {
     int       span;           /* the meter's span, degrees */
     bool      reverse;        /* fills from the far end (the mic ring) */
 } peak_led_t;
-static peak_led_t s_sig_led, s_swr_led, s_pwr_led, s_mic_led;
+static peak_led_t s_swr_led, s_pwr_led, s_mic_led;
+#if !KIWI_FACE
+static peak_led_t s_sig_led;         /* the S-meter's */
+#endif
 #if VFO_HAS_SDR
 static peak_led_t s_sdr_led;         /* the web SDR's, on its thin line */
 #endif
@@ -710,6 +760,16 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0x25F425 },   /* S9 to +20  */
     {  -53.0f,  -33.0f, 0x25F425 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0x25F425 },   /* +40 to +60 */
+#elif VFO_RADIO_KIWI
+    /* The Kiwi page's S-meter: one lime bar, end to end. */
+    { -127.0f, -121.0f, 0x00FF00 },   /* S0 to S1   */
+    { -121.0f, -109.0f, 0x00FF00 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0x00FF00 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0x00FF00 },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0x00FF00 },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0x00FF00 },   /* S9 to +20  */
+    {  -53.0f,  -33.0f, 0x00FF00 },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0x00FF00 },   /* +40 to +60 */
 #elif SVX_LOOK
     /* Not an S-meter: the audio level, -60 to 0 dBFS, in SvxConnect's meter
      * colours -- green, then yellow from -12 dB, red in the last 3. */
@@ -744,8 +804,17 @@ static const float RXNOTCH[] = { -121.0f, -109.0f, -97.0f, -85.0f, -73.0f,
 #endif
 
 
+#if KIWI_FACE
+/* The kiwi face's S-meter: one object (vu_band.c) -- its track, the lime
+ * bar, and the peak held a second, a red mark as on the receivers' own page
+ * -- that redraws only the sectors that moved. In PSRAM: only ui_update and
+ * the LVGL task read it, under the lock. */
+EXT_RAM_BSS_ATTR static vu_band_t s_rx_band;
+#define KIWI_PEAK_HEX 0xFF0000
+#else
 static lv_obj_t *s_rx_zone[RX_ZONES];
 static int16_t   s_rx_val[RX_ZONES];   /* last value written, to skip redraws */
+#endif
 static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
 
 /* Tap the meter arc to see where the knob actually is on the network. The one
@@ -847,6 +916,13 @@ static const char *AGCS[]  = { "fast","mid","slow" };
 static const char *MODES[] = { "usb","lsb","cwu","cwl","am","sam","fm","nfm" };
 static const char *AGCS[]  = { "" };
 #define GAIN_CAPTION "FIL"
+#elif VFO_RADIO_KIWI
+/* A Kiwi's own modes, by its own names: AM's sidebands each alone (SAL,
+ * SAU) beside synchronous AM. Its AGC by the decay of its page's presets;
+ * the gain's place is its noise filter. */
+static const char *MODES[] = { "usb","lsb","cw","am","sam","sal","sau","nbfm" };
+static const char *AGCS[]  = { "fast","med","slow" };
+#define GAIN_CAPTION "NR"
 #elif SVX_LOOK
 /* A reflector has no modes, AGC or gain; the tables stay for the editors'
  * sake, which the reflector face never opens. */
@@ -861,7 +937,36 @@ static const char *MODES[] = { "usb","lsb","cw","cwr","am","sam","fm","nfm",
 static const char *AGCS[]  = { "fast","med","slow","off" };
 #define GAIN_CAPTION "RF.G"
 #endif
-#if VFO_RADIO_UBERSDR
+#if VFO_RADIO_KIWI
+/* Its passbands, by mode: around the dial in CW, AM and NBFM, one side of it
+ * in a sideband -- 300 Hz off the carrier, as the Kiwi's own page has them
+ * -- and AM's sidebands (SAL, SAU) from the carrier out. */
+static const int32_t F_SSB[] = { 1800, 2100, 2400, 2700, 3000, 3600 };
+static const int32_t F_CW[]  = { 60, 100, 200, 300, 400, 500, 800, 1000 };
+static const int32_t F_AM[]  = { 5000, 6000, 8000, 9800, 12000 };
+static const int32_t F_SA[]  = { 2500, 3000, 4000, 4900, 6000 };
+static const int32_t F_FM[]  = { 6000, 8000, 10000, 12000 };
+static const int32_t *FILTERS = F_SSB;
+static int           N_FILTERS = (int)(sizeof F_SSB / sizeof F_SSB[0]);
+
+static void filters_for(const char *m)
+{
+#define USE(a) do { FILTERS = a; N_FILTERS = (int)(sizeof a / sizeof a[0]); } while (0)
+    if (m && !strncasecmp(m, "cw", 2))                              USE(F_CW);
+    else if (m && (!strcasecmp(m, "am") || !strcasecmp(m, "sam")))  USE(F_AM);
+    else if (m && (!strcasecmp(m, "sal") || !strcasecmp(m, "sau"))) USE(F_SA);
+    else if (m && !strcasecmp(m, "nbfm"))                           USE(F_FM);
+    else                                                             USE(F_SSB);
+#undef USE
+}
+
+/* A passband on both sides of the dial, not one. */
+static bool filter_centred(const char *m)
+{
+    return m && (!strncasecmp(m, "cw", 2) || !strcasecmp(m, "am") || !strcasecmp(m, "sam") ||
+                 !strcasecmp(m, "nbfm"));
+}
+#elif VFO_RADIO_UBERSDR
 /* Its passbands, by mode: the widths UberSDR allows each (CW +-500 Hz, voice
  * up to 6 kHz, AM +-6 kHz, FM +-8 kHz). */
 static const int32_t F_SSB[] = { 1800, 2100, 2400, 2700, 3000, 3600, 4200, 5000 };
@@ -1223,6 +1328,20 @@ static void call_line(const ui_call_t *c, char *out, size_t cap)
 }
 #endif
 
+/* On a Kiwi's face one receiver is never in both ears: in either ear's
+ * chooser, the receiver the other ear has is shown dimmed and named so, and
+ * a tap on it is refused (app_main's triple click). The right ear's choice
+ * may be the left ear's own receiver -- a list saved under both: the left
+ * ear plays it, and the right waits, so it is the left ear's, not dimmed in
+ * its chooser. */
+static bool other_ear(void)
+{
+    if (!KIWI_FACE) return false;
+    if (s_edit == ED_RXSRC) return s_edit_idx > 0 && s_edit_idx - 1 == s_last.radio_sel;
+    if (s_edit == ED_RADIO) return s_edit_idx == s_last.rxsrc && s_last.rxsrc != s_last.radio_sel;
+    return false;
+}
+
 static void edit_render(void)
 {
     if (s_edit == ED_NONE) {
@@ -1324,12 +1443,16 @@ static void edit_render(void)
         else            snprintf(v, sizeof v, "OPEN");
         break;
     case ED_RXSRC:
-        title = "RX";
-        snprintf(v, sizeof v, "%s", s_edit_idx ? s_last.sdr_name[s_edit_idx - 1] : "LOCAL");
+        /* A Kiwi's second receiver plays in the right ear: OFF, or one of
+         * the same receivers -- the left ear's dimmed, its tap refused. */
+        title = KIWI_FACE ? "RIGHT EAR" : "RX";
+        snprintf(v, sizeof v, "%s", s_edit_idx ? s_last.sdr_name[s_edit_idx - 1] : KIWI_FACE ? "OFF" : "LOCAL");
+        if (other_ear()) vcolor = C_DISABLED;
         break;
     case ED_RADIO:
-        title = "RADIO";
+        title = KIWI_FACE ? "RECEIVER" : "RADIO";
         snprintf(v, sizeof v, "%s", s_last.radio_name[s_edit_idx]);
+        if (other_ear()) vcolor = C_DISABLED;
         break;
     case ED_VM:
         /* Icom's own name for it: the V/M key. */
@@ -1339,9 +1462,10 @@ static void edit_render(void)
     case ED_BALANCE:
         title = "BALANCE";
         /* 0: the radio left and the SDR right; towards an end, that one alone
-         * -- on a receiver's face, the UberSDR left and a KiwiSDR right. */
-        if (s_edit_bal <= -100)     snprintf(v, sizeof v, "%s", RX_FACE ? "UBER" : "RADIO");
-        else if (s_edit_bal >= 100) snprintf(v, sizeof v, "%s", RX_FACE ? "KIWI" : "SDR");
+         * -- on a receiver's face, the UberSDR left and a KiwiSDR right; on
+         * a Kiwi's, its two ears. */
+        if (s_edit_bal <= -100)     snprintf(v, sizeof v, "%s", KIWI_FACE ? "LEFT" : UBER_FACE ? "UBER" : "RADIO");
+        else if (s_edit_bal >= 100) snprintf(v, sizeof v, "%s", KIWI_FACE ? "RIGHT" : UBER_FACE ? "KIWI" : "SDR");
         else if (s_edit_bal == 0)   snprintf(v, sizeof v, "L | R");
         else if (s_edit_bal < 0)    snprintf(v, sizeof v, LV_SYMBOL_LEFT " %d", -s_edit_bal);
         else                        snprintf(v, sizeof v, "%d " LV_SYMBOL_RIGHT, s_edit_bal);
@@ -1396,11 +1520,16 @@ static void edit_render(void)
      * service -- the same FlexRadio can be both. */
     if (s_edit == ED_RADIO) {
         char h[40];
-        /* A receiver is reached however its address says: nothing to add. */
-        if (RX_FACE) snprintf(h, sizeof h, "tap to switch");
-        else         snprintf(h, sizeof h, "%s  -  tap to switch",
-                              s_edit_idx < s_last.n_radios_direct ? "LAN" : s_last.radio_via);
+        /* A receiver is reached however its address says: nothing to add --
+         * a Kiwi's only one is chosen again. */
+        if (other_ear()) snprintf(h, sizeof h, "in the right ear");
+        else if (RX_FACE) snprintf(h, sizeof h, "%s", KIWI_FACE && s_last.n_radios == 1 ? "tap to choose it again"
+                                                                                       : "tap to switch");
+        else              snprintf(h, sizeof h, "%s  -  tap to switch",
+                                   s_edit_idx < s_last.n_radios_direct ? "LAN" : s_last.radio_via);
         lv_label_set_text(s_edit_hint, h);
+    } else if (other_ear()) {
+        lv_label_set_text(s_edit_hint, "in the left ear");
     } else if (s_edit == ED_SPOT) {
         /* Where, in what, and what it is: 14.205.0 USB  DX 4m */
         char l1[24], h[56];
@@ -1490,7 +1619,7 @@ static void edit_open(edit_t what, const ui_state_t *st)
     case ED_BAND:   s_edit_idx = nearest_band(st->freq_hz); break;
     case ED_MODE:   s_edit_idx = index_of_mode(st->mode);   break;
     case ED_FILTER:
-#if VFO_RADIO_UBERSDR
+#if VFO_RADIO_UBERSDR || VFO_RADIO_KIWI
         filters_for(st->mode);
 #endif
         s_edit_presets = st->filter_no != 0;
@@ -1625,6 +1754,15 @@ static void edit_fill(void)
         if (filter_centred(s_last.mode)) { s_commit.filt_lo = -w / 2; s_commit.filt_hi = w / 2; }
         else if (s_edit_lsb)             { s_commit.filt_lo = -w;     s_commit.filt_hi = -50; }
         else                             { s_commit.filt_lo = 50;     s_commit.filt_hi = w;   }
+        break;
+#elif VFO_RADIO_KIWI
+        /* The Kiwi's edges: a sideband 300 Hz off the carrier, AM's single
+         * sidebands from it out, the rest around the dial. */
+        if (filter_centred(s_last.mode))         { s_commit.filt_lo = -w / 2;      s_commit.filt_hi = w / 2; }
+        else if (!strcasecmp(s_last.mode, "sal")) { s_commit.filt_lo = -w;          s_commit.filt_hi = 0;     }
+        else if (!strcasecmp(s_last.mode, "sau")) { s_commit.filt_lo = 0;           s_commit.filt_hi = w;     }
+        else if (s_edit_lsb)                     { s_commit.filt_lo = -(300 + w);  s_commit.filt_hi = -300;  }
+        else                                     { s_commit.filt_lo = 300;         s_commit.filt_hi = 300 + w; }
         break;
 #endif
         if (s_edit_lsb) { s_commit.filt_lo = -w;  s_commit.filt_hi = -100; }
@@ -2130,8 +2268,9 @@ static bool aux_spot(lv_point_t p)
     if (REFLECTOR_FACE || p.y < AUX_TOP || p.y >= 104 || !s_last.link_ok || s_last.tx)
         return false;
     const int dx = p.x - CX;
-    /* A receiver's SNR, where the AGC is, is only a reading. */
-    return (dx <= -AUX_IN && dx >= -AUX_OUT && !RX_FACE) ||
+    /* An UberSDR's SNR, where the AGC is, is only a reading; a Kiwi has an
+     * AGC to set there. */
+    return (dx <= -AUX_IN && dx >= -AUX_OUT && !UBER_FACE) ||
            (dx >= AUX_IN && dx <= AUX_OUT && s_last.have_gain);
 }
 
@@ -2427,7 +2566,14 @@ static void tap(lv_point_t p, uint32_t held)
      * would let the operator choose a mode or a filter that goes nowhere. The
      * warning panel is the only thing on screen that means anything, so leave
      * it alone -- the long press on the meter still works, since the
-     * addresses are what you want. */
+     * addresses are what you want. A Kiwi's slab names its receiver, link
+     * or none: a tap there is another, as the swipe up is -- or, the only
+     * one, that one again, which is how one its owner's limits hold back is
+     * asked for once more. */
+    if (KIWI_FACE && p.y >= PTT_TOP && s_last.n_radios > 0) {
+        edit_open(ED_RADIO, &s_last);
+        return;
+    }
     if (!s_last.link_ok) return;
 
     const bool mem = s_last.mem_state != UI_MEM_OFF;
@@ -2455,7 +2601,7 @@ static void tap(lv_point_t p, uint32_t held)
     }
     /* A receiver's slab: all the spots and voices, on the dial. */
     if (RX_FACE && p.y >= PTT_TOP) {
-        if (s_nspots > 0) edit_open(ED_SPOT, &s_last);
+        if (UBER_FACE && s_nspots > 0) edit_open(ED_SPOT, &s_last);
         return;
     }
     /* step | volume, on a receiver */
@@ -2627,7 +2773,9 @@ static void slab_cb(lv_timer_t *t)
 /* A swipe. Down chooses what is heard: LOCAL or a web SDR, and then, on a
  * radio with a second receiver or a choice of antennas, their editors -- the
  * receiver, and a tap later the antenna -- and last, with memories, V/M. Up
- * chooses the radio. From the left, the levels; from the right, the tuner. */
+ * chooses the radio. From the left, the levels; from the right, the tuner.
+ * On a Kiwi's face: down, the right ear; up, the left ear's receiver; from
+ * the left, the balance between them; from the right, the squelch. */
 static void gesture_cb(lv_event_t *e)
 {
     (void)e;
@@ -2647,11 +2795,18 @@ static void gesture_cb(lv_event_t *e)
     return;
 #endif
     /* Up: another radio, where the knob knows more than one -- with or
-     * without a link, since the one in use may be switched off. */
+     * without a link, since the one in use may be switched off. A Kiwi's
+     * only receiver too: chosen again, it is asked for once more. */
     if (dir == LV_DIR_TOP) {
-        if (s_last.n_radios > 1) edit_open(ED_RADIO, &s_last);
+        if (s_last.n_radios > (KIWI_FACE ? 0 : 1)) edit_open(ED_RADIO, &s_last);
         return;
     }
+#if KIWI_FACE && VFO_HAS_SDR
+    /* A Kiwi's right ear, and the balance between the two, are the knob's
+     * own -- with the left ear's receiver down too. */
+    if (dir == LV_DIR_BOTTOM && s_last.n_sdr > 0) { edit_open(ED_RXSRC, &s_last); return; }
+    if (dir == LV_DIR_RIGHT && s_last.rxsrc >= 0) { edit_open(ED_BALANCE, &s_last); return; }
+#endif
     if (!s_last.link_ok) return;
     /* From the left: with a web SDR chosen, the balance first -- the one
      * turned most -- then RF gain and power. From the right: the tuner, or
@@ -2662,8 +2817,8 @@ static void gesture_cb(lv_event_t *e)
         return;
     }
     if (dir == LV_DIR_LEFT) {
-        /* A receiver's: its SSTV pictures, where it keeps them. */
-        if (RX_FACE) {
+        /* An UberSDR's: its SSTV pictures, where it keeps them. */
+        if (UBER_FACE) {
             if (s_last.n_sstv >= 0) edit_open(ED_SSTV, &s_last);
             return;
         }
@@ -2700,6 +2855,7 @@ static void touch_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     ui_note_activity();
+    ui_note_user();                     /* a finger on the glass: someone is listening */
     /* The dial's own VOLUME panel keeps no tap from the face: it goes, and the
      * tap lands where it was aimed -- HANG UP, ANSWER, the keypad. */
     if (s_edit_auto) edit_close();
@@ -3029,7 +3185,7 @@ static void build(void)
 
     /* TX hairline: a complete ring, which peripheral vision catches instantly
      * and which shares no geometry with anything shown in receive. */
-    s_ptt_lbl_shown[0] = s_spot_sub_shown[0] = '\x01';
+    s_ptt_lbl_shown[0] = s_spot_sub_shown[0] = s_spot_n_shown[0] = '\x01';
     s_ring = lv_arc_create(s_scr);
     lv_obj_set_size(s_ring, 356, 356);
     lv_obj_center(s_ring);
@@ -3043,6 +3199,20 @@ static void build(void)
      * ring the size of the glass was still drawn under every redraw. */
     lv_obj_add_flag(s_ring, LV_OBJ_FLAG_HIDDEN);
 
+#if KIWI_FACE
+    {
+        int16_t  a0[RX_ZONES], a1[RX_ZONES];
+        uint32_t rgb[RX_ZONES];
+        for (size_t z = 0; z < RX_ZONES; z++) {
+            a0[z]  = (int16_t)(smeter_frac(RXZONES[z].from) * ARC_SPAN);
+            a1[z]  = (int16_t)(smeter_frac(RXZONES[z].to) * ARC_SPAN);
+            rgb[z] = RXZONES[z].rgb;
+        }
+        vu_band_build(&s_rx_band, s_scr, CX, CY, ARC_ROT, ARC_SPAN, ARC_R0, 12, false, RX_ZONES, a0, a1, rgb,
+                      C_SUBTLE, LED_DEG);
+        vu_band_led_color(&s_rx_band, KIWI_PEAK_HEX);
+    }
+#else
     s_meter = lv_arc_create(s_scr);
     lv_obj_set_size(s_meter, ARC_R0 * 2, ARC_R0 * 2);
     lv_obj_center(s_meter);
@@ -3085,6 +3255,7 @@ static void build(void)
         s_rx_zone[z] = b;
         s_rx_val[z]  = 0;
     }
+#endif /* KIWI_FACE: the S-meter in one object */
 #if VFO_HAS_SDR
     /* A web SDR's S-meter: a thin line just outside the radio's, on its
      * scale, in the SDR's blue -- clear of the notches and the ticks, and
@@ -3199,12 +3370,15 @@ static void build(void)
     /* Peak LEDs: above the bars they mark, below the notches that cut every
      * band into blocks (both tick groups are lifted after this). */
     {
-        uint32_t rx[RX_ZONES], mic[MIC_ZONES], swr[SWR_ZONES];
-        for (size_t z = 0; z < RX_ZONES; z++)  rx[z]  = RXZONES[z].rgb;
+        uint32_t mic[MIC_ZONES], swr[SWR_ZONES];
         for (size_t z = 0; z < MIC_ZONES; z++) mic[z] = MIC_ZONE[z].rgb;
         for (size_t z = 0; z < SWR_ZONES; z++) swr[z] = ZONES[z].rgb;
         static const uint32_t pwr[1] = { PWR_HEX };             /* the bar's */
+#if !KIWI_FACE
+        uint32_t rx[RX_ZONES];
+        for (size_t z = 0; z < RX_ZONES; z++)  rx[z]  = RXZONES[z].rgb;
         led_build(&s_sig_led, ARC_ROT, ARC_SPAN, ARC_R0, 12, false, rx, RX_ZONES);
+#endif
         led_build(&s_swr_led, SWR_ROT, SWR_SPAN, ARC_R0, 12, false, swr, SWR_ZONES);
         led_build(&s_pwr_led, AUD_ROT, AUD_SPAN, ARC_R0, 12, false, pwr, 1);
         led_build(&s_mic_led, AUD_ROT, AUD_SPAN, ARC_R0 - 22, 5, true, mic, MIC_ZONES);
@@ -3256,7 +3430,7 @@ static void build(void)
 
     /* Either side of it, a caption and the setting under it: the AGC, and
      * the front end's gain. Tapping either opens its editor. */
-    s_agc_cap  = mklabel(&lv_font_montserrat_14, C_LABEL, CX - AUX_DX, 78, RX_FACE ? "SNR" : "AGC");
+    s_agc_cap  = mklabel(&lv_font_montserrat_14, C_LABEL, CX - AUX_DX, 78, UBER_FACE ? "SNR" : "AGC");
     s_agc_val  = mklabel(&lv_font_montserrat_14, C_DISABLED, CX - AUX_DX, 97, "--");
     s_gain_cap = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 78, GAIN_CAPTION);
     s_gain_val = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 97, "--");
@@ -3422,6 +3596,8 @@ static void build(void)
         lv_obj_set_width(s_spot_n, 190);
         lv_obj_set_pos(s_spot_n, CX - 95, PTT_TOP + 64);
         lv_obj_remove_flag(s_spot_n, LV_OBJ_FLAG_CLICKABLE);
+        /* A Kiwi's whereabouts can be long: one line, cut, in the chord. */
+        if (KIWI_FACE) lv_label_set_long_mode(s_spot_n, LV_LABEL_LONG_DOT);
         lv_label_set_text(s_spot_n, "");
         s_left = lv_label_create(s_scr);
         lv_obj_set_style_text_font(s_left, &lv_font_montserrat_14, 0);
@@ -3516,10 +3692,10 @@ static void build(void)
      * -- but in the danger colour. It used to be said twice, as a label over
      * the readout and again under it, which is worse than saying it once:
      * two copies of "NO LINK" invite a look for two different faults. */
-    /* Tall enough for the card's four lines -- the firmware, then the
-     * addresses -- under the warning. */
+    /* Tall enough for the card's five lines -- the firmware, the knob's
+     * power, then the addresses -- under the warning. */
     s_warn_panel = lv_obj_create(s_scr);
-    lv_obj_set_size(s_warn_panel, 268, 134);
+    lv_obj_set_size(s_warn_panel, WARN_W, WARN_H);
     lv_obj_align(s_warn_panel, LV_ALIGN_CENTER, 0, -6);
     lv_obj_set_style_radius(s_warn_panel, 18, 0);
     lv_obj_set_style_bg_color(s_warn_panel, C_BG1, 0);
@@ -3538,6 +3714,22 @@ static void build(void)
     lv_obj_set_style_text_color(s_warn, C_DANGER, 0);
     lv_label_set_text(s_warn, "");
     lv_obj_align(s_warn, LV_ALIGN_TOP_MID, 0, 8);
+
+    /* Under it, where the client names one, the radio it is about -- the
+     * receiver the ubersdr firmware is on, with others in its list: NOT
+     * FOUND, then CONNECTING to the next, each with the name. */
+    s_warn_name = lv_label_create(s_warn_panel);
+    lv_obj_set_style_text_font(s_warn_name, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_warn_name, C_TEXT, 0);
+    lv_obj_set_style_text_align(s_warn_name, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_warn_name, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_warn_name, WARN_W - 28);
+    /* One line: a name too long for it is cut with dots, never wrapped onto
+     * the card's. */
+    lv_obj_set_height(s_warn_name, lv_font_get_line_height(&lv_font_montserrat_20));
+    lv_label_set_text(s_warn_name, "");
+    lv_obj_align(s_warn_name, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_add_flag(s_warn_name, LV_OBJ_FLAG_HIDDEN);
 
     /* The addresses live inside the warning, not on a card behind it. With no
      * link they are the single most useful thing on the screen -- they are how
@@ -4336,16 +4528,17 @@ static void left_slab(const ui_state_t *st)
     set_text_color(s_left, st->left_idle || st->left_s < 60 ? C_DANGER : st->left_s < 300 ? C_WARN : C_TEXT2);
 }
 
-/* The spot's call, as it reads now, in its room on the slab: from the time
- * left, while that shows, to the device's battery, or its logo, while they
- * do -- else the slab's 290 px (headset_slab()). Centred where it fits so;
- * a longer one moved aside just as far as it must, so as to be whole; only
- * one too long for the whole room cut with dots. Measured when the call or
- * its room changes: headset_slab() gives the room, each time before this,
- * and no room is the 0, 0 the first is measured against. What was
- * measured, in PSRAM. */
+/* The spot's call -- on a Kiwi's face the receiver's name -- as it reads
+ * now, in its room on the slab: from the time left, while that shows, to
+ * the device's battery, or its logo, while they do -- else the slab's 290
+ * px (headset_slab()). Centred where it fits so; a longer one moved aside
+ * just as far as it must, so as to be whole; only one too long for the
+ * whole room cut with dots. Measured when the call or its room changes:
+ * headset_slab() gives the room, each time before this, and no room is the
+ * 0, 0 the first is measured against. What was measured, in PSRAM: a name
+ * as long as the state's (server). */
 static int16_t s_call_l, s_call_r;
-EXT_RAM_BSS_ATTR static char s_call_said[24];
+EXT_RAM_BSS_ATTR static char s_call_said[40];
 
 static void call_place(void)
 {
@@ -4412,8 +4605,9 @@ static void headset_slab(const ui_state_t *st)
     const int y  = under ? PTT_TOP + 52 : PTT_TOP + 12;
     const int bx = x + (st->speaker ? 0 : 1) - BATT_GAP - BATT_W;
 #if RX_FACE
-    /* The spot's call: its room, clear of the time left at the slab's left
-     * end and of the battery, or the logo, at its right end (call_place()). */
+    /* The spot's call, or a Kiwi's receiver's name: its room, clear of the
+     * time left at the slab's left end and of the battery, or the logo, at
+     * its right end (call_place()). */
     s_call_l = (int16_t)(st->have_left ? LEFT_X + left_room(st) + BATT_GAP : CX - 145);
     s_call_r = (int16_t)(batt ? bx - BATT_GAP : on ? x + (st->speaker ? 0 : 1) - BATT_GAP : CX + 145);
 #endif
@@ -4494,7 +4688,10 @@ void ui_update(const ui_state_t *st)
 #endif
     /* The receiver's gallery shrinks as pictures age out: a viewer left on one
      * past its end would wait for it for good. The last one there is, then;
-     * none left, the dial is back. */
+     * none left, the dial is back. So it is once the gallery is gone with
+     * its receiver -- the next in the list taken, which may have none: the
+     * last one's picture is not left up. */
+    if (s_sv_open && st->n_sstv < 0) sv_close();
     if (s_sv_open && st->n_sstv >= 0 && s_sv_idx >= st->n_sstv) {
         if (st->n_sstv > 0) {
             s_sv_idx = st->n_sstv - 1;
@@ -4722,7 +4919,7 @@ void ui_update(const ui_state_t *st)
 
     /* Greyed out while the radio has not said -- which for AetherSDR's RF
      * gain is always: its TCI carries none. */
-    if (RX_FACE) {
+    if (UBER_FACE) {
         /* The SNR, in UberSDR's colours for it: red at 0 dB, green from 15. */
         if (st->have_snr) {
             snprintf(tb, sizeof tb, "%d dB", (int)lroundf(st->snr_db));
@@ -4781,6 +4978,14 @@ void ui_update(const ui_state_t *st)
             lv_label_set_text(s_warn, st->warn);
             lv_obj_align(s_warn, LV_ALIGN_TOP_MID, 0, 8);
         }
+        /* The radio it is about, where the client names one: a line more,
+         * the panel taller by it. */
+        const bool named = st->warn_name[0];
+        set_text_cut(s_warn_name, s_warn_name_shown, sizeof s_warn_name_shown, st->warn_name);
+        if (named != !lv_obj_has_flag(s_warn_name, LV_OBJ_FLAG_HIDDEN)) {
+            vis(s_warn_name, named);
+            lv_obj_set_height(s_warn_panel, named ? WARN_H_NAMED : WARN_H);
+        }
         if (strcmp(lv_label_get_text(s_warn_net), s_netinfo_text) != 0) {
             lv_label_set_text(s_warn_net, s_netinfo_text);
             lv_obj_align(s_warn_net, LV_ALIGN_BOTTOM_MID, 0, -8);
@@ -4813,6 +5018,11 @@ void ui_update(const ui_state_t *st)
     release(&s_meter_disp, st->smeter_dbm);
 #endif
     const float sig_pk = peak_hold(&s_sig_pk, s_meter_disp, 30.0f);
+#if KIWI_FACE
+    /* The bar and the red peak mark, written -- and redrawn -- only where
+     * they moved, a whole degree at a time (vu_band.c). It never transmits. */
+    vu_band_set(&s_rx_band, smeter_frac(s_meter_disp), smeter_frac(sig_pk), rx_zone_of(sig_pk));
+#else
     if (!st->tx || REFLECTOR_FACE)
         led_set(&s_sig_led, smeter_frac(sig_pk), rx_zone_of(sig_pk));
 
@@ -4833,6 +5043,7 @@ void ui_update(const ui_state_t *st)
         s_rx_val[z] = v;
         lv_arc_set_value(s_rx_zone[z], v);
     }
+#endif /* KIWI_FACE: the S-meter in one object */
 #endif /* PHONE_FACE: the whole arc */
 #if PHONE_FACE
     /* The call's time under the arc, and what it is doing. */
@@ -4942,10 +5153,13 @@ void ui_update(const ui_state_t *st)
         } else
 #endif
         {
-            /* A receiver's level is its own, in dB below full scale. */
-            snprintf(tb, sizeof tb, RX_FACE ? "%d dBFS" : "%d dBm", (int)sig_pk);
+            /* An UberSDR's level is its own, in dB below full scale. A
+             * Kiwi's ADC overloaded, this last second: OV after it, the
+             * reading in red, as the receivers' page marks it. */
+            const bool ov = KIWI_FACE && st->ovl;
+            snprintf(tb, sizeof tb, UBER_FACE ? "%d dBFS" : ov ? "%d dBm  OV" : "%d dBm", (int)sig_pk);
             set_text(s_dbm, tb);
-            set_text_color(s_dbm, C_LABEL);
+            set_text_color(s_dbm, ov ? C_DANGER : C_LABEL);
         }
     }
     set_text_color(s_srd, st->tx ? C_TX_TEXT : C_TEXT);
@@ -5062,11 +5276,15 @@ void ui_update(const ui_state_t *st)
         if (REFLECTOR_FACE) {
             /* the arc, the notches and the peak LED stay as they are */
         } else if (st->tx) {
+#if KIWI_FACE
+            vu_band_show(&s_rx_band, false);
+#else
             lv_obj_add_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
             for (size_t z = 0; z < RX_ZONES; z++)
                 lv_obj_add_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             led_show(&s_sig_led, false);
+#endif
+            lv_obj_add_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             led_show(&s_mic_led, true);
             led_show(&s_pwr_led, true);
             led_show(&s_swr_led, true);
@@ -5078,11 +5296,15 @@ void ui_update(const ui_state_t *st)
             for (size_t z = 0; z < SWR_ZONES; z++)
                 lv_obj_remove_flag(s_swr_zone[z], LV_OBJ_FLAG_HIDDEN);
         } else {
+#if KIWI_FACE
+            vu_band_show(&s_rx_band, true);
+#else
             lv_obj_remove_flag(s_meter, LV_OBJ_FLAG_HIDDEN);
             for (size_t z = 0; z < RX_ZONES; z++)
                 lv_obj_remove_flag(s_rx_zone[z], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             led_show(&s_sig_led, true);
+#endif
+            lv_obj_remove_flag(s_rx_ticks, LV_OBJ_FLAG_HIDDEN);
             led_show(&s_mic_led, false);
             led_show(&s_pwr_led, false);
             led_show(&s_swr_led, false);
@@ -5109,7 +5331,22 @@ void ui_update(const ui_state_t *st)
     phone_update(st);
     phone_slab(st);
 #else
-    if (RX_FACE) {
+    if (KIWI_FACE) {
+        /* The receiver in use, by its name; under it its antenna or its
+         * address, and where it is -- or that it is on its way. A tap brings
+         * the others. A headset's logo, or a speaker, sits at the slab's
+         * right end, level with the name, its battery beside it where it
+         * reports one: the name kept clear of them as an UberSDR's spot is,
+         * moved aside rather than cut where it can be (call_place()). The
+         * name white, said each pass as the spot says its colour. */
+        set_text_cut(s_ptt_lbl, s_ptt_lbl_shown, sizeof s_ptt_lbl_shown, st->server);
+        set_text_color(s_ptt_lbl, C_TEXT);
+#if RX_FACE
+        call_place();
+#endif
+        set_text_cut(s_spot_sub, s_spot_sub_shown, sizeof s_spot_sub_shown, st->rx_line2 ? st->rx_line2 : "");
+        set_text_cut(s_spot_n, s_spot_n_shown, sizeof s_spot_n_shown, st->rx_line3 ? st->rx_line3 : "");
+    } else if (RX_FACE) {
         /* The spot or voice nearest the dial: green while it is heard, bright
          * when the dial is on it, dimmer when it is only a pointer. */
         if (!st->has_spots) {
@@ -5215,6 +5452,15 @@ static void set_level(uint8_t level)
 }
 
 uint32_t ui_last_use(void) { return s_last_use_ms; }
+
+/* Kept apart from s_last_use_ms, which questions, setup screens, page saves
+ * and calls move too: a receiver's owner limits idle listening, and the
+ * knob must not answer for a listener who is not there. An atomic, as the
+ * knob's own task (priority 15) counts its detents here without a lock. */
+static atomic_uint s_user_seq;
+
+void     ui_note_user(void) { atomic_fetch_add(&s_user_seq, 1u); }
+uint32_t ui_user_seq(void)  { return atomic_load(&s_user_seq); }
 
 void ui_note_activity(void)
 {

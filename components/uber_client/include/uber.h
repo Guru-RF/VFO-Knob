@@ -29,6 +29,12 @@ typedef struct {
 } uber_info_t;
 void uber_info(uber_info_t *out);
 
+/* The receiver the client is on, where the knob lists more than one: the one
+ * in use, or the next in turn while that cannot be reached -- its place in
+ * the list (net_prov's) and its name as the dial has it, into `name`. -1,
+ * and "", with a single receiver: nothing to name. */
+int  uber_receiver(char *name, size_t cap);
+
 /* A guest's time left, in seconds, as the receiver will end the session:
  * its limit on a session, counted from the session's first socket -- on
  * through a reconnect and every turn of the dial, as the receiver counts
@@ -60,11 +66,6 @@ int  uber_spots(uber_spot_t *out, int max, uint32_t *seq);
 
 /* A spot's frequency and mode together, as one retune. */
 void uber_tune_to(uint32_t hz, const char *mode);
-
-/* The knob turned or the glass was touched: an UberSDR with an idle timeout
- * counts only that as listening, as its own page does -- and it gives an
- * idle limit's last minute back (uber_time_left). */
-void uber_activity(void);
 
 /* SSTV pictures from the receiver's gallery, newest first: how many (-1: it
  * has none to show), and the one to fetch (-1 once the viewer is closed and

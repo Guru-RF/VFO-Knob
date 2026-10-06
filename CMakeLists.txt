@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom xiegu svxconnect multiflex ubersdr setup phone)
+set(_vfo_radios aethersdr icom xiegu svxconnect multiflex ubersdr kiwi setup phone)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -45,9 +45,11 @@ endif()
 # multiflex speaks a FlexRadio's own API, with no computer in between: the
 # knob is one of the radio's MultiFlex stations. ubersdr is no radio either,
 # but a web receiver -- an UberSDR, over its own protocol -- listened to and
-# tuned, with nothing to transmit. setup has no radio at all: it sets up the
-# knob's WiFi from a phone and installs one of the others. phone is a
-# telephone: a SIP account, called and answered on SVXConnect's face.
+# tuned, with nothing to transmit. kiwi is the same for a KiwiSDR or a
+# Web-888, over KiwiSDR's protocol, with its receivers switched live. setup
+# has no radio at all: it sets up the knob's WiFi from a phone and installs
+# one of the others. phone is a telephone: a SIP account, called and answered
+# on SVXConnect's face.
 if(VFO_RADIO STREQUAL "aethersdr")
     set(_vfo_client tci_client)
 elseif(VFO_RADIO STREQUAL "svxconnect")
@@ -56,6 +58,8 @@ elseif(VFO_RADIO STREQUAL "multiflex")
     set(_vfo_client flex_client)
 elseif(VFO_RADIO STREQUAL "ubersdr")
     set(_vfo_client uber_client)
+elseif(VFO_RADIO STREQUAL "kiwi")
+    set(_vfo_client kiwi_client)
 elseif(VFO_RADIO STREQUAL "setup")
     set(_vfo_client setup_client)
 elseif(VFO_RADIO STREQUAL "phone")
@@ -63,7 +67,7 @@ elseif(VFO_RADIO STREQUAL "phone")
 else()
     set(_vfo_client icom_client)
 endif()
-foreach(_c tci_client icom_client svx_client flex_client uber_client setup_client phone_client)
+foreach(_c tci_client icom_client svx_client flex_client uber_client kiwi_client setup_client phone_client)
     if(NOT _c STREQUAL _vfo_client)
         list(APPEND EXCLUDE_COMPONENTS ${_c})
     endif()
@@ -80,19 +84,21 @@ if(NOT VFO_RADIO STREQUAL "aethersdr")
 endif()
 # For components that call the client (main, webcfg), and for code that looks
 # different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_XIEGU,
-# VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_UBERSDR, VFO_RADIO_SETUP
-# or VFO_RADIO_PHONE is defined as 1.
+# VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_UBERSDR, VFO_RADIO_KIWI,
+# VFO_RADIO_SETUP or VFO_RADIO_PHONE is defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
 idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND)
 # Web SDRs as a second receiver (components/sdr_rx): for the radios with a
 # receiver of their own to set one beside -- not a reflector, nor AetherSDR,
-# which is an SDR already -- and beside an UberSDR, a KiwiSDR.
-if(VFO_RADIO MATCHES "^(icom|xiegu|multiflex|ubersdr)$")
+# which is an SDR already -- and beside an UberSDR, a KiwiSDR. The kiwi
+# firmware's receivers are that same list: one in use in the left ear, and
+# another of them in the right, an antenna against another.
+if(VFO_RADIO MATCHES "^(icom|xiegu|multiflex|ubersdr|kiwi)$")
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_HAS_SDR=1" APPEND)
 endif()
 # A firmware that only receives: no PTT, no microphone, no transmit face.
-if(VFO_RADIO STREQUAL "ubersdr")
+if(VFO_RADIO MATCHES "^(ubersdr|kiwi)$")
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_RX_ONLY=1" APPEND)
 endif()
 # For trying the face's touch without a transmitter: -D VFO_PTT_DRY_RUN=1

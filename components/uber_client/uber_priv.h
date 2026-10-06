@@ -11,7 +11,11 @@
 #include "uber.h"
 #include "uber_net.h"
 
-extern uhost_t g_uh;                 /* the receiver, fixed from radio_start */
+/* The receiver the session is on, copied into `out`, and its generation:
+ * it moves on whenever the session hands over to another in the list, and
+ * nothing of the last one's -- its connections, spots, bands, gallery --
+ * holds for the next. */
+uint32_t uber_rx(uhost_t *out);
 
 /* The session's UUID once /connection has taken it ("" before): the spots'
  * socket registers under it. `gen` moves on with each new one. */

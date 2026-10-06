@@ -30,6 +30,8 @@ typedef struct {
     int16_t    a0[VU_BAND_ZONES], a1[VU_BAND_ZONES];   /* degrees from the filling end */
     lv_color_t zc[VU_BAND_ZONES], track;
     int16_t    led_deg;            /* the peak LED's length, degrees */
+    bool       led_own;            /* the LED in led_c, not in its zone's colour */
+    lv_color_t led_c;
     lv_area_t  zbox[VU_BAND_ZONES];
     lv_area_t  cell[VU_BAND_CELLS];
     lv_area_t  ledbox;
@@ -50,6 +52,11 @@ void vu_band_build(vu_band_t *b, lv_obj_t *parent, int cx, int cy, int rot, int 
  * in zone pk_z (< 0, or pk_f <= 0: out). Writes -- and redraws -- only what
  * changed. */
 void vu_band_set(vu_band_t *b, float bar_f, float pk_f, int pk_z);
+
+/* The peak LED in a colour of its own, whatever zone it is in -- the red
+ * mark a KiwiSDR's page holds its S-meter's peak with -- rather than in the
+ * zone's. After vu_band_build. */
+void vu_band_led_color(vu_band_t *b, uint32_t rgb);
 
 void vu_band_show(vu_band_t *b, bool on);
 

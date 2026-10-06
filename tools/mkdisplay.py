@@ -123,6 +123,19 @@ PALETTES = {
                              (-85,   -73, "#25F425"), (-73,   -53, "#25F425"),
                              (-53,   -33, "#25F425"), (-33,   -13, "#25F425")],
                     SWRZONES=SWRZONES, MICZONES=MICZONES),
+    # The kiwi firmware's face (ui.c under VFO_RADIO_KIWI): the KiwiSDR and
+    # Web-888 page's own look -- black as its waterfall, its grey buttons,
+    # its highlight yellow, its S-meter's lime bar from end to end. It only
+    # receives, so its transmit colours are never shown.
+    "kiwi": dict(BG="#000000", BG1="#373737", BG_TX="#2A0C0C", ACCENT="#FFFF50",
+                 ACCENT_HI="#FFFF80", TEXT="#FFFFFF", TEXT2="#D3D3D3",
+                 LABEL="#909090", SUBTLE="#262626", WARN="#FFA500",
+                 DANGER="#FF3030", TX_RED="#FF3030", TX_TEXT="#FFFFFF",
+                 GREEN="#00FF00", BATT_OK="#00FF00", DISABLED="#575757", PWR="#00FF00",
+                 RXZONES=[(lo, hi, "#00FF00") for lo, hi in
+                          ((-127, -121), (-121, -109), (-109, -97), (-97, -85),
+                           (-85, -73), (-73, -53), (-53, -33), (-33, -13))],
+                 SWRZONES=SWRZONES, MICZONES=MICZONES),
 }
 # The phone firmware wears SVXConnect's face (ui.c SVX_LOOK), colours and all.
 PALETTES["phone"] = PALETTES["svxconnect"]

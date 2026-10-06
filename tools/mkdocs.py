@@ -32,7 +32,7 @@ PAD = 44                                  # room around the body for gestures
 W = H = 2 * md.BODY_R + 2 * PAD
 OX = OY = W / 2
 GESTURE = "#E0902A"                       # mkdisplay's ANNOT_HOT: a hand's doing
-VERSION = "1.18.5"                        # what the address card says it runs
+VERSION = "1.19.0"                        # what the address card says it runs
 POWER = "on USB power"                    # ...the knob's own power, under it
 ADDRESSES = "USB   -\nWiFi  192.168.1.40\nsetup  http://192.168.1.40"
 
@@ -312,13 +312,15 @@ SDR_BLUE = {"icom": "#5A9BFF", "multiflex": "#62BBFF"}   # ui.c SDR_HEX
 def face(pal, dbm=-85, band="40m", mode="LSB", filt="FIL2", digits="  7123" "00",
          active=5, step="100 Hz", agc="MID", gain_cap="P.AMP", gain="OFF",
          gain_known=True, sub=None, sdr=None, mem=None, rit="RIT 0", vol="40", mic="100",
-         receiver=False, ghz=False):
+         receiver=False, ghz=False, sdr_note=None):
     """A radio firmware's receive face at a reading, in its palette (ui.c;
     mkrender's dial, with the options the guides need): `sub` for what is
     under the S-units, `sdr` a web SDR's level -- its thin line outside the
-    radio's, and its reading in blue -- and `mem` = (group, name, line) for
-    memory mode. `receiver`: a receiver radio's (the IC-R8600), RECEIVER on
-    the slab and no RIT or microphone; `ghz` the digits from 1 GHz up."""
+    radio's, and its reading in blue -- or `sdr_note` the word for why it is
+    not heard, in amber where its reading would be, and no line; `mem` =
+    (group, name, line) for memory mode. `receiver`: a receiver radio's (the
+    IC-R8600), RECEIVER on the slab and no RIT or microphone; `ghz` the
+    digits from 1 GHz up."""
     md.use_palette(pal)
     s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>',
          f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
@@ -338,6 +340,8 @@ def face(pal, dbm=-85, band="40m", mode="LSB", filt="FIL2", digits="  7123" "00"
                  f'stroke="{md.SUBTLE}" stroke-width="4"/>')
         s.append(md.block(md.ARC_ROT, md.ARC_ROT + md.smeter_frac(sdr) * md.ARC_SPAN, blue, r=174, band=4))
         sub, sub_colour = md.smeter_text(sdr), blue
+    elif sdr_note:
+        sub, sub_colour = sdr_note, md.WARN
     else:
         sub, sub_colour = sub or f"{dbm} dBm", md.LABEL
     s += [md.text(180, 83, md.smeter_text(dbm), 20, md.TEXT, 700),
@@ -430,10 +434,10 @@ def reflector(pal="svxconnect", **reading):
 
 
 # The editors that are lists of names (ui.c edit_render): the wider panel,
-# whatever font their value is in -- RX on LOCAL too. Told by the title's
-# first word, as the knob tells them by the editor -- but not the antennas'
-# (RX ANT, TX ANT), a value's panel.
-NAME_LISTS = ("RX", "RADIO", "SPOT", "SSTV", "CALLS")
+# whatever font their value is in -- RX on LOCAL too, and a Kiwi's RIGHT EAR
+# on OFF. Told by the title's first word, as the knob tells them by the
+# editor -- but not the antennas' (RX ANT, TX ANT), a value's panel.
+NAME_LISTS = ("RX", "RADIO", "RECEIVER", "RIGHT", "SPOT", "SSTV", "CALLS")
 
 
 def editor(title, value, size=48, hint="turn to choose  -  tap to accept", colour=None):
@@ -450,20 +454,27 @@ def hold_slab():
     return tap(180, 300, ring=24)
 
 
-def warning(title, fw, net=ADDRESSES):
+def warning(title, fw, net=ADDRESSES, name=None):
     """The warning panel: 268 x 134 in the danger colour, the warning at
     28 px, and under it at 14 px the address card's text -- the firmware and
     its version (`fw`, e.g. "Icom"), the knob's power, then the addresses,
     16 px a line, the last 10 px over the panel's foot as on the knob -- or,
-    fw None, a message in its place."""
+    fw None, a message in its place. `name`, the radio it is about, where
+    the firmware names one (ui.c warn_name: the UberSDR firmware's receiver,
+    with more than one in its list): a line between them at 20 px in the
+    face's text colour, the panel 26 px taller, about the same middle."""
+    grow = 26 if name else 0
+    top = 107 - grow // 2
     if not fw:
-        text = lines(180, 199, net, 14, md.TEXT2, 17)
+        text = lines(180, 199 + grow // 2, net, 14, md.TEXT2, 17)
     else:
         rows = f"{fw} {VERSION}\n{POWER}\n{net}"
-        text = lines(180, 231 - 8 * len(rows.split("\n")), rows, 14, md.TEXT2, 16)
-    return (f'<rect x="46" y="107" width="268" height="134" rx="18" fill="{md.BG1}" '
+        text = lines(180, 231 + grow // 2 - 8 * len(rows.split("\n")), rows, 14, md.TEXT2, 16)
+    if name:
+        text = lines(180, top + 52.5, name, 20, md.TEXT, 22) + text
+    return (f'<rect x="46" y="{top}" width="268" height="{134 + grow}" rx="18" fill="{md.BG1}" '
             f'stroke="{md.DANGER}" stroke-width="2"/>'
-            + md.text(180, 145, esc(title), 28, md.DANGER, 600) + text)
+            + md.text(180, top + 38, esc(title), 28, md.DANGER, 600) + text)
 
 
 def swipe(direction):
@@ -760,6 +771,11 @@ def icom_pictures():
     out["24-battery"] = knob("icom-24", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
                              "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    # The IC-9700 on 2 m, beyond what any web SDR covers.
+    out["25-sdr-out"] = knob("icom-25", "The IC-9700 on 2 m: the web SDR cannot reach it",
+                             face("icom", **dict(R, dbm=-91, band="2m", mode="USB", digits="144300" "00"),
+                                  sdr_note="can't reach"), "",
+                             "the SDR quiet, its line gone  \u00b7  back once the radio is within its range")
     return out
 
 
@@ -818,6 +834,11 @@ def multiflex_pictures():
     out["17-battery"] = knob("flex-17", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
                              "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    # 6 m, beyond a KiwiSDR's 30 MHz.
+    out["18-sdr-out"] = knob("flex-18", "6 m: the KiwiSDR beside it cannot reach it",
+                             face("multiflex", **dict(R, dbm=-91, band="6m", digits=" 50150" "00"),
+                                  sdr_note="can't reach"), "",
+                             "the SDR quiet, its line gone  \u00b7  back once the radio is within its range")
     return out
 
 
@@ -1018,7 +1039,7 @@ def headset_pictures():
 
 # --- the ubersdr firmware -------------------------------------------------------
 
-KIWI = "#8B7CF8"                           # ui.c SDR_HEX for ubersdr: UberSDR's violet
+UBER_KIWI = "#8B7CF8"                      # ui.c SDR_HEX for ubersdr: UberSDR's violet
 
 
 def snr_colour(snr):
@@ -1032,17 +1053,18 @@ def snr_colour(snr):
 
 def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 14215" "00", active=5,
               step="1 kHz", nr="NR4", spot=("LU7YZ", "14.215.0 USB  DX 2m  heard 12 dB", "green", "8 on 20m"),
-              kiwi=None, vol="40", headset=False, speaker=False, left=None):
+              kiwi=None, vol="40", headset=False, speaker=False, left=None, kiwi_note=None):
     """The ubersdr firmware's face (ui.c, RX_FACE): the S-meter in UberSDR's
     colours, the SNR where the AGC is, the noise filter where the gain is, no
     RIT and no microphone, and on the slab the spot or voice nearest the dial:
     `spot` is (its call or frequency, where and what it is, "green" heard now
     / "bright" on it / "dim" elsewhere, how many on the band). `kiwi` is a
-    KiwiSDR's level beside it; `headset`, a Bluetooth headset's logo at the
-    slab's right end (ui.c s_hs_bt), and `speaker` a speaker's there. `left`
-    is a guest's time left at the slab's left end (ui.c left_slab): what it
-    says, and "dim", "warn" in the last five minutes, or "danger" in the last
-    one and an idle limit's."""
+    KiwiSDR's level beside it -- or `kiwi_note` the word for why it is not
+    heard, in amber where its reading would be, and no line; `headset`, a
+    Bluetooth headset's logo at the slab's right end (ui.c s_hs_bt), and
+    `speaker` a speaker's there. `left` is a guest's time left at the slab's
+    left end (ui.c left_slab): what it says, and "dim", "warn" in the last
+    five minutes, or "danger" in the last one and an idle limit's."""
     md.use_palette("ubersdr")
     s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>',
          f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
@@ -1059,8 +1081,11 @@ def uber_face(dbm=-91, snr=9, band="20m", mode="USB", filt="2650", digits=" 1421
     if kiwi is not None:
         s.append(f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, 174)}" fill="none" '
                  f'stroke="{md.SUBTLE}" stroke-width="4"/>')
-        s.append(md.block(md.ARC_ROT, md.ARC_ROT + md.smeter_frac(kiwi) * md.ARC_SPAN, KIWI, r=174, band=4))
-        sub, sub_colour = md.smeter_text(kiwi), KIWI
+        s.append(md.block(md.ARC_ROT, md.ARC_ROT + md.smeter_frac(kiwi) * md.ARC_SPAN, UBER_KIWI, r=174,
+                           band=4))
+        sub, sub_colour = md.smeter_text(kiwi), UBER_KIWI
+    elif kiwi_note:
+        sub, sub_colour = kiwi_note, md.WARN
     else:
         sub, sub_colour = f"{dbm} dBFS", md.LABEL
     s += [md.text(180, 83, md.smeter_text(dbm), 20, md.TEXT, 700),
@@ -1171,6 +1196,15 @@ def ubersdr_pictures():
     out["14-radio"] = knob("uber-14", "Swipe up: another UberSDR",
                            f + editor("RADIO", "ON6URE-TEL", 28, hint="tap to switch"),
                            swipe_at("up"), "swipe up  \u00b7  turn  \u00b7  tap the panel: it restarts into it")
+    # The one in use not reached, the next tried (ui.c warn_name).
+    out["21-not-found"] = knob("uber-21", "The receiver in use not found: named under the warning",
+                               uber_face(dbm=-127, snr=None, spot=None)
+                               + warning("NOT FOUND", "UberSDR", name="ON6URE-TEL-LAN"), "",
+                               "the one in use, tried twice  \u00b7  then the next in the list")
+    out["22-connecting"] = knob("uber-22", "On to the next receiver in the list",
+                                uber_face(dbm=-127, snr=None, spot=None)
+                                + warning("CONNECTING", "UberSDR", name="ON6URE-TEL"), "",
+                                "the first that answers plays  \u00b7  and is in use from then on")
     out["15-headset"] = knob("uber-15", "A Bluetooth headset connected: its logo beside the spot",
                              uber_face(headset=True), "",
                              "the receiver in the headset  \u00b7  the spots stay")
@@ -1190,12 +1224,250 @@ def ubersdr_pictures():
     out["20-battery"] = knob("uber-20", "On its own battery: the knob's charge at the top of the arc",
                              uber_face() + md.knob_battery(85), "",
                              "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    # 6 m on an UberSDR that covers it, beyond the KiwiSDR's 30 MHz.
+    out["23-kiwi-out"] = knob("uber-23", "6 m: the KiwiSDR beside it cannot reach it",
+                              uber_face(dbm=-97, snr=12, band="6m", digits=" 50150" "00", kiwi_note="can't reach",
+                                        spot=("50.150.0", "USB  voice 12 dB", "green", "2 on 6m")), "",
+                              "the KiwiSDR quiet, its line gone  \u00b7  back once the dial is within its range")
+    return out
+
+
+# --- the kiwi firmware (Kiwi888) ---------------------------------------------------
+
+KIWI_PEAK = "#FF0000"                      # ui.c KIWI_PEAK_HEX: the peak held, red as on the page
+KIWI_RIGHT = "#99C9FF"                     # ui.c SDR_HEX for kiwi: the right ear, the page's link blue
+# The receiver on the slab: its name, then -- the name its antenna already --
+# its model and address, and where it is (kiwi_info's lines).
+KIWI_RX = ("EchoTracer", "Web-888  81.83.21.23:8077", "Lombardsijde, Belgium")
+
+
+def kiwi_face(dbm=-85, peak=-79, band="40m", mode="LSB", filt="2400", digits="  7123" "00", active=5,
+              step="1 kHz", agc="MED", nr="OFF", ov=False, rx=KIWI_RX, right=None, vol="40", headset=False,
+              speaker=False, right_note=None):
+    """The kiwi firmware's face (ui.c, KIWI_FACE): the receivers' own page's
+    look -- its lime S-meter with the peak held a second in red, the AGC and
+    the noise filter (NR) either side, no RIT and no microphone, and on the
+    slab the receiver in use: `rx` is its name, its model and address (or
+    antenna), and where it is. The readout is the peak's, in dBm under the
+    S-units, OV after it in red (`ov`) while the receiver's ADC overloads.
+    `right` is the right ear's level -- its thin line outside the S-meter,
+    its reading in blue where the dBm is -- or, `right_note`, the word for
+    why it is not heard there, in amber, and no line; `headset`, a Bluetooth
+    headset's logo at the slab's right end, and `speaker` a speaker's there."""
+    md.use_palette("kiwi")
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>',
+         f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
+         f'stroke="{md.SUBTLE}" stroke-width="{md.BAND}"/>']
+    for lo, hi, col in md.RXZONES:
+        s.append(md.block(md.ARC_ROT + md.smeter_frac(lo) * md.ARC_SPAN,
+                          md.ARC_ROT + md.smeter_frac(hi) * md.ARC_SPAN, col))
+    s.append(cover(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.smeter_frac(dbm)))
+    if peak > -127:
+        # vu_band's peak mark (ui.c led_set): three degrees, ending at the peak.
+        at = min(max(round(md.smeter_frac(peak) * md.ARC_SPAN) - 3, 0), md.ARC_SPAN - 3)
+        s.append(md.block(md.ARC_ROT + at, md.ARC_ROT + at + 3, KIWI_PEAK))
+    for d in md.RXNOTCH:
+        s.append(md.notch(md.ARC_ROT + md.smeter_frac(d) * md.ARC_SPAN))
+    for d, ln, _ in md.RXTICKS:
+        col = md.TEXT2 if d == -73 else (md.WARN if d > -73 else md.LABEL)
+        s.append(md.tick(md.ARC_ROT + md.smeter_frac(d) * md.ARC_SPAN, ln, col, 3 if d == -73 else 2))
+    if right is not None:
+        at = min(max(round(md.smeter_frac(right) * md.ARC_SPAN) - 3, 0), md.ARC_SPAN - 3)
+        s += [f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, 174)}" fill="none" '
+              f'stroke="{md.SUBTLE}" stroke-width="4"/>',
+              md.block(md.ARC_ROT, md.ARC_ROT + md.smeter_frac(right) * md.ARC_SPAN, KIWI_RIGHT, r=174, band=4),
+              md.block(md.ARC_ROT + at, md.ARC_ROT + at + 3, KIWI_RIGHT, r=174, band=4)]
+        sub, sub_colour = md.smeter_text(right), KIWI_RIGHT
+    elif right_note:
+        sub, sub_colour = right_note, md.WARN
+    else:
+        sub, sub_colour = f"{peak} dBm" + ("  OV" if ov else ""), md.DANGER if ov else md.LABEL
+    name, line2, line3 = rx
+    s += [md.text(180, 83, md.smeter_text(peak), 20, md.TEXT, 700),
+          md.text(180, 103, esc(sub), 14, sub_colour, extra=' xml:space="preserve"'),
+          md.aux(agc, "NR", nr),
+          md.text(104, 129, band, 20, md.ACCENT), md.text(180, 129, mode, 20, md.TEXT),
+          md.text(256, 129, filt, 20, md.TEXT2),
+          md.readout(digits, colour=md.TEXT, sep_colour=md.LABEL, underline=active,
+                     after_colour=md.TEXT2, active_colour=md.ACCENT_HI),
+          md.text(124, 227, step, 20, md.ACCENT),
+          md.icon_readout(236, 227, md.speaker, vol, md.TEXT2),
+          f'<rect x="0" y="{md.PTT_TOP}" width="360" height="{360 - md.PTT_TOP}" fill="{md.BG1}"/>',
+          f'<line x1="0" y1="{md.PTT_TOP + 1}" x2="360" y2="{md.PTT_TOP + 1}" '
+          f'stroke="{md.ACCENT}" stroke-width="2"/>',
+          md.text(180, md.PTT_TOP + 8 + 25, esc(name), 28, md.TEXT, 500, extra=' xml:space="preserve"'),
+          md.text(180, md.PTT_TOP + 44 + 12, esc(line2), 14, md.TEXT2, extra=' xml:space="preserve"'),
+          md.text(180, md.PTT_TOP + 64 + 12, esc(line3), 14, md.LABEL, extra=' xml:space="preserve"')]
+    if headset:
+        s.append(md.headset_logo(md.ACCENT, md.BG1))
+    if speaker:
+        s.append(md.speaker_logo(md.ACCENT))
+    return "".join(s)
+
+
+# The configuration page (components/webcfg/www/index.html), its own colours.
+PAGE = dict(bg="#14161a", panel="#1c1f26", line="#2b303b", fg="#e6e9ef", dim="#8b93a5",
+            accent="#f2a33c", ok="#4caf7d", field="#111317")
+PAGE_W, PAGE_H = 760, 742
+
+
+def page_receivers():
+    """The configuration page's Receivers on the kiwi firmware, in a browser:
+    two receivers -- the one in use, playing; another in the right ear --
+    Add RF.Guru's receivers, and the name their owners see the knob by."""
+    P = PAGE
+    t = lambda x, y, s, size, col, weight=400, anchor="start", extra="": (   # noqa: E731
+        f'<text x="{x}" y="{y}" font-size="{size}" fill="{col}" font-weight="{weight}" '
+        f'text-anchor="{anchor}"{extra}>{esc(s)}</text>')
+
+    def field(x, y, w, label, value, pw=False):
+        out = t(x, y + 12, label, 12, P["dim"])
+        out += (f'<rect x="{x}" y="{y + 18}" width="{w}" height="36" rx="6" fill="{P["field"]}" '
+                f'stroke="{P["line"]}"/>')
+        if pw:
+            out += t(x + 10, y + 41, "•" * 8 if value else "", 14, P["fg"])
+            out += t(x + w - 12, y + 40, "Show", 12, P["accent"], anchor="end")
+        else:
+            out += t(x + 10, y + 41, value, 14, P["fg"] if value else P["dim"])
+        return out
+
+    def radio(x, y, on, label, disabled=False):
+        col = P["dim"] if disabled else P["fg"]
+        out = f'<circle cx="{x + 7}" cy="{y - 5}" r="7" fill="none" stroke="{col}" stroke-width="1.5"/>'
+        if on:
+            out += f'<circle cx="{x + 7}" cy="{y - 5}" r="3.5" fill="{P["accent"]}"/>'
+        return out + t(x + 22, y, label, 14, col)
+
+    def button(x, y, label, w):
+        return (f'<rect x="{x}" y="{y}" width="{w}" height="34" rx="6" fill="none" stroke="{P["line"]}"/>'
+                + t(x + w / 2, y + 22, label, 14, P["dim"], anchor="middle"))
+
+    x0, w = 60, 640                      # the section's content: 720 less its padding
+    s = [f'<rect x="1" y="1" width="{PAGE_W - 2}" height="{PAGE_H - 2}" rx="12" fill="{P["bg"]}" '
+         f'stroke="#3A3F4B" stroke-width="2"/>',
+         f'<path d="M1,40 V13 a12,12 0 0 1 12,-12 H{PAGE_W - 13} a12,12 0 0 1 12,12 V40 Z" fill="#23262d"/>',
+         *[f'<circle cx="{22 + 18 * i}" cy="20" r="6" fill="{c}"/>'
+           for i, c in enumerate(("#e5534b", "#e0a23a", "#4caf7d"))],
+         f'<rect x="96" y="9" width="{PAGE_W - 192}" height="22" rx="11" fill="#14161a"/>',
+         t(PAGE_W / 2, 25, "vfo-knob.local/config#sdr", 12, P["dim"], anchor="middle"),
+         f'<rect x="{x0 - 16}" y="58" width="{w + 32}" height="{PAGE_H - 76}" rx="10" fill="{P["panel"]}" '
+         f'stroke="{P["line"]}"/>',
+         t(x0, 86, "RECEIVERS", 12, P["dim"], 600, extra=' letter-spacing="1.1"')]
+    # A Test of the one playing answers from its session, with no login of
+    # its own (index.html's LOGIN['in use']), wrapped beside its buttons.
+    rows = [(True, False, "EchoTracer", "81.83.21.23:8077", "in use: streaming",
+             ("✓ playing now: no second login —", "RF.Guru EchoTracer · Web-888 · 4 of 13 channels in use")),
+            (False, True, "TerraBooster", "81.83.21.23:8075", "right ear: streaming", ())]
+    y = 100
+    for use, right, name, host, state, res in rows:
+        s.append(radio(x0, y + 14, use, "In use", disabled=right))
+        s.append(field(x0, y + 22, (w - 14) / 2, "Name, on the knob", name))
+        s.append(field(x0 + (w + 14) / 2, y + 22, (w - 14) / 2, "Address", host))
+        s.append(field(x0, y + 84, (w - 14) / 2, "Password", ""))
+        s.append(field(x0 + (w + 14) / 2, y + 84, (w - 14) / 2, "Time-limit password", ""))
+        s.append(t(x0, y + 160, state, 12, P["dim"]))
+        s.append(button(x0, y + 172, "Test", 64) + button(x0 + 74, y + 172, "Remove", 86))
+        for i, line in enumerate(res):
+            s.append(t(x0 + 172, y + 186 + 16 * i, line, 12, P["ok"]))
+        s.append(f'<line x1="{x0}" y1="{y + 222}" x2="{x0 + w}" y2="{y + 222}" stroke="{P["line"]}"/>')
+        y += 230
+    # Two receivers: RF.Guru's other two are still to be added.
+    s.append(button(x0, y, "Add a receiver", 132) + button(x0 + 142, y, "Add RF.Guru's receivers", 196))
+    s.append(field(x0, y + 40, (w - 14) / 2, "Your name, for their owners", "ON6URE"))
+    for i, row in enumerate(("A KiwiSDR or a Web-888 lists who listens, for its owner: the knob goes by this",
+                             "name there — your callsign, say. Left empty, VFO-Knob. Saved with Save, and",
+                             "told at once to a receiver playing.")):
+        s.append(t(x0, y + 118 + 18 * i, row, 12, P["dim"]))
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {PAGE_W} {PAGE_H}" width="{PAGE_W}" '
+            f'height="{PAGE_H}" role="img" aria-label="The configuration page: Receivers">'
+            f'<title>The configuration page: Receivers</title>'
+            f'<g font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif">{"".join(s)}</g></svg>')
+
+
+def kiwi_pictures():
+    f = kiwi_face()
+    # The peak mark's place on the arc, for its callout.
+    pa = math.radians(md.ARC_ROT + md.smeter_frac(-79) * md.ARC_SPAN - 1.5)
+    peak_at = (round(180 + 164 * math.cos(pa)), round(180 + 164 * math.sin(pa)))
+    left = [(64, 64, "S-meter · hold: the addresses"), (84, 77, "AGC · fast, med, slow"), (84, 123, "band"),
+            (58, 172, "frequency · tap a digit: its step"), (96, 221, "tuning step"),
+            (92, 276, "the receiver · tap: another"), (90, 300, "its model and address")]
+    right = [(*peak_at, "the peak, held a second"), (204, 77, "S-units, dBm under, OV in red"),
+             (282, 77, "NR · the noise filter"), (204, 123, "mode"), (282, 123, "filter"),
+             (252, 222, "volume"), (262, 322, "where it is")]
+    out = {}
+    out["01-face"] = callouts("kiwi-01", "The Kiwi888 firmware's face", f, left, right)
+    down = kiwi_face(dbm=-127, peak=-127, rx=("EchoTracer", "Web-888  81.83.21.23:8077", ""))
+    md.use_palette("kiwi")
+    out["02-no-link"] = knob("kiwi-02", "The receiver will not have the knob, and why",
+                             down + warning("RECEIVER FULL", "Kiwi888"))
+    out["03-tune"] = knob("kiwi-03", "Turn to tune; tap a digit for its step", f,
+                          turn() + tap(236, 172), "tap a digit for the step  ·  turn to tune")
+    out["04-agc"] = knob("kiwi-04", "AGC: the receivers' own three",
+                         kiwi_face(agc="SLOW") + editor("AGC", "SLOW"), tap(108, 90) + turn(),
+                         "tap AGC  ·  FAST, MED, SLOW  ·  applies as you turn")
+    out["05-nr"] = knob("kiwi-05", "NR: the receivers' noise filters",
+                        kiwi_face(nr="WDSP") + editor("NOISE FILTER", "WDSP"), tap(252, 90) + turn(),
+                        "tap NR  ·  OFF, WDSP, LMS, SPEC  ·  rests half a second, then goes")
+    out["06-mode"] = knob("kiwi-06", "The mode, by the receivers' own names",
+                          f + editor("MODE", "SAM"), turn(),
+                          "tap the mode  ·  USB LSB CW AM SAM SAL SAU NBFM")
+    out["07-filter"] = knob("kiwi-07", "The filter, its widths by mode",
+                            kiwi_face(filt="2700") + editor("FILTER", "2700 Hz"), turn(),
+                            "tap the filter  ·  applies as you turn  ·  a tap anywhere closes it")
+    out["08-receiver"] = knob("kiwi-08", "Swipe up, or tap the slab: another receiver, at once",
+                              f + editor("RECEIVER", "OctaLoop", 28, hint="tap to switch"),
+                              swipe_at("up"), "swipe up  ·  turn  ·  tap the panel: no restart")
+    out["09-squelch"] = knob("kiwi-09", "Swipe from the right: SQUELCH",
+                             f + editor("SQUELCH", "30%"), swipe_at("left"),
+                             "swipe from the right  ·  0% is OPEN  ·  applies as you turn")
+    md.use_palette("kiwi")
+    out["10-time-up"] = knob("kiwi-10", "The receiver ended the session: listen again?",
+                             dimmed(down) + chooser("TIME UP", "LISTEN AGAIN"),
+                             tap(180, 188), "tap the panel: a new session")
+    md.use_palette("kiwi")
+    out["11-day-limit"] = knob("kiwi-11", "DAY LIMIT: the receiver's listening time for today used up",
+                               down + warning("DAY LIMIT", "Kiwi888"), "",
+                               "left alone until it restarts  ·  chosen again: one more try, two at most")
+    out["12-ov"] = knob("kiwi-12", "OV: the receiver's ADC overloaded",
+                        kiwi_face(dbm=-20, peak=-13, ov=True, band="20m", mode="USB", filt="2400",
+                                  digits=" 14200" "00", active=6, step="100 Hz"), "",
+                        "OV after the reading, in red, a second after the last overload")
+    out["13-headset"] = knob("kiwi-13", "A Bluetooth headset connected: its logo beside the name",
+                             kiwi_face(headset=True), "",
+                             "the receiver in the headset  ·  nothing to transmit")
+    out["14-right-ear"] = knob("kiwi-14", "Swipe down: a second receiver, in the right ear",
+                               f + editor("RIGHT EAR", "TerraBooster", 28), swipe_at("down"),
+                               "swipe down  ·  turn to OFF or a receiver  ·  tap the panel")
+    out["15-right"] = knob("kiwi-15", "The right ear playing: its line and reading in blue",
+                           kiwi_face(right=-97), "", "the right ear: the thin blue line, its S-units in blue")
+    md.use_palette("kiwi")
+    out["16-right-refused"] = knob("kiwi-16", "The left ear's receiver: never in both ears",
+                                   f + editor("RIGHT EAR", "EchoTracer", 28, hint="in the left ear",
+                                              colour=md.DISABLED), turn(),
+                                   "dimmed: a tap on it is refused, with a triple click")
+    out["17-balance"] = knob("kiwi-17", "BALANCE: the left ear's receiver, the right ear's",
+                             kiwi_face(right=-97) + editor("BALANCE", "L | R"), swipe_at("right") + turn(),
+                             "swipe from the left  ·  turn: LEFT ... L | R ... RIGHT")
+    out["18-page"] = page_receivers()
+    out["19-speaker"] = knob("kiwi-19", "A Bluetooth speaker connected: a speaker beside the name",
+                             kiwi_face(speaker=True), "",
+                             "the receivers in the speaker, a little behind  \u00b7  nothing to transmit")
+    out["20-right-out"] = knob("kiwi-20", "The right ear's KiwiSDR cannot reach 6 m: quiet, and said so",
+                               kiwi_face(dbm=-97, peak=-91, band="6m", mode="USB", digits=" 50150" "00",
+                                         right_note="can't reach"), "",
+                               "the left ear on 6 m  \u00b7  the right ear quiet until the dial is back under 30 MHz")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show).
+    md.use_palette("kiwi")
+    out["21-battery"] = knob("kiwi-21", "On its own battery: the knob's charge at the top of the arc",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
 
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "svxconnect": svxconnect_pictures,
-             "ubersdr": ubersdr_pictures, "phone": phone_pictures,
+             "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
              "headset": headset_pictures}
 
 

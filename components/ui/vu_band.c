@@ -146,7 +146,7 @@ static void draw_cb(lv_event_t *e)
             if (isect(&t, &cc, &b->zbox[z]))
                 arc(layer, &d, b, b->zc[z], b->a0[z], imin(b->bar, b->a1[z]));
         if (b->led >= 0 && b->led_z >= 0 && isect(&t, &cc, &b->ledbox))
-            arc(layer, &d, b, b->zc[b->led_z], b->led, b->led + b->led_deg);
+            arc(layer, &d, b, b->led_own ? b->led_c : b->zc[b->led_z], b->led, b->led + b->led_deg);
     }
     layer->_clip_area = clip0;
 }
@@ -176,6 +176,7 @@ void vu_band_build(vu_band_t *b, lv_obj_t *parent, int cx, int cy, int rot, int 
     b->nz = (uint8_t)(nz > VU_BAND_ZONES ? VU_BAND_ZONES : nz);
     b->track = track;
     b->led_deg = (int16_t)led_deg;
+    b->led_own = false;
     b->bar = 0;
     b->led = -1;
     b->led_z = -1;
@@ -230,6 +231,13 @@ void vu_band_set(vu_band_t *b, float bar_f, float pk_f, int pk_z)
         b->led_z = (int8_t)z;
         if (led >= 0) sector_box(b, led, led + b->led_deg, &b->ledbox);
     }
+}
+
+void vu_band_led_color(vu_band_t *b, uint32_t rgb)
+{
+    b->led_c   = lv_color_hex(rgb);
+    b->led_own = true;
+    if (b->obj && b->led >= 0) band_inv(b, b->led, b->led + b->led_deg);
 }
 
 void vu_band_show(vu_band_t *b, bool on)

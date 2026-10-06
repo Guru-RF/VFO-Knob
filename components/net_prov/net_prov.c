@@ -73,6 +73,20 @@
 #define DEFAULT_PORT 443             /* its tunnel's https; 8080 on a LAN */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_KIWI
+/* Unused: its receivers are the web SDRs' list (components/sdr_rx), each
+ * with its own address and passwords. Keys of its own, so it never writes
+ * another firmware's. */
+#define KEY_HOST     "kwhost"
+#define KEY_RLIST    "kwrlist"
+#define KEY_RSEL     "kwrsel"
+#define KEY_PORT     "kwport"
+#define KEY_USER     "kwuser"
+#define KEY_PASS     "kwpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 8073            /* most KiwiSDRs' */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_XIEGU
 #define KEY_HOST     "xhost"
 #define KEY_RLIST    "xlist"     /* the radios, one in use: see below */

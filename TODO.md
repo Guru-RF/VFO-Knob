@@ -135,9 +135,14 @@ broadcast, IQ from the radio and demodulated in the knob:
 dial tunes a web SDR itself, its S-meter and audio the knob's:
 - [x] UberSDR -- the ubersdr firmware, over UberSDR's own protocol (see
       Firmware); ON6URE-TEL through its tunnel, 2026-10-01
-- [ ] Web-888 and KiwiSDR, over the KiwiSDR protocol `components/sdr_rx`
-      already speaks beside a radio (its owner's limits kept: a Kiwi that
-      lets no apps listen stays out of reach)
+- [x] Web-888 -- the kiwi firmware, Kiwi888, over KiwiSDR's protocol (see
+      Firmware), its owner's limits kept; TerraBooster, one of the four
+      Lombardsijde Web-888s, streaming on the knob, 2026-10-03
+- [x] KiwiSDR -- the same firmware; ON3RVH's (KiwiSDR v1.902, De Haan)
+      behind Cloudflare, https:// only: its 301 followed, TLS in 1.3 s,
+      logged in and streaming on the knob, 2026-10-06. Through the
+      kiwisdr.com proxy not yet: N0BQV's answered port 80 with a 307 on
+      2026-10-05 and nothing on 80 or 443 the day after
 
 wfview's source (`src/radio/`) speaks the Yaesu (SCU-LAN10) and Kenwood
 network protocols as well as Icom's: a reference for those clients.
@@ -185,6 +190,39 @@ network protocols as well as Icom's: a reference for those clients.
         get ERROR. The charge goes with the hands-free link it came over: a
         speaker that closes that link and plays on shows none, not a stale
         one.
+      - [x] a level for each headset or speaker (the user, 2026-10-06: the
+        Sony SRS-XB100 -- AVRCP, its own volume the knob's -- far quieter than
+        the JLab at the same 12 dB down): **Level** beside the device on the
+        configuration page, -24 to +12 dB in 3 dB steps (each the square root
+        of two: -12 is the old quarter exactly), heard at once; a speaker
+        -12 dB until set, a headset 0 dB. The JLab (its own volume the knob's)
+        gets the very samples it did once its swell is done, the swell block
+        for block as long and each sample within a least bit, and the Jabra
+        each within a least bit; a speaker that keeps its own volume the true
+        quarter where the old sums cut it short -- 1.9 dB more at VOLUME 1, a
+        few tenths at the other odd ones below 10. On top of the VOLUME, and
+        of the full-level path, in place of the fixed "/4". Above 0 dB, where
+        a loud passage can pass full scale, the audio is held back a block
+        (10 ms, 15 at 16 kHz; the speaker's delay counts it) and the gain
+        turned down smoothly ahead of it and back up a 32nd a block, never
+        clipped: each block brought down whole by its own peak, as first
+        built, clicked at the block edges on CW at +9 and +12 dB (the review,
+        2026-10-06). At 0 dB and below nothing is held. Kept on the S3 by
+        address for the last eight set (NVS btlink/levels, written by the
+        supervisor 2 s after the last step, never during an over or a call,
+        and on Kiwi888 at a quiet moment or 30 s on, as its VOLUME -- merged
+        for 1.19.0; it moves to the card with the rest of btlink), forgotten
+        with Forget it;
+        `GET /api/bt` `level`/`level_default`, `POST /api/bt do=level` (the
+        whole field a step, else 400). The arithmetic and the records in
+        `components/bt_link/bt_level.c`, tested in test/host (`test_bt_level`:
+        the old tap's sums matched; keyed CW and speech at +12 dB, no gain
+        step past a 500th of full scale where the first build's reached a
+        half); the page's control tried with node. On the knob, 2026-10-06:
+        the Sony raised to 0 dB, and at 0 again after a restart; the row's
+        note before its buttons, so that neither jumps as it comes and goes
+        (the user). By ear still: the JLab at -12, the Jabra at 0, a level
+        above 0 dB on loud audio.
 - [ ] **The knob's own battery** (asked 2026-10-05): its charge at the top of
       the arc, over the S-meter's reading, as a phone's status bar has it, on
       every face, the setup firmware's too, while the knob runs on it -- a
@@ -420,6 +458,37 @@ network protocols as well as Icom's: a reference for those clients.
         `tools/mock_ubersdr.py` (`--time-limit`, `--idle-timeout`,
         `--day-limit`, `--day-check`, `/mock/restart`, `/mock/refuse`), the
         face with `make -C tools/lvhost slab-check`;
+      - [x] the next receiver in the list when the one in use cannot be
+        reached (the user, 2026-10-06: back home, the remote station's
+        `http://ubersdr-tel.local:8080` sat on NOT FOUND). On the knob the
+        same day: that name not found twice, 4 s apart, then ON6URE-TEL
+        through its tunnel, playing 25 s after the restart and saved as In
+        use (the timer's stack: 2,020 bytes never used). Its description not
+        read -- the name not found,
+        no answer, refused, TLS failed, a tunnel's or a proxy's page in
+        its place (502, a 503 without "allowed", or HTML: no answer of an
+        UberSDR's, which always says "allowed", a full one's 503 too) --
+        the one in use tried again 4 s on, then the next in turn, once
+        each, wrapping round; a round of them all, then the backoff, 2 s
+        growing to 60. The first that lets the knob in plays and is saved
+        as In use (by a timer, just before its session plays; the list
+        keeps its order; not where the dial or the page chose another
+        meanwhile; one that answers only to refuse is not). In the client,
+        with no restart: the spots' task drops the last one's connection,
+        bands, spots, voices and gallery; the noise filter goes with the
+        knob, the last boot's too; the SSTV viewer closes. RECEIVER FULL,
+        BUSY, DAY LIMIT, a password refused, TIME UP keep the one in use's
+        turn; a stand-in that answers so is passed by for the next (the
+        user, 2026-10-06); no hand-over while the knob's own WiFi is down;
+        a single receiver as ever. The face names the receiver under the
+        warning (NOT FOUND, then CONNECTING with the next one's name),
+        `/api/radio` has `why`
+        and `uber.rx`/`rx_name`, the radio page says it. Tried on the PC:
+        `make -C tools/uberhost test` (handover, fullnext, standin,
+        pwnext, chosen, allgone, fullstays, timeupstays, wrongpwstays,
+        gone, tunnelgone, proxygone, blip, single; two mocks, `/mock/vanish`,
+        `/mock/gateway[?status=503]`, `--full` and `/mock/full`, names
+        never looked up), the face with `make -C tools/lvhost slab-check`;
       - [ ] (later, the user's call, 2026-10-04) the dial for UberSDR's
         own page in a browser, both ways: a
         small browser extension (Chrome and Firefox) on the page's
@@ -437,6 +506,280 @@ network protocols as well as Icom's: a reference for those clients.
         desktop app's TCI server (port 60001) for the aethersdr firmware
         as it is, once the knob halves its 48 kHz audio (it sends no
         S-meter, only -127).
+- [ ] **Kiwi888, native.** A firmware of its own, `kiwi`
+      (`VFO_RADIO=kiwi`, `components/kiwi_client` on the session in
+      `components/kiwi_proto`), receive only: a KiwiSDR or a Web-888 over
+      KiwiSDR's protocol on the app path, the web SDRs' list its receivers,
+      one in use and another taken over live. KIWI-PLAN.md, its steps:
+      - [x] step 1, the smallest useful firmware: modes, filters, AGC
+        presets, live switching (swipe up, a tap on the slab, the page's
+        In use, `receiver=`), every refusal classed and kept to (day-limit
+        marks, holds, the silent door, the HTTP statuses, the cap on its
+        own attempts), the receivers' page's look; built, its limits passed
+        against `tools/mock_kiwi.py` (`kiwi_client_limits`), 2026-10-03;
+      - [x] step 2, the limits complete: `SET inactivity_ack` only after a
+        touch or a turn of the knob (`ui_user_seq`, `radio_user_activity`),
+        a minute apart at most, the UberSDR's ping on the same rule; the
+        full mock (every login answer, rates, offset, a carrier, the SET
+        record), `test_kiwi_proto` (ADPCM against kiwiclient's decoder,
+        squelched frames) and `fuzz_kiwi`, 2026-10-03;
+      - [x] the review's limits, here and in the second receiver: a login's
+        answer always read (10 s, never cut short by a switch or a save); a
+        login left unanswered by a receiver with time limits counted, in case
+        it was a refusal; two logins at once each counted; a mark at rest
+        after a stream keeps its strikes; "no hourglass" lifts only one that
+        showed it; a full NVS (MEMORY FULL) and a run of crashes keep the knob
+        from logging in on its own; the cap counts only tries that reached
+        the receiver; REFUSED held; the branch on eaed41f, 2026-10-03; then
+        a lift short of a restart (the time limits taken away) keeps the
+        strikes, a refusal beside "no hourglass" stops that lift, and time
+        up, kicked and refused hold through a crash, 2026-10-03;
+      - [x] EchoTracer playing and tuning, on the knob; switching live --
+        from ON3RVH's KiwiSDR to EchoTracer in 1.5 s, the one session closed
+        before the next logged in; "sounds perfect" (the user, 2026-10-06);
+      - [x] step 3, the second receiver on the session (`components/sdr_rx`
+        on `kiwi_sess_run`, its own session and test code gone): the app
+        path, the silent door and the HTTP refusals classed, CW on the dial,
+        a Web-888's S-meter from its own reference, keepalive every 5 s, the
+        courtesy cap; its limits and the fixes passed against the mock
+        (`kiwi_limits`), 2026-10-04;
+      - [x] step 5, the audio: half-band stages to 32 kHz or more and a cubic
+        interpolator (flat within 0.07 dB to 5 kHz at 12 kHz, the rest at
+        least 42 dB down), the drift trim on the ring's level, a stall's
+        backlog left out in one jump, whole frames, in the stall's own
+        silence when it comes at once or at twice the pace or more
+        (TerraBooster's stall, 2026-10-03), the 30 s report in the log, rej=
+        lost audio only, saves at quiet moments (`kiwi_audio`), 2026-10-04;
+      - [x] decided (as recommended, unanswered): a backlog the network
+        hands over slowly is played as it comes and cut back every few
+        seconds, as before -- no new login at the live point; short stalls
+        again and again grow the ring's target (`kiwi_link_t.target_max`):
+        two breaks within two minutes, and it holds a stall as long as the
+        last, to 0.7 s, the ring's room growing with it (the pre-roll too,
+        `audio_out_set_preroll`), eased back half a frame each 30 s after
+        three calm minutes, the trim draining the ring, never a cut; the
+        target and the breaks in the 30 s report. Against the mock, 0.4 s
+        every 8 s for two minutes: 2 breaks, 14 before; 0.6 s every 5 s: 2,
+        23 before; a calm stream at 256 ms throughout; the right ear the
+        same (`kiwi_audio`, `kiwi_two_ears`), 2026-10-04;
+      - [x] step 4, the receivers on the dial: an unnamed one by the antenna
+        its `/status` names ("RF.Guru " left off), once read -- before its
+        first session, never for a label alone -- else by its address, the
+        port kept where another receiver shares the host and only there
+        (`kiwi_label`), so neither four on one address nor receivers on one
+        domain look alike; the slab's second and third lines from it;
+        the page's Test says antenna, whereabouts, model and `ext_api`, and
+        names an unnamed receiver as it names itself (`kiwi_status_name`),
+        which Save keeps;
+        decision 4(b): "Add RF.Guru's receivers" fills in the four
+        Lombardsijde Web-888s by address and port, logging in to none;
+        decision 10: "Your name, for their owners" (`SET ident_user`,
+        URL-encoded, VFO-Knob when empty), kept with the list (NVS `sdrid`)
+        for every session -- the second receiver's too -- and told at once
+        to the one playing; passed against the mock, 2026-10-04; and after
+        review, a Test and a session never log in to one receiver at once,
+        nor does a choice made before a Test's refusal spend a try
+        (`kiwi_test_busy`), 2026-10-04;
+      - [x] step 6, the rest of the face and pages: the noise filter on the
+        right of the S-meter (OFF WDSP LMS SPEC, sent once the choice has
+        rested), the squelch on the swipe from the right (`kwn`, `kwq`), OV
+        in red after the reading, the S-meter in one `vu_band` object with
+        its peak in red (`vu_band_led_color`: phase 3 of VU-PLAN starts
+        here; `tools/lvhost/kiwi_face.c` against the arc stack), the mic rows
+        hidden on a receive-only firmware, a squelch slider on the radio
+        page (the IC-R8600's too), the day-limit lines under the caller's
+        tag, 2026-10-04;
+      - [ ] on the knob: NR, the squelch and OV by ear and eye on EchoTracer
+        (the noise filter and the squelch heard working, 2026-10-06; an OV
+        still to see: no signal strong enough came by);
+        the owner's list showing the knob's name;
+      - [x] step 8, a second Kiwi in the right ear (decision 11): kiwi joins
+        `VFO_HAS_SDR`, the right ear `components/sdr_rx` on the left ear's
+        dial, mode and passband (`sdr_rx_tune`, also with the left ear
+        down), RIGHT EAR with OFF on the swipe down, BALANCE LEFT ... RIGHT,
+        its line and reading in the page's link blue; a session of its own,
+        each ear its receiver's owner's limits, the marks shared; never both
+        ears on one receiver -- each ear refuses the other's (dimmed on the
+        dial, a triple click; 409 on the pages and the API, `sdr=`), and one
+        the other ear only leaves, or gets from a list saved under both, is
+        waited out (`sdr_rx_primary_cb`, `sdr_rx_in_session`); its own 30 s
+        report; the page's rows say "right ear", the radio page has its
+        buttons and the balance; the mixer flushes the left ear's ring while
+        the right plays; flash at quiet moments of both ears
+        (`sdr_rx_quiet_cb`); the right ear's choice and balance under keys of
+        its own (`kwr`, `kwrh`, `kwbal`), so a web SDR chosen beside a radio
+        on another firmware starts no second session here. Against two and
+        three mocks (`kiwi_two_ears`), and `tools/lvhost` (`make
+        kiwi-check`), 2026-10-04;
+      - [x] step 7, the guide's pictures: `kiwi_face()` and `kiwi_pictures()`
+        in tools/mkdocs.py, 18 of them (the face named, RECEIVER FULL, tune,
+        AGC, NR, mode, filter, the receiver, squelch, TIME UP, DAY LIMIT, OV,
+        the headset, the right ear, its line, the left ear's refused,
+        BALANCE, and the page's Receivers with Add RF.Guru's receivers and
+        the owners' name), the kiwi palette in tools/mkdisplay.py, docs/kiwi.md
+        and README.md with them, 2026-10-04;
+      - [x] after review: a ring coming down after an eased target rides out
+        a hiccup it holds, as at 256 ms -- never a cut (`flow_top`), and a
+        stall that runs it dry meanwhile leaves its backlog out down to the
+        eased target, no second cut (the mock's `--hold`, `kiwi_audio`'s
+        eases and ease_stall); the right ear's receiver set with the list it
+        is saved with (`sdr_save`'s `sel`), so the left ear never takes it in
+        between; the left ear says its receiver before it looks at the right
+        ear's; a receiver's `/status` read once a boot between the two ears
+        (`kiwi_status_keep`, `kiwi_two_ears`' status_once); a mark at rest
+        flushed only with both ears quiet; the right ear's next hold keeps
+        what holds the left ear through a crash; `receiver=`, `sdr=` and
+        `sel=` out of the list 400, nothing done; a Test of the right ear's
+        receiver tested (`kiwi_two_ears`' tests); the host shim mixes as
+        `mix_block` does (a ring short of a 10 ms block, an underrun),
+        2026-10-05;
+      - [x] merged with main's work after v1.18.4, 2026-10-05: the session
+        reads where a receiver centres CW (`load_cfg`, whole or as it goes
+        by), puts ten digits in the app path's stamp and tunes again once
+        the audio flows -- the AGC and the squelch with it, which that input
+        lets go by before it has a channel -- so either ear plays an
+        UberSDR's Kiwi input (`kiwi_two_ears`' uber_input,
+        `kiwi_client_limits`' cw_centre_read); a Bluetooth speaker beside the
+        receiver's name, the name cut short of it, both ears in it (the
+        guide's 19th picture); the readout in Hack;
+      - [x] on the knob: a Bluetooth speaker, both ears playing -- the
+        Marshall Stockwell III, the two ears mixed into it and BALANCE
+        moving it; 0 dry, 0 skips (2026-10-06);
+      - [x] decided (as recommended): a Bluetooth speaker's own volume
+        buttons do not count as someone listening, for a receiver's idle
+        limit -- only the dial and the glass do, as the guides say -- and
+        the right ear logs in again at a list save, as the web SDR beside a
+        radio does on every firmware: both kept as they are, 2026-10-05;
+      - [x] decided and done (as recommended): the right ear on the left
+        ear's AGC, noise filter and squelch, asked at every pass and sent
+        at that ear's pace, the noise filter once rested
+        (`sdr_rx_settings_cb`): two antennas compared fairly -- and both
+        squelches closed a second a quiet moment for flash
+        (`sdr_rx_audible`); and a web SDR that cannot reach the dial -- the
+        right ear, and beside a radio on every firmware -- quiet and saying
+        so, rather than playing its edge (kiwi_sess.h's `reach`,
+        `kiwi_tune_reaches`: the dial within what the receiver says it
+        covers): no login again, the receiver kept where it was tuned, no
+        tune at every turn, silence fed at the stream's pace (no break, no
+        growth of the target), its thin line gone, *can't reach* in amber
+        where its reading was, S0 back within its range until its first
+        reading, "out of range: it covers 0-30 MHz" on the pages, a log
+        line each way; back within its range, the tune and the audio at
+        once (`kiwi_two_ears`' follows_left, out_of_range and quiet_both,
+        `kiwi_limits`' out_of_range, out_of_range_at_start and
+        cw_at_the_edge, `tools/lvhost` kiwi-check and slab-check on every
+        face with a web SDR, a picture in the kiwi, icom, multiflex and
+        ubersdr guides), 2026-10-05. The left ear needs none: its dial is
+        held within its receiver's range (`cb_range`), so the dial shows
+        where it plays -- but in CW within the tone of a converter's bottom
+        edge (on a 144 MHz offset, 144.0000 to 144.0005), where both ears
+        keep the carrier at the edge and the station there is heard below
+        its tone, or not at all: left as it is;
+      - [ ] to decide: a session that starts with the dial already out of
+        its receiver's reach (the radio on 6 m at boot, a KiwiSDR chosen)
+        logs in, tunes its edge once and sits silent on one of its channels;
+        and like one gone out of reach it sends nothing meanwhile, so an
+        owner's idle limit may end it (*time up*, then held until chosen
+        again). Wait for the dial instead, with no login, where an earlier
+        session this boot said its range?
+      - [x] the mix a Bluetooth speaker takes, before the volume since the
+        AVRCP change: a block past full scale -- the leveller's 8x for a
+        weak source still held as a strong one starts -- brought down whole,
+        by 32767 over its peak, not clipped (`components/audio/mix_tap.h`,
+        `test_mix_tap`); the jack's path as it was, 2026-10-05;
+      - [ ] on the knob: the right ear's AGC, NR and squelch with the left
+        ear's -- its noise filter heard following, 2026-10-06; a KiwiSDR in
+        the right ear beyond its range done the same day (ON3RVH's, to 30
+        MHz, with the left on 30.5 MHz: quiet, its line gone, "out of range",
+        and playing again within a second back on 20 m); a speaker at a
+        strong station's start, no crackle;
+      - [x] on the knob: both ears on two of the Lombardsijde receivers --
+        EchoTracer left, TerraBooster right (in 1.6 s), BALANCE from either
+        alone to both, the right ear's thin blue line; their 30 s reports
+        clean, 89 kB internal free with the speaker on (2026-10-06); the
+        refusals by hand still to try;
+      - [x] rebased onto v1.18.5, 2026-10-05: the knob's own battery at the
+        top of Kiwi888's face too, clear of the arc and its red peak mark,
+        the reading with OV after it and the right ear's line; a headset's
+        or speaker's battery beside its logo, the receiver's name kept clear
+        of them as the UberSDR's spot is -- centred where it fits so, else
+        moved aside, whole, and only one too long for its room cut with dots
+        (`call_place`); the address card's power line; a speaker sent a
+        quarter of the level, rising into it, after the tap's headroom
+        (`mix_tap.h`). Every placement checked on the PC (`tools/lvhost`
+        slab-check's `slab_kiwi`), the guide's 21st picture. The other
+        guides' *can't reach* pictures numbered after v1.18.5's: icom's 25,
+        multiflex's 18, ubersdr's 23 (after the hand-over's 21 and 22, merged
+        for 1.19.0). The setup guide's list with Kiwi888 in
+        it; the UberSDR mock says the ports it holds (`LISTENING`), so
+        `kiwi_two_ears` no longer loses one to a test running beside it;
+      - [ ] on the knob: its battery over Kiwi888's face; a headset's or a
+        speaker's battery beside a long receiver's name;
+      - [x] receivers reached only over https, 2026-10-06 -- the kiwisdr.com
+        proxy (n0bqv.proxy.kiwisdr.com: port 80 answered 307) and a KiwiSDR
+        behind Cloudflare (kiwisdr.on3rvh.be: 80 answered 301, 8073 silent),
+        the user's two: `https://` on the page and the API, kept with each
+        receiver ("https://" before its host in NVS, the port a redirect
+        moved it from after its own, "443/80": an old list reads as it did);
+        /status over https and the session over wss, the Host the front
+        routes on, the certificate checked against the bundle for that name
+        (SNI) -- mbedTLS on the knob's own socket, its contexts in PSRAM, not
+        esp-tls's 2 kB of internal RAM (`components/kiwi_proto/kiwi_tls.c`);
+        the handshake a step at a time, `go_on` asked between them, and one
+        connection's step at a time of all of them, the idle task's turn
+        after a long one: the receivers' handshakes keep core 0 from its idle
+        task for one step at most (its certificates, half a handshake's
+        computing on the PC, up to a second or so on the S3), never near the
+        task watchdog's 5 s; the newest four
+        receivers' TLS sessions kept, so the session after the /status read,
+        a Test after its read and a receiver chosen again resume with no
+        handshake's worth of software ECC. An http:// receiver's 301, 302,
+        307 or 308 to https on its own host followed at once, once, and kept
+        (`sdr_moved`: the list in RAM at once, in flash at a quiet moment,
+        never during audio), under the key it had (`kport`), its marks and
+        holds its own still; any other redirect said, MOVED / "moved to
+        <host>", not "not a kiwi"; a certificate that does not verify --
+        signed by no authority in the bundle (the bundle's callback makes it
+        mbedTLS's fatal error, its flags all set) or for another name --
+        CERTIFICATE?, not a word spoken; both held until chosen again or the
+        list saved. A page loaded before a redirect saves the receiver at
+        its old address as it is now, https:// and passwords kept
+        (`sdr_same`); the list's two flash writers one at a time. The page's
+        Test on a task of its own, its stack in PSRAM (the web server's has
+        no room for a handshake), its way to the login 25 s at most. Stacks
+        for a session 16 kB, in PSRAM: a handshake took ~9 kB on the PC. A
+        full socket over TLS waited for on the write alone (it spun at 100 %
+        with audio still coming in). Tried on the PC:
+        `tools/mock_kiwi.py --tls` (a front ending TLS before the mock, the
+        run's own CA from `make_certs`), `--redirect`, `--tls-delay`;
+        `kiwi_limits`, `kiwi_client_limits` and `kiwi_two_ears` with `--tls`
+        (every scenario over TLS), and their tls_* scenarios -- redirects
+        kept and refused, one hop, certificates refused as the bundle
+        refuses them (`shim_tls.c` attaches as ESP-IDF does), marks across a
+        redirect, a stale page's save, a quiet moment for the save, a switch
+        in a slow handshake;
+      - [ ] on the knob: kiwisdr.on3rvh.be done, 2026-10-06 -- its http://
+        link's 301 followed, TLS in 1.29 s (1.15 s of it computing), a
+        resumed one in 0.05 s, saved as https://, streaming, 91 kB internal
+        free with one ear; n0bqv.proxy.kiwisdr.com answered nothing that day
+        on 80 or 443 (its KiwiSDR off, most likely). Left: the proxy once it
+        is up (and their http:// links, redirected),
+        the handshake's time ("TLS in N s, M s of it computing": a resumed
+        one's next to nothing) and the internal RAM free with both ears over
+        TLS, the [STK] line for the kiwi, sdr and sdrtest tasks; both ears
+        on https receivers at boot and a Test pressed meanwhile: core 0's
+        idle and no task watchdog;
+      - [ ] the website's list (KIWI-PLAN section 17), in that repo's session,
+        after the user's go;
+      - [x] its release, 1.19.0, merged with main's work since 1.18.5 (the
+        UberSDR's hand-over, a level for each Bluetooth device): `soon:true`
+        gone from the page's Firmware list, `dependencies.kiwi.lock` and
+        `sdkconfig.kiwi` committed; `tools/mkdocs.py`'s VERSION 1.19.0 and
+        every guide's pictures drawn again; a kiwi set in `tools/mkrender.py`,
+        in its own palette (S9+10 on 20 m, EchoTracer on the slab);
+        `tools/release.sh`'s NAMES and the setup firmware's list offer it,
+        and the setup guide, docs/README.md and README.md name it with the
+        others, 2026-10-06.
 - [ ] **Web SDRs beside the radio.** For the icom, xiegu and multiflex
       firmwares (`VFO_HAS_SDR`, `components/sdr_rx`): a KiwiSDR, a Web-888 or
       an UberSDR's Kiwi input as a second receiver, over KiwiSDR's protocol
@@ -454,14 +797,42 @@ network protocols as well as Icom's: a reference for those clients.
       - [x] both KiwiSDR paths: `/ws/kiwi/<ts>/SND` (KiwiSDR 1.9) and
         `/<ts>/SND` (the Web-888, older Kiwis), the one that answers
         remembered; every address a name stands for, in turn
-        (kiwi.on4cdj.be has one that resets);
+        (kiwi.on4cdj.be has one that resets) -- the app path alone since
+        1.19.0, `/ws/kiwi/` dropped with step 3;
       - [x] a Kiwi's limits respected, not dodged: one whose owner gives apps
         no channels (`ext_api_nchans` 0, ON4CDJ's) cuts a client without a
         waterfall off after 10 s -- the knob says "no apps allowed" and does
         not come back until chosen again; app channels full, two minutes;
-        the day's listening limit per address (`ip_limit`), half an hour;
+        the day's listening limit per address (`ip_limit`): marked through
+        restarts, tried again only when chosen, twice at most (KIWI-PLAN.md
+        step 0, released in 1.19.0);
+      - [x] step 0 released together with step 3, in 1.19.0 (2026-10-06):
+        step 3 built on the kiwi branch, 2026-10-04 -- the second receiver
+        on the app path alone, with the silent door (120 s, then NO APPS),
+        so a KiwiSDR 1.9's owner's limit on apps holds;
+      - [x] on the same branch: an unnamed receiver on the RX chooser by its
+        antenna once read, else by its address, with the port where another
+        shares the host (four on one address told apart), Test filling an
+        empty name, and who the owners see (`SET ident_user`) from the page,
+        2026-10-04;
+      - [x] on the same branch, with the Kiwi888 right ear: the SDR's ring
+        kept fuller while short stalls come again and again (up to 0.7 s,
+        its room in PSRAM grown by 21 KB), eased back once calm; the
+        receiver's clock followed (the drift trim); a 30 s report in the log
+        (`sdr: ring ... ms of ...`); its underruns counted
+        (`audio_out_sdr_stats`); the mixer now flushes and trims the radio's
+        ring while the SDR plays, 2026-10-04 -- released with step 3;
       - [x] streaming from the Web-888 (81.83.21.23:8077) on the IC-7610
         firmware, 2026-09-30;
+      - [x] a receiver reached only over https -- behind the kiwisdr.com
+        proxy or Cloudflare -- by its `https://` link, and an http:// one's
+        redirect to https on its own host followed and kept: the same as on
+        Kiwi888 (its entry above), built and tried on the PC, 2026-10-06;
+        its list to flash at a quiet moment for the web SDR, the radio's own
+        receive audio playing on, as for the other settings there;
+      - [ ] on the knob: an https web SDR beside the IC-705 or the IC-7610
+        (n0bqv.proxy.kiwisdr.com, kiwisdr.on3rvh.be), Test and listen: the
+        sdr: log's TLS lines, the redirect kept;
       - [x] listened to on the dial: the RX chooser, the balance, the
         levelling, the mute on transmit (the Icom firmware);
       - [ ] the UberSDR's Kiwi input (port 8073 on its own address, not the
@@ -473,8 +844,22 @@ network protocols as well as Icom's: a reference for those clients.
         and tunes the carrier that far below, as the Kiwi's own page does --
         on a KiwiSDR its CW was 500 Hz off before -- and tunes again once the
         audio flows; tried on the PC against the mock, both flavours; the
-        knob's test left (its `enable_kiwisdr` on);
+        knob's test left (its `enable_kiwisdr` on). Merged with Kiwi888 into
+        the session (`components/kiwi_proto`), so its two ears have it too:
+        `load_cfg` read whole or as it passes, ten digits in the app path's
+        stamp (the Kiwi input takes it only so), the tune again once the
+        audio flows, and the AGC and the squelch with it, which the input
+        lets go by before it has a channel (applyAGC, applySquelch)
+        (`test_kiwi_proto`, `fuzz_kiwi`, `make -C tools/uberhost test`),
+        2026-10-05;
       - [ ] on the multiflex and xiegu firmwares.
+      - [x] on the kiwi branch, with the right ear's: a web SDR that cannot
+        reach the radio's frequency -- a KiwiSDR beside the IC-7610 on 6 m
+        -- goes quiet and says so (*can't reach* in amber, "out of range: it
+        covers 0-30 MHz" on the pages), its session kept, until the radio is
+        back within its range, rather than playing its top edge; tried on
+        the PC (`kiwi_limits`' out_of_range), 2026-10-05; the knob's test
+        left.
 
 ## Known hardware quirks
 

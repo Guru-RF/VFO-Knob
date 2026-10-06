@@ -80,8 +80,18 @@ typedef void (*audio_out_hold_hook_t)(const char *where, int64_t since_us, int64
                                       uint32_t dma_done, int64_t dma_gap_us);
 void audio_out_set_hold_hook(audio_out_hold_hook_t fn);
 
-/* Sample frames buffered and not yet played. */
+/* Sample frames buffered and not yet played; the most the ring holds over
+ * its own pre-roll; and how many it waits for before it plays (the
+ * pre-roll). The pre-roll may be set higher, up to audio_out_preroll_max(),
+ * the ring keeping as much more room: after a gap it then waits for that
+ * much -- a web receiver's stream the network keeps breaking up rides its
+ * stalls out (kiwi_sess.h's target_max). The kiwi firmware's grows to 0.7 s;
+ * the others' stays as built. */
 size_t audio_out_queued(void);
+size_t audio_out_room(void);
+size_t audio_out_preroll(void);
+size_t audio_out_preroll_max(void);
+void   audio_out_set_preroll(size_t frames);
 
 /* A second receiver, a web SDR (components/sdr_rx): mono 16-bit PCM at
  * AUDIO_RATE_HZ. While on, the radio is heard on the left and the SDR on the
@@ -89,6 +99,15 @@ size_t audio_out_queued(void);
  * ears, as without it. Feeding never blocks. */
 void audio_out_sdr(bool on);
 bool audio_out_feed_sdr(const int16_t *pcm, size_t n);
+/* Its samples buffered and not yet played, the most its ring holds over its
+ * pre-roll, its pre-roll and how far that may grow (to 0.7 s, on the
+ * firmwares with a web SDR): as audio_out_queued() and the rest are the
+ * radio's. */
+size_t audio_out_sdr_queued(void);
+size_t audio_out_sdr_room(void);
+size_t audio_out_sdr_preroll(void);
+size_t audio_out_sdr_preroll_max(void);
+void   audio_out_sdr_set_preroll(size_t n);
 /* The SDR silent -- while transmitting -- its stream kept running. */
 void audio_out_sdr_mute(bool mute);
 /* -100 the radio alone, 0 radio left and SDR right, +100 the SDR alone. */
@@ -108,5 +127,7 @@ typedef struct {
     uint32_t sample_rate, format, channels;
 } audio_stats_t;
 void audio_out_stats(audio_stats_t *st);
+/* The SDR's: its feeds, those its full ring let go, the times it ran dry. */
+void audio_out_sdr_stats(audio_stats_t *st);
 
 #endif /* AUDIO_OUT_H */

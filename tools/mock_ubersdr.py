@@ -17,6 +17,9 @@ something.
                                                   page http://<this PC>:8080,
                                                   or <this PC>:8073 a web SDR
 
+The ports it listens on are printed first: "LISTENING <port> <kiwi-port>"
+(--port 0 picks one; --kiwi-port 0 is none, said as 0).
+
 Limits and faults, for the paths a receiver does not take every day:
     --time-limit S     a guest's session ends S s after its first socket (an
                        hour, on many), whatever happened since -- reconnects,
@@ -39,10 +42,16 @@ Limits and faults, for the paths a receiver does not take every day:
     --password PW      the bypass password: with it a session is bypassed,
                        with another one /connection answers 403
     --password-only    no guests: 403 "requires a password"
+    --full             no room for a guest: /connection answers 503 "Maximum
+                       number of users reached", as a full receiver does --
+                       until GET /mock/full?on=0 (?on=1: full again)
+    --name NAME        the receiver's name in its description, to tell two
+                       mocks apart ("Mock UberSDR on the LAN")
     --kiwi-flavour K   the Kiwi input as 'ubersdr' (CW centred on the carrier,
                        its channel made from the first SET mod and the
-                       passband taken from the next) or as 'kiwisdr' (a real
-                       KiwiSDR: CW centred on a 500 Hz tone)
+                       passband taken from the next, an AGC or a squelch
+                       before it let go by) or as 'kiwisdr' (a real KiwiSDR:
+                       CW centred on a 500 Hz tone)
     --kiwi-cw LO,HI    a KiwiSDR's CW passband, as its owner may set it
 
 GET /mock/state, on either port: what the knob asked for, as JSON -- with,
@@ -52,7 +61,16 @@ closes them -- the sessions go on. GET /mock/refuse: the same, and every
 audio socket refused from then on, answered 500 -- or with ?open=1 opened
 and closed at once. GET /mock/restart: the receiver restarted -- every
 session forgotten, its time and the day's with it, the sockets closed: a
-session's time runs again from its next socket.
+session's time runs again from its next socket. GET /mock/vanish: the
+receiver gone, as a power cut or a network leaves it -- every connection
+closed and its ports let go, so that a new one is refused; with ?for=S it is
+there again S s on, its sessions remembered. GET /mock/gateway: the receiver
+gone from behind its tunnel -- every connection closed, and every request
+from then on answered as a tunnel answers for a receiver it cannot reach:
+502 Bad Gateway, a page of HTML -- or with ?status=503, 503 Service
+Unavailable, as a proxy may answer.
+
+Several at once, each on ports of its own, are a knob's list of receivers.
 """
 import argparse
 import base64
@@ -79,9 +97,17 @@ STATE = {
     "tunes": [], "dsp": [], "pings": 0, "audio_sockets": 0, "frames": 0, "pongs": 0,
     "dx_sockets": 0, "subscribed": [], "requests": [], "drops": 0, "restarts": 0,
     "refuse": "",              # audio sockets: "" taken, "500" refused, "open" closed as they open
-    "kiwi": {"sockets": 0, "auth": [], "mods": [], "frames": 0, "keepalives": 0, "paths": []},
+    "vanished": 0,             # /mock/vanish: gone, refusing connections
+    "gateway": 0,              # /mock/gateway: gone from behind its tunnel, this status (502)
+    "full": False,             # --full, or /mock/full: no room for a guest
+    "kiwi": {"sockets": 0, "auth": [], "mods": [], "frames": 0, "keepalives": 0, "paths": [],
+             "agc": [], "squelch": []},                 # the AGC and the squelch its channel took
 }
 OPEN = {}                      # uuid -> the sessions on its open audio sockets
+CONNS = set()                  # every connection open to it: /mock/vanish and /mock/gateway close them
+LISTENING = {}                 # port -> its listening socket, while it listens
+THERE = threading.Event()      # cleared while it has vanished
+THERE.set()
 DAY = {}                       # address -> {"used": s of sockets closed, "open": {uuid: [since, sockets]}}
 
 RATE = 12000                   # usb, lsb, cw: radiod's 12 kHz presets
@@ -300,7 +326,7 @@ def read_request(f):
 
 
 REASON = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 410: "Gone", 429: "Too Many Requests",
-          500: "Internal Server Error"}
+          500: "Internal Server Error", 502: "Bad Gateway", 503: "Service Unavailable"}
 
 
 def respond(c, status, body, ctype="application/json", keep=True):
@@ -403,7 +429,7 @@ def description(peer):
     with LOCK:
         users = sum(1 for r in STATE["registered"].values() if not r["bypassed"])
     return {
-        "receiver": {"name": "Mock UberSDR on the LAN", "callsign": "MOCK", "location": "127.0.0.1",
+        "receiver": {"name": ARGS.name, "callsign": "MOCK", "location": "127.0.0.1",
                      "antenna": "a dummy load", "public_url": "", "gps": {"lat": 51.2, "lon": 2.8}},
         "version": "0.1.66", "max_clients": 20, "available_clients": max(0, 20 - users),
         "bypassed_users_only": ARGS.password_only,
@@ -428,6 +454,12 @@ def connection(c, peer, headers, body):
     bypassed = bool(ARGS.password and pw == ARGS.password) or (private(peer) and not ARGS.guests_limited)
     if ARGS.password_only and not bypassed:
         return respond(c, 403, dict(base, allowed=False, reason="This receiver requires a password to access"))
+    with LOCK:
+        full = STATE["full"]
+    if full and not bypassed:
+        log(f"/connection {uuid[:8]} from {peer}: no room -- 503")
+        return respond(c, 503, dict(base, allowed=False, reason="Maximum number of users reached. "
+                                                                "Please try again later."))
     with LOCK:
         kicked = uuid in STATE["kicked"]
         used = day_used(peer)
@@ -696,6 +728,13 @@ def receiver_conn(c, peer):
             keep = headers.get("connection", "").lower() != "close"
             with LOCK:
                 STATE["requests"].append(f"{method} {path}")
+                gateway = STATE["gateway"]
+            if gateway and not path.startswith("/mock/"):
+                respond(c, gateway, f"<html><body><h1>{gateway} {REASON[gateway]}</h1></body></html>", "text/html",
+                        keep)
+                if not keep or headers.get("upgrade", ""):
+                    return
+                continue
             if headers.get("upgrade", "").lower() == "websocket":
                 if path == "/ws":
                     with LOCK:
@@ -755,6 +794,33 @@ def receiver_conn(c, peer):
                 for ws in socks:
                     ws.drop()
                 respond(c, 200, {"dropped": len(socks)}, keep=keep)
+            elif path == "/mock/vanish":
+                back = float(q.get("for", ["0"])[0] or 0)
+                respond(c, 200, {"vanished": True, "for": back}, keep=False)
+                vanish(back)
+                return
+            elif path == "/mock/gateway":
+                status = int(q.get("status", ["502"])[0] or 502)
+                if status not in (502, 503):
+                    respond(c, 400, {"error": "?status=502 or 503"}, keep=False)
+                    return
+                with LOCK:
+                    STATE["gateway"] = status
+                    socks = [s for s in CONNS if s is not c]
+                log(f"gone from behind the tunnel: {len(socks)} connection(s) closed, {status} from now on")
+                for s in socks:
+                    try:
+                        s.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                respond(c, 200, {"gateway": status}, keep=False)
+                return
+            elif path == "/mock/full":
+                with LOCK:
+                    STATE["full"] = q.get("on", ["1"])[0] != "0"
+                    full = STATE["full"]
+                log("full: no room for a guest" if full else "room for a guest again")
+                respond(c, 200, {"full": full}, keep=keep)
             elif path == "/mock/restart":
                 # Its sessions, their clocks and the day's are in its memory: gone.
                 with LOCK:
@@ -897,6 +963,15 @@ def kiwi_ws(c, f, headers, path, peer):
                     STATE["kiwi"]["mods"].append(dict(sess, cmd=cmd))
                 log(f"kiwi: {cmd} -> channel {what}: {sess['freq']} Hz {sess['mode']} "
                     f"{sess['lo']}..{sess['hi']}{'' if sess['edges'] else ' (its preset)'}")
+            elif "agc" in p or "squelch" in p:
+                # The channel's: UberSDR lets them go by while it has none
+                # (applyAGC, applySquelch); a KiwiSDR's is there from the login.
+                if sess or ARGS.kiwi_flavour == "kiwisdr":
+                    with LOCK:
+                        STATE["kiwi"]["agc" if "agc" in p else "squelch"].append(cmd)
+                    log(f"kiwi: {cmd}")
+                else:
+                    log(f"kiwi: {cmd} -> let go by: no channel yet")
             elif "keepalive" in cmd:
                 with LOCK:
                     STATE["kiwi"]["keepalives"] += 1
@@ -932,23 +1007,76 @@ def kiwi_conn(c, peer):
             pass
 
 
-def serve(host, port, handler, what):
+def listen(host, port):
+    """A port held, from now until it vanishes: --port 0's, the one it picked."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((host, port))
     s.listen(16)
-    log(f"{what} on {host}:{port}")
+    with LOCK:
+        LISTENING[s.getsockname()[1]] = s
+    return s
+
+
+def vanish(back):
+    """The receiver gone, as a power cut or a network leaves it: every
+    connection closed, its ports let go -- a new one refused -- and with
+    `back`, there again so many seconds on, its sessions remembered."""
+    THERE.clear()
+    with LOCK:
+        STATE["vanished"] += 1
+        socks = list(LISTENING.values()) + list(CONNS)
+    log(f"vanished: {len(socks)} socket(s) closed, connections refused"
+        f"{f' for {back:g} s' if back else ''}")
+    for s in socks:
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+    if back:
+        def come_back():
+            log("there again")
+            THERE.set()
+        threading.Timer(back, come_back).start()
+
+
+def serve(s, handler, what):
+    """The port s holds, served -- and once the receiver has vanished, held
+    again on the same port when it is there again."""
+    host, port = s.getsockname()[:2]
+
+    def run(c, peer):
+        try:
+            handler(c, peer)
+        finally:
+            with LOCK:
+                CONNS.discard(c)
     while True:
-        c, a = s.accept()
-        c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        threading.Thread(target=handler, args=(c, a[0]), daemon=True).start()
+        if s is None:
+            THERE.wait()
+            s = listen(host, port)
+        log(f"{what} on {host}:{port}")
+        try:
+            while True:
+                c, a = s.accept()
+                c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                with LOCK:
+                    CONNS.add(c)
+                threading.Thread(target=run, args=(c, a[0]), daemon=True).start()
+        except OSError:
+            pass                                         # vanished: its socket shut
+        finally:
+            with LOCK:
+                LISTENING.pop(port, None)
+            s.close()
+            s = None
 
 
 def main():
     global ARGS, PNG
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--host", default="127.0.0.1", help="the address to listen on (127.0.0.1)")
-    p.add_argument("--port", type=int, default=8080, help="its own protocol's port (8080)")
+    p.add_argument("--port", type=int, default=8080, help="its own protocol's port (8080; 0: any free one)")
     p.add_argument("--kiwi-port", type=int, default=8073, help="its Kiwi input's port (8073; 0: none)")
     p.add_argument("--time-limit", type=float, default=0, help="a guest's session, in seconds (0: none)")
     p.add_argument("--idle-timeout", type=float, default=0, help="a guest's silence, in seconds (0: none)")
@@ -957,17 +1085,24 @@ def main():
     p.add_argument("--guests-limited", action="store_true", help="private addresses are guests too")
     p.add_argument("--password", default="", help="the bypass password")
     p.add_argument("--password-only", action="store_true", help="no guests")
+    p.add_argument("--full", action="store_true", help="no room for a guest: 503")
+    p.add_argument("--name", default="Mock UberSDR on the LAN", help="its name in its description")
     p.add_argument("--kiwi-flavour", choices=("ubersdr", "kiwisdr"), default="ubersdr")
     p.add_argument("--kiwi-cw", type=lambda v: tuple(int(x) for x in v.split(",")), default=(300, 700),
                    help="a KiwiSDR's CW passband, lo,hi (300,700)")
     ARGS = p.parse_args()
+    STATE["full"] = ARGS.full
     Opus(RATE).close()                                   # libopus there, before anyone asks
     PNG = png()
+    # Both ports held before a word is said, the Kiwi input's first: one
+    # already taken ends the mock here, and --port 0 never picks the other.
+    kiwi = listen(ARGS.host, ARGS.kiwi_port) if ARGS.kiwi_port else None
+    own = listen(ARGS.host, ARGS.port)
+    print(f"LISTENING {own.getsockname()[1]} {kiwi.getsockname()[1] if kiwi else 0}", flush=True)
     threading.Thread(target=enforce, daemon=True).start()
-    if ARGS.kiwi_port:
-        threading.Thread(target=serve, args=(ARGS.host, ARGS.kiwi_port, kiwi_conn, "its Kiwi input"),
-                         daemon=True).start()
-    serve(ARGS.host, ARGS.port, receiver_conn, "UberSDR, in the clear,")
+    if kiwi:
+        threading.Thread(target=serve, args=(kiwi, kiwi_conn, "its Kiwi input"), daemon=True).start()
+    serve(own, receiver_conn, "UberSDR, in the clear,")
 
 
 if __name__ == "__main__":

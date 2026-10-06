@@ -1,5 +1,6 @@
 #include "audio_out.h"
 #include "board_pins.h"
+#include "mix_tap.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -20,33 +21,63 @@ static const char *TAG = "audio";
 
 /* ~0.5 s at 24 kHz stereo int16. Lives in PSRAM: it is streamed through, not
  * touched by DMA, so it has no business competing for internal RAM -- which is
- * the scarce resource that the display and WiFi are already fighting over. */
+ * the scarce resource that the display and WiFi are already fighting over.
+ * A KiwiSDR's compressed frame is 2048 samples, 171 ms at its 12 kHz and 16 KB
+ * here once it is at 24 kHz stereo: the kiwi firmware's ring holds four. */
+#if VFO_RADIO_KIWI
+#define RING_BYTES (64 * 1024)
+#else
 #define RING_BYTES (48 * 1024)
+#endif
 /* Wait for this much before starting playback, so a burst of jitter at the
  * start of a stream does not produce an immediate underrun. A FlexRadio is
  * often a routed hop or a VPN away, and its 10 ms packets come in bursts:
- * 85 ms ran dry every few seconds there, so that firmware keeps 170. */
+ * 85 ms ran dry every few seconds there, so that firmware keeps 170. A Kiwi's
+ * frames come a whole one at a time: 8 KB would start on half of one and run
+ * dry at the first late frame, so that firmware waits for one and a half. */
 #if VFO_RADIO_MULTIFLEX
 #define PREROLL_BYTES (16 * 1024)
+#elif VFO_RADIO_KIWI
+#define PREROLL_BYTES (24 * 1024)
 #else
 #define PREROLL_BYTES (8 * 1024)
 #endif
+/* A Kiwi's pre-roll grows, up to 0.7 s, while the network keeps breaking its
+ * stream up, and eases back once it is calm (kiwi_sess.h's target_max): the
+ * ring holds as much more as the pre-roll may grow by, so the room above it
+ * stays what it was. */
+#if VFO_RADIO_KIWI
+#define PREROLL_MAX   (AUDIO_RATE_HZ * 700 / 1000 * 4)
+#else
+#define PREROLL_MAX   PREROLL_BYTES
+#endif
+#define RING_ALL      (RING_BYTES + PREROLL_MAX - PREROLL_BYTES)
 
 static i2s_chan_handle_t s_tx;
 static RingbufHandle_t   s_ring;
+static volatile size_t   s_preroll = PREROLL_BYTES;     /* as it is set now */
 
 /* A second receiver: a web SDR's audio (components/sdr_rx), mono at the same
  * 24 kHz, in a ring of its own with a longer pre-roll -- a web SDR is further
  * away and burstier than the radio. While one plays, the radio goes to the
  * left ear and the SDR to the right, each levelled to the same loudness, and
- * the balance fades between them. Without one, playback is as it always was. */
+ * the balance fades between them. Without one, playback is as it always was.
+ * Its pre-roll grows as a Kiwi's does, the ring with room for it. */
 #define SDR_RING_BYTES (40 * 1024)          /* ~0.8 s of mono int16 */
 #define SDR_PREROLL    (12 * 1024)          /* 250 ms */
+#if VFO_HAS_SDR
+#define SDR_PREROLL_MAX (AUDIO_RATE_HZ * 700 / 1000 * 2)
+#else
+#define SDR_PREROLL_MAX SDR_PREROLL         /* no web SDR on this firmware */
+#endif
+#define SDR_RING_ALL   (SDR_RING_BYTES + SDR_PREROLL_MAX - SDR_PREROLL)
 #define MIX_FRAMES     240                  /* 10 ms blocks */
 static RingbufHandle_t   s_sdr_ring;
 static volatile bool     s_sdr_on, s_sdr_flush, s_sdr_mute;
 static volatile int8_t   s_balance;         /* -100 radio .. 0 split .. +100 SDR */
 static bool              s_sdr_playing;
+static volatile size_t   s_sdr_preroll = SDR_PREROLL;
+static audio_stats_t     s_sdr_stats;       /* its feeds, those let go, the times it ran dry */
 typedef struct { float gain; } leveler_t;
 static leveler_t         s_lv_radio = { 1.0f }, s_lv_sdr = { 1.0f };
 static volatile uint8_t  s_vol = 40;
@@ -89,7 +120,19 @@ static bool on_dma_sent(i2s_chan_handle_t h, i2s_event_data_t *e, void *ctx)
 
 size_t audio_out_queued(void)
 {
-    return s_ring ? (RING_BYTES - xRingbufferGetCurFreeSize(s_ring)) / 4 : 0;
+    return s_ring ? (RING_ALL - xRingbufferGetCurFreeSize(s_ring)) / 4 : 0;
+}
+
+size_t audio_out_room(void) { return RING_BYTES / 4; }
+size_t audio_out_preroll(void) { return PREROLL_BYTES / 4; }
+size_t audio_out_preroll_max(void) { return PREROLL_MAX / 4; }
+
+void audio_out_set_preroll(size_t frames)
+{
+    size_t b = frames * 4;
+    if (b < PREROLL_BYTES) b = PREROLL_BYTES;
+    if (b > PREROLL_MAX)   b = PREROLL_MAX;
+    s_preroll = b;
 }
 
 void audio_out_set_balance(int8_t b) { s_balance = b < -100 ? -100 : (b > 100 ? 100 : b); }
@@ -108,7 +151,38 @@ void audio_out_sdr_mute(bool mute) { s_sdr_mute = mute; }
 bool audio_out_feed_sdr(const int16_t *pcm, size_t n)
 {
     if (!s_sdr_ring || !s_sdr_on || !pcm || !n) return false;
-    return xRingbufferSend(s_sdr_ring, pcm, n * 2, 0) == pdTRUE;
+    if (xRingbufferSend(s_sdr_ring, pcm, n * 2, 0) != pdTRUE) {
+        s_sdr_stats.dropped++;
+        return false;
+    }
+    s_sdr_stats.frames++;
+    return true;
+}
+
+size_t audio_out_sdr_queued(void)
+{
+    return s_sdr_ring ? (SDR_RING_ALL - xRingbufferGetCurFreeSize(s_sdr_ring)) / 2 : 0;
+}
+
+size_t audio_out_sdr_room(void) { return SDR_RING_BYTES / 2; }
+size_t audio_out_sdr_preroll(void) { return SDR_PREROLL / 2; }
+size_t audio_out_sdr_preroll_max(void) { return SDR_PREROLL_MAX / 2; }
+
+void audio_out_sdr_set_preroll(size_t n)
+{
+    size_t b = n * 2;
+    if (b < SDR_PREROLL)     b = SDR_PREROLL;
+    if (b > SDR_PREROLL_MAX) b = SDR_PREROLL_MAX;
+    s_sdr_preroll = b;
+}
+
+void audio_out_sdr_stats(audio_stats_t *st)
+{
+    if (!st) return;
+    *st = s_sdr_stats;
+    st->format      = TCI_AUDIO_FMT_INT16;
+    st->sample_rate = AUDIO_RATE_HZ;
+    st->channels    = 1;
 }
 
 static void drain(RingbufHandle_t r)
@@ -152,23 +226,56 @@ static void level(leveler_t *lv, float *x, int n)
 
 static int16_t sat16(float v) { return v > 32767.0f ? 32767 : (v < -32768.0f ? -32768 : (int16_t)v); }
 
-/* One 10 ms block of the two sources mixed, or nothing when neither plays. */
-static void mix_block(void)
+/* The radio's ring before a block is taken from it, whichever way it plays
+ * -- alone, or mixed with an SDR's: a flush asked for, then a trim. What it
+ * holds then, in bytes. */
+static size_t radio_chores(void)
+{
+    if (s_flush) {
+        s_flush = false;
+        drain(s_ring);
+        s_playing = false;
+    }
+    size_t buffered = RING_ALL - xRingbufferGetCurFreeSize(s_ring);
+    /* Far behind: the oldest dropped down to what is to be kept, the
+     * playing going on -- no pre-roll again, no hole. */
+    if (s_trim) {
+        const size_t keep = s_trim * 4;
+        s_trim = 0;
+        while (buffered > keep) {
+            size_t got = 0;
+            void  *q = xRingbufferReceiveUpTo(s_ring, &got, 0, buffered - keep);
+            if (!q) break;
+            vRingbufferReturnItem(s_ring, q);
+            buffered -= got;
+        }
+    }
+    return buffered;
+}
+
+/* One 10 ms block of the two sources mixed, or nothing when neither plays.
+ * `rbuf`: what the radio's ring holds. */
+static void mix_block(size_t rbuf)
 {
     EXT_RAM_BSS_ATTR static int16_t radio[MIX_FRAMES * 2], sdr[MIX_FRAMES], out[MIX_FRAMES * 2];
-    EXT_RAM_BSS_ATTR static float   fr[MIX_FRAMES], fs[MIX_FRAMES];
+    EXT_RAM_BSS_ATTR static float   fr[MIX_FRAMES], fs[MIX_FRAMES], fm[MIX_FRAMES * 2];
 
-    const size_t rbuf = RING_BYTES - xRingbufferGetCurFreeSize(s_ring);
-    const size_t sbuf = SDR_RING_BYTES - xRingbufferGetCurFreeSize(s_sdr_ring);
-    if (!s_playing && rbuf >= PREROLL_BYTES) s_playing = true;
-    if (!s_sdr_playing && sbuf >= SDR_PREROLL) s_sdr_playing = true;
+    const size_t sbuf = SDR_RING_ALL - xRingbufferGetCurFreeSize(s_sdr_ring);
+    if (!s_playing) {
+        /* A kick starts whatever is there, as without the SDR. */
+        if (s_kick) { s_kick = false; s_playing = rbuf > 0; }
+        if (!s_playing && rbuf >= s_preroll) s_playing = true;
+    } else {
+        s_kick = false;
+    }
+    if (!s_sdr_playing && sbuf >= s_sdr_preroll) s_sdr_playing = true;
     if (!s_playing && !s_sdr_playing) { vTaskDelay(pdMS_TO_TICKS(5)); return; }
 
     size_t got = s_playing ? ring_take(s_ring, (uint8_t *)radio, sizeof radio) : 0;
     if (s_playing && got < sizeof radio) { s_stats.underruns++; s_playing = false; }
     memset((uint8_t *)radio + got, 0, sizeof radio - got);
     got = s_sdr_playing ? ring_take(s_sdr_ring, (uint8_t *)sdr, sizeof sdr) : 0;
-    if (s_sdr_playing && got < sizeof sdr) s_sdr_playing = false;
+    if (s_sdr_playing && got < sizeof sdr) { s_sdr_stats.underruns++; s_sdr_playing = false; }
     memset((uint8_t *)sdr + got, 0, sizeof sdr - got);
 
     for (int i = 0; i < MIX_FRAMES; i++) {
@@ -189,13 +296,16 @@ static void mix_block(void)
     const float rs = b < 0 ? 1.0f + b : 1.0f, rr = b < 0 ? -b : 0.0f;
     const uint8_t vol = s_vol;
     const audio_out_tap_t tap = s_tap;
-    /* The tap's before the volume, which it applies itself (audio_out.h);
-     * then the jack's, mixed again at its volume. */
+    /* The tap's before the volume, which it applies itself (audio_out.h): at
+     * full scale, which a strong source starting under the gain the leveller
+     * still holds for a weak one passes -- that block comes down whole, not
+     * clipped (mix_tap.h). Then the jack's, mixed again at its volume. */
     if (tap) {
         for (int i = 0; i < MIX_FRAMES; i++) {
-            out[2 * i]     = sat16(lr * fr[i] + ls * fs[i]);
-            out[2 * i + 1] = sat16(rs * fs[i] + rr * fr[i]);
+            fm[2 * i]     = lr * fr[i] + ls * fs[i];
+            fm[2 * i + 1] = rs * fs[i] + rr * fr[i];
         }
+        mix_tap(out, fm, MIX_FRAMES * 2);
         tap(out, MIX_FRAMES, vol);
     }
     const float g = vol / 100.0f;
@@ -230,40 +340,21 @@ static void play_task(void *arg)
             s_sdr_playing = false;
             s_lv_radio.gain = s_lv_sdr.gain = 1.0f;
         }
-        if (s_sdr_on) { mix_block(); continue; }
+        /* The radio's flush and trim go either way: a receiver switched
+         * while an SDR plays beside it is flushed then and there. */
+        const size_t buffered = radio_chores();
+        if (s_sdr_on) { mix_block(buffered); continue; }
         /* Pre-roll. Starting playback the instant the first bytes arrive means
          * the very next scheduling hiccup is an audible gap; waiting for a
          * cushion first costs a few tens of milliseconds once, at the start of
          * the stream, and nothing thereafter. The previous version had this
          * check with an empty body and underran about once a second. */
-        if (s_flush) {
-            s_flush = false;
-            size_t n;
-            void  *p;
-            while ((p = xRingbufferReceiveUpTo(s_ring, &n, 0, RING_BYTES)))
-                vRingbufferReturnItem(s_ring, p);
-            s_playing = false;
-        }
-        size_t buffered = RING_BYTES - xRingbufferGetCurFreeSize(s_ring);
-        /* Far behind: the oldest dropped down to what is to be kept, the
-         * playing going on -- no pre-roll again, no hole. */
-        if (s_trim) {
-            const size_t keep = s_trim * 4;
-            s_trim = 0;
-            while (buffered > keep) {
-                size_t got = 0;
-                void  *q = xRingbufferReceiveUpTo(s_ring, &got, 0, buffered - keep);
-                if (!q) break;
-                vRingbufferReturnItem(s_ring, q);
-                buffered -= got;
-            }
-        }
         if (!s_playing) {
             /* A kick starts whatever is there; one that finds nothing is
              * spent, so it cannot cut the next stream's pre-roll short. */
             if (s_kick) { s_kick = false; s_playing = buffered > 0; }
             if (!s_playing) {
-                if (buffered < PREROLL_BYTES) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+                if (buffered < s_preroll) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
                 s_playing = true;
             }
         } else {
@@ -323,10 +414,10 @@ esp_err_t audio_out_init(void)
      * silent mux in the wrong position produces perfect logs and no sound. */
     gpio_set_level(BOARD_PIN_AUDIO_MUX_SEL, 1);
 
-    s_ring = xRingbufferCreateWithCaps(RING_BYTES, RINGBUF_TYPE_BYTEBUF,
+    s_ring = xRingbufferCreateWithCaps(RING_ALL, RINGBUF_TYPE_BYTEBUF,
                                        MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(s_ring, ESP_ERR_NO_MEM, TAG, "ring");
-    s_sdr_ring = xRingbufferCreateWithCaps(SDR_RING_BYTES, RINGBUF_TYPE_BYTEBUF,
+    s_sdr_ring = xRingbufferCreateWithCaps(SDR_RING_ALL, RINGBUF_TYPE_BYTEBUF,
                                            MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(s_sdr_ring, ESP_ERR_NO_MEM, TAG, "sdr ring");
 
@@ -370,7 +461,7 @@ esp_err_t audio_out_init(void)
     xTaskCreatePinnedToCore(play_task, "audio", 3072, NULL, 11, NULL, 1);
     ESP_LOGI(TAG, "I2S up: %d Hz stereo, bclk=%d ws=%d dout=%d, %d kB PSRAM ring",
              AUDIO_RATE_HZ, BOARD_PIN_I2S_BCLK, BOARD_PIN_I2S_WS,
-             BOARD_PIN_I2S_DOUT, RING_BYTES / 1024);
+             BOARD_PIN_I2S_DOUT, RING_ALL / 1024);
     return ESP_OK;
 }
 

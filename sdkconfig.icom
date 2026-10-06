@@ -17,5 +17,6 @@ CONFIG_LWIP_DNS_MAX_HOST_IP=4
 # bounce buffers from internal RAM, 1600 bytes at a time, and with the
 # Bluetooth headset's link beside WiFi there was none to spare -- an update
 # died at 27% on "esp-aes: Failed to allocate memory", downloading straight
-# into flash. Only the update downloads use TLS here.
+# into flash. The web SDR's TLS, for a receiver behind an https:// front,
+# and the update downloads run without it.
 CONFIG_MBEDTLS_HARDWARE_AES=n

@@ -186,6 +186,12 @@ Put them after led_show (ui.c:521-527) so build() and the VU can use them. Use E
 
 6. Phase 3: radio faces (aethersdr, icom, xiegu, multiflex, ubersdr, plus setup compiling)
 
+Started on the kiwi face (2026-10-04): its S-meter is s_rx_band already (ui.c, under KIWI_FACE), its peak LED
+red as the receivers' page has it -- vu_band_led_color() gives a band a colour of its own for its LED, in place of
+its zone's. tools/lvhost/kiwi_face.c draws it beside the lv_arc stack: the same pixels but the bar's end, a degree
+off in two of fifteen states (the zone arcs round their value down), and 10.8x fewer pixels redrawn on a walk, none
+stale. The other faces below are still to do.
+
 - s_rx_band now serves as the S-meter.
 - s_sdr_band replaces s_sdr_arc and its LED (ui.c:2797-2817 and 2923-2928). In ui_update (4399-4416):
   - when the SDR switches on or off: band_set(b, 0, 0, −1), then band_show;

@@ -22,7 +22,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:10px;ma
 a.btn,button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--panel);
       color:var(--text2);padding:9px 14px;text-decoration:none;display:inline-block;touch-action:manipulation}
 a.btn:hover,button:hover{border-color:var(--accent)}
-button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.on{background:var(--accent);border-color:var(--accent);color:var(--on,#fff);font-weight:600}
 button:disabled{opacity:.35;cursor:default}
 section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--label);margin:0 0 10px;font-weight:600}
@@ -75,7 +75,8 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
 </header>
 <main>
 <section id="radiosec" hidden>
-  <div class="row"><span class="sub" style="margin:0;min-width:86px">Radio</span><span id="radios" class="row"></span></div>
+  <div class="row"><span id="radiolbl" class="sub" style="margin:0;min-width:86px">Radio</span><span id="radios" class="row"></span></div>
+  <p id="kiwiinfo" class="sub" style="margin:8px 0 0" hidden></p>
 </section>
 <section class="vfo">
   <div class="row between">
@@ -110,6 +111,8 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   </div>
   <div id="rfgbox" class="slider" hidden><label for="rfg">RF gain</label>
     <input id="rfg" type="range" min="0" max="100" step="1"><output id="rfgv">--</output></div>
+  <div id="sqbox" class="slider" hidden><label for="sq">Squelch</label>
+    <input id="sq" type="range" min="0" max="100" step="1"><output id="sqv">--</output></div>
 </section>
 
 <section class="ctl" id="txset" hidden>
@@ -143,8 +146,8 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
 </section>
 
 <section class="ctl" id="sdrsec" hidden>
-  <h2>Web SDR</h2>
-  <div class="row"><span class="sub" style="margin:0;min-width:86px">Listen to</span><span id="sdrs" class="row"></span></div>
+  <h2 id="sdrh">Web SDR</h2>
+  <div class="row"><span class="sub" id="sdrlbl" style="margin:0;min-width:86px">Listen to</span><span id="sdrs" class="row"></span></div>
   <p class="sub" id="sdrstate"></p>
   <div id="balbox" class="slider" hidden><label for="bal">Balance</label>
     <input id="bal" type="range" min="-100" max="100" step="10"><output id="balv">--</output></div>
@@ -169,15 +172,20 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   <h2>For other programs</h2>
   <p>Read the frequency, mode and the rest, as JSON:<br><code id="apiget"></code></p>
   <p>Set the frequency (Hz, or MHz with a point) and anything else on this page:<br><code id="apiset"></code></p>
-  <p>Another radio, by its place in the list from 0 &mdash; the knob restarts into it:<br>
+  <p id="apiradios">Another radio, by its place in the list from 0 &mdash; the knob restarts into it:<br>
      <code>POST /api/radios/switch</code> with <code>to=1</code></p>
-  <p>Also <code>mode</code>, <code>filter</code> (1&ndash;3), <code>agc</code>, <code>gain</code>, <code>rfgain</code> and
-     <code>power</code> (0&ndash;100), <code>tuner</code> (on/off), <code>rx</code> (main/sub), <code>ant</code> and
-     <code>txant</code> (by place in the radio's list, from 1),
+  <p id="apirecv" hidden>Another receiver, by its place in the list from 0, at once &mdash; even while the one in
+     use is down: <code>receiver=1</code></p>
+  <p>Also <code>mode</code>, <code>filter</code> (1&ndash;3), <code>agc</code>, <code>gain</code><span id="apinr" hidden>
+     (the noise filter: 0 off, 1 WDSP, 2 LMS, 3 spectral)</span>, <code>rfgain</code> and
+     <code>power</code> (0&ndash;100), <code>squelch</code> (0&ndash;100, 0 open), <code>tuner</code> (on/off),
+     <code>rx</code> (main/sub), <code>ant</code> and <code>txant</code> (by place in the radio's list, from 1),
      <code>rit</code> (Hz)<span id="apisdr" hidden>, and <code>sdr</code> (<code>local</code>, or a web SDR by its
      place in the list, from 0) and <code>balance</code> (&minus;100 the radio alone, 0 the radio left and the SDR
-     right, 100 the SDR alone)</span>. Both need this page's login &mdash; <code>http://user:password@&hellip;</code> &mdash;
-     and nothing here transmits.</p>
+     right, 100 the SDR alone)</span><span id="apiright" hidden>, and <code>sdr</code>, the right ear
+     (<code>off</code>, or a receiver by its place in the list, from 0 &mdash; not the one in use) and
+     <code>balance</code> (&minus;100 the left ear alone, 0 left and right, 100 the right alone)</span>. Both need
+     this page's login &mdash; <code>http://user:password@&hellip;</code> &mdash; and nothing here transmits.</p>
 </section>
 </main>
 </div>
@@ -195,23 +203,35 @@ const PAL={
  aethersdr:{bg:'#0f0f1a',panel:'#1a2a3a',panel2:'#121e2b',line:'#26394d',text2:'#8ea8c0',label:'#506070',dim:'#3a4a5a',
        accent:'#00b4d8','accent-hi':'#00c8f0',danger:'#ff4d4d',tx:'#e01010',meter:'#00b4d8'},
  ubersdr:{bg:'#090c12',panel:'#141a25',panel2:'#0f141d',line:'#212a39',text2:'#8d99ad',label:'#5c6779',dim:'#2f3b4e',
-       accent:'#08a2fb','accent-hi':'#4db4ff',warn:'#f2b544',danger:'#f2646a',tx:'#f2646a',meter:'#45d69a',ok:'#45d69a'}};
-const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR',ubersdr:'UberSDR'};
-const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',cwu:'CWU',cwl:'CWL',am:'AM',sam:'SAM',fm:'FM',nfm:'NFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
+       accent:'#08a2fb','accent-hi':'#4db4ff',warn:'#f2b544',danger:'#f2646a',tx:'#f2646a',meter:'#45d69a',ok:'#45d69a'},
+ kiwi:{bg:'#000000',panel:'#262626',panel2:'#1a1a1a',line:'#373737',text2:'#d3d3d3',label:'#909090',dim:'#575757',
+       accent:'#ffff50','accent-hi':'#ffff80',on:'#000000',danger:'#ff3030',tx:'#ff3030',meter:'#00ff00',ok:'#00ff00'}};
+const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR',ubersdr:'UberSDR',kiwi:'Kiwi888'};
+const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',cwu:'CWU',cwl:'CWL',am:'AM',sam:'SAM',sal:'SAL',sau:'SAU',
+  fm:'FM',nfm:'NFM',nbfm:'NBFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
 const MODES={icom:['usb','lsb','cw','cwr','am','fm','rtty','digu','digl'],
   xiegu:['usb','lsb','cw','cwr','am','fm','digu','digl'],
   multiflex:['usb','lsb','cw','am','sam','fm','nfm','digu','digl','rtty'],
   aethersdr:['usb','lsb','cw','cwr','am','sam','fm','nfm','digu','digl','rtty'],
-  ubersdr:['usb','lsb','cwu','cwl','am','sam','fm','nfm']};
+  ubersdr:['usb','lsb','cwu','cwl','am','sam','fm','nfm'],
+  kiwi:['usb','lsb','cw','am','sam','sal','sau','nbfm']};
 const AGCS={icom:['fast','mid','slow'],xiegu:['fast','mid','slow'],multiflex:['fast','med','slow','off'],aethersdr:['fast','med','slow','off'],
-  ubersdr:[]};
-const GAINCAP={icom:'P.AMP',xiegu:'PRE',multiflex:'RF.G',aethersdr:'RF.G',ubersdr:'Noise filter'};
-/* An UberSDR only receives: its SNR where the AGC is, its noise filter as the
- * gain, its passbands by mode, and no RIT or microphone (the knob's ui.c). */
-const RXONLY=r=>r==='ubersdr';
-const UWID=m=>/^cw/.test(m)?[100,200,300,400,500,800,1000]:/^s?am$/.test(m)?[4000,6000,8000,10000,12000]
-  :/fm$/.test(m)?[10000,12000,16000]:[1800,2100,2400,2700,3000,3600,4200,5000];
+  ubersdr:[],kiwi:['fast','med','slow']};
+const GAINCAP={icom:'P.AMP',xiegu:'PRE',multiflex:'RF.G',aethersdr:'RF.G',ubersdr:'Noise filter',kiwi:'Noise filter'};
+/* An UberSDR and a KiwiSDR only receive: no RIT or microphone, and their
+ * passbands by mode (the knob's ui.c) -- an UberSDR's SNR where the AGC is. */
+const RXONLY=r=>r==='ubersdr'||r==='kiwi';
+const UWID=m=>RADIO==='kiwi'
+  ? (/^cw/.test(m)?[60,100,200,300,400,500,800,1000]:/^s?am$/.test(m)?[5000,6000,8000,9800,12000]
+    :/^sa[lu]$/.test(m)?[2500,3000,4000,4900,6000]:/fm$/.test(m)?[6000,8000,10000,12000]:[1800,2100,2400,2700,3000,3600])
+  : (/^cw/.test(m)?[100,200,300,400,500,800,1000]:/^s?am$/.test(m)?[4000,6000,8000,10000,12000]
+    :/fm$/.test(m)?[10000,12000,16000]:[1800,2100,2400,2700,3000,3600,4200,5000]);
 const centred=m=>/^cw|^s?am$|fm$/.test(m);
+/* A passband of width w, as the knob's own filter editor sets it: a Kiwi's
+ * sideband 300 Hz off the carrier, AM's single sidebands from it out. */
+const edges=(m,w)=>centred(m)?{lo:-Math.round(w/2),hi:Math.round(w/2)}
+  :RADIO==='kiwi'?(m==='sal'?{lo:-w,hi:0}:m==='sau'?{lo:0,hi:w}:lsbSide(m)?{lo:-(300+w),hi:-300}:{lo:300,hi:300+w})
+  :lsbSide(m)?{lo:-w,hi:-50}:{lo:50,hi:w};
 const BANDS=[['160m',1840000],['80m',3700000],['60m',5355000],['40m',7100000],['30m',10130000],['20m',14100000],
   ['17m',18120000],['15m',21200000],['12m',24940000],['10m',28400000],['6m',50200000],['2m',144300000],['70cm',432200000]];
 const WIDTHS=[1800,2100,2400,2700,3000,3600];
@@ -232,6 +252,10 @@ function slider(id,out,fmtv,send){const s=$(id);let t=0;
 const busy=id=>Date.now()-(touched[id]||0)<1500;
 
 function sunits(dbm){if(dbm<=-126)return 'S0';if(dbm<=-73)return 'S'+Math.max(0,Math.round((dbm+127)/6));return 'S9+'+Math.round(dbm+73)}
+/* A web SDR's state -- and, a dial it cannot reach, what it covers. */
+const mhzSpan=r=>{const f=h=>+(h/1e6).toFixed(3);return f(r[0])+'-'+f(r[1])+' MHz'};
+const sdrSays=E=>E.state==='out of range'&&E.range&&E.range[1]>E.range[0]
+  ?'out of range: it covers '+mhzSpan(E.range):E.state;
 function gainLabel(g,max){if(R&&R.gain_names&&R.gain_names[g])return R.gain_names[g];
   if(RADIO==='multiflex'||RADIO==='aethersdr')return (g>0?'+':'')+g+' dB';
   if(g<=0)return 'OFF';if(max<=1)return 'ON';return (RADIO==='xiegu'?'PRE':'P.AMP')+g}
@@ -239,7 +263,10 @@ function gainLabel(g,max){if(R&&R.gain_names&&R.gain_names[g])return R.gain_name
 function render(){
   if(!R)return;
   const ready=R.ready;document.body.classList.toggle('off',!ready);document.body.classList.toggle('tx',!!R.tx);
-  const l=$('link');l.textContent=ready?'connected':(R.link||'').toLowerCase();l.className='pill '+(ready?'up':'down');
+  /* With no link, why, as the knob's face says it -- and, with more than one
+     UberSDR in the list, which one: the one in use, or the next it tries. */
+  const rx=R.uber&&R.uber.rx_name?R.uber.rx_name+': ':'';
+  const l=$('link');l.textContent=ready?'connected':rx+(R.why||R.link||'').toLowerCase();l.className='pill '+(ready?'up':'down');
   $('model').textContent=R.model||NAME[RADIO]||'Radio';
   $('freq').innerHTML=(ready?fmt(R.freq):'--.---.---')+'<small>MHz</small>';
   $('modetag').textContent=ML[R.mode]||(R.mode||'--').toUpperCase();
@@ -249,8 +276,11 @@ function render(){
   $('txbadge').hidden=!R.tx;
   const pct=Math.max(0,Math.min(1,(R.smeter+127)/114))*100;
   $('mbar').style.width=(R.tx?0:pct)+'%';
-  $('sval').textContent=ready?(sunits(R.smeter)+'  '+Math.round(R.smeter)+(RXONLY(RADIO)?' dBFS':' dBm')
-    +(R.have_snr?'  \u00b7  SNR '+Math.round(R.snr)+' dB':'')):'--';
+  /* A Kiwi's ADC overloaded, this last second: OV, in red, as its own page has it. */
+  const ov=ready&&R.kiwi&&R.kiwi.ovl;
+  $('sval').textContent=ready?(sunits(R.smeter)+'  '+Math.round(R.smeter)+(RADIO==='ubersdr'?' dBFS':' dBm')
+    +(ov?'  OV':'')+(R.have_snr?'  \u00b7  SNR '+Math.round(R.snr)+' dB':'')):'--';
+  $('sval').style.color=ov?'var(--danger)':'';
   $('memtag').hidden=!(R.memories&&R.mem_state>0);
   /* A FlexRadio's memories are one list, with no groups: the memory's number alone. */
   $('memtag').textContent='MEM '+(R.mem_all?'':String(R.mem_group).padStart(2,'0')+'/')
@@ -263,7 +293,7 @@ function render(){
   if(R.filter){if($('filters').dataset.kind!=='pre'){$('filters').dataset.kind='pre';btns($('filters'),[[1,'FIL1'],[2,'FIL2'],[3,'FIL3']],n=>set({filter:n}))}mark($('filters'),R.filter)}
   else if(RXONLY(RADIO)){const ws=UWID(R.mode),kind='u'+ws.join(',');
     if($('filters').dataset.kind!==kind){$('filters').dataset.kind=kind;btns($('filters'),ws.map(w=>[w,w<1000?w+'':(w/1000).toFixed(1)+'k']),w=>
-      set(centred(R.mode)?{lo:-Math.round(w/2),hi:Math.round(w/2)}:lsbSide(R.mode)?{lo:-w,hi:-50}:{lo:50,hi:w}))}
+      set(edges(R.mode,w)))}
     const w=R.hi-R.lo;mark($('filters'),ws.reduce((a,b)=>Math.abs(b-w)<Math.abs(a-w)?b:a))}
   else{if($('filters').dataset.kind!=='w'){$('filters').dataset.kind='w';btns($('filters'),WIDTHS.map(w=>[w,(w/1000).toFixed(1)+'k']),w=>{
       const l=lsbSide(R.mode);set(l?{lo:-w,hi:-100}:{lo:100,hi:w})})}
@@ -273,7 +303,11 @@ function render(){
   if(R.have_gain){const items=[];for(let g=R.gain_min;g<=R.gain_max;g+=Math.max(1,R.gain_step))items.push([g,gainLabel(g,R.gain_max)]);
     const key=items.map(i=>i[0]).join(',');if($('gains').dataset.k!==key){$('gains').dataset.k=key;btns($('gains'),items,g=>set({gain:g}))}
     mark($('gains'),R.gain)}
-  $('rfgbox').hidden=!R.levels;$('pwrbox').hidden=!R.levels;$('tunerbox').hidden=!R.tuner;$('txset').hidden=!(R.levels||R.tuner);
+  $('rfgbox').hidden=!R.levels;$('pwrbox').hidden=!R.levels;
+  /* A squelch where the receiver has one: a Kiwi's, the IC-R8600's. */
+  $('sqbox').hidden=!R.has_squelch;
+  if(R.has_squelch&&!busy('sq')){$('sq').value=R.squelch;$('sqv').textContent=sqText(R.squelch)}
+  $('tunerbox').hidden=!R.tuner;$('txset').hidden=!(R.levels||R.tuner);
   if(R.levels){if(!busy('rfg')){$('rfg').value=R.rfgain;$('rfgv').textContent=R.rfgain+'%'}
     if(!busy('pwr')){$('pwr').value=R.power;$('pwrv').textContent=pwrText(R.power)}}
   $('tunon').classList.toggle('on',R.tuner_on);$('tunoff').classList.toggle('on',!R.tuner_on);
@@ -293,25 +327,42 @@ function render(){
       btns($('txants'),items,v=>set({txant:v}))}
     mark($('txants'),R.tx_ant+1)}
   $('ritv').textContent=(R.rit>0?'+':'')+R.rit+' Hz';
-  /* The radios the knob knows: another is a restart away. */
-  const RS=R.radios;$('radiosec').hidden=!(RS&&RS.names.length>1);
-  if(RS&&RS.names.length>1){
+  /* The radios the knob knows: another is a restart away -- or a receiver,
+     taken over at once; a receiver's button, even the only one's, chooses it
+     again, which is how one its owner's limits hold back is asked for once
+     more. */
+  const many=RS=>RS&&RS.names.length>(RS.live?0:1);
+  const RS=R.radios;$('radiosec').hidden=!many(RS);
+  $('radiolbl').textContent=RS&&RS.live?'Receiver':'Radio';
+  const K=R.kiwi;$('kiwiinfo').hidden=!K;
+  if(K) $('kiwiinfo').textContent=[K.model,K.antenna,K.loc,K.users_max>0?K.users+' of '+K.users_max+' in use':'',
+    K.rate>0?(K.rate/1000).toFixed(K.rate%1000?3:0)+' kHz audio':'',ready?'':K.state].filter(Boolean).join(' \u00b7 ');
+  if(many(RS)){
     /* How each is reached: the same FlexRadio can be there directly and by SmartLink. */
-    const lab=RS.names.map((n,i)=>RS.via&&RS.via[i]&&RS.via[i]!=='LAN'?n+' \u00b7 '+RS.via[i]:n);
+    const lab=RS.names.map((n,i)=>!RS.live&&RS.via&&RS.via[i]&&RS.via[i]!=='LAN'?n+' \u00b7 '+RS.via[i]:n);
     const key=lab.join('|');
     if($('radios').dataset.k!==key){$('radios').dataset.k=key;btns($('radios'),lab.map((n,i)=>[i,n]),switchTo)}
-    mark($('radios'),RS.sel)}
+    mark($('radios'),RS.sel);
+    /* A Kiwi's right ear has its own: never the one in use as well. */
+    const RE=RS.live&&R.sdr&&R.sdr.right?R.sdr.right.sel:-1;
+    for(const b of $('radios').children)b.disabled=RE>=0&&+b.dataset.v===RE&&RE!==RS.sel}
   renderUber(R.uber);
-  /* A web SDR beside the radio: the Icom, Xiegu and FlexRadio firmwares. */
-  const S=R.sdr;$('sdrsec').hidden=!S;$('apisdr').hidden=!S;
-  if(S){const items=[['local','LOCAL'],...S.list.map((x,i)=>[i,x.name||x.host])];
+  /* A web SDR beside the radio: the Icom, Xiegu and FlexRadio firmwares --
+     and the kiwi firmware's right ear, another of its receivers, never the
+     one in use (its button disabled). */
+  const S=R.sdr,KR=RADIO==='kiwi';$('sdrsec').hidden=!S;$('apisdr').hidden=!S||KR;$('apiright').hidden=!S||!KR;
+  if(S){const E=KR?S.right||{sel:-1}:S,none=KR?'off':'local';
+    $('sdrh').textContent=KR?'Right ear':'Web SDR';$('sdrlbl').textContent=KR?'Receiver':'Listen to';
+    const items=[[none,none.toUpperCase()],...S.list.map((x,i)=>[i,x.label||x.name||x.host])];
     const key=items.map(i=>i[1]).join('|');if($('sdrs').dataset.k!==key){$('sdrs').dataset.k=key;btns($('sdrs'),items,v=>set({sdr:v}))}
-    mark($('sdrs'),S.sel<0?'local':S.sel);$('sdrnone').hidden=S.list.length>0;
-    const x=S.list[S.sel];
-    const who=RXONLY(RADIO)?['The UberSDR','the UberSDR']:['The radio','the radio'];
-    $('sdrstate').textContent=S.sel<0||!x?who[0]+' alone, in both ears.':(x.name||x.host)+': '+S.state+
-      (S.streaming?' \u00b7 '+sunits(S.smeter)+'  '+Math.round(S.smeter)+' dBm \u00b7 '+who[1]+' left, the SDR right':'');
-    $('balbox').hidden=S.sel<0;
+    mark($('sdrs'),E.sel<0?none:E.sel);$('sdrnone').hidden=S.list.length>0;
+    if(KR)for(const b of $('sdrs').children)b.disabled=b.dataset.v!==none&&+b.dataset.v===S.sel;
+    const x=S.list[E.sel];
+    const who=KR?['The one in use','the one in use']:RXONLY(RADIO)?['The UberSDR','the UberSDR']:['The radio','the radio'];
+    $('sdrstate').textContent=E.sel<0||!x?who[0]+' alone, in both ears.':(x.label||x.name||x.host)+': '+sdrSays(E)+
+      (E.streaming?' \u00b7 '+sunits(E.smeter)+'  '+Math.round(E.smeter)+' dBm \u00b7 '+who[1]+' left, '
+       +(KR?'this one':'the SDR')+' right':'');
+    $('balbox').hidden=E.sel<0;
     if(!busy('bal')){$('bal').value=S.balance;$('balv').textContent=balText(S.balance)}}
 }
 /* A guest's time left, as the knob's slab says it: whole minutes, hours from
@@ -349,11 +400,17 @@ function renderUber(U){
       i.alt=f;i.style.cssText='width:150px;border-radius:8px;border:1px solid var(--line)';a.appendChild(i);$('sstv').appendChild(a)}}
 }
 /* As the knob's face has it. */
-const balText=b=>b<=-100?(RXONLY(RADIO)?'UberSDR':'radio'):b>=100?(RXONLY(RADIO)?'Kiwi':'SDR'):b===0?'L | R':b<0?'\u25c0 '+(-b):b+' \u25b6';
+const balText=b=>b<=-100?(RADIO==='kiwi'?'left':RXONLY(RADIO)?'UberSDR':'radio')
+  :b>=100?(RADIO==='kiwi'?'right':RXONLY(RADIO)?'Kiwi':'SDR'):b===0?'L | R':b<0?'\u25c0 '+(-b):b+' \u25b6';
 const pwrText=p=>R&&R.max_w?Math.round(p*R.max_w/100)+' W':p+'%';
-/* Another radio: the knob restarts into it, as a swipe up on it does. */
+const sqText=v=>v?v+'%':'open';
+/* Another radio: the knob restarts into it, as a swipe up on it does. A
+ * receiver is taken over at once -- and the one in use chosen again, which is
+ * how one held back by its owner's limits is asked for again. */
 async function switchTo(i){
-  const RS=R&&R.radios;if(!RS||i===RS.sel)return;
+  const RS=R&&R.radios;if(!RS)return;
+  if(RS.live)return set({receiver:i});
+  if(i===RS.sel)return;
   if(!confirm('Switch to '+RS.names[i]+'? The knob restarts into it.'))return;
   try{const r=await fetch('/api/radios/switch',{method:'POST',body:'to='+i});
     toast(r.ok?'Switching to '+RS.names[i]+': the knob restarts':await r.text())}
@@ -373,9 +430,11 @@ async function init(){
   btns($('agcs'),AGCS[RADIO].map(a=>[a,a.toUpperCase()]),a=>set({agc:a}));
   $('gaincap').textContent=GAINCAP[RADIO];
   if(RXONLY(RADIO)){
-    /* Nothing to transmit: no RIT, no microphone, no AGC to choose. */
-    $('ritsec').hidden=true;$('microw').hidden=true;$('agcbox').hidden=true;
+    /* Nothing to transmit: no RIT, no microphone -- and an UberSDR has no
+     * AGC to choose. */
+    $('ritsec').hidden=true;$('microw').hidden=true;$('agcbox').hidden=RADIO==='ubersdr';
   }
+  $('apiradios').hidden=RADIO==='kiwi';$('apirecv').hidden=RADIO!=='kiwi';$('apinr').hidden=RADIO!=='kiwi';
   btns($('steps'),STEPS,s=>{step=s;mark($('steps'),step)});mark($('steps'),step);
   for(const b of document.querySelectorAll('[data-step]'))b.onclick=()=>R&&set({freq:Math.round(R.freq/step)*step+(+b.dataset.step)*step});
   for(const b of document.querySelectorAll('[data-rit]'))b.onclick=()=>R&&set({rit:+b.dataset.rit?Math.max(-9999,Math.min(9999,R.rit+(+b.dataset.rit))):0});
@@ -383,6 +442,7 @@ async function init(){
   $('tunon').onclick=()=>set({tuner:'on'});$('tunoff').onclick=()=>set({tuner:'off'});
   slider('rfg','rfgv',v=>v+'%',v=>set({rfgain:v}));
   slider('pwr','pwrv',pwrText,v=>set({power:v}));
+  slider('sq','sqv',sqText,v=>set({squelch:v}));
   slider('bal','balv',balText,v=>set({balance:v}));
   const knob=(k,v)=>fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:k+'='+v}).catch(()=>{});
   /* The knob's own levels are saved with its settings: sent once, on letting go. */

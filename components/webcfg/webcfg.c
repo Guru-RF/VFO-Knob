@@ -23,16 +23,23 @@
 #include "audio_in.h"
 #include "audio_out.h"
 #include "board.h"
+#include "bt_level.h"
 #include "bt_link.h"
 #include "net_prov.h"
 #include "ota.h"
 #include "ptt_fsm.h"
 #include "radio.h"
-#if VFO_HAS_SDR
+#if VFO_HAS_SDR || VFO_RADIO_KIWI
+#include "kiwi_mark.h"
 #include "sdr_rx.h"
 #endif
 #if VFO_RADIO_UBERSDR
 #include "uber.h"
+#endif
+/* The kiwi firmware's receivers are the web SDRs' list, one in use. */
+#if VFO_RADIO_KIWI
+#include "kiwi.h"
+#include "kiwi_sess.h"
 #endif
 #include "ui.h"
 #include "usb_net.h"
@@ -141,6 +148,11 @@ static void client_addr(httpd_req_t *r, char *out, size_t len, bool *on_usb)
     if (n && esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr)
         *on_usb = (a.s_addr & ip.netmask.addr) == (ip.ip.addr & ip.netmask.addr);
 }
+
+/* A receiver's name on the pages (kiwi_rx_label, sdr_rx_label): what the
+ * dial calls it, with room for more than the dial's 15 bytes -- a long name,
+ * antenna or address shows whole. */
+#define PAGE_LABEL 48
 
 /* For text from elsewhere -- a reflector's talkgroup names -- going into JSON:
  * quotes and backslashes escaped, control characters dropped. */
@@ -265,11 +277,14 @@ static esp_err_t config_get(httpd_req_t *r)
     return send_json(r, buf);
 }
 
-/* Reads one form field, URL-decoded, or leaves `out` untouched if absent. */
-static bool field(const char *body, const char *key, char *out, size_t len)
+/* Reads one form field, URL-decoded: ESP_OK; else, `out` untouched,
+ * ESP_ERR_NOT_FOUND when it is absent and ESP_ERR_HTTPD_RESULT_TRUNC when it
+ * is too long to read whole. */
+static esp_err_t field_e(const char *body, const char *key, char *out, size_t len)
 {
     char raw[128];
-    if (httpd_query_key_value(body, key, raw, sizeof raw) != ESP_OK) return false;
+    const esp_err_t e = httpd_query_key_value(body, key, raw, sizeof raw);
+    if (e != ESP_OK) return e;
     /* httpd_query_key_value does not decode; do the two cases that matter for
      * an SSID or a passphrase. */
     size_t o = 0;
@@ -282,7 +297,13 @@ static bool field(const char *body, const char *key, char *out, size_t len)
         } else out[o++] = raw[i];
     }
     out[o] = 0;
-    return true;
+    return ESP_OK;
+}
+
+/* Reads one form field, URL-decoded, or leaves `out` untouched if absent. */
+static bool field(const char *body, const char *key, char *out, size_t len)
+{
+    return field_e(body, key, out, len) == ESP_OK;
 }
 
 static bool field_num(const char *body, const char *key, long *out)
@@ -839,7 +860,7 @@ static esp_err_t wifi_post_h(httpd_req_t *r)
     return send_json(r, "{\"ok\":true}");
 }
 
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_KIWI
 /* ------------------------------------------------------------- the radios
  *
  * The radios the knob knows, one in use (see net_prov.h):
@@ -1054,44 +1075,155 @@ static esp_err_t radios_switch_h(httpd_req_t *r)
     if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 1200 * 1000);
     return ESP_OK;
 }
+#elif VFO_RADIO_KIWI
+/* The kiwi firmware's receivers are the web SDRs' list below, and another is
+ * taken over live, with no restart: the radio page switches with receiver=. */
+#define RADIOS_URIS 0
+
+/* ,"radios":{"sel":0,"live":true,"names":[...],"via":[...]} -- for the
+ * radio's JSON: the receivers by their names on the dial, at more length. */
+static size_t radios_names_json(char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static char nm[PAGE_LABEL], e[2 * PAGE_LABEL];    /* this task's stack is tight */
+    const int n = sdr_count();
+    int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"live\":true,\"names\":[", kiwi_rx_active());
+    for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
+        nm[0] = 0;
+        kiwi_rx_label(i, nm, sizeof nm);
+        json_esc(nm, e, sizeof e);
+        o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", e);
+    }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "],\"via\":[");
+    for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++)
+        o += snprintf(j + o, cap - o, "%s\"Kiwi\"", i ? "," : "");
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
 #else
 #define RADIOS_URIS 0
 #endif
 
-#if VFO_HAS_SDR
+#if VFO_HAS_SDR || VFO_RADIO_KIWI
 /* ------------------------------------------------------------- web SDRs
  *
- *   GET  /api/sdr        the receivers (their passwords only as set or not),
- *                        the one listened to and how that goes, the balance
+ *   GET  /api/sdr        the receivers (their passwords only as set or not,
+ *                        each with its name on the dial, at more length than
+ *                        the dial has room for: label), the one listened to
+ *                        and how that goes, the balance, and who their
+ *                        owners see (ident)
  *   POST /api/sdr        n=, then name0 host0 pass0 ipl0 was0, name1 ... : the
- *                        list, saved. A password left out is the one receiver
- *                        `was` had, at the same address; empty is none.
- *                        sel= (local, or 0-3) and balance= (-100..100) too.
+ *                        list, saved. host as the page takes it: host:port
+ *                        (8073 for a host alone), or an http:// or https://
+ *                        link whole -- https:// is TLS, 443 unless it says. A
+ *                        password left out is the one receiver `was` had, at
+ *                        the same address -- or at the one an https://
+ *                        redirect moved it from, the move kept; empty is
+ *                        none.
+ *                        sel= (local, or 0-3) and balance= (-100..100) too:
+ *                        sel= is the operator choosing, even the receiver
+ *                        already chosen (sdr_rx_choose). ident= on its own or
+ *                        with the list: who the owners see, "" for VFO-Knob
+ *                        -- told to a receiver logged in at once, no list
+ *                        saved and no session ended for it.
  *   POST /api/sdr/test   host pass ipl was: one receiver tried -- reached,
- *                        what it calls itself, its users, the password
+ *                        what it calls itself, its users, the password, and
+ *                        a day-limit mark; never a login to a marked one. An
+ *                        http:// one's redirect to https:// on its own host is
+ *                        followed (tls, port: where it was spoken -- said
+ *                        with an error after it too) and kept for the
+ *                        receiver at that address in the list
+ *
+ * Each receiver says whether it is spoken to over TLS (tls: an https://
+ * address), and its day-limit mark, where it has one. The one listened
+ * to says where it tunes, once it has (range, Hz; 0 0 not yet): its state
+ * "out of range" is a dial it cannot reach, and the pages say what it
+ * covers. On the kiwi firmware these are its receivers: sel= is the one in
+ * use, taken over at once, and each says what holds it back until chosen
+ * again (hold); the right ear is "right" (its sel, state, streaming, smeter,
+ * range) and sdr= (off, or 0-3) chooses it, balance= mixes the two. One
+ * receiver is never in both ears: a choice of the other ear's is refused,
+ * 409; a place not in the list, 400, and nothing saved.
  */
 #define SDR_URIS 3
+
+#if VFO_RADIO_KIWI
+/* A receiver's place, as receiver=, sdr= and sel= give it, not among the
+ * `count` there are: answered 400, and true -- nothing is to be done. */
+static bool no_such_rx(httpd_req_t *r, long i, int count)
+{
+    if (i >= 0 && i < count) return false;
+    char msg[64];
+    if (count > 0) snprintf(msg, sizeof msg, "no receiver %ld: they go from 0 to %d", i, count - 1);
+    else           snprintf(msg, sizeof msg, "no receivers yet: the configuration page adds them");
+    httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, msg);
+    return true;
+}
+#endif
 
 /* ,"sdr":{...} -- for the radio's JSON, and without the key for /api/sdr. */
 static size_t sdr_json(char *j, size_t cap)
 {
-    sdr_status_t s;
-    sdr_rx_status(&s);
     char st[48];
+    /* Static: this task serves one request at a time, on a tight stack. */
+    EXT_RAM_BSS_ATTR static char who[2 * KIWI_IDENT_MAX], id[KIWI_IDENT_MAX], lb[PAGE_LABEL], l[2 * PAGE_LABEL];
+    sdr_ident(id, sizeof id);
+    json_esc(id, who, sizeof who);
+#if VFO_RADIO_KIWI
+    EXT_RAM_BSS_ATTR static kiwi_info_t ki;      /* this task's stack is tight */
+    EXT_RAM_BSS_ATTR static sdr_status_t rs;
+    kiwi_info(&ki);
+    sdr_rx_status(&rs);
+    json_esc(ki.state, st, sizeof st);
+    char rst[48];
+    json_esc(rs.state, rst, sizeof rst);
+    int o = snprintf(j, cap, ",\"sdr\":{\"sel\":%d,\"state\":\"%s\",\"streaming\":%s,\"ident\":\"%s\","
+                     "\"right\":{\"sel\":%d,\"state\":\"%s\",\"streaming\":%s,\"smeter\":%.1f,\"range\":[%lld,%lld]},"
+                     "\"balance\":%d,\"list\":[",
+                     kiwi_rx_active(), st, radio_is_ready() ? "true" : "false", who,
+                     sdr_rx_selected(), rst, rs.streaming ? "true" : "false", (double)rs.smeter_dbm,
+                     (long long)rs.lo_hz, (long long)rs.hi_hz, sdr_rx_balance());
+#else
+    EXT_RAM_BSS_ATTR static sdr_status_t s;
+    sdr_rx_status(&s);
     json_esc(s.state, st, sizeof st);
     int o = snprintf(j, cap, ",\"sdr\":{\"sel\":%d,\"state\":\"%s\",\"streaming\":%s,"
-                     "\"smeter\":%.1f,\"balance\":%d,\"list\":[",
+                     "\"smeter\":%.1f,\"range\":[%lld,%lld],\"balance\":%d,\"ident\":\"%s\",\"list\":[",
                      sdr_rx_selected(), st, s.streaming ? "true" : "false",
-                     (double)s.smeter_dbm, sdr_rx_balance());
+                     (double)s.smeter_dbm, (long long)s.lo_hz, (long long)s.hi_hz, sdr_rx_balance(), who);
+#endif
     for (int i = 0; i < sdr_count() && o > 0 && (size_t)o < cap; i++) {
         sdr_cfg_t c;
         if (!sdr_get(i, &c)) break;
         char n[52], h[132];
         json_esc(c.name, n, sizeof n);
         json_esc(c.host, h, sizeof h);
-        o += snprintf(j + o, cap - o, "%s{\"name\":\"%s\",\"host\":\"%s\",\"port\":%u,"
-                      "\"pass\":%s,\"ipl\":%s}", i ? "," : "", n, h, (unsigned)c.port,
-                      c.pass[0] ? "true" : "false", c.ipl[0] ? "true" : "false");
+        /* Its name on the dial, whole here: the page's, else what it says it
+         * is, else its address. */
+        lb[0] = 0;
+#if VFO_RADIO_KIWI
+        kiwi_rx_label(i, lb, sizeof lb);
+#else
+        sdr_rx_label(i, lb, sizeof lb);
+#endif
+        json_esc(lb, l, sizeof l);
+        o += snprintf(j + o, cap - o, "%s{\"name\":\"%s\",\"label\":\"%s\",\"host\":\"%s\",\"port\":%u,"
+                      "\"tls\":%s,\"pass\":%s,\"ipl\":%s", i ? "," : "", n, l, h, (unsigned)c.port,
+                      c.tls ? "true" : "false", c.pass[0] ? "true" : "false", c.ipl[0] ? "true" : "false");
+        /* Its day-limit mark: the knob's refused logins, the tries left
+         * when it is chosen again, whether it is held for good, and whether
+         * it is only a login left unanswered. */
+        kiwi_mark_t m;
+        if (o > 0 && (size_t)o < cap && kiwi_mark_get(sdr_hp(&c), &m))
+            o += snprintf(j + o, cap - o, ",\"mark\":{\"strikes\":%u,\"tries\":%d,\"held\":%s,\"unsure\":%s}",
+                          (unsigned)m.strikes, m.strikes < KIWI_STRIKES_MAX ? KIWI_STRIKES_MAX - m.strikes : 0,
+                          m.strikes >= KIWI_STRIKES_MAX ? "true" : "false",
+                          m.flags & KIWI_MARK_UNSURE ? "true" : "false");
+#if VFO_RADIO_KIWI
+        char hw[16];
+        if (o > 0 && (size_t)o < cap && kiwi_rx_hold(i, hw, sizeof hw))
+            o += snprintf(j + o, cap - o, ",\"hold\":\"%s\"", hw);
+#endif
+        if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "}");
     }
     if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
     return o > 0 && (size_t)o < cap ? (size_t)o : 0;
@@ -1100,7 +1232,7 @@ static size_t sdr_json(char *j, size_t cap)
 static esp_err_t sdr_get_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
-    EXT_RAM_BSS_ATTR static char j[1400];     /* internal RAM is the scarce one */
+    EXT_RAM_BSS_ATTR static char j[2048];     /* internal RAM is the scarce one */
     const size_t n = sdr_json(j, sizeof j);
     if (n < 8) return httpd_resp_send_500(r);
     return send_json(r, j + 7);                 /* past ,"sdr": */
@@ -1124,35 +1256,20 @@ static bool recv_form(httpd_req_t *r, char *buf, size_t cap)
     return true;
 }
 
-/* "http://host:port/...", "host:port" or "host": the host, and the port when
- * there is one. */
-static bool split_host(const char *in, char *host, size_t cap, uint16_t *port)
-{
-    const char *s = strstr(in, "://");
-    s = s ? s + 3 : in;
-    while (*s == ' ') s++;
-    const size_t n = strcspn(s, ":/ ");
-    if (!n || n >= cap) return false;
-    memcpy(host, s, n);
-    host[n] = 0;
-    if (s[n] == ':') {
-        const long p = strtol(s + n + 1, NULL, 10);
-        if (p > 0 && p < 65536) *port = (uint16_t)p;
-    }
-    return true;
-}
-
 /* A receiver's fields from a form, their names ending in `sfx` ("0".."3", or
- * "" for the test). A password not in the form is the one it had -- only at
- * the same address, so a receiver moved elsewhere never gets the old one's. */
+ * "" for the test): its address as the page takes it (sdr_parse_addr) --
+ * host:port, or an http:// or https:// link. A password not in the form is
+ * the one it had -- only at the same address, so a receiver moved elsewhere
+ * never gets the old one's; and at the same address it is known by the port
+ * it was, where an https:// redirect moved it (its kport). A page loaded
+ * before such a move shows the address it had: that is the same receiver
+ * too, and it stays https:// (sdr_same). */
 static bool sdr_from_form(const char *body, const char *sfx, sdr_cfg_t *c, long *was_out)
 {
     char key[12], hp[96] = "";
     memset(c, 0, sizeof *c);
-    c->port = 8073;
     snprintf(key, sizeof key, "host%s", sfx);
-    if (!field(body, key, hp, sizeof hp) || !split_host(hp, c->host, sizeof c->host, &c->port))
-        return false;
+    if (!field(body, key, hp, sizeof hp) || !sdr_parse_addr(hp, c)) return false;
     snprintf(key, sizeof key, "name%s", sfx);
     field(body, key, c->name, sizeof c->name);
     long was = -1;
@@ -1160,8 +1277,7 @@ static bool sdr_from_form(const char *body, const char *sfx, sdr_cfg_t *c, long 
     field_num(body, key, &was);
     if (was_out) *was_out = was;
     EXT_RAM_BSS_ATTR static sdr_cfg_t old;       /* this task's stack is tight */
-    const bool had = was >= 0 && sdr_get((int)was, &old) &&
-                     !strcasecmp(old.host, c->host) && old.port == c->port;
+    const bool had = was >= 0 && sdr_get((int)was, &old) && sdr_same(&old, c);
     snprintf(key, sizeof key, "pass%s", sfx);
     if (!field(body, key, c->pass, sizeof c->pass) && had) strlcpy(c->pass, old.pass, sizeof c->pass);
     snprintf(key, sizeof key, "ipl%s", sfx);
@@ -1176,10 +1292,20 @@ static esp_err_t sdr_post_h(httpd_req_t *r)
     if (!recv_form(r, body, sizeof body)) return ESP_FAIL;
     long n;
     char v[12];
-    if (field_num(body, "n", &n)) {
-        EXT_RAM_BSS_ATTR static sdr_cfg_t list[SDR_MAX];
+    /* Who the receivers' owners see, with the list or on its own: read whole
+     * before anything is saved -- longer than the knob keeps, it is said so,
+     * never dropped or cut short unseen. */
+    EXT_RAM_BSS_ATTR static char who[128];
+    const esp_err_t ie = field_e(body, "ident", who, sizeof who);
+    if (ie == ESP_ERR_HTTPD_RESULT_TRUNC || (ie == ESP_OK && strlen(who) >= KIWI_IDENT_MAX)) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "your name for their owners is too long: 31 bytes at most");
+        return ESP_FAIL;
+    }
+    EXT_RAM_BSS_ATTR static sdr_cfg_t list[SDR_MAX];
+    const bool has_list = field_num(body, "n", &n);
+    int k = 0, sel = -1;
+    if (has_list) {
         const int cur = sdr_rx_selected();
-        int k = 0, sel = -1;
         for (int i = 0; i < clampl(n, 0, SDR_MAX); i++) {
             char sfx[4];
             long was;
@@ -1188,32 +1314,90 @@ static esp_err_t sdr_post_h(httpd_req_t *r)
             if (cur >= 0 && was == cur) sel = k;      /* the one listened to, still */
             k++;
         }
-        sdr_rx_select(-1);
-        if (sdr_save(list, k) != ESP_OK) return httpd_resp_send_500(r);
-        sdr_rx_select(sel);
+    }
+#if VFO_RADIO_KIWI
+    /* A receiver's place that is not in the list, as it is about to be: said,
+     * and nothing saved. */
+    const int count = has_list ? k : sdr_count();
+    if (field(body, "sel", v, sizeof v) && v[0] >= '0' && v[0] <= '9' && no_such_rx(r, strtol(v, NULL, 10), count))
+        return ESP_FAIL;
+    if (field(body, "sdr", v, sizeof v) && v[0] >= '0' && v[0] <= '9' && no_such_rx(r, strtol(v, NULL, 10), count))
+        return ESP_FAIL;
+#endif
+    if (has_list) {
+        /* The one listened to -- on the kiwi firmware, the right ear's --
+         * kept through the reshuffle, set with the list: no choice made, so
+         * a receiver held back by its limits stays held. The kiwi firmware's
+         * receiver in use follows its address wherever the list puts it, by
+         * itself. */
+        if (sdr_save(list, k, sel) != ESP_OK) return httpd_resp_send_500(r);
         ESP_LOGI(TAG, "web: %d web SDR%s", k, k == 1 ? "" : "s");
     }
+    /* The name after the list: a flash with no room for it costs the list
+     * nothing, and the page hears why. */
+    const bool who_lost = ie == ESP_OK && sdr_ident_save(who) != ESP_OK;
+    bool refused = false;
     if (field(body, "sel", v, sizeof v) && v[0]) {
-        if (v[0] >= '0' && v[0] <= '9') sdr_rx_select(atoi(v));
-        else if (!strcasecmp(v, "local")) sdr_rx_select(-1);
+#if VFO_RADIO_KIWI
+        /* In use: the operator's act, even of the one in use -- not the
+         * right ear's. */
+        if (v[0] >= '0' && v[0] <= '9') refused |= !kiwi_rx_use(atoi(v), true);
+#else
+        if (v[0] >= '0' && v[0] <= '9') sdr_rx_choose(atoi(v));
+        else if (!strcasecmp(v, "local")) sdr_rx_choose(-1);
+#endif
     }
+#if VFO_RADIO_KIWI
+    /* The right ear: off, or a receiver -- not the one in use. */
+    if (field(body, "sdr", v, sizeof v) && v[0]) {
+        if (v[0] >= '0' && v[0] <= '9') refused |= !sdr_rx_choose(atoi(v));
+        else if (!strcasecmp(v, "off") || !strcasecmp(v, "local")) sdr_rx_choose(-1);
+    }
+#endif
     if (field_num(body, "balance", &n)) sdr_rx_set_balance((int8_t)clampl(n, -100, 100));
+    if (who_lost) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "your name for their owners was not kept: the knob's flash has no room for it");
+        return ESP_FAIL;
+    }
+    if (refused) {
+        httpd_resp_set_status(r, "409 Conflict");
+        return httpd_resp_sendstr(r, "one receiver is never in both ears: that one is in the other");
+    }
     return sdr_get_h(r);
 }
 
-/* Blocks this task for the test's few seconds: the page waits for it. */
+#if VFO_RADIO_KIWI
+/* The receiver at this address in either ear, its session on its way or
+ * playing. */
+static bool in_either_ear(uint32_t hp) { return kiwi_rx_in_session(hp) || sdr_rx_in_session(hp); }
+#endif
+
+/* Blocks this task for the test's few seconds -- a few more over TLS, its
+ * handshakes on the Test's own task (sdr_test), 40 s at most: the page
+ * waits for it. */
 static esp_err_t sdr_test_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
-    EXT_RAM_BSS_ATTR static char body[512], j[400];
+    EXT_RAM_BSS_ATTR static char body[512], j[1024];
     EXT_RAM_BSS_ATTR static sdr_cfg_t c;
     if (!recv_form(r, body, sizeof body)) return ESP_FAIL;
     if (!sdr_from_form(body, "", &c, NULL)) {
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "no address");
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "web: testing %s:%u", c.host, (unsigned)c.port);
-    sdr_test(&c, j, sizeof j);
+    ESP_LOGI(TAG, "web: testing %s%s:%u", c.tls ? "https://" : "", c.host, (unsigned)c.port);
+    /* This test's answer, never the last one's. */
+    j[0] = 0;
+#if VFO_RADIO_KIWI
+    /* The receiver in use in either ear, its session on its way or playing,
+     * answers from that: no second login beside it -- two at once, each could
+     * be refused. */
+    const esp_err_t e = sdr_test(&c, in_either_ear, j, sizeof j, "kiwi");
+#else
+    const esp_err_t e = sdr_test(&c, NULL, j, sizeof j, NULL);
+#endif
+    if (e != ESP_OK && !j[0]) return httpd_resp_send_500(r);
     return send_json(r, j);
 }
 #else
@@ -1227,12 +1411,18 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  * logging programs and anything else that wants the frequency and mode, or
  * to set them with a plain URL:
  *
- *   GET /api/radio                          the state, as JSON
+ *   GET /api/radio                          the state, as JSON -- with no
+ *                                           link, why, as the face says it
+ *                                           ("NOT FOUND"); an UberSDR's, the
+ *                                           receiver of the list it is on
  *   GET /api/radio/set?freq=14074000        Hz; 14.074 (a point) is MHz
  *       ...&mode=usb&filter=2&agc=mid&gain=1&rfgain=80&power=50
  *       ...&tuner=on&squelch=30&rx=sub&ant=2&rxant=1&rit=-120&lo=100&hi=2800
  *       ...&sdr=0&balance=-30    a web SDR beside it, "local" for none (see
  *                                above: the Icom, Xiegu and FlexRadio ones)
+ *       ...&receiver=1           the kiwi firmware's receiver in use, by its
+ *                                place in the list: at once, and even while
+ *                                the one in use is down
  *   (POST, with the same fields as a form, does the same.)
  *
  * Behind the page's login like everything here. Nothing that transmits:
@@ -1377,7 +1567,10 @@ static int bt_update_json(char *j, size_t cap, const bt_link_status_t *st)
  *              connected)
  *   battery    the device's charge as it last reported it, 0-100 %; -1 not
  *              known (none connected, nothing said yet, or a second chip
- *              whose firmware came before batteries) */
+ *              whose firmware came before batteries)
+ *   level      the device's level, dB, on top of the knob's VOLUME: its own
+ *              (do=level), or its kind's; null with no device
+ *   level_default  ...its kind's: -12 a speaker's, 0 a headset's */
 static esp_err_t bt_get_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
@@ -1400,16 +1593,22 @@ static esp_err_t bt_get_h(httpd_req_t *r)
     if (memcmp(st.hs.bda, none, 6)) bda_text(st.hs.bda, b);
     svc_text(b[0] ? st.hs.svc : 0, svc, sizeof svc);
     const char *kind = !b[0] ? "" : st.hs.kind == BTL_KIND_SPEAKER ? "speaker" : "headset";
+    char lv[8] = "null", lvd[8] = "null";
+    if (b[0]) {
+        snprintf(lv, sizeof lv, "%d", bt_link_level(st.hs.bda, st.hs.kind, NULL));
+        snprintf(lvd, sizeof lvd, "%d", bt_level_default(st.hs.kind));
+    }
     int o = snprintf(j, sizeof j,
                      "{\"companion\":%s,\"version\":\"%s\",\"speakers\":%s,\"link\":\"%s\",\"audio\":\"%s\","
                      "\"name\":\"%s\",\"bda\":\"%s\",\"kind\":\"%s\",\"kind_why\":\"%s\",\"svc\":\"%s\","
-                     "\"delay\":%lu,\"av_volume\":%s,\"volume\":\"%s\",\"battery\":%d,\"remembered\":%s,"
+                     "\"delay\":%lu,\"av_volume\":%s,\"volume\":\"%s\",\"level\":%s,\"level_default\":%s,"
+                     "\"battery\":%d,\"remembered\":%s,"
                      "\"scanning\":%s,\"spk\":%u,\"mic\":%u,\"presses\":%lu,\"mic_frames\":%lu,\"boom\":%s,",
                      st.companion ? "true" : "false", ver, spks ? "true" : "false", links[st.hs.link % 3],
                      st.hs.audio < 4 ? audios[st.hs.audio] : "?", name, b, kind,
                      b[0] && st.hs.kind_why < 5 ? whys[st.hs.kind_why] : "", svc,
                      (unsigned long)bt_link_speaker_delay_ms(), (st.flags & BTL_HELLO_AV_VOLUME) ? "true" : "false",
-                     sv < 5 ? vols[sv] : "", bt_link_battery(), st.hs.remembered ? "true" : "false",
+                     sv < 5 ? vols[sv] : "", lv, lvd, bt_link_battery(), st.hs.remembered ? "true" : "false",
                      st.hs.scanning ? "true" : "false", st.hs.spk, st.hs.mic, (unsigned long)st.presses,
                      (unsigned long)st.up_frames, bt_link_boom_ptt() ? "true" : "false");
     o += bt_update_json(j + o, sizeof j - o, &st);
@@ -1432,7 +1631,9 @@ static esp_err_t bt_get_h(httpd_req_t *r)
 /* do=scan, or do=connect|forget with bda=, or do=disconnect, or do=boom with
  * on=1|0, or do=kind with bda= and kind=headset|speaker: the page's choice
  * for that device, which the second chip keeps -- and the device connected
- * is called again as that. */
+ * is called again as that -- or do=level with bda= and level=<dB>, -24 to
+ * 12 in steps of 3: that device's level, which this chip keeps, heard at
+ * once if it is the one there. */
 static esp_err_t bt_post_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
@@ -1450,7 +1651,7 @@ static esp_err_t bt_post_h(httpd_req_t *r)
     field(body, "bda", bs, sizeof bs);
     uint8_t bda[6];
     const bool have = bda_parse(bs, bda);
-    char kind[12] = "";
+    char what[12] = "";                         /* the choice, for the log */
     if      (!strcmp(act, "scan"))               bt_link_scan(10);
     else if (!strcmp(act, "connect") && have)    bt_link_connect(bda);
     else if (!strcmp(act, "disconnect"))         bt_link_disconnect();
@@ -1461,17 +1662,27 @@ static esp_err_t bt_post_h(httpd_req_t *r)
         bt_link_set_boom_ptt(on[0] == '1');
     }
     else if (!strcmp(act, "kind") && have) {
-        field(body, "kind", kind, sizeof kind);
-        const bool spk = !strcmp(kind, "speaker");
-        if (!spk && strcmp(kind, "headset"))
+        field(body, "kind", what, sizeof what);
+        const bool spk = !strcmp(what, "speaker");
+        if (!spk && strcmp(what, "headset"))
             return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "kind: headset or speaker");
         if (!bt_link_set_kind(bda, spk ? BTL_KIND_SPEAKER : BTL_KIND_HEADSET)) {
             httpd_resp_send_custom_err(r, "409 Conflict", "the second chip's firmware knows headsets only");
             return ESP_OK;
         }
     }
+    else if (!strcmp(act, "level") && have) {
+        /* The whole field a number, one of the steps: 3.5 or 3x is none,
+         * where field_num() would take the 3. */
+        char lv[24] = "", *end = lv;
+        field(body, "level", lv, sizeof lv);
+        const long db = strtol(lv, &end, 10);
+        if (end == lv || *end || !bt_level_ok(db) || !bt_link_set_level(bda, (int)db))
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "level: -24 to +12 dB, in steps of 3");
+        snprintf(what, sizeof what, "%+ld dB", db);
+    }
     else return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "do what");
-    ESP_LOGI(TAG, "bluetooth: %s %s%s%s", act, bs, kind[0] ? " " : "", kind);
+    ESP_LOGI(TAG, "bluetooth: %s %s%s%s", act, bs, what[0] ? " " : "", what);
     return send_json(r, "{\"ok\":true}");
 }
 
@@ -1667,11 +1878,18 @@ static size_t uber_json(char *j, size_t cap)
      * whose: the session's limit, the day's, an idle limit's last minute. */
     char by = 0;
     const int left = uber_time_left(&by);
+    /* The receiver of the knob's list it is on -- the one in use, or the
+     * next while that cannot be reached -- where there is more than one. */
+    char rn[24], rx[52];
+    const int at = uber_receiver(rn, sizeof rn);
+    json_esc(rn, rx, sizeof rx);
     int o = snprintf(j, cap, ",\"uber\":{\"name\":\"%s\",\"callsign\":\"%s\",\"location\":\"%s\","
                      "\"version\":\"%s\",\"session_s\":%d,\"bypassed\":%s,\"time_left_s\":%d,"
-                     "\"time_left_by\":\"%s\",\"url\":\"%s\",\"sstv_n\":%d,\"spots\":[",
+                     "\"time_left_by\":\"%s\",\"url\":\"%s\",\"sstv_n\":%d,\"rx\":%d,\"rx_name\":\"%s\","
+                     "\"spots\":[",
                      nm, in.callsign, lc, in.version, in.max_session_s, in.bypassed ? "true" : "false", left,
-                     by == 'S' ? "session" : by == 'D' ? "day" : by == 'I' ? "idle" : "", url, uber_sstv_count());
+                     by == 'S' ? "session" : by == 'D' ? "day" : by == 'I' ? "idle" : "", url, uber_sstv_count(),
+                     at, rx);
     const int n = uber_spots(sp, UBER_SPOTS, NULL);
     for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
         char call[16];
@@ -1690,11 +1908,40 @@ static size_t uber_json(char *j, size_t cap)
 }
 #endif
 
-/* The radio's JSON: an UberSDR's carries its spots and gallery as well. */
+#if VFO_RADIO_KIWI
+/* ,"kiwi":{...} -- what the receiver in use says of itself, for the radio
+ * page: its model and software, antenna and whereabouts, its channels, its
+ * audio's rate, its frequency offset, and its day-limit mark. */
+static size_t kiwi_json(char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static kiwi_info_t ki;
+    kiwi_info(&ki);
+    char sw[48], an[100], lc[100], st[48];
+    json_esc(ki.sw, sw, sizeof sw);
+    json_esc(ki.antenna, an, sizeof an);
+    json_esc(ki.loc, lc, sizeof lc);
+    json_esc(ki.state, st, sizeof st);
+    const int o = snprintf(j, cap, ",\"kiwi\":{\"model\":\"%s\",\"sw\":\"%s\",\"antenna\":\"%s\","
+                           "\"loc\":\"%s\",\"users\":%d,\"users_max\":%d,\"rate\":%.3f,"
+                           "\"offset_khz\":%.3f,\"state\":\"%s\",\"ovl\":%s,\"strikes\":%d,"
+                           "\"held\":%s,\"unsure\":%s}",
+                           ki.model, sw, an, lc, ki.users, ki.users_max, ki.rate, ki.offset_khz, st,
+                           ki.ovl ? "true" : "false", ki.strikes, ki.held ? "true" : "false",
+                           ki.unsure ? "true" : "false");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
+#endif
+
+/* The radio's JSON: an UberSDR's carries its spots and gallery as well; the
+ * others the web SDRs' list, with their marks, and a FlexRadio's antennas and
+ * the radios it found on the LAN -- a Kiwi's the receivers' names twice over,
+ * with what its own says and both ears. In PSRAM. */
 #if VFO_RADIO_UBERSDR
 #define RADIO_JSON_BYTES 8192
+#elif VFO_RADIO_KIWI
+#define RADIO_JSON_BYTES 6144
 #else
-#define RADIO_JSON_BYTES 3072
+#define RADIO_JSON_BYTES 4608
 #endif
 
 static esp_err_t radio_get(httpd_req_t *r)
@@ -1705,14 +1952,15 @@ static esp_err_t radio_get(httpd_req_t *r)
     EXT_RAM_BSS_ATTR static char j[RADIO_JSON_BYTES];
     radio_get_status(&st);
     static const char *LINK[] = { "DOWN", "CONNECTING", "GREETING", "READY", "DEGRADED" };
-    char mode[8], agc[8], model[16], mem[20];
+    char mode[8], agc[8], model[16], mem[20], why[16];
     json_str(mode, sizeof mode, st.mode);
     json_str(agc, sizeof agc, st.agc);
     json_str(model, sizeof model, st.model);
     json_str(mem, sizeof mem, st.mem_name);
+    json_str(why, sizeof why, st.link_why);
     const bool ready = st.link == RADIO_LINK_READY || st.link == RADIO_LINK_DEGRADED;
     snprintf(j, sizeof j,
-        "{\"radio\":\"%s\",\"model\":\"%s\",\"link\":\"%s\",\"ready\":%s,"
+        "{\"radio\":\"%s\",\"model\":\"%s\",\"link\":\"%s\",\"ready\":%s,\"why\":\"%s\","
         "\"freq\":%lld,\"f_max\":%lld,\"mode\":\"%s\",\"tx\":%s,\"smeter\":%.1f,"
         "\"filter\":%u,\"lo\":%ld,\"hi\":%ld,\"agc\":\"%s\",\"rit\":%ld,"
         "\"have_gain\":%s,\"gain\":%d,\"gain_min\":%d,\"gain_max\":%d,\"gain_step\":%d,"
@@ -1721,7 +1969,7 @@ static esp_err_t radio_get(httpd_req_t *r)
         "\"n_rx\":%u,\"rx\":%u,\"n_ant\":%u,\"ant\":%u,\"has_rx_ant\":%s,\"ant_rx\":%s,"
         "\"memories\":%s,\"mem_state\":%u,\"mem_group\":%u,\"mem_ch\":%u,\"mem_name\":\"%s\"",
         ota_radio(), model, st.link <= RADIO_LINK_DEGRADED ? LINK[st.link] : "?",
-        ready ? "true" : "false",
+        ready ? "true" : "false", ready ? "" : why,
         (long long)st.f_display, (long long)st.f_max, mode, st.tx ? "true" : "false",
         (double)st.smeter_dbm,
         (unsigned)st.filter_no, (long)st.filt_lo, (long)st.filt_hi, agc, (long)st.rit_hz,
@@ -1763,6 +2011,9 @@ static esp_err_t radio_get(httpd_req_t *r)
 #if VFO_RADIO_UBERSDR
     o += uber_json(j + o, sizeof j - o);
 #endif
+#if VFO_RADIO_KIWI
+    o += kiwi_json(j + o, sizeof j - o);
+#endif
 #if VFO_HAS_SDR
     o += sdr_json(j + o, sizeof j - o);
 #endif
@@ -1794,7 +2045,43 @@ static esp_err_t radio_set(httpd_req_t *r)
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "nothing to set");
         return ESP_FAIL;
     }
+    char v[32];
+    long n;
+#if VFO_RADIO_KIWI
+    /* Another receiver, at once -- even while the one in use is down, which
+     * is when another is wanted most. The operator's act, even of the one
+     * in use (kiwi.h). The right ear (sdr=) and the balance between the
+     * two are the knob's own as well. One receiver is never in both ears:
+     * the other ear's is refused (409). A place not in the list is said
+     * (400), and nothing of the request done. */
+    bool own = false, refused = false;
+    long rx = -1;
+    const bool by_rx = field_num(q, "receiver", &rx);
+    const bool by_sdr = field(q, "sdr", v, sizeof v) && v[0];
+    if ((by_rx && no_such_rx(r, rx, sdr_count())) ||
+        (by_sdr && v[0] >= '0' && v[0] <= '9' && no_such_rx(r, strtol(v, NULL, 10), sdr_count())))
+        return ESP_FAIL;
+    if (by_rx) {
+        own = true;
+        refused |= !kiwi_rx_use((int)rx, true);
+    }
+    if (by_sdr) {
+        own = true;
+        if (v[0] >= '0' && v[0] <= '9') refused |= !sdr_rx_choose(atoi(v));
+        else if (!strcasecmp(v, "off") || !strcasecmp(v, "local")) sdr_rx_choose(-1);
+    }
+    if (field_num(q, "balance", &n)) {
+        own = true;
+        sdr_rx_set_balance((int8_t)clampl(n, -100, 100));
+    }
+    if (refused) {
+        httpd_resp_set_status(r, "409 Conflict");
+        return httpd_resp_sendstr(r, "one receiver is never in both ears: that one is in the other");
+    }
+    if (!radio_is_ready() && !own) {
+#else
     if (!radio_is_ready()) {
+#endif
         httpd_resp_set_status(r, "503 Service Unavailable");
         return httpd_resp_sendstr(r, "the radio is not connected");
     }
@@ -1802,8 +2089,6 @@ static esp_err_t radio_set(httpd_req_t *r)
         httpd_resp_set_status(r, "409 Conflict");
         return httpd_resp_sendstr(r, "the radio is transmitting");
     }
-    char v[32];
-    long n;
     if (field(q, "freq", v, sizeof v) && v[0]) {
         /* Hz, or MHz with a point: 14074000 or 14.074. */
         const double f = strchr(v, '.') ? strtod(v, NULL) * 1e6 : strtod(v, NULL);
@@ -1838,12 +2123,14 @@ static esp_err_t radio_set(httpd_req_t *r)
     /* The transmit antenna, where it is chosen apart: its place, from 1. */
     if (field_num(q, "txant", &n) && n >= 1 && n <= 12) radio_set_tx_antenna((uint8_t)(n - 1));
     if (field_num(q, "rit", &n)) radio_set_rit((int32_t)clampl(n, -9999, 9999));
-#if VFO_HAS_SDR
+#if VFO_HAS_SDR && !VFO_RADIO_KIWI
     /* What is heard: the radio alone ("local"), or a web SDR beside it -- by
-     * its place in the configuration page's list, from 0 -- and the mix. */
+     * its place in the configuration page's list, from 0 -- and the mix. A
+     * choice, even of the one playing: see sdr_rx_choose. The kiwi
+     * firmware's right ear is chosen above, with its receiver. */
     if (field(q, "sdr", v, sizeof v) && v[0]) {
-        if (v[0] >= '0' && v[0] <= '9') sdr_rx_select(atoi(v));
-        else if (!strcasecmp(v, "local")) sdr_rx_select(-1);
+        if (v[0] >= '0' && v[0] <= '9') sdr_rx_choose(atoi(v));
+        else if (!strcasecmp(v, "local")) sdr_rx_choose(-1);
     }
     if (field_num(q, "balance", &n)) sdr_rx_set_balance((int8_t)clampl(n, -100, 100));
 #endif
@@ -1931,7 +2218,7 @@ esp_err_t webcfg_start(void)
     for (size_t i = 0; i < sizeof radios_uris / sizeof radios_uris[0]; i++)
         httpd_register_uri_handler(s_srv, &radios_uris[i]);
 #endif
-#if VFO_HAS_SDR
+#if VFO_HAS_SDR || VFO_RADIO_KIWI
     static const httpd_uri_t sdr_uris[] = {
         { .uri = "/api/sdr",      .method = HTTP_GET,  .handler = sdr_get_h },
         { .uri = "/api/sdr",      .method = HTTP_POST, .handler = sdr_post_h },

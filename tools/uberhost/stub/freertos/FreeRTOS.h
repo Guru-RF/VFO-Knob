@@ -7,6 +7,8 @@ typedef pthread_mutex_t portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
 #define taskENTER_CRITICAL(m) pthread_mutex_lock(m)
 #define taskEXIT_CRITICAL(m)  pthread_mutex_unlock(m)
+#define portENTER_CRITICAL(m) pthread_mutex_lock(m)
+#define portEXIT_CRITICAL(m)  pthread_mutex_unlock(m)
 typedef uint32_t TickType_t;
 typedef int      BaseType_t;
 typedef unsigned UBaseType_t;

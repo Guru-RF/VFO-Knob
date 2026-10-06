@@ -72,7 +72,8 @@ bool bt_link_speaker_connected(void);
 /* ...and its stream is open. */
 bool bt_link_speaker_audio(void);
 /* How far behind the jack an open speaker plays, in ms: the companion's
- * figure, 250 without one; 0 with none open. For the telephone's hold. */
+ * figure, 250 without one -- and its level above 0 dB, the block that
+ * holds back (bt_level.h); 0 with none open. For the telephone's hold. */
 uint32_t bt_link_speaker_delay_ms(void);
 /* The configuration page's choice for a device: BTL_KIND_HEADSET or
  * BTL_KIND_SPEAKER. The companion keeps it, and calls the device again as
@@ -83,13 +84,14 @@ bool bt_link_set_kind(const uint8_t bda[6], uint8_t kind);
 
 /* A speaker's volume. One that takes its volume from its source -- AVRCP's
  * absolute volume, as the companion finds -- has the knob's VOLUME for its
- * own: it turns itself to it, and is sent the knob's audio at a quarter of
- * full level, 12 dB down (the jack keeps the VOLUME) -- less, in proportion,
- * what it says it plays above the VOLUME, and rising into it over a second
- * or so; its own buttons or knob turn the knob's VOLUME. One that does not
- * keeps its own, and is sent the audio at a quarter of the jack's loudness
- * -- as is one that did not take the knob's (it answered louder than asked,
- * or not at all). */
+ * own: it turns itself to it, and is sent the knob's audio at full level,
+ * its level on top (bt_link_set_level: 12 dB down, a quarter, until one is
+ * set; the jack keeps the VOLUME) -- less, in proportion, what it says it
+ * plays above the VOLUME, and rising into it over a second or so; its own
+ * buttons or knob turn the knob's VOLUME. One that does not keeps its own,
+ * and is sent the audio at the jack's loudness, its level on top -- as is
+ * one that did not take the knob's (it answered louder than asked, or not
+ * at all). */
 /* The knob's VOLUME, 0-100, as it stands: from the knob's loop, every pass.
  * Sent on to the companion as it changes, four times a second at the most,
  * which sets it on a speaker that takes it. */
@@ -108,6 +110,27 @@ enum {
 };
 uint8_t bt_link_speaker_volume(void);
 
+/* A device's level, on top of the knob's VOLUME (bt_level.h): set on the
+ * configuration page for each headset or speaker, BT_LEVEL_MIN to
+ * BT_LEVEL_MAX dB in steps of 3, and heard at once from the device it is
+ * set for, if that is the one there. Kept by its Bluetooth address for the
+ * last BT_LEVEL_DEVICES devices set, the oldest forgotten, and forgotten
+ * with the device (bt_link_forget). Without one a speaker is sent 12 dB
+ * less, a headset the jack's level. Above 0 dB its audio is held back a
+ * block and turned down smoothly where it would pass full scale. False, and
+ * nothing set, for a level that is not one of the steps. */
+bool bt_link_set_level(const uint8_t bda[6], int db);
+/* A device's level, dB: its own, or its kind's (BTL_KIND_*) without one --
+ * `own` says which. */
+int  bt_link_level(const uint8_t bda[6], uint8_t kind, bool *own);
+/* The levels set, into NVS once the last change has settled two seconds:
+ * from a task whose stack is internal, and never during an over or a call
+ * -- the caller's to see to, as a flash write holds the audio up. `ok`, if
+ * given, is asked then, with how long ago the change came: whether flash
+ * may be written now (a web receiver plays for hours: its quiet moment).
+ * Nothing changed: nothing done. */
+void bt_link_save_levels(bool (*ok)(int64_t settled));
+
 /* The boom arm as the PTT, an option on the configuration page: lowering it
  * -- the headset's microphone live -- transmits, raising it -- muted --
  * stops (app_main.c). Kept in NVS. */
@@ -117,7 +140,8 @@ void bt_link_set_boom_ptt(bool on);
 /* What the last scan found (its newest first), and whether one runs. */
 int  bt_link_found(btl_found_t *out, int max);
 
-/* The configuration page's buttons. */
+/* The configuration page's buttons. Forget unpairs the device, and forgets
+ * its level. */
 void bt_link_scan(uint8_t seconds);
 void bt_link_connect(const uint8_t bda[6]);
 void bt_link_disconnect(void);

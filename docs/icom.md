@@ -200,15 +200,30 @@ the name, **LAN** says how it is reached.
 ## A web SDR beside the radio
 
 A KiwiSDR, a Web-888 or an UberSDR can play beside the radio, following its
-frequency, mode and passband. Add them under **Web SDRs** on the configuration
-page — each with a **Test** — then swipe down and choose one.
+frequency, mode and passband — in CW the station on the dial is heard at the
+receiver's own CW tone, as on its own page (below). Add them under **Web SDRs**
+on the configuration page — each with a **Test** — then swipe down and choose
+one.
 
 With one playing, the radio is in the left ear and the SDR in the right, both
 brought to the same loudness. The SDR's S-meter is the thin blue line outside
 the radio's, its reading the blue one under the radio's; **BALANCE**, first on
 the swipe from the left, fades from one to the other. The SDR is silent while
-you transmit. A web SDR hears what it covers — a KiwiSDR or an UberSDR up to
-30 MHz — so with the IC-R8600 above that, choose LOCAL.
+you transmit.
+
+A web SDR hears what it covers — a KiwiSDR or an UberSDR up to 30 MHz, a
+Web-888 to about 62 MHz. Where it cannot reach the radio's frequency — 6 m on
+a KiwiSDR, the IC-9700's bands or the IC-R8600 above 62 MHz on any of them —
+it goes quiet rather than play the top of its range: its thin line goes, and
+*can't reach* takes its reading's place, in amber. It stays logged in
+meanwhile, nothing sent to it at every turn of the dial, and plays again the
+moment the radio is back within its range — unless its owner's limit on idle
+listening has ended the session meanwhile (*time up*: choose it again); the
+radio page and the configuration page say what it covers (*out of range: it
+covers 0-30 MHz*). It keeps one of the receiver's channels all the while:
+staying up there, choose LOCAL.
+
+![The IC-9700 on 2 m: the web SDR cannot reach it, can't reach in amber where its reading was](icom/25-sdr-out.svg)
 
 An UberSDR plays here through its Kiwi input: its own address on your
 network with port **8073**, its KiwiSDR compatibility switched on
@@ -216,12 +231,53 @@ network with port **8073**, its KiwiSDR compatibility switched on
 own page only, not this. Its bypass password, where you need one, goes in
 **Password** — on its own network you need none — and the time-limit
 password is a KiwiSDR's only. In CW the knob centres the SDR where the
-receiver does: a KiwiSDR on its 500 Hz tone, an UberSDR on the carrier, with
-its own tone.
+receiver does: a KiwiSDR on its 500 Hz tone, or wherever its owner set it, an
+UberSDR on the carrier, with its own tone.
+
+A KiwiSDR behind the kiwisdr.com proxy or Cloudflare is reached only over
+https: give it by its `https://` link, pasted whole
+(`https://n0bqv.proxy.kiwisdr.com`, `https://kiwisdr.on3rvh.be`), and the
+knob speaks to it over TLS, its certificate checked against the authorities
+a browser trusts, for its name (not its dates). The first connection to one
+takes a few seconds longer, the knob doing TLS in software; the next ones to
+the same receiver are quick where its front lets the knob resume. An
+`http://` link it answers with a redirect to https on its own host is
+followed at once, and kept: the page shows the `https://` link from then on.
+A redirect anywhere else is not followed (*moved*; the page's **Test** says
+where to), and a receiver whose certificate does not check out is not spoken
+to (*certificate*): both wait until it is chosen again or the list is saved.
 
 | RX | Playing | BALANCE |
 |---|---|---|
 | ![RX: Web-888](icom/14-rx.svg) | ![The SDR's S-meter in blue](icom/15-sdr.svg) | ![BALANCE: L \| R](icom/16-balance.svg) |
+
+On the dial each receiver goes by the name you gave it on the page; without
+one, by the antenna its status page names, once the knob has read that, else
+by its address, with the port where another receiver shares it, so four
+receivers on one address stay apart. **Test** puts the name an unnamed one
+gives itself in its **Name** box, and **Save** keeps it. **Your name, for
+their owners**, under the list, is what each receiver's owner sees the knob
+as among those listening: your callsign, say; left empty, *VFO-Knob*.
+
+Its owner's limits are kept. A receiver that turns the knob away because
+its listening time for the day is used up says *day limit*, and the knob
+leaves it alone, through restarts, until the receiver shows it has restarted
+or, on a KiwiSDR, a day has passed. Choosing it again (swipe down, tap) is one
+more try, and the knob takes two such refusals at most: a Kiwi bars an
+address for good after five. One that ended a session nobody used says
+*time up*, one whose owner sent the knob away *kicked*; both wait to be
+chosen again, even after a crash, as does one that refuses this address.
+A receiver with time limits that leaves the knob's login unanswered counts
+as such a refusal, in case its answer was one; and with its settings memory
+full (*memory full*) the knob logs in to one with time limits only when you
+choose it. The knob logs in as the receivers' own apps do, so an owner's
+limits on apps hold for it: a KiwiSDR whose status page lets no apps in says
+*no apps* at once, and one whose channels for apps are all taken says
+*busy*, *no apps* after the third time. A wrong password (*password?*) and an
+address where no Kiwi answers (*not a kiwi*) wait until it is chosen again
+or the list is saved; on its own the knob tries one receiver at most six
+times in ten minutes. **Test** never logs in to a receiver at its day limit,
+nor beside the knob's own login to one: the two never log in at once.
 
 ## Transmitting
 
@@ -279,6 +335,8 @@ GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
     ...&mode=usb&filter=2&agc=mid&rfgain=80&power=50&tuner=on&rit=-120
     ...&squelch=30                    the IC-R8600's, 0-100 %
 ```
+
+With the IC-R8600 the page has a slider for its squelch as well.
 
 Nothing there transmits, and no setting is taken while the radio is on the air.
 

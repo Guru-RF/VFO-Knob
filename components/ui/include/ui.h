@@ -44,7 +44,8 @@ typedef struct {
     float    snr_db;
     /* The ubersdr firmware's slab, where PTT is on a transmitter: the spots
      * and voices on the band (ui_set_spots), where the receiver has either;
-     * and its SSTV pictures, a swipe from the right (-1: it has no gallery). */
+     * and its SSTV pictures, a swipe from the right (-1: no gallery -- every
+     * firmware but ubersdr). */
     bool     has_spots;
     int16_t  n_sstv;
     /* ...and at the slab's left end a guest's time left, where the receiver
@@ -52,6 +53,11 @@ typedef struct {
      * idle limit's last minute, which a touch gives back. */
     bool     have_left, left_idle;
     int32_t  left_s;
+    /* The kiwi firmware's slab: the receiver's name (server) over its antenna
+     * or address, and where it is or "connecting..."; read only while the
+     * face is drawn. And its ADC overloaded. */
+    const char *rx_line2, *rx_line3;
+    bool     ovl;
     /* Memory mode (radio.h): the knob selects channels instead of tuning, and
      * the channel takes the frequency readout's place. mem_state is UI_MEM_*,
      * in the order of radio_mem_state_t. */
@@ -169,6 +175,11 @@ typedef struct {
     uint8_t  n_missed;       /* missed, not yet looked at in the history */
     /* Transient banner: AetherSDR's refusal reason, or ours. NULL for none. */
     const char *warn;
+    /* ...and under it, the radio it is about, where the client names it: the
+     * ubersdr firmware's, with more than one receiver in its list -- the one
+     * in use, or the next it tries while that cannot be reached. "" for
+     * none: the panel as ever. */
+    char     warn_name[24];
 } ui_state_t;
 
 enum { UI_MEM_OFF = 0, UI_MEM_READING, UI_MEM_READY, UI_MEM_EMPTY };
@@ -220,9 +231,16 @@ typedef struct {
 /* False when the face was busy drawing: offer the list again. */
 bool ui_set_calls(const ui_call_t *calls, uint8_t n);
 
-/* When the knob or the glass was last used (lv ticks): what an idle timer
- * on the far end may want to hear about. */
+/* When the knob was last used or woken (lv ticks): the dimming's clock. It
+ * also moves for an update question, a setup screen, a page save, a call. */
 uint32_t ui_last_use(void);
+
+/* Real use, and only that: a finger on the glass, a detent of the knob.
+ * ui_note_user() counts one -- from any task, no lock taken -- and
+ * ui_user_seq() is the count: a web receiver's idle timer hears of nothing
+ * else (radio_user_activity), as its own page tells it of nothing else. */
+void     ui_note_user(void);
+uint32_t ui_user_seq(void);
 
 /* The SSTV viewer, opened from the swipe from the right: the knob steps
  * through the receiver's pictures, newest first, and any tap closes it.

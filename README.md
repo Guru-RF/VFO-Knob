@@ -4,7 +4,8 @@ A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersd
 FlexRadio and the Icom IC-705, IC-7610, IC-9700 and IC-R8600, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
 over WiFi. And, with firmware of their own, SVXConnect, a talkgroup knob for
-SvxLink reflectors, a dial for UberSDR web receivers, and a telephone.
+SvxLink reflectors, a dial for UberSDR web receivers, one for KiwiSDR and
+Web-888 receivers, and a telephone.
 
 <p align="center">
   <img src="docs/display-rx.svg" width="400" alt="Receiving: the S-meter rises to S9+20 and falls back while its readout follows and the 100 Hz digit ticks; S-units marked around the blue 66 mm body">
@@ -51,6 +52,12 @@ spots and voices on the band along the bottom, its noise filters and SNR
 beside the S-meter, and its SSTV pictures on the glass. It only receives. See
 [UberSDR](#ubersdr).
 
+With the **Kiwi888** firmware the knob is a dial for KiwiSDR and Web-888 web
+receivers, over KiwiSDR's own protocol: up to four of them, another taken
+over at once with a swipe up, a second in the right ear on the same dial,
+each owner's limits kept, in the receivers' own look. It only receives. See
+[Kiwi888](#kiwi888).
+
 With the **Telephone** firmware the knob is a telephone on one SIP account,
 in SVXConnect's colours: favourites on the dial, a keypad for any number, your
 starred Google contacts as the favourites, the caller's name in a call, and
@@ -66,14 +73,14 @@ both voices on the split arc. See [Telephone](#telephone).
 | **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. On a radio with a choice of antennas — a FlexRadio's slice, the IC-7610, the IC-R8600 — a press held half a second opens them instead, with a buzz, and keys nothing; there a tap keys 0.15 s after the lift, so that the glass losing a held finger for a moment is never taken for a tap. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
-| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys, with its battery beside it — green, yellow or red — where the headset reports it; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the UberSDR firmware, only for listening. A Bluetooth speaker plays the knob's audio as well as the jack, a fifth of a second or so behind it, and the knob's own microphone transmits: a speaker shows at the slab's end, and it falls silent while you do; one that takes its volume from what plays to it has the knob's VOLUME for its own, both ways. The second chip tells a speaker from a headset by itself; the configuration page can say otherwise. |
+| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys, with its battery beside it — green, yellow or red — where the headset reports it; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the UberSDR and Kiwi888 firmwares, only for listening. A Bluetooth speaker plays the knob's audio as well as the jack, a fifth of a second or so behind it, and the knob's own microphone transmits: a speaker shows at the slab's end, and it falls silent while you do; one that takes its volume from what plays to it has the knob's VOLUME for its own, both ways. Each headset or speaker has its own level on the configuration page, 24 dB down to 12 dB up — a speaker 12 dB down until it is set. The second chip tells a speaker from a headset by itself; the configuration page can say otherwise. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705, the IC-9700 and the FlexRadio, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another; on the IC-9700 the group is the band it is on). A FlexRadio's memories have no groups: the knob steps through all of them in order of frequency, each put on the slice by the radio's own *memory apply*. VFO again for the VFO, simplex. |
 | **Radios** | Up to four per firmware on the configuration page — an IC-705, an IC-7610, an IC-9700 and an IC-R8600, two FlexRadios, AetherSDR on two computers — and, on the FlexRadio firmware, the SmartLink account's. Swipe up, turn to one, tap on it: the knob restarts into it (SWITCHING TO …), with or without a link to the one it leaves; under the name, **LAN** or **SmartLink** says how it is reached. Not over the USB cable, which reaches one computer or one radio. |
 | **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns (with a web SDR chosen, BALANCE comes first). Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
-| **Web SDR** | On the Icom and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). |
-| **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.18.5`, or `… dev` for a build that is not a release), the knob's power — **battery 85 %**, or **on USB power** — and its addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
+| **Web SDR** | On the Icom and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). On the Kiwi888 firmware a second of its own receivers plays in the right ear: **RIGHT EAR**, **OFF** or a receiver, and **BALANCE** from **LEFT** to **RIGHT** — see [Kiwi888](#kiwi888). |
+| **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.19.0`, or `… dev` for a build that is not a release), the knob's power — **battery 85 %**, or **on USB power** — and its addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
 | **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
@@ -293,38 +300,74 @@ the LAN, Opus audio and PTT included. A radio reachable only by hole punching
 
 ## Web SDRs
 
-On the Icom and FlexRadio firmwares the knob can listen to a web SDR
-beside the radio — a [KiwiSDR](http://kiwisdr.com/), a Web-888, or an
+On the Icom and FlexRadio firmwares the knob can listen to a web SDR beside
+the radio — a [KiwiSDR](http://kiwisdr.com/), a Web-888, or an
 [UberSDR](https://ubersdr.org/) through its Kiwi input; all three speak
-KiwiSDR's protocol. Up to four are kept, added on the configuration page with
-their address (`host:port` — **8073** on most KiwiSDRs), a password where the
-receiver has one, and its time-limit password, which lifts the listening limit
-some receivers put on each address. The address is the receiver's own plain
-`http://` one: not an `https://` link through a proxy or a tunnel. An
+KiwiSDR's protocol. Up to four are kept, added on the configuration page
+with their address (`host:port` — **8073** on most KiwiSDRs), a password
+where the receiver has one, and its time-limit password, which lifts the
+listening limit some receivers put on each address. A receiver behind the
+kiwisdr.com proxy or Cloudflare, reached only over https, goes by its
+`https://` link, pasted whole (`https://n0bqv.proxy.kiwisdr.com`): the knob
+speaks KiwiSDR's protocol to it over TLS, its certificate checked against
+the authorities a browser trusts, for its name — the first connection a few
+seconds slower, TLS being done in software, the next ones quick where its
+front lets the knob resume. An `http://` link it answers with a redirect to
+https on its own host is followed at once, and kept from then on. An
 UberSDR's Kiwi input is port **8073** on its own address (its
 `enable_kiwisdr` on), its bypass password in the password; it centres CW on
-the carrier where a KiwiSDR centres it on a 500 Hz tone, and the knob tunes
-each as its own page would.
+the carrier where a KiwiSDR centres it on its 500 Hz tone, or wherever its
+owner set it, and the knob tunes each as its own page would.
 
 | | |
 |---|---|
 | **Swipe down** | **RX**: turn through **LOCAL** and the receivers by name, tap to listen. The IC-7610 then goes on to MAIN/SUB and the antenna for the radio's side, whichever was chosen: with an SDR the radio still plays in the left ear. The IC-R8600 goes on to its antenna, the IC-705 and the IC-9700 to V/M, a FlexRadio to RX ANT, TX ANT and V/M. |
-| **Listening** | The SDR follows the radio: frequency, mode and passband, retuned as the dial turns. The radio is in the left ear and the SDR in the right, both levelled to the same loudness. |
-| **Its S-meter** | A thin blue line just outside the radio's S-meter, on the same scale, and its reading in blue under the radio's, where the dBm is otherwise: **S9+20** against the radio's **S7**. Dots while it connects; a word, in amber, when it cannot — *busy*, *no apps*, *password?*, *day limit*, *no answer*. |
+| **Listening** | The SDR follows the radio: frequency, mode and passband, retuned as the dial turns; in CW the station on the dial is heard at the receiver's own CW tone, as on its own page — 500 Hz on a KiwiSDR, unless its owner set another. The radio is in the left ear and the SDR in the right, both levelled to the same loudness. When the network holds the SDR's audio up and then hands it over all at once, the right ear leaves the late audio out where it had gone quiet anyway and picks up at the live point, rather than lagging behind or breaking up; where short stalls come again and again it keeps more in hand, up to 0.7 s, and eases back once the stream has been calm for three minutes. It follows the receiver's clock, a hair faster or slower, and every 30 s the log says how its audio came (`sdr: ring … ms of …`). |
+| **Its S-meter** | A thin blue line just outside the radio's S-meter, on the same scale, and its reading in blue under the radio's, where the dBm is otherwise: **S9+20** against the radio's **S7**. A Web-888 and a KiwiSDR each count it from their own reference. Dots while it connects; a word, in amber, when it cannot — *busy*, *no apps*, *password?*, *day limit*, *time up*, *kicked*, *refused*, *not a kiwi*, *moved*, *certificate*, *one per ip*, *updating*, *memory full*, *try later*, *no answer* — or *can't reach*: the radio beyond what it covers (6 m on a KiwiSDR), the SDR quiet rather than playing the top of its range, still logged in, and back the moment the radio is within it — unless its owner's limit on idle listening has ended the session meanwhile (*time up*); the pages say what it covers. |
 | **Balance** | First on the swipe from the left while an SDR is chosen; a tap on it goes on to RF GAIN and POWER. From **RADIO**, the radio alone, through **L \| R** to **SDR**, the SDR alone. |
 | **Transmitting** | The SDR goes quiet: it would play the over back a second late, and from a speaker the microphone would hear it. |
 
 **Test**, beside each receiver on the configuration page, logs in and says
 what the receiver calls itself, how many of its channels are in use, and
-whether the password is right. It also says when a receiver's owner lets no
-apps listen: a KiwiSDR can keep its channels for browsers, and a client
-without a waterfall — the knob is one — is cut off after ten seconds. The
-knob tries such a receiver once and then leaves it alone until it is chosen
-again. It waits two minutes when the channels for apps are all in use, and
-half an hour when the day's listening limit has been reached.
+whether the password is right; a receiver with no name yet gets the one it
+gives itself in its Name box, which **Save** keeps. On the dial an unnamed
+receiver goes by the antenna its status page names, once the knob has read
+that, else by its address, with the port where another receiver shares it:
+four on one address stay apart. **Your name, for their owners**, under
+the list, is what every receiver's owner sees the knob as among those
+listening — your callsign, say; left empty, *VFO-Knob*; told at once to the
+receiver playing. The knob logs in as the receivers' own apps
+do, so an owner's limits on apps hold for it: a KiwiSDR can keep its channels
+for browsers. One whose status page says it lets no apps in is *no apps* at
+once, with no login, until it is chosen again; one whose channels for apps
+are all in use says nothing to the knob — *busy*, asked again two minutes on,
+and after the third time *no apps*. A receiver that is full is asked again
+20 s on.
 
 The choice is on the radio page too, and in its API: `sdr=local` or `sdr=0`
 to `3`, by the receiver's place in the list, and `balance=-100` to `100`.
+
+### The receiver's limits
+
+An owner may limit how long one address listens in a day, end a session
+nobody uses, or send a listener away. A Kiwi also bars an address for good
+after five logins it refused for its day limit — and every browser behind
+that address with it. The knob keeps to all of it:
+
+| | |
+|---|---|
+| **Day limit** | A receiver that turns the knob away because the day's listening time is used up is marked, and the mark is kept through restarts. The knob does not log in to it again by itself — not at power-on, not after a save, not on a retry. Choosing it again, on the dial (swipe down, tap), on the radio page or with `sdr=`, is one more try; so is a new time-limit password. The knob takes two such refusals from a receiver at most, until the mark lifts. |
+| **No answer** | A login's answer is always waited for, ten seconds, whatever else happens meanwhile: it may be a refusal the receiver counted. A receiver with time limits that leaves the login unanswered — silence, or a connection that fails — counts as such a refusal, in case, and no second login follows. Without time limits it is tried again after 2 s, then longer each time, up to 30 s. |
+| **When it lifts** | When the receiver's own status page shows it has restarted — read once at power-on and before a try, never polled. On a KiwiSDR also a day after the last refusal, as it clears its count once a day; a Web-888 forgets nothing until it restarts. Its owner taking the time limits away, or a try that plays for ten seconds, lets the receiver go, its refusals still counted: refused again, it has no more tries than it had. |
+| **Time up** | The receiver ended a session nobody used. The knob waits until it is chosen again. |
+| **Kicked** | Its owner sent the knob away. Not again until it is chosen again either. |
+| **Refused** | It will not talk to this address (HTTP 403, `badp=3`): not again until it is chosen again. |
+| **Password?, not a kiwi** | A wrong password, or something other than a KiwiSDR or a Web-888 answering at the address (HTTP 400 or 404): not again until it is chosen again or the list is saved. |
+| **Moved, certificate** | A redirect the knob does not follow — to another host, or a second one — says where it points (*moved to …* on the pages and in the log); an https receiver whose certificate does not check out is not spoken to. Both: not again until it is chosen again or the list is saved. |
+| **Six tries** | On its own the knob tries one receiver at most six times in ten minutes, whatever ended them, counting only the tries that reached it; *try later* meanwhile. Choosing it goes at once. |
+| **Memory full** | With its settings memory full, the knob could not keep a mark through a restart: it logs in to a receiver with time limits only when it is chosen. |
+| **Crashes** | After a run of crashes or brownouts, each soon after the last start, the knob waits before it contacts the receiver on its own — half a minute, longer each time, ten minutes at most: *try later*. After any crash, *time up*, *kicked* and *refused* still hold until the receiver is chosen again; a power-on starts afresh. |
+| **Test** | Never logs in to a receiver at its day limit — it says how many tries are left, or that the knob leaves it alone until it restarts (a Web-888) or for a day at most (a KiwiSDR) — nor to the one in use while its session is on its way or playing; and the knob waits for a Test's answer before its own login, so the two never log in at once, and a refusal a Test met is no try spent by a choice made before it. A second Test within a minute reads no status page again. |
 
 ## UberSDR
 
@@ -348,6 +391,37 @@ Step by step: [the UberSDR guide](docs/ubersdr.md).
 | **SSTV** | Swipe from the right: the receiver's SSTV gallery, newest first, one picture a detent; any tap goes back to the dial. |
 | **A KiwiSDR beside it** | Swipe down for LOCAL or a KiwiSDR (or a Web-888), which follows the UberSDR: the UberSDR left, the KiwiSDR right, BALANCE from the left. |
 | **Its limits** | Without the receiver's password the knob listens as a guest: its time left at the slab's left end, counted as the receiver counts it, the seconds too in the last five minutes, in amber, red in the last one -- or an idle limit's last minute, which a touch gives back. When the receiver ends a session, the dial asks before starting another, as UberSDR's own page does. |
+| **Its receivers** | Up to four in the list. When the one in use cannot be reached -- its name not found, no answer -- the knob goes on to the next by itself, after a second try, with no restart: the first that answers plays and is in use from then on. The face names each as it goes. The one in use that answers but turns the knob away (full, its password, its time up) keeps its turn; a stand-in that does is passed by for the next. See [another receiver](docs/ubersdr.md#another-receiver). |
+
+## Kiwi888
+
+The kiwi firmware (`vfo-knob-kiwi`) makes the knob a dial for KiwiSDR and
+Web-888 web receivers: it talks to each over KiwiSDR's protocol, as the
+receivers' own apps do, and plays it on the jack. The receivers are the web
+SDRs' list on the configuration page, up to four by `host:port` — or by an
+`https://` link, for one behind the kiwisdr.com proxy or Cloudflare, spoken
+to over TLS — and another
+is taken over at once, with no restart: a swipe up, a tap on the receiver's
+name at the bottom of the face, the page's **In use**, or `receiver=` in the
+API. **Add RF.Guru's receivers** on the page fills in the four Web-888s at
+Lombardsijde, logging in to none. A second receiver from the list can play
+in the right ear, on the same dial: one antenna against another. Receive
+only, in the receivers' own page's look. Step by step: [the Kiwi888
+guide](docs/kiwi.md).
+
+<p align="center">
+  <img src="docs/kiwi/01-face.svg" width="560" alt="The kiwi face: S8 on 40 m, 7.123.00 LSB, AGC MED and NR OFF either side of the S-meter, its peak held in red, the receiver EchoTracer along the bottom with its model, address and whereabouts">
+</p>
+
+| | |
+|---|---|
+| **S-meter** | The receivers' lime bar, the peak held a second as a red mark, as on their own page; **OV** after the reading, in red, while the receiver's ADC overloads. |
+| **AGC, NR** | Either side of the S-meter: the AGC (FAST, MED, SLOW, the receivers' own presets), sent as the knob turns, and the noise filter (OFF, WDSP, LMS, SPEC, the receivers' own), sent once it has rested half a second. |
+| **Squelch** | Swipe from the right: 0 % OPEN; the receiver's own scale in NBFM, up to 40 dB over its noise in the other modes. A slider on the radio page, `squelch=` in the API. |
+| **The receiver** | Along the bottom, where PTT is on a radio: its name, its antenna or address, where it is — or *connecting...*. A tap there, or a swipe up, for another. Without a name of yours, its antenna as its status page names it, else its address, with the port where another receiver shares it. |
+| **The right ear** | Swipe down for **RIGHT EAR**: **OFF**, or another of the receivers, on the same frequency, mode and filter, and with the left ear's AGC, noise filter and squelch — the one in use in the left ear, this one in the right, at the same loudness. Where its receiver does not reach the dial (a KiwiSDR beside a Web-888 on 6 m) it goes quiet, *can't reach* in amber, until the dial is back within its range — or its owner's limit on idle listening ends the session meanwhile (*time up*). Its S-meter the thin blue line outside the left ear's, its reading in blue under the S-units; **BALANCE** from the left, **LEFT** … **L \| R** … **RIGHT**. One receiver is never in both ears: each ear's chooser shows the other's dimmed and refuses it, and so do the pages and the API (`sdr=`). Each ear keeps its receiver's owner's limits; a day-limit mark is the receiver's, whichever ear met it. |
+| **Its audio** | A quarter of a second in hand. The knob follows the receiver's clock, a hair faster or slower, so that holds for hours; when the network holds the stream up and then hands it over at once — or at least twice as fast as it plays — the knob leaves the late audio out where the sound had stopped anyway and is back at the live point: one break. Handed over more slowly, it is cut back every few seconds until the network has caught up. Where short stalls come again and again, the knob keeps more in hand, up to 0.7 s, until the stream has been calm for three minutes, then eases back: more delay only while the network is bad, fewer breaks (0.4 s every 8 s: two breaks in two minutes, not fourteen). Each ear alike. Every 30 s the log says how the audio came, what the knob holds against what it keeps it at. |
+| **Its limits** | As for a web SDR beside a radio ([The receiver's limits](#the-receivers-limits)): a day limit is marked through restarts and tried again only when chosen, twice at most, and so is a login left unanswered by one with time limits; *time up* and *kicked* ask LISTEN AGAIN; a KiwiSDR's silent door for apps is *apps full*, three times *no apps*. On its own the knob tries a receiver at most six times in ten minutes, counting only the tries that reached it; *MEMORY FULL* and a run of crashes keep it from trying on its own. A tap on the receiver's name, even the only one's, chooses it again. |
 
 ## SVXConnect
 
@@ -454,11 +528,13 @@ connected; the speaker falls silent while you do, its buttons key nothing,
 and a speaker shows at the slab's end in the headset logo's place. One that
 takes its volume from what plays to it, as most do, has the knob's **VOLUME**
 for its own: the knob sets it, and its own volume buttons turn the knob's;
-one that does not keeps its own, and the knob turns down what it sends. The second
-chip tells a speaker from a headset by its class and the services it lists,
-or by its hanging up a call's audio at once, as some speakers that call
-themselves headsets do; **Use as** on the configuration page switches it.
-More: [A Bluetooth speaker](docs/headset.md#a-bluetooth-speaker).
+one that does not keeps its own, and the knob turns down what it sends. Each
+speaker, and each headset, has its own **Level** on the configuration page,
+how loud the knob sends it its audio: a speaker 12 dB down until it is set.
+The second chip tells a speaker from a headset by its class and the services
+it lists, or by its hanging up a call's audio at once, as some speakers that
+call themselves headsets do; **Use as** on the configuration page switches
+it. More: [A Bluetooth speaker](docs/headset.md#a-bluetooth-speaker).
 
 ## Configuration page
 
@@ -474,14 +550,19 @@ the only place the host setting is used.
 
 The radio section is a list: up to four radios, each with a name for the
 dial, and one **In use** — chosen here for the next start, or with a swipe up
-on the knob, which restarts into it at once. (The reflector firmware keeps
-its single reflector.) On the FlexRadio firmware a **SmartLink** section
-below it logs in to FlexRadio's service and lists the account's radios, each
+on the knob, which restarts into it at once. The UberSDR firmware also moves
+on to the next in the list by itself when the one in use cannot be reached,
+and the first that answers is in use from then on. (The reflector firmware
+keeps its single reflector.) Kiwi888 has its **Receivers** instead:
+**In use** there, or a swipe up on the knob, takes one over at once, with no
+restart. On the FlexRadio firmware a **SmartLink** section below it logs in
+to FlexRadio's service and lists the account's radios, each
 with **Use now** — see [SmartLink](#smartlink).
 
 With the radio connected, the page opens on its **controls** instead, in the
 knob's own colours: the frequency, typed or stepped, band, mode, filter, AGC,
-the preamp or RF gain, power, the tuner, MAIN/SUB and the antenna, RIT, the
+the preamp or RF gain, power, the tuner, the squelch where the receiver has
+one (the IC-R8600, a Kiwi), MAIN/SUB and the antenna, RIT, the
 [web SDR](#web-sdrs) and its balance, and the knob's volume and mic gain —
 everything the knob can set on the radio, and
 nothing that transmits. **Config** leads to the settings above, the radio
@@ -491,10 +572,13 @@ The same, for other programs — a logbook reading the frequency and mode, or
 anything setting them with a URL:
 
 ```
-GET /api/radio                        the state, as JSON
+GET /api/radio                        the state, as JSON; with no link, why
+                                      ("why", as the face says it)
 GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
     ...&mode=usb&filter=2&agc=mid&rfgain=80&power=50&tuner=on&rit=-120
-    ...&sdr=0&balance=-30             a web SDR beside the radio, "local" for none
+    ...&squelch=30                    0-100 %, 0 open, where the receiver has one
+    ...&sdr=0&balance=-30             a web SDR beside the radio, "local" for none;
+                                      sdr= chooses it, as a tap on the dial does
 GET /api/radios                       the radios the knob knows, and the one in use
 POST /api/radios/switch  to=1         another in use: the knob restarts into it
 GET /api/status                       the knob itself, its power too: on_usb (null
@@ -553,7 +637,7 @@ too, `COMPANIO.BIN`: a radio's firmware sends it to that chip, never
 installing it on its own.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr` and `vfo-knob-phone` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi` and `vfo-knob-phone` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -596,7 +680,7 @@ idf.py -B build_icom -D VFO_RADIO=icom \
        build flash
 ```
 
-So are the multiflex, svxconnect, ubersdr, phone and setup firmwares:
+So are the multiflex, svxconnect, ubersdr, kiwi, phone and setup firmwares:
 
 ```sh
 idf.py -B build_multiflex -D VFO_RADIO=multiflex \
@@ -608,6 +692,9 @@ idf.py -B build_svxconnect -D VFO_RADIO=svxconnect \
 idf.py -B build_ubersdr -D VFO_RADIO=ubersdr \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ubersdr" \
        build flash
+idf.py -B build_kiwi -D VFO_RADIO=kiwi \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.kiwi" \
+       build flash
 idf.py -B build_phone -D VFO_RADIO=phone \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.phone" \
        build flash
@@ -616,22 +703,90 @@ idf.py -B build_setup -D VFO_RADIO=setup \
        build flash
 ```
 
-Host-side tests (no hardware, no ESP-IDF):
+Host-side tests (no hardware; of ESP-IDF only its mbedTLS sources, for the
+TLS runs — found at `$IDF_PATH` or `~/esp/esp-idf`, else those runs are left
+out):
 
 ```sh
 cmake -S test/host -B build_host && cmake --build build_host && (cd build_host && ctest)
 ```
 
 `tools/mock_aether.py` is a fault-injecting TCI server for exercising the error
-paths without a radio.
+paths without a radio. `tools/mock_kiwi.py` is a KiwiSDR or a Web-888 that
+keeps its owner's limits — the day limit at login or mid-session, idle and
+kick, every answer a login can get and one that comes late, `/status` with
+its uptime and clock, with or without its hourglass —
+plays a tone or a carrier at any of the receivers' audio rates, records every
+`SET` it is sent, and counts the logins it refused (`--help` lists its
+flags): the `kiwi_limits` test (`ctest -L mock`) runs the web SDR's code from
+`components/sdr_rx` against it, boot after boot, and `kiwi_client_limits` the
+kiwi firmware's receiver from `components/kiwi_client` — its day limit, a
+login left unanswered, a switch or a Test in the middle of a login, a full
+NVS, a restart loop, a KiwiSDR's silent door, the HTTP refusals and every
+login answer, LISTEN AGAIN, the cap on its own attempts, switching live, the
+keepalive, the idle
+acknowledgement only after a touch, the first tune only once the receiver has
+said where it tunes, CW and an offset, CW where its owner centres it (its
+`load_cfg`, read as it goes by: `--cw`), the S-meter's reference, the pitch at
+every rate, the receivers' names and the slab from their `/status`, who their
+owners see (`SET ident_user`, decoded by the mock), the noise filter and the
+squelch, OV — so no real receiver's limits are spent on a test. `kiwi_audio`
+(`ctest -L mock` too) plays that receiver's audio through a ring that runs
+as `audio_out`'s does: a stall's backlog handed over at once or at any pace,
+short stalls again and again — the ring kept fuller while they come and eased
+back once calm, the breaks counted against an older build with `--before` —
+a calm stream at its quarter second, the drift trim for five minutes (an hour
+with `--minutes 60`), the 30 s report in the log, `rej=` and the saves at
+quiet moments. `kiwi_two_ears` runs both ears at once against two and three
+mocks: the right ear on the left ear's dial, mode and passband, each ear
+refusing the other's receiver, a list saved under both, both back after a
+restart, a day-limit mark shared between them, and never two sessions on one
+receiver — each ear on an UberSDR's Kiwi input (`tools/mock_ubersdr.py`,
+below): the app path's ten-digit stamp, the tune, the AGC and the squelch
+again once the audio flows, CW where each receiver centres it — the right
+ear on the left ear's AGC, noise filter and squelch, paced alike, both
+squelches closed a quiet moment, and a right ear whose receiver does not
+reach the dial quiet, its session kept, no break, back at once;
+`kiwi_limits` the same beside a radio, one out of reach from its login on
+(S0 back within its range, until its first reading), and the reach in CW at
+a converter's edges. `kiwi_limits`, `kiwi_client_limits` and `kiwi_two_ears`
+run again behind TLS (`ctest -L tls`), every receiver an `https://` link:
+the mock behind a front that ends TLS with a certificate of the run's own CA
+(`--tls`); their runs in the clear try TLS itself — an http:// link's
+redirect followed and kept (`--redirect`), one elsewhere refused, a
+certificate the knob refuses, a switch in the middle of a slow handshake
+(`--tls-delay`).
+`test_mix_tap` checks the mix a Bluetooth headset or speaker takes: a
+block past full scale brought down whole, never clipped; and
+`test_bt_level` the level each one is then sent at, on top of the VOLUME:
+its steps and defaults, the old fixed quarter's sums matched, and above
+0 dB a loud passage turned down smoothly ahead of it, never clipped.
+`test_kiwi_proto` checks the protocol's plain-C parts, the ADPCM decoder
+against kiwiclient's among them and where a receiver centres CW (its
+`load_cfg`, read whole or in pieces of any size), and `fuzz_kiwi` feeds them
+a million rounds of noise and mangled messages. `tools/lvhost` renders parts
+of the face with the knob's own LVGL on the PC: `make kiwi-check OUT=dir`
+draws the kiwi face's S-meter in one object with its red peak mark beside
+the arcs it replaced, pixel by pixel, the readout with OV and the noise
+filter and squelch editors, and the right ear: its line and reading in
+blue, RIGHT EAR with the left ear's receiver dimmed, BALANCE, and *can't
+reach* where its receiver does not reach the dial; `make slab-check` the
+same word on every face with a web SDR — the FlexRadio's, the Icoms', the
+UberSDR's and Kiwi888's — from `ui.c` itself.
 
 `tools/mock_ubersdr.py` is an UberSDR on the LAN, in the clear — its own
 protocol on 8080 with real Opus, spots, voices and an SSTV gallery, and its
 Kiwi input on 8073 — with a guest's limits (a session's, an idle one, a day's
-allowance), a restart, refused sockets and the bypass password to try.
+allowance), a restart, refused sockets, a full receiver, one that vanishes
+and the bypass password to try; two at once are a list of receivers.
 `make -C tools/uberhost test` runs the ubersdr firmware's client and the web
-SDR's (`components/uber_client`, `components/sdr_rx`) on the PC against it,
-scenario by scenario; `--host 0.0.0.0` puts it on the LAN for a knob.
+SDR's (`components/uber_client`, `components/sdr_rx` on the session in
+`components/kiwi_proto`) on the PC against it, scenario by scenario — the
+hand-over to the next receiver too, with names that are never looked up on
+the network; on the Kiwi input the app path's ten-digit stamp, the passband,
+the AGC and the squelch asked for again once the audio flows, and CW where
+each flavour centres it (`--kiwi-flavour`, `--kiwi-cw`); `--host 0.0.0.0`
+puts it on the LAN for a knob.
 
 `tools/mock_flex.py` is a FlexRadio — its API on 4992 with memories and a
 slice's antennas, and its discovery broadcast — that never transmits, and

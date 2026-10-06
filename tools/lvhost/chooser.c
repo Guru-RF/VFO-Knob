@@ -41,6 +41,7 @@ static const struct { const char *title, *value; bool name; } CASE[] = {
     { "INSTALL", "AetherSDR 1.18.10",       true },
     { "INSTALL", "FlexRadio 1.18.10",       true },
     { "INSTALL", "UberSDR 1.18.10",         true },
+    { "INSTALL", "Kiwi888 1.19.0",          true },
     { "WIFI",    "Set up again",            true },
     /* A station's name comes as a question's choice (ED_CHOICE, 23
      * characters at most): the radio list's own are 15. */

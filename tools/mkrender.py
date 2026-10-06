@@ -23,6 +23,10 @@ in that firmware's colours, so the two sets tell apart at a glance:
   ubersdr     UberSDR's own dark theme: S9+10 on 20 m, 14.215.00 USB, SNR 26 dB
               and NR4 either side of the S-meter, the spot LU7YZ heard now on
               the slab
+  kiwi        Kiwi888, in the KiwiSDR's and the Web-888's own page's look: S9+10
+              on 20 m, 14.200.00 USB, AGC MED and the WDSP noise filter either
+              side of the S-meter, its peak held in red, the receiver
+              EchoTracer on the slab
 
 The body is a 66 mm cylinder, 22 mm deep: a blue anodised ring with diagonal
 knurling over a black base, the cover glass, and the 1.8" panel inside it --
@@ -75,6 +79,13 @@ RADIOS = {
     # tools/mkdocs.py uber_face() draws it, at this reading.
     "ubersdr": dict(name="UberSDR", uber=dict(
         dbm=-63, snr=26, spot=("LU7YZ", "14.215.0 USB  DX 2m  heard 26 dB", "green", "8 on 20m"))),
+    # KiwiSDR and Web-888 receivers, in their own page's look: the lime
+    # S-meter with its peak held in red, the AGC and the noise filter either
+    # side, the receiver in use on the slab. The guides' face, as
+    # tools/mkdocs.py kiwi_face() draws it, at this reading.
+    "kiwi": dict(name="Kiwi888", kiwi=dict(
+        dbm=-65, peak=-63, band="20m", mode="USB", filt="2400", digits=" 14200" "00", active=6,
+        step="100 Hz", nr="WDSP")),
 }
 
 
@@ -410,6 +421,9 @@ def dial(radio):
         # mkdocs imports this file: it is imported here, when wanted.
         import mkdocs
         return mkdocs.uber_face(**R["uber"])
+    if R.get("kiwi"):
+        import mkdocs
+        return mkdocs.kiwi_face(**R["kiwi"])
     DBM = R["dbm"]
     s = [f'<circle cx="180" cy="180" r="180" fill="{D.BG}"/>',
          f'<path d="{D.arc_path(D.ARC_ROT, D.ARC_ROT + D.ARC_SPAN, D.RC)}" '

@@ -16,8 +16,9 @@ CONFIG_ESP_CONSOLE_NONE=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
 # CONFIG_LWIP_DHCPS_ADD_DNS is not set
-# The update downloads' TLS without the AES hardware, whose DMA borrows the
-# internal RAM a USB build is short of.
+# The update downloads' TLS, and the web SDR's for a receiver behind an
+# https:// front, without the AES hardware, whose DMA borrows the internal
+# RAM a USB build is short of.
 CONFIG_MBEDTLS_HARDWARE_AES=n
 
 # A web SDR beside the radio (components/sdr_rx) and its test on the web

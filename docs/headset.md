@@ -25,6 +25,8 @@ While a speaker is connected:
   to it, as most do: it turns itself to the knob's, and its own volume buttons
   or knob turn the knob's. One that does not keeps its own, and the knob
   turns down what it sends;
+- it is sent its audio 12 dB down, a quarter, until its own **Level** is set
+  on the configuration page ([Its level](#its-level));
 - you transmit with the knob's own microphone, as with nothing connected,
   and the speaker falls silent while you do;
 - its buttons key nothing;
@@ -32,10 +34,11 @@ While a speaker is connected:
   never red — and its battery beside it, if it reports it. See
   [A Bluetooth speaker](#a-bluetooth-speaker).
 
-The UberSDR firmware only receives: there the headset is for listening, and
-its logo shows beside the spots, never in red, since nothing keys. So it is
-with the IC-R8600 receiver on the Icom firmware: the slab says **RECEIVER**,
-with the logo at its end, and nothing keys.
+The UberSDR and Kiwi888 firmwares only receive: there the headset is for
+listening, and its logo shows beside the spots or the receiver's name, never
+in red, since nothing keys. So it is with the IC-R8600 receiver on the Icom
+firmware: the slab says **RECEIVER**, with the logo at its end, and nothing
+keys.
 
 The Telephone firmware opens the headset's audio for its calls only, as a
 mobile phone does. The audio opens when a call rings in, so the ring plays in
@@ -154,7 +157,43 @@ speaker** is there once the second chip runs the companion firmware.
 The knob remembers it, and calls it whenever it is switched on, as a phone
 does: switch the headset on and it is there in a few seconds. **Disconnect**
 lets it go until it calls again or you connect it; **Forget it** unpairs it,
-and forgets what the knob made of it.
+and forgets what the knob made of it, and its level.
+
+## Its level
+
+**Level**, beside the device on the configuration page, is how loud the
+knob sends a headset or speaker its audio, on top of the knob's **VOLUME**:
+from 24 dB less to 12 dB more, in steps of 3 dB, with **−** and **+**. Each
+step is heard at once from the device connected, and the knob keeps it for
+that device, by its Bluetooth address, on every firmware: each headset or
+speaker has its own back when it connects.
+
+Until one is set, a speaker is sent 12 dB less — a quarter — and a headset
+the jack's level, 0 dB; the page says *a speaker's default* or *a headset's
+default* beside the level while it is at that. A speaker is a loudspeaker,
+and what suits earphones at a low **VOLUME** fills a room from one; but
+speakers are not all as loud. 12 dB down suits a JLab Pop Party, and a small
+one, a Sony SRS-XB100, plays far quieter there: raise its **Level**, and the
+JLab stays as it is.
+
+On a speaker whose own volume is the knob's **VOLUME** the level is on top of
+the full level it is sent; on one that keeps its own, and on a headset, on
+top of the jack's loudness. At 0 dB and below nothing passes full scale, the
+most the audio carries. Above it a loud passage can, and the knob turns it
+down rather than clip it: it holds the audio back a moment — 10 ms, 15 on
+SVXConnect and the Telephone — to hear what comes, turns the level down
+smoothly just before a loud passage, so that its peaks reach full scale and
+go no further, and brings it back up over a fraction of a second after.
+Raised that far, a level brings the quiet passages up while the loud ones
+stay at the most the audio carries, without a crackle or a click. The moment
+held back counts in a speaker's delay on the page; a step across 0 dB
+repeats or skips it, once.
+
+The knob keeps the levels of the last eight devices set, and a ninth forgets
+the oldest; **Forget it** forgets the device's. It saves a level a couple of
+seconds after the last step — never during an over or a call, as a flash
+write would hold the audio up, and on Kiwi888 at a quiet moment of the
+receiver, or half a minute on.
 
 ## On the knob
 
@@ -171,8 +210,9 @@ shows a speaker there instead ([below](#a-bluetooth-speaker)).
 |---|---|
 | ![A headset connected: its logo at the slab's end](headset/01-connected.svg) | ![Its microphone muted: the logo in red](headset/02-muted.svg) |
 
-The headset hears what the jack plays, the knob's volume applied, and its
-own volume buttons on top. Its mute is read from the microphone gain it
+The headset hears what the jack plays, the knob's volume applied, its
+**Level** on top — 0 dB until one is set ([Its level](#its-level)) — and its
+own volume buttons after that. Its mute is read from the microphone gain it
 reports — 0 while muted, as the Jabras do; a headset that does not report it
 never turns the logo red.
 
@@ -195,9 +235,10 @@ Most headsets and speakers made to work with phones report it the way an
 iPhone asks for it — when they connect, and again each time it changes by a
 tenth: they say what they are with Apple's `AT+XAPL`, which the second chip
 answers as an iPhone does, and their charge, in steps of 10 %, with
-`AT+IPHONEACCEV`. The Jabra Evolve2 headsets ask so, and so does the JLab
-speaker, over the hands-free link it opens beside its music, which carries no
-call. A device that reports nothing never shows a battery. The hands-free
+`AT+IPHONEACCEV`. The Jabra Evolve2 headsets ask so, and so do the JLab Pop
+Party and the Sony SRS-XB100 speakers, over the hands-free link each opens
+beside its music, which carries no call. A device that reports nothing
+never shows a battery: the Marshall Stockwell III, for one. The hands-free
 profile has a battery report of its own (1.7's HF indicators, `AT+BIEV`); the
 Bluetooth stack on the second chip offers it to no headset, so a device that
 reports its battery only that way shows none — one that sends it all the
@@ -279,27 +320,31 @@ hears both, the Bluetooth one a little later.
 from a phone: Bluetooth's remote control profile carries it (AVRCP's
 absolute volume). The knob sets such a speaker to its **VOLUME** — the face's
 readout and its editor, or the page's **Volume** — and sends it the audio at
-a quarter of full level, the speaker's own amplifier turning it down from
-there. A speaker with no volume buttons, then, is set from the knob, and one
-with buttons or a knob of its own turns the knob's **VOLUME** with them: the
-face and the page follow, and it is saved as a turn of the dial is. The dial
-turning goes to the speaker a few times a second, its last position always. A
-**VOLUME** of 0 is silence on any speaker. The jack keeps the knob's
-**VOLUME**, as it always has.
+full level with its **Level** on top, a quarter of full level until one is
+set: the speaker's own amplifier turns it down from there. A speaker with no
+volume buttons, then, is set from the knob, and one with buttons or a knob
+of its own turns the knob's **VOLUME** with them: the face and the page
+follow, and it is saved as a turn of the dial is. The dial turning goes to
+the speaker a few times a second, its last position always. A **VOLUME** of
+0 is silence on any speaker. The jack keeps the knob's **VOLUME**, as it
+always has.
 
-Any speaker is sent a quarter of the level, 12 dB less: a quarter of full
-level where its own volume is the knob's **VOLUME**, a quarter of the jack's
-where it keeps its own. It is a loudspeaker, and what suits earphones at a low
-**VOLUME** fills a room from one. The headset is sent the jack's level.
+Until its **Level** is set, any speaker is sent a quarter of the level, 12 dB
+less: a quarter of full level where its own volume is the knob's **VOLUME**,
+a quarter of the jack's where it keeps its own. It is a loudspeaker, and what
+suits earphones at a low **VOLUME** fills a room from one. The headset is sent
+the jack's level. Each one's **Level** raises or lowers that, for that device
+alone: [Its level](#its-level).
 
 When such a speaker connects, its audio waits until it has turned to the
 knob's **VOLUME** — under a second for most, up to five for one slow to bring
 up its remote control, or without one — so that it never plays at its own
-level first; then its sound rises to the **VOLUME** over about a second. Where
-it says it plays louder than asked — a step of its own, or the dial just
-turned down — the knob turns down what it sends by as much, at once. A turn of
-its own buttons right after a turn of the dial is taken for the dial's own,
-and leaves the knob's **VOLUME** as it is; when the two cross, the dial's wins.
+level first; then its sound rises to the **VOLUME** over a second or so, a
+little longer the higher its **Level**. Where it says it plays louder than
+asked — a step of its own, or the dial just turned down — the knob turns down
+what it sends by as much, at once. A turn of its own buttons right after a
+turn of the dial is taken for the dial's own, and leaves the knob's
+**VOLUME** as it is; when the two cross, the dial's wins.
 
 A speaker that does not take its volume that way keeps its own, set by its
 own controls, and the knob turns down what it sends to it as it does the
@@ -321,8 +366,9 @@ can then only be turned down further, from the knob.
   end talks, as without a speaker — longer by the speaker's lag:
   [its guide](phone.md#a-bluetooth-headset).
 - **The receivers** play in it — on the UberSDR firmware with the speaker
-  beside the spot, on the IC-R8600 with it at the end of **RECEIVER** — and
-  nothing keys.
+  beside the spot, on the Kiwi888 firmware beside the receiver's name, both
+  ears together, on the IC-R8600 at the end of **RECEIVER** — and nothing
+  keys.
 
 A second chip whose firmware came before speakers knows headsets only; a
 knob whose firmware came before them is never given a speaker — to it every
@@ -341,6 +387,8 @@ POST /api/bt   do=scan              look for headsets and speakers, ten seconds
                do=forget&bda=…
                do=kind&bda=…&kind=speaker
                                     use it as a speaker (kind=headset: as a headset)
+               do=level&bda=…&level=-6
+                                    its level, dB: -24 to 12, in steps of 3
                do=boom&on=1         the boom arm as the PTT (on=0: not)
 POST /api/bt/update                 a signed second-chip firmware, as the body:
                                     the knob sends it at a quiet moment
@@ -376,5 +424,9 @@ sends, and the next **VOLUME** tries again), or `""` with no speaker;
 `battery` is the device's charge as it last reported it, 0 to 100 (%), or -1
 while it is not known — none connected, nothing said yet since it connected,
 or a second chip whose firmware came before batteries.
+`level` is the device's level, in dB — its own, set with `do=level`, or its
+kind's — and `level_default` its kind's: -12 for a speaker, 0 for a headset;
+both `null` with no device. `do=level` takes any device's address, connected
+or not, and a level outside the steps is answered 400.
 `speakers` says whether the second chip plays to speakers at all; `do=kind`
 to one that does not is answered 409.

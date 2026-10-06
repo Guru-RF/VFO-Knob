@@ -68,6 +68,7 @@ A name too long for the panel is shown in smaller type, so it fits.
 | **FlexRadio** | a FLEX-6000/8000 as a MultiFlex station, on the LAN or through SmartLink |
 | **SVXConnect** | an SvxLink reflector: the knob is the station |
 | **UberSDR** | an UberSDR web receiver, receive only, with its spots and SSTV pictures |
+| **Kiwi888** | KiwiSDR and Web-888 web receivers, receive only: up to four, another a swipe away, a second in the right ear |
 | **Telephone** | a SIP telephone account: the knob is the handset |
 
 The list comes from the update server each time, so a knob set up long after
