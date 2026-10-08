@@ -41,6 +41,11 @@
 #include "kiwi.h"
 #include "kiwi_sess.h"
 #endif
+/* The openwebrx firmware's receivers are the radios' list, switched live. */
+#if VFO_RADIO_OWRX
+#include "owrx.h"
+#include "owrx_proto.h"
+#endif
 #include "ui.h"
 #include "usb_net.h"
 
@@ -856,6 +861,27 @@ static int radios_sel(void)
     return f >= 0 ? net_prov_radio_count() + f : net_prov_radio_active();
 }
 
+#if VFO_RADIO_OWRX
+/* ,"radios":{"sel":0,"live":true,"names":[...],"via":[...]} -- for the
+ * radio's JSON: the receivers by their names on the dial, switched live. */
+static size_t radios_names_json(char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static char nm[24], e[52];      /* this task's stack is tight */
+    const int n = net_prov_radio_count();
+    int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"live\":true,\"names\":[", owrx_rx_active());
+    for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
+        nm[0] = 0;
+        owrx_rx_label(i, nm, sizeof nm);
+        json_esc(nm, e, sizeof e);
+        o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", e);
+    }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "],\"via\":[");
+    for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++)
+        o += snprintf(j + o, cap - o, "%s\"OpenWebRX\"", i ? "," : "");
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
+#else
 /* ,"radios":{"sel":0,"names":[...],"via":[...]} -- for the radio's JSON:
  * every radio, and how it is reached ("LAN", "SmartLink"): the configured
  * ones and those the client found on the LAN, then the others. */
@@ -882,6 +908,7 @@ static size_t radios_names_json(char *j, size_t cap)
     if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
     return o > 0 && (size_t)o < cap ? (size_t)o : 0;
 }
+#endif
 
 static esp_err_t radios_get_h(httpd_req_t *r)
 {
@@ -939,6 +966,25 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         memset(e, 0, sizeof *e);
         snprintf(key, sizeof key, "host%d", i);
         if (!field(body, key, v, sizeof v)) continue;
+#if VFO_RADIO_OWRX
+        /* An OpenWebRX by its address whole -- scheme, port and path, as its
+         * client reads it (owrx_url): "https://fms.komkon.org/OWRX/",
+         * "http://sdr.on4pra.be/", "host:8073". Kept as that reads it back,
+         * the port only where it is not the scheme's own. */
+        {
+            owrx_url_t ou;
+            if (!owrx_url(v + strspn(v, " "), &ou)) continue;
+            char pp[8] = "";
+            if (ou.port != (ou.tls ? 443 : 80)) snprintf(pp, sizeof pp, ":%u", (unsigned)ou.port);
+            const int w = snprintf(e->host, sizeof e->host, "%s://%s%s%s", ou.tls ? "https" : "http", ou.host, pp,
+                                   ou.path);
+            if (w < 0 || (size_t)w >= sizeof e->host) {
+                httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "an address too long to keep: 63 characters at most");
+                return ESP_FAIL;
+            }
+            e->port = ou.port;
+        }
+#else
         /* "http://host:port/" and "host:port" too, as for the SDRs. An
          * UberSDR keeps its scheme with the name: https:// is TLS and http://
          * in the clear, whatever the port -- a name alone is TLS on 443 only,
@@ -961,6 +1007,7 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         else if (s[hl] == ':') e->port = (uint16_t)clampl(strtol(s + hl + 1, NULL, 10), 1, 65535);
         else if (scheme[0]) e->port = scheme[4] == 's' ? 443 : 80;
         else e->port = net_prov_cfg()->radio_port;
+#endif
         snprintf(key, sizeof key, "name%d", i);
         field(body, key, e->name, sizeof e->name);
         snprintf(key, sizeof key, "user%d", i);
@@ -1021,6 +1068,16 @@ static esp_err_t radios_switch_h(httpd_req_t *r)
         return ESP_FAIL;
     }
     if (to < nd) strlcpy(name, e.name[0] ? e.name : net_prov_host_shown(e.host), sizeof name);
+#if VFO_RADIO_OWRX
+    /* Live, as the dial's: no restart -- and the one in use chosen again
+     * lets go of what held it back. */
+    if (to >= nd || !owrx_rx_use((int)to, true)) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "to=N: a receiver in the list");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "web: receiver %ld (%s) in use", to, name);
+    return httpd_resp_sendstr(r, "switched");
+#endif
     if (to == radios_sel()) return httpd_resp_sendstr(r, "already in use");
     if (radio_on_air()) {
         httpd_resp_set_status(r, "409 Conflict");

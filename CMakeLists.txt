@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom xiegu svxconnect multiflex ubersdr kiwi setup phone)
+set(_vfo_radios aethersdr icom xiegu svxconnect multiflex ubersdr kiwi owrx setup phone)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -46,7 +46,8 @@ endif()
 # knob is one of the radio's MultiFlex stations. ubersdr is no radio either,
 # but a web receiver -- an UberSDR, over its own protocol -- listened to and
 # tuned, with nothing to transmit. kiwi is the same for a KiwiSDR or a
-# Web-888, over KiwiSDR's protocol, with its receivers switched live. setup
+# Web-888, over KiwiSDR's protocol, with its receivers switched live; owrx
+# for an OpenWebRX or an OpenWebRX+, over theirs. setup
 # has no radio at all: it sets up the knob's WiFi from a phone and installs
 # one of the others. phone is a telephone: a SIP account, called and answered
 # on SVXConnect's face.
@@ -60,6 +61,8 @@ elseif(VFO_RADIO STREQUAL "ubersdr")
     set(_vfo_client uber_client)
 elseif(VFO_RADIO STREQUAL "kiwi")
     set(_vfo_client kiwi_client)
+elseif(VFO_RADIO STREQUAL "owrx")
+    set(_vfo_client owrx_client)
 elseif(VFO_RADIO STREQUAL "setup")
     set(_vfo_client setup_client)
 elseif(VFO_RADIO STREQUAL "phone")
@@ -67,7 +70,8 @@ elseif(VFO_RADIO STREQUAL "phone")
 else()
     set(_vfo_client icom_client)
 endif()
-foreach(_c tci_client icom_client svx_client flex_client uber_client kiwi_client setup_client phone_client)
+foreach(_c tci_client icom_client svx_client flex_client uber_client kiwi_client owrx_client setup_client
+           phone_client)
     if(NOT _c STREQUAL _vfo_client)
         list(APPEND EXCLUDE_COMPONENTS ${_c})
     endif()
@@ -85,7 +89,7 @@ endif()
 # For components that call the client (main, webcfg), and for code that looks
 # different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_XIEGU,
 # VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_UBERSDR, VFO_RADIO_KIWI,
-# VFO_RADIO_SETUP or VFO_RADIO_PHONE is defined as 1.
+# VFO_RADIO_OWRX, VFO_RADIO_SETUP or VFO_RADIO_PHONE is defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
 idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND)
@@ -98,7 +102,9 @@ if(VFO_RADIO MATCHES "^(icom|xiegu|multiflex|ubersdr|kiwi)$")
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_HAS_SDR=1" APPEND)
 endif()
 # A firmware that only receives: no PTT, no microphone, no transmit face.
-if(VFO_RADIO MATCHES "^(ubersdr|kiwi)$")
+# The OpenWebRX one has no web SDR beside it (no VFO_HAS_SDR): a second
+# receiver's session would double what WiFi carries, the waterfall in it.
+if(VFO_RADIO MATCHES "^(ubersdr|kiwi|owrx)$")
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_RX_ONLY=1" APPEND)
 endif()
 # For trying the face's touch without a transmitter: -D VFO_PTT_DRY_RUN=1

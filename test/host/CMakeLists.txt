@@ -1,7 +1,7 @@
 # Host-side tests for components/vfo_core, the FlexRadio API's parsing, the
 # second chip's reading of a device's battery, the knob's own battery, the
 # headset's mix and a Bluetooth headset's or speaker's level,
-# components/kiwi_proto, and the owners' limits -- the web SDR's and the kiwi
+# components/kiwi_proto, components/owrx_proto, and the owners' limits -- the web SDR's and the kiwi
 # firmware's receiver's -- against a mock receiver, in the clear and behind
 # TLS. No cross-compiler; of ESP-IDF only its mbedTLS sources, for the
 # receivers' TLS, where its tree is (below).
@@ -161,6 +161,46 @@ target_compile_options(fuzz_kiwi PRIVATE -Wall -Wextra)
 add_test(NAME fuzz_kiwi COMMAND fuzz_kiwi)
 set_tests_properties(fuzz_kiwi PROPERTIES TIMEOUT 600)
 
+# OpenWebRX's protocol, the plain-C part (components/owrx_proto): its
+# messages read in pieces broken at every byte, status.json and its join, the
+# writers, the modes, the audio decoder...
+set(OWRX ${CMAKE_CURRENT_SOURCE_DIR}/../../components/owrx_proto)
+add_library(owrx_proto STATIC ${OWRX}/owrx_proto.c ${OWRX}/owrx_adpcm.c)
+target_include_directories(owrx_proto PUBLIC ${OWRX}/include)
+target_link_libraries(owrx_proto PUBLIC m)
+target_compile_options(owrx_proto PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(test_owrx_proto src/test_owrx_proto.c)
+target_link_libraries(test_owrx_proto PRIVATE owrx_proto m)
+target_compile_options(test_owrx_proto PRIVATE -Wall -Wextra)
+add_test(NAME test_owrx_proto COMMAND test_owrx_proto)
+# ...the decoder against csdr's encoder, as tools/owrx_adpcm.py ports it
+# (its check-csdr held it to csdr's own, byte for byte): 12 and 48 kHz, the
+# stream in pieces of every size...
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_FOUND)
+    foreach(_rate 12000 48000)
+        add_test(NAME owrx_adpcm_${_rate}
+                 COMMAND sh -c "\"$1\" -I \"$2\" vectors \"$3.bin\" \"$3.pcm\" --rate ${_rate} && \"$4\" \"$3.bin\" \"$3.pcm\""
+                         sh ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/owrx_adpcm.py
+                         ${CMAKE_CURRENT_BINARY_DIR}/owrx_vectors_${_rate} $<TARGET_FILE:test_owrx_proto>)
+    endforeach()
+endif()
+# ...the mock receiver (tools/mock_owrx.py) tried by a client shaped as the
+# receivers' own page, through every case the knob must meet...
+if(Python3_FOUND)
+    add_test(NAME owrx_mock
+             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/owrx_mock.py
+                     --mock ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_owrx.py)
+    set_tests_properties(owrx_mock PROPERTIES TIMEOUT 600 LABELS mock)
+endif()
+# ...and the same fed a million rounds of what any address might send.
+# By hand, for as long as it is let run: fuzz_owrx 0 [SEED].
+add_executable(fuzz_owrx src/fuzz_owrx.c)
+target_link_libraries(fuzz_owrx PRIVATE owrx_proto)
+target_compile_options(fuzz_owrx PRIVATE -Wall -Wextra)
+add_test(NAME fuzz_owrx COMMAND fuzz_owrx)
+set_tests_properties(fuzz_owrx PROPERTIES TIMEOUT 900)
+
 # The web SDR beside a radio -- components/sdr_rx on the session in
 # components/kiwi_proto, with its day-limit marks, as the firmware compiles
 # them -- on the PC: shim/ stands in for ESP-IDF (NVS in a file, so a second
@@ -210,6 +250,40 @@ target_compile_definitions(kiwi_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM)
 target_link_libraries(kiwi_host PRIVATE kiwi_proto vfo_core ${KIWI_TLS_LIBS} Threads::Threads)
 target_compile_options(kiwi_host PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare)
 
+# OpenWebRX's session -- components/owrx_proto's owrx_sess.c on the web SDRs'
+# link (components/websdr_link), as the firmware builds them -- on the PC
+# against tools/mock_owrx.py, its audio into the shim's ring.
+set(WSL ${CMAKE_CURRENT_SOURCE_DIR}/../../components/websdr_link)
+add_executable(owrx_link_host
+    src/owrx_link_host.c
+    shim/shim.c
+    ${WSL}/websdr_link.c
+    ${WSL}/wl_flow.c
+    ${OWRX}/owrx_sess.c
+    ${KIWI_TLS_SRCS})
+target_include_directories(owrx_link_host PRIVATE shim ${WSL}/include ${KIWI})
+target_compile_definitions(owrx_link_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM)
+target_link_libraries(owrx_link_host PRIVATE owrx_proto kiwi_proto ${KIWI_TLS_LIBS} Threads::Threads)
+target_compile_options(owrx_link_host PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare)
+
+# ...and the openwebrx firmware's receiver: components/owrx_client on that
+# session, with a radios' list of its own in the place of net_prov's.
+set(OC ${CMAKE_CURRENT_SOURCE_DIR}/../../components/owrx_client)
+add_executable(owrx_host
+    src/owrx_host.c
+    shim/shim.c
+    ${OC}/owrx_client.c
+    ${WSL}/websdr_link.c
+    ${WSL}/wl_flow.c
+    ${OWRX}/owrx_sess.c
+    ${KIWI_TLS_SRCS})
+target_include_directories(owrx_host PRIVATE shim ${OC}/include ${WSL}/include ${KIWI}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../components/net_prov/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/../../components/radio/include)
+target_compile_definitions(owrx_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM)
+target_link_libraries(owrx_host PRIVATE owrx_proto kiwi_proto vfo_core ${KIWI_TLS_LIBS} Threads::Threads)
+target_compile_options(owrx_host PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare)
+
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
     # Without TLS in the harnesses, their scenarios about it are left out.
@@ -245,6 +319,24 @@ if(Python3_FOUND)
                      --mock ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_kiwi.py
                      --uber ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_ubersdr.py ${_no_tls})
     set_tests_properties(kiwi_two_ears PROPERTIES TIMEOUT 600 LABELS mock)
+    # OpenWebRX's session against its mock: a minute's stream (T2's ten
+    # minutes with --minutes 10 by hand), TLS behind a redirect, a squelch's
+    # pauses, band changes, a stall, WFM, and every end.
+    add_test(NAME owrx_link
+             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/owrx_link.py
+                     --host $<TARGET_FILE:owrx_link_host>
+                     --mock ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_owrx.py ${_no_tls})
+    set_tests_properties(owrx_link PROPERTIES TIMEOUT 900 LABELS mock)
+    # ...and the openwebrx firmware's receiver on it: its bands, the dial at
+    # their edges, another band no sooner than 11 s after the last, another
+    # listener's followed; the receivers handed over, one full or banned
+    # waited for as its owner asks, another chosen live; what is kept
+    # through a restart.
+    add_test(NAME owrx_client
+             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/owrx_client.py
+                     --host $<TARGET_FILE:owrx_host>
+                     --mock ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_owrx.py ${_no_tls})
+    set_tests_properties(owrx_client PROPERTIES TIMEOUT 900 LABELS mock)
     # ...and the three again with every receiver behind TLS, as one behind
     # the kiwisdr.com proxy or Cloudflare is reached: the owners' limits as
     # they are in the clear. A run that cannot be had (no openssl to make

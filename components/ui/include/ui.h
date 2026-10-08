@@ -58,6 +58,19 @@ typedef struct {
      * face is drawn. And its ADC overloaded. */
     const char *rx_line2, *rx_line3;
     bool     ovl;
+    /* The openwebrx firmware's: its S-meter in the receiver's own dB (in
+     * smeter_dbm), on the scale its page draws it on, meter_lo to meter_hi;
+     * where the AGC is, everyone listening (-1 not said); where the gain is,
+     * its squelch in that dB (-150 open). And the band it is on, by the
+     * receiver's own name -- another chosen from its list (ui_set_bands), not
+     * for band_wait_s yet, every other listener moved with it. SAM where the
+     * receiver plays it (OpenWebRX+). */
+    float    meter_lo, meter_hi;
+    int16_t  users, sq_db;
+    char     band_name[24];
+    int8_t   band_sel;           /* in ui_set_bands' list; -1 none */
+    uint8_t  band_wait_s;
+    bool     has_sam;
     /* Memory mode (radio.h): the knob selects channels instead of tuning, and
      * the channel takes the frequency readout's place. mem_state is UI_MEM_*,
      * in the order of radio_mem_state_t. */
@@ -217,6 +230,19 @@ typedef struct {
 } ui_spot_t;
 void ui_set_spots(const ui_spot_t *spots, uint8_t n);
 
+/* --- a receiver's bands (the openwebrx firmware) ---------------------------
+ * The receiver's own bands -- its profiles -- in its order: the swipe down,
+ * or a tap on the band, opens them on the knob, and a tap on the panel asks
+ * for that one (ui_commit_t.band): every listener goes with it. */
+#define UI_BANDS_MAX 24
+typedef struct {
+    char name[24];          /* "40m" */
+    char sdr[16];           /* under it its SDR, "RSPdx" ("" for none)... */
+    char range[24];         /* ...and where it is in MHz, "7.000-7.200" ("" not known) */
+} ui_band_t;
+/* False when the face was busy drawing: offer the list again. */
+bool ui_set_bands(const ui_band_t *bands, uint8_t n);
+
 /* The telephone's calls, newest first, for the history the swipe from the
  * left brings: the knob turns through them, a tap on the panel calls back. */
 #define UI_CALLS_MAX 20
@@ -313,6 +339,7 @@ typedef struct {
     bool     have_radio;    int8_t  radio;      /* another radio: restart into it */
     bool     have_vm;       bool    vm_mem;     /* V/M: memory mode, or the VFO */
     bool     have_spot;     uint32_t spot_hz;  char spot_mode[5];  /* a spot: tune there */
+    bool     have_band;     uint8_t band;       /* a receiver's band, by its place (ui_set_bands) */
 } ui_commit_t;
 
 /* Non-zero if the operator accepted an edit, or a live editor moved (live

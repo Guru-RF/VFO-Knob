@@ -2088,6 +2088,260 @@ static void runs(const char *dir)
     printf("%s: the receiver's name %d times centred, %d moved aside, %d cut with dots; its box within %d-%d\n",
            "slab_kiwi", calls_centred, calls_moved, calls_cut, call_least_l, call_most_r);
 }
+#elif VFO_RADIO_OWRX
+/* The OpenWebRX face: Kiwi888's slab and meter, the meter in the receiver's
+ * own dB on its page's scale -- green, yellow from 70 % of it, red from 90
+ * -- its listeners where the AGC is, its squelch where the gain is, and its
+ * bands, a swipe down or a tap on the band away. */
+#define OW_GREEN  0x22FF2F
+#define OW_YELLOW 0xFFF720
+#define OW_RED    0xFF5939
+#define OW_TRACK  0x373737
+#define OW_DIM    0x6E6E6E                  /* ui.c's C_DISABLED there */
+
+static void owrx_base(void)
+{
+    base();
+    st.freq_hz = 7074000; st.mode = "usb"; st.filt_lo = 300; st.filt_hi = 3000;
+    st.step_hz = 100;
+    st.meter_lo = -108.0f; st.meter_hi = 0.0f;
+    st.smeter_dbm = -85.0f;
+    st.users = 3; st.sq_db = -150; st.squelch_pct = 0; st.has_squelch = st.have_squelch = true;
+    st.band_sel = 1; st.band_wait_s = 0; st.has_sam = true;
+    strcpy(st.band_name, "40m");
+    strcpy(st.server, "ON4PRA WebSDR");
+    st.rx_line2 = "40m  RSPdx";
+    st.rx_line3 = "OpenWebRX+ 1.2.126";
+    st.n_radios = 2; st.n_radios_direct = 2; st.radio_sel = 0;
+    strcpy(st.radio_name[0], "ON4PRA WebSDR");
+    strcpy(st.radio_name[1], "fms.komkon.org");
+}
+
+/* The meter's colour at share f of its arc, across the middle of its band. */
+static uint16_t arc_px(float f)
+{
+    lv_obj_invalidate(lv_screen_active());
+    lv_refr_now(disp);
+    const double a = (170.0 + f * 200.0) * M_PI / 180.0;
+    const int x = (int)lround(180 + 164 * cos(a)), y = (int)lround(180 + 164 * sin(a));
+    return fb[y * W + x];
+}
+static uint16_t u16(uint32_t rgb) { return lv_color_to_u16(lv_color_hex(rgb)); }
+
+/* The editor's value: the label in the panel saying `text`. */
+static lv_obj_t *value_is(const char *text) { return label_is(lv_screen_active(), text); }
+
+static const ui_band_t BANDS9[] = {
+    { "160m", "RSPdx", "1.810-2.000" },        { "40m", "RSPdx", "7.000-7.200" },
+    { "20m", "RSPdx", "14.000-14.350" },       { "2m FM Repeaters", "RTL-SDR", "145.575-145.800" },
+    { "70cm", "Airspy HF+ Disc", "430.000-440.000" },     /* 15: the longest an SDR's keeps */
+    { "Airband", "RTL-SDR", "118.000-137.000" },
+    { "PMR446", "RTL-SDR", "446.000-446.200" },
+    { "Broadcast FM Wide Band", "RTL-SDR", "87.500-108.000" },  /* 22: the longest a name keeps */
+    { "CB", "", "" },
+};
+#define N_BANDS9 ((int)(sizeof BANDS9 / sizeof *BANDS9))
+
+static void runs(const char *dir)
+{
+    owrx_base(); run(1500);
+
+    where = "the face: its dB readout, nothing under it, its listeners and its squelch";
+    CHECK(shown("-85.0 dB"));
+    CHECK(shown("USERS") && shown("3"));
+    CHECK(shown("SQL") && shown("OPEN"));
+    CHECK(!shown("-85 dBm"));
+    CHECK(shown("40m") && shown("USB") && shown("2700"));
+    CHECK(shown("ON4PRA WebSDR") && shown("40m  RSPdx") && shown("OpenWebRX+ 1.2.126"));
+    picture(dir, "owrx-face");
+
+    where = "the meter: green to 70 % of its scale (-85 dB of -108..0 is 21 %)";
+    st.smeter_dbm = -54.0f; run(3000);                  /* 50 % */
+    CHECK(arc_px(0.45f) == u16(OW_GREEN));
+    CHECK(arc_px(0.58f) == u16(OW_TRACK));
+    CHECK(shown("-54.0 dB"));
+    where = "...yellow from 70 %, red from 90";
+    st.smeter_dbm = -5.0f; run(3000);                   /* 95 % */
+    CHECK(arc_px(0.65f) == u16(OW_GREEN));
+    CHECK(arc_px(0.75f) == u16(OW_YELLOW));
+    CHECK(arc_px(0.92f) == u16(OW_RED));
+    picture(dir, "owrx-meter-red");
+    where = "...on the receiver's own scale: -128..-28, -78 dB is half way";
+    st.meter_lo = -128.0f; st.meter_hi = -28.0f; st.smeter_dbm = -78.0f; run(3000);
+    CHECK(arc_px(0.45f) == u16(OW_GREEN));
+    CHECK(arc_px(0.58f) == u16(OW_TRACK));
+    where = "...a scale it cannot mean is not taken";
+    st.meter_lo = -10.0f; st.meter_hi = -8.0f; run(1500);
+    CHECK(arc_px(0.45f) == u16(OW_GREEN) && arc_px(0.58f) == u16(OW_TRACK));
+    st.meter_lo = -108.0f; st.meter_hi = 0.0f; st.smeter_dbm = -85.0f; run(3000);
+    where = "...with no link: no reading";
+    st.link_ok = false; run(200);
+    CHECK(shown("-- dB"));
+    st.link_ok = true; run(200);
+
+    where = "the squelch: where the gain is, tapped; its value in the receiver's dB";
+    tap_at(180 + 72, 88, 80); run(100);
+    CHECK(ui_edit_active() && shown("SQUELCH") && shown("OPEN"));
+    ui_edit_rotate(50); run(100);
+    CHECK(shown("-54 dB"));
+    picture(dir, "owrx-squelch");
+    {
+        ui_commit_t c;
+        commit(&c);                                     /* live as it turns */
+        CHECK(c.have_squelch && c.squelch_pct == 50);
+    }
+    tap_at(OUTSIDE_X, OUTSIDE_Y, 80); settle(); quiet();
+    st.squelch_pct = 50; st.sq_db = -54; run(100);
+    CHECK(shown("-54 dB") && !shown("OPEN"));
+    st.squelch_pct = 0; st.sq_db = -150; run(100);
+    where = "...the listeners' place takes no tap";
+    tap_at(180 - 72, 88, 80); run(100);
+    CHECK(!ui_edit_active());
+    after();
+
+    where = "no bands said yet: the swipe down opens nothing";
+    swipe(180, 70, 180, 230); run(100);
+    CHECK(!ui_edit_active());
+    after();
+
+    where = "the bands: a swipe down, on the one in use";
+    CHECK(ui_set_bands(BANDS9, N_BANDS9));
+    run(60);
+    swipe(180, 70, 180, 230); run(100);
+    CHECK(ui_edit_active() && shown("BAND 2 / 9") && value_is("40m") && shown("RSPdx  7.000-7.200  -  in use"));
+    where = "...the next: what a tap does there -- every other listener moved too";
+    ui_edit_rotate(1); run(100);
+    CHECK(value_is("20m") && shown("RSPdx  14.000-14.350  -  moves 2 more"));
+    picture(dir, "owrx-band");
+    {
+        lv_obj_t *v = value_is("20m");
+        CHECK(v && lv_color_eq(lv_obj_get_style_text_color(v, 0), lv_color_hex(0xFFFF80)));
+    }
+    where = "...the longest names: in the panel whole or cut with dots, the hint within it";
+    int widest = 0;
+    for (int i = 2; i < N_BANDS9; i++) {
+        ui_edit_rotate(1); run(100);
+        lv_obj_t *t = label_from(lv_screen_active(), "BAND ");
+        CHECK(t != NULL);
+        /* The value: the panel's middle label, by its place. */
+        const int32_t px = PANEL_X - 145, pw = 290;
+        bool found = false;
+        for (uint32_t k = 0; t && k < lv_obj_get_child_count(lv_obj_get_parent(t)); k++) {
+            lv_obj_t *o = lv_obj_get_child(lv_obj_get_parent(t), (int32_t)k);
+            if (!lv_obj_check_type(o, &lv_label_class) || o == t) continue;
+            lv_area_t a;
+            lv_obj_get_coords(o, &a);
+            CHECK(a.x1 >= px + 4 && a.x2 <= px + pw - 4);
+            if (a.x2 - a.x1 > widest) widest = a.x2 - a.x1;
+            found = true;
+        }
+        CHECK(found);
+        if (i == 7) picture(dir, "owrx-band-longest");
+    }
+    printf("  the band chooser: its widest label %d px of the panel's 290\n", widest + 1);
+    CHECK(shown("CB") && shown("moves 2 more"));
+    where = "...a tap on the panel asks for it";
+    tap_at(PANEL_X, PANEL_Y, 80); run(100);
+    {
+        ui_commit_t c;
+        CHECK(commit(&c) && c.have_band && c.band == 8);
+    }
+    after();
+
+    where = "...too soon after the last: greyed, how long said";
+    st.band_wait_s = 7; run(100);
+    tap_at(180 - 76, 122, 80); run(100);
+    CHECK(ui_edit_active() && value_is("40m") && shown("RSPdx  7.000-7.200  -  in use"));
+    ui_edit_rotate(-1); run(100);
+    {
+        lv_obj_t *v = value_is("160m");
+        CHECK(v && lv_color_eq(lv_obj_get_style_text_color(v, 0), lv_color_hex(OW_DIM)));
+        CHECK(shown("RSPdx  1.810-2.000  -  in 7 s"));
+    }
+    picture(dir, "owrx-band-wait");
+    after();
+    st.band_wait_s = 0; run(60);
+
+    where = "...the one in use, tapped: no change asked";
+    tap_at(180 - 76, 122, 80); run(100);
+    CHECK(ui_edit_active() && value_is("40m"));
+    tap_at(PANEL_X, PANEL_Y, 80); run(100);
+    {
+        ui_commit_t c;
+        commit(&c);
+        CHECK(!c.have_band);
+    }
+    after();
+
+    where = "...alone on it: no others to move";
+    st.users = 1; run(60);
+    swipe(180, 70, 180, 230); run(100);
+    ui_edit_rotate(1); run(100);
+    CHECK(shown("RSPdx  14.000-14.350  -  tap to switch"));
+    after();
+    st.users = 3; run(60);
+
+    where = "the band's name on the face, fitted to its place beside the mode";
+    strcpy(st.band_name, "Broadcast FM Wide Band"); run(100);
+    {
+        lv_obj_t *b = label_from(lv_screen_active(), "Broa");
+        lv_obj_t *m = label_is(lv_screen_active(), "USB");
+        CHECK(b && m);
+        if (b && m) {
+            lv_area_t ab, am;
+            lv_obj_get_coords(b, &ab);
+            lv_obj_get_coords(m, &am);
+            CHECK(ab.x2 - ab.x1 + 1 <= 92 && ab.x2 + 4 <= am.x1);
+            CHECK(ab.x1 >= 180 - 168);
+        }
+    }
+    picture(dir, "owrx-band-name-long");
+    strcpy(st.band_name, "40m"); run(100);
+    CHECK(shown("40m"));
+
+    where = "the slab: a tap brings the receivers";
+    tap_at(SLAB_X, SLAB_Y, 80); run(100);
+    CHECK(ui_edit_active() && shown("RECEIVER") && shown("ON4PRA WebSDR"));
+    after();
+    where = "...and so does a swipe up";
+    swipe(180, 230, 180, 70); run(100);
+    CHECK(ui_edit_active() && shown("RECEIVER"));
+    after();
+
+    where = "the modes: SAM on OpenWebRX+ only";
+    tap_at(180, 122, 80); run(100);
+    CHECK(ui_edit_active() && shown("MODE"));
+    ui_edit_rotate(4); run(100);
+    CHECK(shown("SAM"));
+    after();
+    st.has_sam = false; run(60);
+    tap_at(180, 122, 80); run(100);
+    ui_edit_rotate(4); run(100);
+    CHECK(shown("NFM") && !shown("SAM"));
+    after();
+    st.has_sam = true; run(60);
+
+    where = "the filter: a sideband from 150 Hz off the carrier on OpenWebRX+";
+    tap_at(180 + 76, 122, 80); run(100);
+    CHECK(ui_edit_active() && shown("FILTER"));
+    ui_edit_rotate(1); run(100);
+    {
+        ui_commit_t c;
+        commit(&c);
+        CHECK(c.have_filter && c.filt_lo == 150 && c.filt_hi == 150 + 3000);
+    }
+    after();
+
+    /* The knob's own battery over this face, as on every face. */
+    knob_sweep(dir, "owrx");
+    knob_radio(dir, "owrx");
+
+    /* The receiver's name on the slab beside a device's logo and battery. */
+    st.headset = true; st.have_batt = true; st.batt = 80; run(60);
+    call_check("ON4PRA WebSDR", NULL);
+    batt_check(dir, "owrx-batt", false);
+    st.headset = false; st.have_batt = false; run(60);
+}
 #endif
 
 int main(int argc, char **argv)

@@ -67,6 +67,10 @@ bool      net_prov_radio_get(int i, net_radio_t *out);
 bool      net_prov_radio_known(const char *host);
 esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active);
 esp_err_t net_prov_radio_activate(int i);
+/* Moves on with each list saved (net_prov_radios_save), never with the one
+ * in use alone: a client that switches live (the OpenWebRX firmware's)
+ * follows a list saved under it. */
+uint32_t  net_prov_radios_gen(void);
 
 /* Written by the HTTP configuration page. Takes effect on the next boot: the
  * transport is chosen once at startup and the TCI client has no restart path.

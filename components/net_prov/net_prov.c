@@ -87,6 +87,21 @@
 #define DEFAULT_PORT 8073            /* most KiwiSDRs' */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_OWRX
+/* Its receivers, each by its address whole -- "https://fms.komkon.org/OWRX/",
+ * "http://sdr.on4pra.be/", "host:8073" -- scheme, port and path in the host,
+ * as the page takes it: the client reads each (owrx_url). No user, no
+ * password: OpenWebRX asks a listener for neither. */
+#define KEY_HOST     "owhost"
+#define KEY_RLIST    "owlist"
+#define KEY_RSEL     "owsel"
+#define KEY_PORT     "owport"
+#define KEY_USER     "owuser"
+#define KEY_PASS     "owpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 8073            /* OpenWebRX's own */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_XIEGU
 #define KEY_HOST     "xhost"
 #define KEY_RLIST    "xlist"     /* the radios, one in use: see below */
@@ -140,6 +155,7 @@ static vfo_cfg_t          s_cfg;
 /* The radios the knob knows, the one in use feeding s_cfg's endpoint. */
 EXT_RAM_BSS_ATTR static net_radio_t s_radios[NET_PROV_RADIOS];
 static int                s_nradios, s_radio_sel;
+static volatile uint32_t  s_radios_gen;      /* each list saved */
 static EventGroupHandle_t s_events;
 static bool               s_connected;
 static int                s_retries;
@@ -299,6 +315,7 @@ static esp_err_t radios_write(void)
 
 int  net_prov_radio_count(void)  { return s_nradios; }
 int  net_prov_radio_active(void) { return s_radio_sel; }
+uint32_t net_prov_radios_gen(void) { return s_radios_gen; }
 
 bool net_prov_radio_known(const char *host)
 {
@@ -325,6 +342,7 @@ esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active)
     memcpy(s_radios, list, n * sizeof list[0]);
     s_nradios   = n;
     s_radio_sel = active;
+    s_radios_gen++;
     radio_to_cfg(&s_radios[active]);
     const esp_err_t e = radios_write();
     ESP_LOGI(TAG, "%d radio%s saved; in use: %s", n, n == 1 ? "" : "s",

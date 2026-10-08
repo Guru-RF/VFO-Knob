@@ -4,7 +4,8 @@
  * the certificate bundle for the name the address gives, which is also the
  * name asked for (SNI) -- its chain and its name, not its dates: the
  * firmware's mbedTLS has no calendar for them (no
- * CONFIG_MBEDTLS_HAVE_TIME_DATE). kiwi_sess.c's own; not for anything else.
+ * CONFIG_MBEDTLS_HAVE_TIME_DATE). kiwi_sess.c's, and the web SDRs' link
+ * (components/websdr_link) beside it.
  *
  * Nothing here waits on the network: the socket is non-blocking, and the
  * caller waits on it with select() a slice at a time, its go_on asked in
