@@ -26,12 +26,13 @@
 #define H 360
 #define OLD_W 250                         /* the panel before */
 #define OLD_ROOM (OLD_W - 10)
-/* The setup firmware's colours: ui.c's default palette. */
-#define C_BG        lv_color_hex(0x0F0F1A)
-#define C_BG1       lv_color_hex(0x1A2A3A)
-#define C_ACCENT    lv_color_hex(0x00B4D8)
-#define C_ACCENT_HI lv_color_hex(0x00C8F0)
-#define C_LABEL     lv_color_hex(0x506070)
+/* The setup firmware's colours: ui.c's SvxConnect palette, the RF.Guru
+ * site's ink and gold. */
+#define C_BG        lv_color_hex(0x08090C)
+#define C_BG1       lv_color_hex(0x13161D)
+#define C_ACCENT    lv_color_hex(0xE5A823)
+#define C_ACCENT_HI lv_color_hex(0xECC34A)
+#define C_LABEL     lv_color_hex(0x94A3B8)
 #define HINT "turn to choose  -  tap to accept"
 
 static const struct { const char *title, *value; bool name; } CASE[] = {
@@ -42,6 +43,7 @@ static const struct { const char *title, *value; bool name; } CASE[] = {
     { "INSTALL", "FlexRadio 1.18.10",       true },
     { "INSTALL", "UberSDR 1.18.10",         true },
     { "INSTALL", "Kiwi888 1.19.0",          true },
+    { "INSTALL", "SVXConnect 1.19.0",       true },
     { "WIFI",    "Set up again",            true },
     /* A station's name comes as a question's choice (ED_CHOICE, 23
      * characters at most): the radio list's own are 15. */

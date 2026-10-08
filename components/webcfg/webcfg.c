@@ -43,7 +43,6 @@
 #endif
 #include "ui.h"
 #include "usb_net.h"
-#include "esp_task_wdt.h"
 
 static const char *TAG = "webcfg";
 
@@ -637,41 +636,13 @@ failed_sent:
     return ESP_FAIL;
 }
 
-/* The task watchdog, relaxed while an upload runs. Its flash erase and writes
- * stall the other core while the display redraws the progress ring, and with
- * a radio session keeping both cores busy besides, core 1's idle task went
- * 5 s without running: the watchdog reset the knob two seconds into an
- * upload. The upload has its own stall timeout (kUploadStalls); the watchdog
- * gets half a minute while it runs, and its usual 5 s back after. */
-#ifdef CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0
-#define WDT_IDLE0 1
-#else
-#define WDT_IDLE0 0
-#endif
-#ifdef CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1
-#define WDT_IDLE1 2
-#else
-#define WDT_IDLE1 0
-#endif
-static void upload_watchdog(bool relaxed)
-{
-#ifdef CONFIG_ESP_TASK_WDT_INIT
-    const esp_task_wdt_config_t c = {
-        .timeout_ms     = relaxed ? 30000 : CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000,
-        .idle_core_mask = WDT_IDLE0 | WDT_IDLE1,
-        .trigger_panic  = true,
-    };
-    esp_task_wdt_reconfigure(&c);
-#else
-    (void)relaxed;
-#endif
-}
-
 static esp_err_t ota_upload_post(httpd_req_t *r)
 {
-    upload_watchdog(true);
+    /* The watchdog relaxed while it runs: ota_watchdog_relax(). The upload
+     * has its own stall timeout (kUploadStalls). */
+    ota_watchdog_relax(true);
     const esp_err_t e = ota_upload_run(r);
-    upload_watchdog(false);
+    ota_watchdog_relax(false);
     return e;
 }
 

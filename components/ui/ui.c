@@ -192,10 +192,12 @@ LV_FONT_DECLARE(font_hack_46);
 #define C_GREEN     lv_color_hex(0x00FF00)   /* lime                       */
 #define PWR_HEX     0x00FF00
 #define SDR_HEX     0x99C9FF                 /* its page's link blue       */
-#elif SVX_LOOK
+#elif SVX_LOOK || VFO_RADIO_SETUP
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
- * clients use: green connected, amber (re)connecting, red transmitting. */
+ * clients use: green connected, amber (re)connecting, red transmitting.
+ * The setup firmware wears it too: the same ink and gold are the RF.Guru
+ * site's, and its own WiFi page's (webcfg/www/portal.html). */
 #define C_BG        lv_color_hex(0x08090C)   /* ink-950                 */
 #define C_BG1       lv_color_hex(0x13161D)   /* ink-800: the PTT slab   */
 #define C_BG_TX     lv_color_hex(0x2A0C0C)   /* a red tint on the air   */

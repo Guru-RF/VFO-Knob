@@ -1944,7 +1944,7 @@ static void runs(const char *dir)
     where = "...over the list of firmwares, a chooser";
     {
         static const char T[3][12] = { "INSTALL", "INSTALL", "WIFI" };
-        static const char N[3][24] = { "SVXConnect 1.18.3", "Icom 1.18.4", "Set up again" };
+        static const char N[3][24] = { "SVXConnect 1.19.0", "Icom 1.18.4", "Set up again" };
         ui_setup_show("FIRMWARE", "Turn to your radio,\nthen tap to install.");
         ui_ask_choice(T, N, 3, 0);
         ui_setup_show("FIRMWARE", "Turn to your radio,\nthen tap to install."); run(60);

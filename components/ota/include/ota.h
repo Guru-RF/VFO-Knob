@@ -184,6 +184,11 @@ uint8_t  *ota_companion_take(size_t *len, uint8_t sha256[32]);
 /* An install or an upload is writing this chip's flash, or about to. */
 bool ota_writing(void);
 
+/* The task watchdog given half a minute while this chip's flash is written
+ * (true), its usual timeout back (false): an install's or an upload's erase
+ * stalls both cores for seconds. */
+void ota_watchdog_relax(bool relaxed);
+
 /* Called just before this chip's flash is written -- an install, a switch,
  * an upload -- from the task about to write it: the second chip's update
  * steps aside (bt_link_update_stop). A fetch of its image stops too, and

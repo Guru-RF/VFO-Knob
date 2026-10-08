@@ -59,7 +59,7 @@ The knob looks up the firmwares published for it, with their versions, and
 shows them on the dial, one a detent. Turn to your radio's and tap the panel.
 A name too long for the panel is shown in smaller type, so it fits.
 
-![FIRMWARE: INSTALL SVXConnect 1.18.3 — turn to choose, tap the panel to install](setup/07-firmwares.svg)
+![FIRMWARE: INSTALL SVXConnect and its version — turn to choose, tap the panel to install](setup/07-firmwares.svg)
 
 | Firmware | For |
 |---|---|
@@ -109,8 +109,10 @@ To install another radio's firmware, go back to the list from the knob itself.
 
    ![FIRMWARE? turn the knob for the picker](setup/12-firmware-question.svg)
 
-3. The knob restarts, installs the setup firmware — from its SD card, or
-   over WiFi — and shows the list again, the WiFi settings kept.
+3. The knob restarts, installs the setup firmware — the newest published,
+   once it is on WiFi (from its SD card when the card holds that one), or
+   the card's own where no network comes within about 20 seconds — and
+   shows the list again, the WiFi settings kept.
 
    ![REBOOTING into update mode](setup/13-rebooting.svg)
 

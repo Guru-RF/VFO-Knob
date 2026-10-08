@@ -12,6 +12,7 @@
 #include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_task_wdt.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -981,13 +982,47 @@ static void comp_yield(void)
     if (s_comp_busy) ESP_LOGW(TAG, "second chip: the fetch of its firmware has not stopped in 10 s");
 }
 
+/* The task watchdog, relaxed while this chip's flash is written. An upload or
+ * an install erases the image's whole room up front, stalling both cores with
+ * the cache off, while the display redraws the progress ring: with a radio
+ * session keeping both cores busy besides, core 1's idle task went 5 s
+ * without running two seconds into an upload; and core 0's as long in the
+ * setup firmware, erasing for SVXConnect (2.3 MB) from the SD card (v1.19.0):
+ * it restarted into the setup firmware, nothing installed. Half a minute
+ * while it runs, the usual 5 s back after. */
+#ifdef CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0
+#define WDT_IDLE0 1
+#else
+#define WDT_IDLE0 0
+#endif
+#ifdef CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1
+#define WDT_IDLE1 2
+#else
+#define WDT_IDLE1 0
+#endif
+void ota_watchdog_relax(bool relaxed)
+{
+#ifdef CONFIG_ESP_TASK_WDT_INIT
+    const esp_task_wdt_config_t c = {
+        .timeout_ms     = relaxed ? 30000 : CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000,
+        .idle_core_mask = WDT_IDLE0 | WDT_IDLE1,
+        .trigger_panic  = true,
+    };
+    esp_task_wdt_reconfigure(&c);
+#else
+    (void)relaxed;
+#endif
+}
+
 /* Installing writes flash, and a task whose stack is in PSRAM must not, so an
  * install gets its own internal-stack task for the one run. */
 static void ota_install_task(void *arg)
 {
     (void)arg;
     comp_yield();
+    ota_watchdog_relax(true);
     ota_run(true);
+    ota_watchdog_relax(false);
     s_writing = false;
     vTaskDelete(NULL);
 }

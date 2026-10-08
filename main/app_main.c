@@ -2751,6 +2751,14 @@ RADIO_ONLY_FN static void second_chip_step_aside(void)
     bt_link_update_stop(BTL_UPD_WHY_KNOB);
 }
 
+/* How long the way back to the setup firmware waits, from boot, for WiFi
+ * before it settles for the SD card's copy: past a cable's grace, and a join. */
+#if CONFIG_VFO_USB_NET
+#define PICKER_WIFI_US (USB_GRACE_US + 15 * 1000 * 1000)
+#else
+#define PICKER_WIFI_US (20 * 1000 * 1000)
+#endif
+
 RADIO_ONLY_FN static void net_task(void *arg)
 {
     (void)arg;
@@ -2759,14 +2767,26 @@ RADIO_ONLY_FN static void net_task(void *arg)
     bool started = false;
 
     for (;;) {
-        /* The firmware picker asked for, and the setup firmware on the SD
-         * card: back to it without a network. Without, it waits for WiFi. */
+        /* The firmware picker asked for: back to the setup firmware -- on
+         * WiFi the update server's newest (the SD card's copy, when it is
+         * that one), else the card's own. The card's is from the last time
+         * the setup firmware ran, maybe releases ago: taken at once, before
+         * WiFi was up, an older setup firmware came back (one that still cut
+         * "SVXConnect 1.19.0" short, after v1.18.3 had widened its list). A
+         * computer on the cable never brings WiFi: the card's at once. */
         static bool picker_card;
         if (s_picker_accepted && !picker_card) {
-            picker_card = true;
-            if (ota_card_has("setup", NULL, 0)) {
-                s_picker_accepted = false;
-                install_switch("setup");          /* returns only if it failed */
+            const bool online = net_prov_is_connected();
+            bool cable = false;
+#if CONFIG_VFO_USB_NET
+            cable = usb_net_host_present();
+#endif
+            if (online || cable || esp_timer_get_time() > PICKER_WIFI_US) {
+                picker_card = true;
+                if (online || ota_card_has("setup", NULL, 0)) {
+                    s_picker_accepted = false;
+                    install_switch("setup");      /* returns only if it failed */
+                }
             }
         }
         if (wifi_setup()) {

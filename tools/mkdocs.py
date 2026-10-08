@@ -585,7 +585,7 @@ def portal(joined=False):
 # --- the setup firmware ------------------------------------------------------
 
 def setup_pictures():
-    md.use_palette("aethersdr")          # the setup firmware wears the default face
+    md.use_palette("svxconnect")         # the setup firmware wears SVXConnect's ink and gold
     net = "HomeNetwork"
     out = {}
     out["01-starting"] = knob("setup-01", "The setup firmware starting",
@@ -602,7 +602,7 @@ def setup_pictures():
     out["07-firmwares"] = knob(
         "setup-07", "The firmwares published for the knob, one a detent",
         setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",
-                     chooser("INSTALL", "SVXConnect 1.18.3")),
+                     chooser("INSTALL", f"SVXConnect {VERSION}")),
         turn() + tap(282, 150), "turn to choose  \u00b7  tap the panel to install")
     out["08-wifi-again"] = knob(
         "setup-08", "The last choice: another network",
@@ -613,6 +613,7 @@ def setup_pictures():
                                 update_screen("UPDATING", "64%", "Do not unplug", percent=64))
     out["10-restarting"] = knob("setup-10", "Installed: the knob restarts into it",
                                 update_screen("UPDATING", "100%", "Restarting", "#4DD87A", percent=100))
+    md.use_palette("aethersdr")          # a radio's firmware, in its own face
     face = radio_face()
     out["11-address-card"] = knob(
         "setup-11", "A radio firmware: the address card, held up on the S-meter",
@@ -631,12 +632,12 @@ def setup_pictures():
                           setup_screen("WIFI SETUP", "None of its networks\nis in reach. Join\n"
                                                      "VFOKnob with your\nphone to add one,\n"
                                                      "or wait: it keeps looking."))
-    md.use_palette("aethersdr")
+    md.use_palette("svxconnect")
     # The knob's own battery, while it runs on it (ui.c knob_batt_show): over
     # each screen's title -- the list of firmwares', up for minutes, here.
     out["15-battery"] = knob("setup-15", "On its own battery: the knob's charge over the title",
                              setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",
-                                          chooser("INSTALL", "SVXConnect 1.18.3")) + md.knob_battery(85),
+                                          chooser("INSTALL", f"SVXConnect {VERSION}")) + md.knob_battery(85),
                              "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
     return out
 
