@@ -31,6 +31,11 @@
       "version": "1.20.0"
     },
     {
+      "radio": "websdr",
+      "name": "WebSDR",
+      "version": "1.20.0"
+    },
+    {
       "radio": "svxconnect",
       "name": "SVXConnect",
       "version": "1.19.0"
