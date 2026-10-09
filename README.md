@@ -423,6 +423,31 @@ guide](docs/kiwi.md).
 | **Its audio** | A quarter of a second in hand. The knob follows the receiver's clock, a hair faster or slower, so that holds for hours; when the network holds the stream up and then hands it over at once — or at least twice as fast as it plays — the knob leaves the late audio out where the sound had stopped anyway and is back at the live point: one break. Handed over more slowly, it is cut back every few seconds until the network has caught up. Where short stalls come again and again, the knob keeps more in hand, up to 0.7 s, until the stream has been calm for three minutes, then eases back: more delay only while the network is bad, fewer breaks (0.4 s every 8 s: two breaks in two minutes, not fourteen). Each ear alike. Every 30 s the log says how the audio came, what the knob holds against what it keeps it at. |
 | **Its limits** | As for a web SDR beside a radio ([The receiver's limits](#the-receivers-limits)): a day limit is marked through restarts and tried again only when chosen, twice at most, and so is a login left unanswered by one with time limits; *time up* and *kicked* ask LISTEN AGAIN; a KiwiSDR's silent door for apps is *apps full*, three times *no apps*. On its own the knob tries a receiver at most six times in ten minutes, counting only the tries that reached it; *MEMORY FULL* and a run of crashes keep it from trying on its own. A tap on the receiver's name, even the only one's, chooses it again. |
 
+## OpenWebRX
+
+The owrx firmware (`vfo-knob-owrx`) makes the knob a dial for OpenWebRX and
+OpenWebRX+ web receivers: it talks to each over the receiver's own web
+protocol, as its page does, and plays it on the jack. The receivers are the
+configuration page's list, up to four, each by its address whole —
+`http://sdr.on4pra.be/`, `https://fms.komkon.org/OWRX/`,
+`watou.on4ipr.be:8076` — with **Test** beside each; when the one in use
+cannot be reached the knob goes on to the next, as on UberSDR. The dial stays
+within the receiver's band and stops at its edge; **BAND** chooses another of
+the receiver's bands from a list. The meter reads in dB, as OpenWebRX's own
+page does. Receive only.
+
+## WebSDR
+
+The websdr firmware (`vfo-knob-websdr`) makes the knob a dial for PA3FWM's
+WebSDR receivers, those listed on [websdr.org](http://websdr.org) — the
+wide-band WebSDR at the University of Twente, and the many others: it takes
+the receiver's stream as its page does and plays it on the jack. Up to four
+in the configuration page's list, by address (`http://websdr.ewi.utwente.nl:8901/`,
+`http://sdr.websdrmaasbree.nl:8901/`); the dial moves across the receiver's
+bands by itself; the S-meter in dBm with S-units (S9 = −73 dBm). The name
+the receiver lists you by among its listeners is set with the receivers, and
+the receiver's own idle time-out is kept. Receive only.
+
 ## SVXConnect
 
 The SVXConnect firmware (`vfo-knob-svxconnect`) turns the knob into a node on
@@ -656,7 +681,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi` and `vfo-knob-phone` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr` and `vfo-knob-phone` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice

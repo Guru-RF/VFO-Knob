@@ -68,7 +68,8 @@ fi
 # is released only once it is named here: published unnamed, its knobs would
 # update, and no new knob could ever choose it.
 NAMES='{"aethersdr": "AetherSDR", "icom": "Icom", "multiflex": "FlexRadio", "ubersdr": "UberSDR",
-        "kiwi": "Kiwi888", "svxconnect": "SVXConnect", "phone": "Telephone", "setup": "Setup"}'
+        "kiwi": "Kiwi888", "owrx": "OpenWebRX", "websdr": "WebSDR", "svxconnect": "SVXConnect",
+        "phone": "Telephone", "setup": "Setup"}'
 if [ "$RADIO" != companion ] &&
    ! python3 -c 'import json, sys; sys.exit(sys.argv[2] not in json.loads(sys.argv[1]))' "$NAMES" "$RADIO"; then
     echo "$RADIO has no name in NAMES (tools/release.sh): the setup firmware would never offer it" >&2

@@ -2303,6 +2303,7 @@ static const struct { const char *radio, *name; } FIRMWARES[] = {
     { "ubersdr",    "UberSDR"   },
     { "kiwi",       "Kiwi888"   },
     { "owrx",       "OpenWebRX" },
+    { "websdr",     "WebSDR"    },
     { "svxconnect", "SVXConnect" },
     { "phone",      "Telephone" },
 };

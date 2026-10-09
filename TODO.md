@@ -176,11 +176,16 @@ network protocols as well as Icom's: a reference for those clients.
             a change made meanwhile merged on when it is back), "Carry on
             without the SD card" and "Use the SD card again" (a restart that
             merges; it first overwrote the card with NVS's older copy -- fixed)
-      - [ ] the release round that brings every firmware onto it: then the
+      - [x] released in every firmware, v1.20.0 (2026-10-09), the NVS copies
+            still frozen
+      - [ ] a later release round, after the user's days of testing: then the
             NVS copies emptied after a confirmed start, the floor version
             (older firmware refused), deletions made while the card was away
             (`kvs/fbdel`), the page's login without the card (`kvs/wver`),
             the boot counter's RTC record
+- [ ] **Guides for OpenWebRX and WebSDR**, released in v1.20.0 without
+      them: docs/owrx.md and docs/websdr.md with their tools/mkdocs.py
+      screens, as for the other firmwares (the website pulls them).
 - [x] **PTT keyed on the lift of a tap.** Acting on the touch, as it did, a
       swipe up begun on the slab keyed the radio before it could be seen to
       be a swipe. A tap now keys as the finger lifts without having moved; on
