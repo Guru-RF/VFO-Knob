@@ -26,6 +26,11 @@
       "version": "1.20.0"
     },
     {
+      "radio": "owrx",
+      "name": "OpenWebRX",
+      "version": "1.20.0"
+    },
+    {
       "radio": "svxconnect",
       "name": "SVXConnect",
       "version": "1.19.0"
