@@ -69,6 +69,8 @@ A name too long for the panel is shown in smaller type, so it fits.
 | **SVXConnect** | an SvxLink reflector: the knob is the station |
 | **UberSDR** | an UberSDR web receiver, receive only, with its spots and SSTV pictures |
 | **Kiwi888** | KiwiSDR and Web-888 web receivers, receive only: up to four, another a swipe away, a second in the right ear |
+| **OpenWebRX** | OpenWebRX and OpenWebRX+ web receivers, receive only: up to four, by their addresses |
+| **WebSDR** | PA3FWM's WebSDR receivers (websdr.org: Twente and the others), receive only: up to four |
 | **Telephone** | a SIP telephone account: the knob is the handset |
 
 The list comes from the update server each time, so a knob set up long after
