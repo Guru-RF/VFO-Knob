@@ -9,10 +9,17 @@
  *   GET  /addon/sstv/api/images?limit=         its SSTV gallery, newest first
  *   GET  /addon/sstv/images/<file>             a picture, as PNG
  *
- * The task's stack is in PSRAM: nothing here touches flash. */
+ * The task's stack is in PSRAM: nothing here touches flash. It runs on core
+ * 1, below the face, and starts only once the audio's session has been up a
+ * few seconds: a TLS handshake here costs a second or two of software
+ * crypto, and at a start every other one -- the session's, the update
+ * check's, a second receiver's -- runs on core 0 at once; with this task's
+ * there too, core 0's idle task starved past the watchdog's 5 s (a restart
+ * a few seconds into the ubersdr firmware, 2026-10-09). */
 #include "uber_json.h"
 #include "uber_png.h"
 #include "uber_priv.h"
+#include "radio.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -668,8 +675,19 @@ static void aux_task(void *arg)
     int64_t dx_retry = 0, t_voice = 0, t_expire = 0, t_bands = 0;
     char voice_band[8] = "";
     int dx_backoff = 10;
+    int64_t up_since = 0;               /* the session READY since; 0 not */
     uint32_t rx_gen = uber_rx(&s_rx);
     for (;;) {
+        if (!radio_is_ready()) {
+            up_since = 0;
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        if (!up_since) up_since = now_s();
+        if (now_s() - up_since < 5) {   /* its handshakes done first */
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
         /* The session gone on to another receiver: this task with it. */
         const uint32_t g = uber_rx(&s_rx);
         if (g != rx_gen) {
@@ -771,7 +789,7 @@ static void aux_task(void *arg)
 void uber_aux_start(void)
 {
     if (s_started) return;
-    s_started = xTaskCreatePinnedToCoreWithCaps(aux_task, "uberaux", 12288, NULL, 3, NULL, 0,
+    s_started = xTaskCreatePinnedToCoreWithCaps(aux_task, "uberaux", 12288, NULL, 3, NULL, 1,
                                                 MALLOC_CAP_SPIRAM) == pdPASS;
     if (!s_started) ESP_LOGE(TAG, "no task for the spots");
 }

@@ -1072,10 +1072,13 @@ static bool worker(void)
         if (mine) break;
         vTaskDelay(1);
     }
-    /* IDF's StackType_t is a byte, so the depth is in bytes. */
+    /* IDF's StackType_t is a byte, so the depth is in bytes. Core 1, below
+     * the face: its TLS handshake is a second or two of software crypto, and
+     * on core 0 beside a start's other handshakes (the radio's session, a
+     * second receiver's) it starved the idle task past the watchdog. */
     StackType_t *stack = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
-    TaskHandle_t t = stack ? xTaskCreateStaticPinnedToCore(ota_check_task, "otachk", 8192, NULL, 4, stack,
-                                                           &s_chk_tcb, 0)
+    TaskHandle_t t = stack ? xTaskCreateStaticPinnedToCore(ota_check_task, "otachk", 8192, NULL, 3, stack,
+                                                           &s_chk_tcb, 1)
                            : NULL;
     if (!t) heap_caps_free(stack);
     portENTER_CRITICAL(&s_lock);
