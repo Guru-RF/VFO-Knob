@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-aethersdr",
-  "version": "1.20.0",
-  "file": "vfo-knob-aethersdr-1.20.0.bin",
-  "sha256": "06215f26446b7a8b74556269c3d2ae1991d133361e762f39c3a32032a86f745d",
+  "version": "1.20.1",
+  "file": "vfo-knob-aethersdr-1.20.1.bin",
+  "sha256": "af26a00454f2318b6d8e30b49f250b66e6a8aeab9d7c625baa2aa7aee9a60eb3",
   "size": 2166784
 }
