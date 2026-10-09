@@ -335,9 +335,19 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #else
 #define OWRX_FACE 0
 #endif
-/* A receiver named on the slab, its others a swipe up: Kiwi888's and
- * OpenWebRX's. */
-#define NAMED_RX (KIWI_FACE || OWRX_FACE)
+/* ...or a WebSDR's: Kiwi888's slab and S-meter (dBm, in S-units), its own
+ * squelch -- on or off -- where the gain is, and its bands, or on a site of
+ * one wide band its band plan, to choose from. */
+#if VFO_RADIO_WEBSDR
+#define WSDR_FACE 1
+#else
+#define WSDR_FACE 0
+#endif
+/* A receiver's own bands in BAND (ui_set_bands): OpenWebRX's, a WebSDR's. */
+#define OWN_BANDS (OWRX_FACE || WSDR_FACE)
+/* A receiver named on the slab, its others a swipe up: Kiwi888's,
+ * OpenWebRX's, a WebSDR's. */
+#define NAMED_RX (KIWI_FACE || OWRX_FACE || WSDR_FACE)
 /* A web SDR beside the radio: blue -- the Icom's and the Maestro's own. */
 #ifndef SDR_HEX
 #if VFO_RADIO_ICOM
@@ -914,7 +924,7 @@ EXT_RAM_BSS_ATTR static ui_state_t s_last;
 EXT_RAM_BSS_ATTR static ui_spot_t s_spots[UI_SPOTS_MAX];
 EXT_RAM_BSS_ATTR static ui_spot_t s_spot_snap[UI_SPOTS_MAX];
 static uint8_t   s_nspots, s_nsnap;
-#if OWRX_FACE
+#if OWN_BANDS
 /* The band label's room, centred 76 px left of the middle: clear of the
  * mode beside it, "USB" at its widest. */
 #define OWRX_BAND_ROOM 92
@@ -992,6 +1002,13 @@ static const char *AGCS[]  = { "" };
  * shown in the AGC's place, and its squelch in the gain's. */
 static const char *MODES[] = { "usb","lsb","cw","am","sam","nfm","wfm" };
 static const char *MODES_NO_SAM[] = { "usb","lsb","cw","am","nfm","wfm" };
+static const char *AGCS[]  = { "" };
+#define GAIN_CAPTION "SQL"
+#elif VFO_RADIO_WEBSDR
+/* A WebSDR's demodulators: SAM (its AM sync) on Twente's server only. No
+ * AGC to choose; its squelch, on or off, in the gain's place. */
+static const char *MODES[] = { "usb","lsb","cw","am","sam","nfm" };
+static const char *MODES_NO_SAM[] = { "usb","lsb","cw","am","nfm" };
 static const char *AGCS[]  = { "" };
 #define GAIN_CAPTION "SQL"
 #elif VFO_RADIO_KIWI
@@ -1073,6 +1090,33 @@ static bool filter_centred(const char *m)
     return m && (!strcasecmp(m, "cw") || !strcasecmp(m, "am") || !strcasecmp(m, "sam") ||
                  !strcasecmp(m, "nfm") || !strcasecmp(m, "wfm"));
 }
+#elif VFO_RADIO_WEBSDR
+/* Its passbands, by mode, within what a site allows (no edge past 0.95 of
+ * its maxlinbw, 7.1 kHz on Twente; FM +-15 kHz): a sideband from 300 Hz off
+ * the carrier, as its page has it; CW around its 750 Hz tone; the rest
+ * around the dial. */
+static const int32_t F_SSB[] = { 1800, 2100, 2400, 2700, 3000, 3600, 4500, 6000 };
+static const int32_t F_CW[]  = { 200, 300, 400, 500, 800, 1000 };
+static const int32_t F_AM[]  = { 5000, 6000, 8000, 9000, 10000, 12000 };
+static const int32_t F_FM[]  = { 8000, 10000, 12000, 16000 };
+static const int32_t *FILTERS = F_SSB;
+static int           N_FILTERS = (int)(sizeof F_SSB / sizeof F_SSB[0]);
+
+static void filters_for(const char *m)
+{
+#define USE(a) do { FILTERS = a; N_FILTERS = (int)(sizeof a / sizeof a[0]); } while (0)
+    if (m && !strcasecmp(m, "cw"))                                  USE(F_CW);
+    else if (m && (!strcasecmp(m, "am") || !strcasecmp(m, "sam")))  USE(F_AM);
+    else if (m && !strcasecmp(m, "nfm"))                            USE(F_FM);
+    else                                                             USE(F_SSB);
+#undef USE
+}
+
+/* A passband on both sides of the dial, not one: CW's is around its tone. */
+static bool filter_centred(const char *m)
+{
+    return m && (!strcasecmp(m, "am") || !strcasecmp(m, "sam") || !strcasecmp(m, "nfm"));
+}
 #elif VFO_RADIO_UBERSDR
 /* Its passbands, by mode: the widths UberSDR allows each (CW +-500 Hz, voice
  * up to 6 kHz, AM +-6 kHz, FM +-8 kHz). */
@@ -1108,7 +1152,7 @@ static const int32_t FILTERS[] = { 250, 500, 700, 1000, 1500, 1800, 2100,
  * of widths: its widths belong to each preset, set on the radio. */
 #define N_PRESETS 3
 static bool s_edit_presets;
-#if !OWRX_FACE
+#if !OWN_BANDS
 /* An OpenWebRX's bands are its own (ui_set_bands). */
 static const struct { const char *name; int64_t hz; } BANDS[] = {
     { "160m",  1840000 }, { "80m",   3700000 }, { "60m",   5355000 },
@@ -1136,7 +1180,7 @@ static const char *const *modes(int *n)
 #if VFO_RADIO_ICOM
     if (s_last.rx_only) { *n = NELEM(MODES_RX); return MODES_RX; }
 #endif
-#if VFO_RADIO_OWRX
+#if VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
     if (!s_last.has_sam) { *n = NELEM(MODES_NO_SAM); return MODES_NO_SAM; }
 #endif
     *n = NELEM(MODES);
@@ -1481,7 +1525,7 @@ static void edit_render(void)
     switch (s_edit) {
     case ED_BAND:
         title = "BAND";
-#if OWRX_FACE
+#if OWN_BANDS
         /* The receiver's own bands, by its names: one asked for too soon
          * after the last, or with no link, greyed. */
         if (!s_n_osnap) {
@@ -1584,6 +1628,9 @@ static void edit_render(void)
 #if OWRX_FACE
         /* On its meter's scale, in its dB, as its page's slider has it. */
         if (s_edit_pct) snprintf(v, sizeof v, "%d dB", (int)lroundf(s_m_lo + (s_m_hi - s_m_lo) * s_edit_pct / 100.0f));
+#elif WSDR_FACE
+        /* The site's own squelch: on its modulation, on or off. */
+        if (s_edit_pct) snprintf(v, sizeof v, "ON");
 #else
         if (s_edit_pct) snprintf(v, sizeof v, "%d%%", s_edit_pct);
 #endif
@@ -1657,7 +1704,7 @@ static void edit_render(void)
      * dots, never at the panel's edge (fit_text.h). */
     const bool names = s_edit == ED_CHOICE || s_edit == ED_RADIO || s_edit == ED_RXSRC ||
                        s_edit == ED_SPOT || s_edit == ED_SSTV || s_edit == ED_CALLS ||
-                       (OWRX_FACE && s_edit == ED_BAND);
+                       (OWN_BANDS && s_edit == ED_BAND);
     const int32_t pw = names ? EDIT_W_NAME : EDIT_W;
     lv_obj_set_width(s_edit_panel, pw);
     fit_text(s_edit_value, v,
@@ -1678,7 +1725,7 @@ static void edit_render(void)
         lv_label_set_text(s_edit_hint, h);
     } else if (other_ear()) {
         lv_label_set_text(s_edit_hint, "in the left ear");
-#if OWRX_FACE
+#if OWN_BANDS
     } else if (s_edit == ED_BAND) {
         /* Its SDR and where it is, then what a tap does: the one it is on;
          * not yet; every other listener moved too. */
@@ -1749,7 +1796,7 @@ static int nearest_filter(int32_t w)
     return best;
 }
 
-#if !OWRX_FACE
+#if !OWN_BANDS
 /* A band the radio tunes: all of them, until it has said where it tunes. */
 static bool band_ok(int i)
 {
@@ -1791,7 +1838,7 @@ static void edit_open(edit_t what, const ui_state_t *st)
     if (s_warn_panel) lv_obj_add_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_panel);
     switch (what) {
-#if OWRX_FACE
+#if OWN_BANDS
     case ED_BAND:
         /* The receiver's bands, held still while the chooser is open, on
          * the one it is on. */
@@ -1805,7 +1852,7 @@ static void edit_open(edit_t what, const ui_state_t *st)
 #endif
     case ED_MODE:   s_edit_idx = index_of_mode(st->mode);   break;
     case ED_FILTER:
-#if VFO_RADIO_UBERSDR || VFO_RADIO_KIWI || VFO_RADIO_OWRX
+#if VFO_RADIO_UBERSDR || VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
         filters_for(st->mode);
 #endif
         s_edit_presets = st->filter_no != 0;
@@ -1919,7 +1966,7 @@ static void edit_fill(void)
     memset(&s_commit, 0, sizeof s_commit);
     switch (s_edit) {
     case ED_BAND:
-#if OWRX_FACE
+#if OWN_BANDS
         /* Asked for -- refused by the client, with the three clicks, too
          * soon after the last. The one it is on is no change. */
         s_commit.have_band = s_n_osnap > 0 && s_edit_idx != s_last.band_sel;
@@ -1957,6 +2004,15 @@ static void edit_fill(void)
             else if (s_edit_lsb)             { s_commit.filt_lo = -(off + w); s_commit.filt_hi = -off;   }
             else                             { s_commit.filt_lo = off;        s_commit.filt_hi = off + w; }
         }
+        break;
+#elif VFO_RADIO_WEBSDR
+        /* A WebSDR's edges, from the carrier it is sent: a sideband 300 Hz off
+         * it, as its page's; CW around its 750 Hz tone below it; the rest
+         * around it. */
+        if (!strcasecmp(s_last.mode, "cw"))  { s_commit.filt_lo = -750 - w / 2; s_commit.filt_hi = -750 + w / 2; }
+        else if (filter_centred(s_last.mode)) { s_commit.filt_lo = -w / 2;       s_commit.filt_hi = w / 2;        }
+        else if (s_edit_lsb)                 { s_commit.filt_lo = -(300 + w);   s_commit.filt_hi = -300;         }
+        else                                 { s_commit.filt_lo = 300;          s_commit.filt_hi = 300 + w;      }
         break;
 #elif VFO_RADIO_KIWI
         /* The Kiwi's edges: a sideband 300 Hz off the carrier, AM's single
@@ -2136,7 +2192,7 @@ static void edit_rotate_now(int32_t detents)
         return;
     }
     switch (s_edit) {
-#if OWRX_FACE
+#if OWN_BANDS
     case ED_BAND:
         s_edit_idx += detents;
         if (s_edit_idx >= s_edit_n) s_edit_idx = s_edit_n - 1;
@@ -2178,6 +2234,12 @@ static void edit_rotate_now(int32_t detents)
     case ED_RFGAIN:
     case ED_POWER:
     case ED_SQUELCH:
+#if WSDR_FACE
+        if (s_edit == ED_SQUELCH) {             /* on or off: a turn either way */
+            s_edit_pct = detents > 0 ? 100 : 0;
+            break;
+        }
+#endif
         s_edit_pct += detents;
         if (s_edit_pct < 0)   s_edit_pct = 0;
         if (s_edit_pct > 100) s_edit_pct = 100;
@@ -2481,8 +2543,8 @@ static bool aux_spot(lv_point_t p)
     const int dx = p.x - CX;
     /* An UberSDR's SNR, where the AGC is, is only a reading; a Kiwi has an
      * AGC to set there. */
-    return (dx <= -AUX_IN && dx >= -AUX_OUT && !UBER_FACE && !OWRX_FACE) ||
-           (dx >= AUX_IN && dx <= AUX_OUT && (s_last.have_gain || OWRX_FACE));
+    return (dx <= -AUX_IN && dx >= -AUX_OUT && !UBER_FACE && !OWRX_FACE && !WSDR_FACE) ||
+           (dx >= AUX_IN && dx <= AUX_OUT && (s_last.have_gain || OWRX_FACE || WSDR_FACE));
 }
 
 /* --- the SSTV viewer (a receiver's face) ---------------------------------- */
@@ -2618,7 +2680,7 @@ void ui_set_spots(const ui_spot_t *spots, uint8_t n)
 
 bool ui_set_bands(const ui_band_t *bands, uint8_t n)
 {
-#if OWRX_FACE
+#if OWN_BANDS
     if (!lvgl_port_lock(20)) return false;
     if (n > UI_BANDS_MAX) n = UI_BANDS_MAX;
     if (n && bands) memcpy(s_obands, bands, sizeof s_obands[0] * n);
@@ -2779,7 +2841,7 @@ static void tap(lv_point_t p, uint32_t held)
     /* AGC left of the S-unit readout, the gain right of it. */
     if (aux_spot(p)) {
         /* An OpenWebRX's squelch is where the gain is. */
-        edit_open(p.x < CX ? ED_AGC : OWRX_FACE ? ED_SQUELCH : ED_GAIN, &s_last);
+        edit_open(p.x < CX ? ED_AGC : OWRX_FACE || WSDR_FACE ? ED_SQUELCH : ED_GAIN, &s_last);
         return;
     }
 
@@ -3028,7 +3090,7 @@ static void gesture_cb(lv_event_t *e)
         if (s_last.n_radios > (NAMED_RX ? 0 : 1)) edit_open(ED_RADIO, &s_last);
         return;
     }
-#if OWRX_FACE
+#if OWN_BANDS
     /* Down: the receiver's bands -- its own list, link or none, which says
      * why none may be asked for yet. */
     if (dir == LV_DIR_BOTTOM) {
@@ -3672,7 +3734,7 @@ static void build(void)
     /* Either side of it, a caption and the setting under it: the AGC, and
      * the front end's gain. Tapping either opens its editor. */
     s_agc_cap  = mklabel(&lv_font_montserrat_14, C_LABEL, CX - AUX_DX, 78,
-                         UBER_FACE ? "SNR" : OWRX_FACE ? "USERS" : "AGC");
+                         UBER_FACE ? "SNR" : OWRX_FACE ? "USERS" : WSDR_FACE ? "" : "AGC");
     s_agc_val  = mklabel(&lv_font_montserrat_14, C_DISABLED, CX - AUX_DX, 97, "--");
     s_gain_cap = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 78, GAIN_CAPTION);
     s_gain_val = mklabel(&lv_font_montserrat_14, C_DISABLED, CX + AUX_DX, 97, "--");
@@ -5153,7 +5215,7 @@ void ui_update(const ui_state_t *st)
         snprintf(tb, sizeof tb, "SUB %s", band_of(f));
         set_text(s_band, tb);
     } else {
-#if OWRX_FACE
+#if OWN_BANDS
         /* The receiver's band, by its own name, fitted to its place; the
          * dial stays on it. */
         const char *bn = st->band_name[0] ? st->band_name : "--";
@@ -5206,6 +5268,11 @@ void ui_update(const ui_state_t *st)
     /* Its squelch, in its dB: OPEN, or where on the meter it shuts. */
     if (st->squelch_pct) snprintf(tb, sizeof tb, "%d dB", (int)st->sq_db);
     set_text(s_gain_val, st->squelch_pct ? tb : "OPEN");
+    set_text_color(s_gain_val, st->squelch_pct ? C_TEXT2 : C_LABEL);
+    set_text_color(s_gain_cap, C_LABEL);
+#elif WSDR_FACE
+    /* The site's own squelch: on, or open. */
+    set_text(s_gain_val, st->squelch_pct ? "ON" : "OPEN");
     set_text_color(s_gain_val, st->squelch_pct ? C_TEXT2 : C_LABEL);
     set_text_color(s_gain_cap, C_LABEL);
 #else

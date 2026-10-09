@@ -11,6 +11,7 @@
 #include "tiny.h"
 #include "owrx_proto.h"
 
+#include <limits.h>
 #include <math.h>
 
 #define PI 3.14159265358979323846
@@ -635,6 +636,18 @@ static size_t encode(enc_t *e, const int16_t *x, size_t pairs, uint8_t *out, int
 static int16_t sig[NS], want[NS], got[2 * NS + 64];
 static uint8_t stream[NS + NS / 100 + 64];
 
+/* A decoder a session's SYNC-framed audio has already gone through: what
+ * it looks for from there on is the next SYNC, nothing plain. */
+static void primed(owrx_adpcm_t *d)
+{
+    static uint8_t blk[8 + 1001];
+    static int16_t scratch[2 * sizeof blk];
+    memcpy(blk, "SYNC\0\0\0\0", 8);
+    owrx_adpcm_reset(d);
+    CHECK_EQ(owrx_adpcm_feed(d, blk, sizeof blk, scratch), 2002);
+    CHECK(d->syncs == 1 && !d->plain);
+}
+
 static void test_adpcm(void)
 {
     CASE("adpcm");
@@ -669,43 +682,91 @@ static void test_adpcm(void)
         CHECK(o >= NS - 2 * cut_len - 2002);
         CHECK(!memcmp(got + o - (NS - wfrom), want + wfrom, (NS - wfrom) * sizeof(int16_t)));
     }
-    /* Joined in the middle (a session's first frame cut short): nothing
-     * until the first SYNC, then exactly. */
+    /* Joined in the middle (a session's first frame cut short): taken as
+     * plain at first -- 509 bytes of noise -- until its next SYNC, the one
+     * at 1009, then exactly. */
     {
         owrx_adpcm_t d;
         owrx_adpcm_reset(&d);
         const size_t o = owrx_adpcm_feed(&d, stream + 500, n - 500, got);
-        CHECK_EQ(o, NS - 2002);
-        CHECK(!memcmp(got, want + 2002, (NS - 2002) * sizeof(int16_t)));
-        CHECK(d.lost > 0);
+        CHECK_EQ(o, NS - 2002 + 2 * (509 + 8));
+        CHECK(!memcmp(got + 2 * (509 + 8), want + 2002, (NS - 2002) * sizeof(int16_t)));
+        CHECK(!d.plain && d.syncs > 0 && d.lost == 0);
     }
     /* "SYNC" by chance in the audio, its index past 88: not taken. */
     {
         uint8_t fake[] = { 'S', 'S', 'Y', 'N', 'C', 0xFF, 0x7F, 0, 0, 'S', 'Y', 'N', 'C', 5, 0, 0x10, 0x00, 0x77 };
         owrx_adpcm_t d;
-        owrx_adpcm_reset(&d);
+        primed(&d);
         const size_t o = owrx_adpcm_feed(&d, fake, sizeof fake, got);
         CHECK_EQ(o, 2);
-        CHECK_EQ(d.syncs, 1);
+        CHECK_EQ(d.syncs, 2);
         enc_t x = { 5, 16, 1 };
         CHECK_EQ(got[0], (int16_t)enc_dec(&x, 7));
         CHECK_EQ(got[1], (int16_t)enc_dec(&x, 7));
         /* ...and a stray 'S' just before a real one, which is taken. */
         const uint8_t stray[] = { 'x', 'S', 'S', 'Y', 'N', 'C', 5, 0, 0x10, 0x00, 0x77 };
-        owrx_adpcm_reset(&d);
+        primed(&d);
         CHECK_EQ(owrx_adpcm_feed(&d, stray, sizeof stray, got), 2);
-        CHECK_EQ(d.syncs, 1);
+        CHECK_EQ(d.syncs, 2);
         CHECK_EQ(d.lost, 2);
     }
-    /* A new SDR's encoder, mid-block: reset, and its first SYNC is taken. */
+    /* A new SDR's encoder, mid-block: resync, and its first SYNC is taken
+     * -- never plain, whatever comes first. */
     {
         owrx_adpcm_t d;
         owrx_adpcm_reset(&d);
         size_t o = owrx_adpcm_feed(&d, stream, 600, got);
-        owrx_adpcm_reset(&d);
+        owrx_adpcm_resync(&d);
         o = owrx_adpcm_feed(&d, stream, n, got);
         CHECK_EQ(o, NS);
         CHECK(!memcmp(got, want, sizeof want));
+        owrx_adpcm_resync(&d);
+        o = owrx_adpcm_feed(&d, stream + 300, n - 300, got);
+        CHECK_EQ(o, NS - 2002);
+        CHECK(!memcmp(got, want + 2002, (NS - 2002) * sizeof(int16_t)));
+        CHECK(!d.plain && d.lost > 0);
+    }
+
+    CASE("adpcm plain (OpenWebRX 1.0, 1.1)");
+    {
+        /* csdr's encode_ima_adpcm_i16_u8: no SYNC ever. */
+        enc_t p = { 0, 0, INT_MAX };
+        const size_t pn = encode(&p, sig, NS / 2, stream, want);
+        CHECK_EQ(pn, (size_t)(NS / 2));
+        for (size_t piece = 1; piece <= 4100; piece += piece < 20 ? 1 : 211) {
+            owrx_adpcm_t d;
+            owrx_adpcm_reset(&d);
+            size_t o = 0;
+            for (size_t i = 0; i < pn; i += piece) {
+                o += owrx_adpcm_feed(&d, stream + i, pn - i < piece ? pn - i : piece, got + o);
+                /* Another SDR, a refused band: on as before, as its page goes on. */
+                if (i == 7 * piece) owrx_adpcm_resync(&d);
+            }
+            CHECK_EQ(o, NS);
+            CHECK(!memcmp(got, want, sizeof want));
+            CHECK(d.plain && d.syncs == 0 && d.lost == 0);
+        }
+        /* Starting as "SY" by chance: those two bytes into its state, not
+         * played, and on exactly from the third. */
+        const uint8_t sy[] = { 'S', 'Y', 0x12, 0x9A, 0x07, 0xF3 };
+        enc_t x = { 0, 0, INT_MAX };
+        int16_t ref[12];
+        for (int i = 0; i < 6; i++) {
+            ref[2 * i] = (int16_t)enc_dec(&x, sy[i] & 0x0F);
+            ref[2 * i + 1] = (int16_t)enc_dec(&x, sy[i] >> 4);
+        }
+        owrx_adpcm_t d;
+        owrx_adpcm_reset(&d);
+        CHECK_EQ(owrx_adpcm_feed(&d, sy, 1, got), 0);
+        CHECK_EQ(owrx_adpcm_feed(&d, sy + 1, 5, got), 8);
+        CHECK(!memcmp(got, ref + 4, 8 * sizeof(int16_t)));
+        CHECK(d.plain);
+        /* "SYNC" and an index past 88 to start with: plain, all 8 into its state. */
+        const uint8_t bad[] = { 'S', 'Y', 'N', 'C', 0xFF, 0x7F, 0, 0, 0x77 };
+        owrx_adpcm_reset(&d);
+        CHECK_EQ(owrx_adpcm_feed(&d, bad, sizeof bad, got), 2);
+        CHECK(d.plain && d.syncs == 0 && d.lost == 0);
     }
 
     CASE("pcm");

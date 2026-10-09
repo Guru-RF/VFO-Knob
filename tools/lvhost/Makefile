@@ -46,7 +46,8 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 # Warnings on for the code under test; LVGL's headers are LVGL's.
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
-SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup slab_kiwi slab_owrx
+SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup slab_kiwi slab_owrx \
+         slab_websdr
 all: vu_compare chooser kiwi_face readout $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
@@ -121,6 +122,8 @@ slab_kiwi: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_KIWI=1 -DVFO_HAS_SDR=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_owrx: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_OWRX=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_websdr: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_WEBSDR=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab-check: $(SLABS)
 	mkdir -p $(OUT)
 	for s in $(SLABS); do ./$$s $(OUT) || exit 1; done

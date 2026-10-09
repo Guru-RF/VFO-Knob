@@ -39,6 +39,11 @@ bool owrx_url(const char *in, owrx_url_t *u);
 /* The path under the receiver's: "<path>ws/", "<path>status.json". Its
  * length, or -1 where it does not fit. */
 int owrx_path(const owrx_url_t *u, const char *leaf, char *out, size_t cap);
+/* The address as the knob keeps it and shows it, read back the same by
+ * owrx_url: "https://fms.komkon.org/OWRX/", "http://host:8073/" -- the port
+ * only where it is not the scheme's own. Its length, or -1 where it does not
+ * fit. */
+int owrx_url_text(const owrx_url_t *u, char *out, size_t cap);
 /* The receiver's key wherever the knob keeps something of it (never 0):
  * FNV-1a of the lower-case "host:port", as kiwi_hp() has it -- and of its
  * path after that, for one under a path, so two receivers behind one front
@@ -332,20 +337,28 @@ int owrx_select_cmd(char *out, size_t cap, const char *id);
  * encoder's state given before every 1001 bytes -- "SYNC", the step index
  * and the predictor, int16 little-endian -- anywhere in a frame, or across
  * two. One decoder for both kinds of audio frame, as the receiver has one
- * encoder for both. Or, with audio_compression "none", int16 little-endian,
- * a sample split across two pieces carried over. */
+ * encoder for both. OpenWebRX 1.0 and 1.1 send the same codec without the
+ * SYNCs, from index 0 and predictor 0 (csdr's encode_ima_adpcm_i16_u8): a
+ * session's audio not starting with "SYNC" is taken as that, plain. Or,
+ * with audio_compression "none", int16 little-endian, a sample split across
+ * two pieces carried over. */
 typedef struct {
     int32_t  pred;
     int16_t  idx;
     uint8_t  st, match, hn;
     uint8_t  hdr[4];
     uint16_t left;                  /* data bytes until the next SYNC */
+    uint16_t watch;                 /* plain: bytes left to look for a SYNC in still */
+    bool     plain;                 /* no SYNCs: OpenWebRX 1.0 and 1.1 */
     bool     odd;                   /* int16: a low byte waiting */
     uint8_t  lo;
     uint32_t syncs, lost;           /* SYNCs taken; bytes passed over looking for one */
 } owrx_adpcm_t;
-/* From nothing, looking for a SYNC: a new session, or another SDR's. */
+/* From nothing: a new session, its audio's kind not known yet. */
 void   owrx_adpcm_reset(owrx_adpcm_t *d);
+/* Another SDR's encoder, or a new DSP, in the same session: looking for its
+ * SYNC -- or, plain, on as before, as those receivers' own page goes on. */
+void   owrx_adpcm_resync(owrx_adpcm_t *d);
 /* `n` bytes of ADPCM in, at most 2n samples out: how many. */
 size_t owrx_adpcm_feed(owrx_adpcm_t *d, const uint8_t *in, size_t n, int16_t *out);
 /* `n` bytes of int16 in, at most n/2 + 1 samples out: how many. */

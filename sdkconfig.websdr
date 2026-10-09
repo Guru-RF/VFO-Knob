@@ -1,0 +1,21 @@
+# The WebSDR firmware: a WebSDR -- PA3FWM's server software, the receivers on
+# websdr.org -- as the knob's own receiver (VFO_RADIO=websdr), over its
+# protocol: listened to, the dial running from one of its bands into the
+# next, another receiver a swipe away. It only receives.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the receivers
+# are on the internet, and the USB link has no route there -- the knob is the
+# DHCP server on it, on a link with no gateway. Leaving TinyUSB out also frees
+# the internal RAM its buffers take, and keeps the serial console on the cable.
+
+# The receiver's stream, its bandinfo.js or the page's Test beside it, the
+# web page's and the log's.
+CONFIG_LWIP_MAX_SOCKETS=16
+# ...and every address a receiver's name stands for, tried in turn. Safe only
+# without SNTP: lwIP's cache then writes them all where SNTP keeps one.
+CONFIG_LWIP_DNS_MAX_HOST_IP=4
+
+# AES in software, as every firmware now: the engine's DMA takes its bounce
+# buffers from internal RAM. A receiver behind https:// and the update
+# downloads run without it.
+CONFIG_MBEDTLS_HARDWARE_AES=n

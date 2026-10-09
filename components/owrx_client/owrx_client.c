@@ -1021,6 +1021,117 @@ bool owrx_audible(void)
     return a;
 }
 
+bool owrx_rx_state(int i, owrx_rx_state_t *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof *out);
+    keys_fresh();
+    const int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&S_LOCK);
+    const uint32_t key = i >= 0 && i < s_keys_n ? s_keys[i] : 0;
+    if (!key) {
+        taskEXIT_CRITICAL(&S_LOCK);
+        return false;
+    }
+    out->in_use = key == S.want;
+    out->playing = key == S.run_key && S.link == RADIO_LINK_READY;
+    const rx_t *x = rx_find(key);
+    if (x) {
+        out->held = x->held;
+        if (!x->held && x->not_before > now) out->wait_s = (int)((x->not_before - now + 999999) / 1000000);
+        if (out->held || out->wait_s) strlcpy(out->why, owrx_end_word(x->end), sizeof out->why);
+        strlcpy(out->name, x->name, sizeof out->name);
+        strlcpy(out->version, x->version, sizeof out->version);
+        out->tls_port = x->tls_port;
+    }
+    /* The one the session is on: what its hello said, where its
+     * status.json did not. */
+    if (key == S.at) {
+        if (!out->name[0]) strlcpy(out->name, s_name, sizeof out->name);
+        if (!out->version[0]) strlcpy(out->version, s_version, sizeof out->version);
+        out->plus = S.plus;
+    }
+    out->plus |= owrx_plus_version(out->version);
+    taskEXIT_CRITICAL(&S_LOCK);
+    return true;
+}
+
+/* ------------------------------------------------------------- the Test */
+
+/* On a task of its own (owrx_test): its stack in PSRAM, with room for a TLS
+ * handshake, which the web server's has not. One at a time, as the web
+ * server runs them. Done, it waits to be deleted: a WithCaps task deleting
+ * itself has another made, in internal RAM, to free it. */
+EXT_RAM_BSS_ATTR static struct {
+    owrx_url_t    u;
+    owrx_status_t st;
+    owrx_end_t    end;
+    uint16_t      tls_port;
+    volatile bool done;
+} s_test;
+
+static void test_task(void *arg)
+{
+    (void)arg;
+    s_test.end = owrx_status_read(&s_test.u, owrx_key(&s_test.u), &s_test.st, &s_test.tls_port, NULL, NULL,
+                                  "owrx test");
+    s_test.done = true;
+    for (;;) vTaskDelay(portMAX_DELAY);
+}
+
+bool owrx_test(const char *addr, owrx_test_t *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof *out);
+    out->max_clients = -1;
+    if (!addr || !owrx_url(addr + strspn(addr, " "), &s_test.u)) {
+        strlcpy(out->error, "NO ADDRESS", sizeof out->error);
+        return false;
+    }
+    /* One this boot found on https:// on its own host: asked there. */
+    const uint32_t key = owrx_key(&s_test.u);
+    taskENTER_CRITICAL(&S_LOCK);
+    const rx_t *x = rx_find(key);
+    const uint16_t tp = x && !s_test.u.tls ? x->tls_port : 0;
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (tp) {
+        s_test.u.tls = true;
+        s_test.u.port = tp;
+    }
+    s_test.tls_port = 0;
+    s_test.done = false;
+    TaskHandle_t t = NULL;
+    if (xTaskCreatePinnedToCoreWithCaps(test_task, "owtest", 16384, NULL, 5, &t, 0, MALLOC_CAP_SPIRAM) != pdPASS) {
+        ESP_LOGE(TAG, "no memory for the Test's task");
+        strlcpy(out->error, "NO MEMORY", sizeof out->error);
+        return false;
+    }
+    while (!s_test.done) vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDeleteWithCaps(t);                 /* its stack and all with it */
+    if (s_test.tls_port && !s_test.u.tls) {
+        s_test.u.tls = true;
+        s_test.u.port = s_test.tls_port;
+    }
+    if (tp || s_test.tls_port) owrx_url_text(&s_test.u, out->url, sizeof out->url);
+    const owrx_status_t *st = &s_test.st;
+    if (s_test.end != OWRX_END_NONE || !st->ok) {
+        strlcpy(out->error, owrx_end_word(s_test.end != OWRX_END_NONE ? s_test.end : OWRX_END_NOT_OWRX),
+                sizeof out->error);
+        ESP_LOGW(TAG, "test %s:%u%s: %s", s_test.u.host, (unsigned)s_test.u.port, s_test.u.path, out->error);
+        return false;
+    }
+    out->ok = true;
+    strlcpy(out->name, st->name, sizeof out->name);
+    strlcpy(out->version, st->version, sizeof out->version);
+    out->plus = owrx_plus_version(st->version);
+    out->sdrs = st->n_sdrs;
+    out->bands = st->profiles;
+    out->max_clients = st->max_clients;
+    ESP_LOGI(TAG, "test %s:%u%s: %s, %s %s, %d SDRs, %d bands", s_test.u.host, (unsigned)s_test.u.port,
+             s_test.u.path, out->name, out->plus ? "OpenWebRX+" : "OpenWebRX", out->version, out->sdrs, out->bands);
+    return true;
+}
+
 /* Seconds until another band may be asked for; under S_LOCK. */
 static int band_wait_locked(int64_t now)
 {

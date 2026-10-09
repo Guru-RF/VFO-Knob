@@ -46,6 +46,11 @@
 #include "owrx.h"
 #include "owrx_proto.h"
 #endif
+/* ...and the websdr firmware's: its addresses read as OpenWebRX's are. */
+#if VFO_RADIO_WEBSDR
+#include "owrx_proto.h"
+#include "wsdr.h"
+#endif
 #include "ui.h"
 #include "usb_net.h"
 
@@ -850,8 +855,40 @@ static esp_err_t wifi_post_h(httpd_req_t *r)
  *                             in use changes on the next boot.
  *   POST /api/radios/switch   to=N: that one in use now -- the knob restarts
  *                             into it, as a swipe up does. Not on the air.
+ *
+ * On the openwebrx firmware these are its receivers, each by its address
+ * whole (owrx_url: scheme, port and path), with no login: the one in use is
+ * taken over at once, by the switch or by a list saved with another use=,
+ * and each in the list says how it stands this boot ("rx": in use, playing,
+ * held or waiting and why, its own name and version, an https:// address it
+ * answered on instead). The websdr firmware's are the same, a WebSDR's
+ * page's title for its name. And:
+ *
+ *   POST /api/radios/test     addr=: that address's status.json read -- what
+ *                             it is, its SDRs and bands -- and never a
+ *                             session, so never one of its listeners.
  */
+/* A firmware whose radios are web receivers, each by its address whole,
+ * taken over live: OpenWebRX's, a WebSDR's -- and the client's word for
+ * each, through these. */
+#define RX_LIST (VFO_RADIO_OWRX || VFO_RADIO_WEBSDR)
+#if VFO_RADIO_OWRX
+static int  rx_active(void) { return owrx_rx_active(); }
+static bool rx_label(int i, char *out, size_t cap) { return owrx_rx_label(i, out, cap); }
+static bool rx_use(int i, bool chosen) { return owrx_rx_use(i, chosen); }
+#define RX_VIA "OpenWebRX"
+#elif VFO_RADIO_WEBSDR
+static int  rx_active(void) { return wsdr_rx_active(); }
+static bool rx_label(int i, char *out, size_t cap) { return wsdr_rx_label(i, out, cap); }
+static bool rx_use(int i, bool chosen) { return wsdr_rx_use(i, chosen); }
+#define RX_VIA "WebSDR"
+#endif
+
+#if RX_LIST
+#define RADIOS_URIS 4
+#else
 #define RADIOS_URIS 3
+#endif
 
 /* The one in use, counting the configured radios first and then those the
  * client found itself (radio.h: SmartLink's). */
@@ -861,23 +898,23 @@ static int radios_sel(void)
     return f >= 0 ? net_prov_radio_count() + f : net_prov_radio_active();
 }
 
-#if VFO_RADIO_OWRX
+#if RX_LIST
 /* ,"radios":{"sel":0,"live":true,"names":[...],"via":[...]} -- for the
  * radio's JSON: the receivers by their names on the dial, switched live. */
 static size_t radios_names_json(char *j, size_t cap)
 {
     EXT_RAM_BSS_ATTR static char nm[24], e[52];      /* this task's stack is tight */
     const int n = net_prov_radio_count();
-    int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"live\":true,\"names\":[", owrx_rx_active());
+    int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"live\":true,\"names\":[", rx_active());
     for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
         nm[0] = 0;
-        owrx_rx_label(i, nm, sizeof nm);
+        rx_label(i, nm, sizeof nm);
         json_esc(nm, e, sizeof e);
         o += snprintf(j + o, cap - o, "%s\"%s\"", i ? "," : "", e);
     }
     if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "],\"via\":[");
     for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++)
-        o += snprintf(j + o, cap - o, "%s\"OpenWebRX\"", i ? "," : "");
+        o += snprintf(j + o, cap - o, "%s\"" RX_VIA "\"", i ? "," : "");
     if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
     return o > 0 && (size_t)o < cap ? (size_t)o : 0;
 }
@@ -910,13 +947,86 @@ static size_t radios_names_json(char *j, size_t cap)
 }
 #endif
 
+#if VFO_RADIO_OWRX
+/* ,"rx":{...} -- receiver `i` (at `host`) as the knob knows it this boot. */
+static int rx_json(int i, const char *host, char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static owrx_rx_state_t s;      /* this task's stack is tight */
+    EXT_RAM_BSS_ATTR static char nm[100], vs[52], mv[80];
+    if (!owrx_rx_state(i, &s)) return 0;
+    json_esc(s.name, nm, sizeof nm);
+    json_esc(s.version, vs, sizeof vs);
+    /* Sent on to https:// on its own host: where, for the page to keep. */
+    owrx_url_t u;
+    mv[0] = 0;
+    if (s.tls_port && owrx_url(host, &u) && !u.tls) {
+        u.tls = true;
+        u.port = s.tls_port;
+        if (owrx_url_text(&u, mv, sizeof mv) < 0) mv[0] = 0;
+    }
+    const int o = snprintf(j, cap, ",\"rx\":{\"in_use\":%s,\"playing\":%s,\"held\":%s,\"wait\":%d,\"why\":\"%s\","
+                           "\"name\":\"%s\",\"version\":\"%s\",\"plus\":%s,\"https\":\"%s\"}",
+                           s.in_use ? "true" : "false", s.playing ? "true" : "false", s.held ? "true" : "false",
+                           s.wait_s, s.why, nm, vs, s.plus ? "true" : "false", mv);
+    return o > 0 && (size_t)o < cap ? o : 0;
+}
+#elif VFO_RADIO_WEBSDR
+/* ,"rx":{...} -- receiver `i` (at `host`) as the knob knows it this boot, in
+ * OpenWebRX's shape: its page's title for its name, no version. */
+static int rx_json(int i, const char *host, char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static wsdr_rx_state_t s;      /* this task's stack is tight */
+    EXT_RAM_BSS_ATTR static char nm[132], mv[80];
+    if (!wsdr_rx_state(i, &s)) return 0;
+    json_esc(s.name, nm, sizeof nm);
+    owrx_url_t u;
+    mv[0] = 0;
+    if (s.tls_port && owrx_url(host, &u) && !u.tls) {
+        u.tls = true;
+        u.port = s.tls_port;
+        if (owrx_url_text(&u, mv, sizeof mv) < 0) mv[0] = 0;
+    }
+    const int o = snprintf(j, cap, ",\"rx\":{\"in_use\":%s,\"playing\":%s,\"held\":%s,\"wait\":%d,\"why\":\"%s\","
+                           "\"name\":\"%s\",\"version\":\"\",\"plus\":false,\"https\":\"%s\"}",
+                           s.in_use ? "true" : "false", s.playing ? "true" : "false", s.held ? "true" : "false",
+                           s.wait_s, s.why, nm, mv);
+    return o > 0 && (size_t)o < cap ? o : 0;
+}
+#endif
+
+/* The one in use in the list. On the openwebrx firmware the client's own,
+ * live: a stand-in that played is in use at once, and in flash at the next
+ * quiet moment -- a list saved meanwhile keeps it, never the one it stood
+ * in for. */
+static int radios_in_use(void)
+{
+#if RX_LIST
+    const int a = rx_active();
+    if (a >= 0) return a;
+#endif
+    return net_prov_radio_active();
+}
+
 static esp_err_t radios_get_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
+#if RX_LIST
+    EXT_RAM_BSS_ATTR static char j[3072];           /* each with its state */
+#else
     EXT_RAM_BSS_ATTR static char j[1600];
+#endif
     /* sel is -1 while a radio the client found (SmartLink) is in use. */
-    int o = snprintf(j, sizeof j, "{\"sel\":%d,\"list\":[",
-                     radio_found_active() >= 0 ? -1 : net_prov_radio_active());
+    int o = snprintf(j, sizeof j, "{\"sel\":%d,", radio_found_active() >= 0 ? -1 : radios_in_use());
+#if VFO_RADIO_WEBSDR
+    {
+        /* Who the knob is in the sites' lists of listeners. */
+        EXT_RAM_BSS_ATTR static char id[32], ie[68];
+        wsdr_ident(id, sizeof id);
+        json_esc(id, ie, sizeof ie);
+        o += snprintf(j + o, sizeof j - o, "\"ident\":\"%s\",", ie);
+    }
+#endif
+    o += snprintf(j + o, sizeof j - o, "\"list\":[");
     for (int i = 0; i < net_prov_radio_count() && (size_t)o < sizeof j; i++) {
         EXT_RAM_BSS_ATTR static net_radio_t e;
         if (!net_prov_radio_get(i, &e)) break;
@@ -925,8 +1035,12 @@ static esp_err_t radios_get_h(httpd_req_t *r)
         json_esc(e.host, h, sizeof h);
         json_esc(e.user, u, sizeof u);
         o += snprintf(j + o, sizeof j - o, "%s{\"name\":\"%s\",\"host\":\"%s\",\"port\":%u,"
-                      "\"user\":\"%s\",\"pass\":%s}", i ? "," : "", n, h, (unsigned)e.port,
+                      "\"user\":\"%s\",\"pass\":%s", i ? "," : "", n, h, (unsigned)e.port,
                       u, e.pass[0] ? "true" : "false");
+#if RX_LIST
+        if ((size_t)o < sizeof j) o += rx_json(i, e.host, j + o, sizeof j - o);
+#endif
+        if ((size_t)o < sizeof j) o += snprintf(j + o, sizeof j - o, "}");
     }
     if ((size_t)o >= sizeof j - 4) return httpd_resp_send_500(r);
     snprintf(j + o, sizeof j - o, "]}");
@@ -958,7 +1072,7 @@ static esp_err_t radios_post_h(httpd_req_t *r)
     field_num(body, "use", &use);
     /* use=-1: none chosen here -- the one in use stays, configured or
      * found; otherwise that configured one, and a found one is given up. */
-    const int cur = net_prov_radio_active();
+    const int cur = radios_in_use();
     int k = 0, in_use = 0;
     for (int i = 0; i < n; i++) {
         net_radio_t *e = &list[k];
@@ -966,19 +1080,15 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         memset(e, 0, sizeof *e);
         snprintf(key, sizeof key, "host%d", i);
         if (!field(body, key, v, sizeof v)) continue;
-#if VFO_RADIO_OWRX
-        /* An OpenWebRX by its address whole -- scheme, port and path, as its
-         * client reads it (owrx_url): "https://fms.komkon.org/OWRX/",
+#if RX_LIST
+        /* An OpenWebRX, a WebSDR, by its address whole -- scheme, port and
+         * path, as its client reads it (owrx_url): "https://fms.komkon.org/OWRX/",
          * "http://sdr.on4pra.be/", "host:8073". Kept as that reads it back,
          * the port only where it is not the scheme's own. */
         {
             owrx_url_t ou;
             if (!owrx_url(v + strspn(v, " "), &ou)) continue;
-            char pp[8] = "";
-            if (ou.port != (ou.tls ? 443 : 80)) snprintf(pp, sizeof pp, ":%u", (unsigned)ou.port);
-            const int w = snprintf(e->host, sizeof e->host, "%s://%s%s%s", ou.tls ? "https" : "http", ou.host, pp,
-                                   ou.path);
-            if (w < 0 || (size_t)w >= sizeof e->host) {
+            if (owrx_url_text(&ou, e->host, sizeof e->host) < 0) {
                 httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "an address too long to keep: 63 characters at most");
                 return ESP_FAIL;
             }
@@ -1029,6 +1139,13 @@ static esp_err_t radios_post_h(httpd_req_t *r)
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "no radio with an address");
         return ESP_FAIL;
     }
+#if VFO_RADIO_WEBSDR
+    {
+        /* Who the knob is in the sites' lists, where the page sends it. */
+        EXT_RAM_BSS_ATTR static char who[100];
+        if (field(body, "ident", who, sizeof who) && wsdr_ident_save(who) != ESP_OK) return httpd_resp_send_500(r);
+    }
+#endif
     if (net_prov_radios_save(list, k, in_use) != ESP_OK) return httpd_resp_send_500(r);
     if (use >= 0) radio_found_use(-1);
     return radios_get_h(r);
@@ -1068,10 +1185,10 @@ static esp_err_t radios_switch_h(httpd_req_t *r)
         return ESP_FAIL;
     }
     if (to < nd) strlcpy(name, e.name[0] ? e.name : net_prov_host_shown(e.host), sizeof name);
-#if VFO_RADIO_OWRX
+#if RX_LIST
     /* Live, as the dial's: no restart -- and the one in use chosen again
      * lets go of what held it back. */
-    if (to >= nd || !owrx_rx_use((int)to, true)) {
+    if (to >= nd || !rx_use((int)to, true)) {
         httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "to=N: a receiver in the list");
         return ESP_FAIL;
     }
@@ -1103,6 +1220,86 @@ static esp_err_t radios_switch_h(httpd_req_t *r)
     if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 1200 * 1000);
     return ESP_OK;
 }
+
+#if VFO_RADIO_OWRX
+/* The Test: addr= read for its status.json (owrx_test) -- {"ok":true,
+ * "name","version","plus","sdrs","bands","max_clients"}, or {"ok":false,
+ * "error":"CAN'T REACH"} -- and "url" where it answered on https:// instead. */
+static esp_err_t radios_test_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char body[400], a[160], j[512], nm[100], vs[52], u[164];
+    EXT_RAM_BSS_ATTR static owrx_test_t t;
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "addr: the receiver's address");
+        return ESP_FAIL;
+    }
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    a[0] = 0;
+    if (!field(body, "addr", a, sizeof a) || !a[0]) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "addr: the receiver's address");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "web: testing %s", a);
+    owrx_test(a, &t);
+    json_esc(t.name, nm, sizeof nm);
+    json_esc(t.version, vs, sizeof vs);
+    json_esc(t.url, u, sizeof u);
+    if (t.ok)
+        snprintf(j, sizeof j, "{\"ok\":true,\"name\":\"%s\",\"version\":\"%s\",\"plus\":%s,\"sdrs\":%d,"
+                 "\"bands\":%d,\"max_clients\":%d,\"url\":\"%s\"}",
+                 nm, vs, t.plus ? "true" : "false", t.sdrs, t.bands, t.max_clients, u);
+    else
+        snprintf(j, sizeof j, "{\"ok\":false,\"error\":\"%s\",\"url\":\"%s\"}", t.error, u);
+    return send_json(r, j);
+}
+#elif VFO_RADIO_WEBSDR
+/* The Test: addr= read as a page reads it -- its bandinfo.js, its title,
+ * its sound script (wsdr_test) -- {"ok":true,"name","bands","plan",
+ * "idle_min","v11"}, or {"ok":false,"error":"CAN'T REACH"} -- and "url"
+ * where it answered on https:// instead. Never a stream: never a place
+ * among its listeners. */
+static esp_err_t radios_test_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    EXT_RAM_BSS_ATTR static char body[400], a[160], j[512], nm[132], u[164];
+    EXT_RAM_BSS_ATTR static wsdr_test_t t;
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "addr: the receiver's address");
+        return ESP_FAIL;
+    }
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    a[0] = 0;
+    if (!field(body, "addr", a, sizeof a) || !a[0]) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "addr: the receiver's address");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "web: testing %s", a);
+    wsdr_test(a, &t);
+    json_esc(t.name, nm, sizeof nm);
+    json_esc(t.url, u, sizeof u);
+    if (t.ok)
+        snprintf(j, sizeof j, "{\"ok\":true,\"name\":\"%s\",\"bands\":%d,\"plan\":%d,\"idle_min\":%d,"
+                 "\"v11\":%s,\"url\":\"%s\"}", nm, t.bands, t.plan, t.idle_min, t.v11 ? "true" : "false", u);
+    else
+        snprintf(j, sizeof j, "{\"ok\":false,\"error\":\"%s\",\"url\":\"%s\"}", t.error, u);
+    return send_json(r, j);
+}
+#endif
 #elif VFO_RADIO_KIWI
 /* The kiwi firmware's receivers are the web SDRs' list below, and another is
  * taken over live, with no restart: the radio page switches with receiver=. */
@@ -1448,9 +1645,14 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  *       ...&tuner=on&squelch=30&rx=sub&ant=2&rxant=1&rit=-120&lo=100&hi=2800
  *       ...&sdr=0&balance=-30    a web SDR beside it, "local" for none (see
  *                                above: the Icom, Xiegu and FlexRadio ones)
- *       ...&receiver=1           the kiwi firmware's receiver in use, by its
- *                                place in the list: at once, and even while
- *                                the one in use is down
+ *       ...&receiver=1           the kiwi and openwebrx firmwares' receiver in
+ *                                use, by its place in the list: at once, and
+ *                                even while the one in use is down
+ *       ...&band=3               the openwebrx firmware's band, by its place
+ *                                in the receiver's own list (/api/radio's
+ *                                owrx.bands): it moves everyone listening,
+ *                                and is refused (409) within 11 s of the
+ *                                last, and while the receiver is not playing
  *   (POST, with the same fields as a form, does the same.)
  *
  * Behind the page's login like everything here. Nothing that transmits:
@@ -1960,11 +2162,78 @@ static size_t kiwi_json(char *j, size_t cap)
 }
 #endif
 
+#if VFO_RADIO_OWRX
+/* ,"owrx":{...} -- what the receiver in use says of itself, for the radio
+ * page: its name and software, everyone listening, the band it is on and
+ * where that is, its bands (its profiles, each with its SDR and where it
+ * is), how long before another band may be chosen, the meter's scale and
+ * the squelch in its dB. */
+static size_t owrx_json(char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static owrx_info_t in;          /* this task's stack is tight */
+    EXT_RAM_BSS_ATTR static owrx_band_info_t b[OWRX_BANDS];
+    EXT_RAM_BSS_ATTR static char nm[100], vs[52], bd[100], st[100], url[324], sd[84];
+    owrx_info(&in);
+    const int n = owrx_bands(b, OWRX_BANDS);
+    json_esc(in.name, nm, sizeof nm);
+    json_esc(in.version, vs, sizeof vs);
+    json_esc(in.band, bd, sizeof bd);
+    json_esc(in.state, st, sizeof st);
+    json_esc(in.url, url, sizeof url);
+    int o = snprintf(j, cap, ",\"owrx\":{\"name\":\"%s\",\"version\":\"%s\",\"plus\":%s,\"users\":%d,"
+                     "\"users_max\":%d,\"state\":\"%s\",\"url\":\"%s\",\"band\":\"%s\",\"band_sel\":%d,"
+                     "\"band_wait_s\":%d,\"center\":%lld,\"rate\":%ld,\"meter_lo\":%.0f,\"meter_hi\":%.0f,"
+                     "\"sq_db\":%d,\"bands\":[",
+                     nm, vs, in.plus ? "true" : "false", in.users, in.users_max, st, url, bd, in.band_sel,
+                     in.band_wait_s, (long long)in.center, (long)in.rate, (double)in.meter_lo,
+                     (double)in.meter_hi, in.sq_db);
+    for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
+        json_esc(b[i].name, bd, sizeof bd);
+        json_esc(b[i].sdr, sd, sizeof sd);
+        o += snprintf(j + o, cap - o, "%s{\"name\":\"%s\",\"sdr\":\"%s\",\"lo\":%lld,\"hi\":%lld}", i ? "," : "",
+                      bd, sd, (long long)b[i].lo, (long long)b[i].hi);
+    }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
+#endif
+
+#if VFO_RADIO_WEBSDR
+/* ,"wsdr":{...} -- the WebSDR in use, for the radio page: its name, its
+ * state, the band the dial is in and where it is, its bands or its band
+ * plan's ranges, its audio's rate, its idle timeout, whether it plays AM
+ * sync. */
+static size_t wsdr_json(char *j, size_t cap)
+{
+    EXT_RAM_BSS_ATTR static wsdr_now_t in;          /* this task's stack is tight */
+    EXT_RAM_BSS_ATTR static wsdr_choice_t b[48];
+    EXT_RAM_BSS_ATTR static char nm[132], bd[52], st[100], url[324];
+    wsdr_now(&in);
+    const int n = wsdr_bands(b, 48);
+    json_esc(in.name, nm, sizeof nm);
+    json_esc(in.band, bd, sizeof bd);
+    json_esc(in.state, st, sizeof st);
+    json_esc(in.url, url, sizeof url);
+    int o = snprintf(j, cap, ",\"wsdr\":{\"name\":\"%s\",\"state\":\"%s\",\"url\":\"%s\",\"band\":\"%s\","
+                     "\"band_sel\":%d,\"lo\":%lld,\"hi\":%lld,\"rate\":%u,\"idle_min\":%d,\"sam\":%s,"
+                     "\"bands\":[",
+                     nm, st, url, bd, in.band_sel, (long long)in.lo, (long long)in.hi, in.rate, in.idle_min,
+                     in.sam ? "true" : "false");
+    for (int i = 0; i < n && o > 0 && (size_t)o < cap; i++) {
+        json_esc(b[i].name, bd, sizeof bd);
+        o += snprintf(j + o, cap - o, "%s{\"name\":\"%s\",\"lo\":%lld,\"hi\":%lld,\"plan\":%s}", i ? "," : "",
+                      bd, (long long)b[i].lo, (long long)b[i].hi, b[i].plan ? "true" : "false");
+    }
+    if (o > 0 && (size_t)o < cap) o += snprintf(j + o, cap - o, "]}");
+    return o > 0 && (size_t)o < cap ? (size_t)o : 0;
+}
+#endif
+
 /* The radio's JSON: an UberSDR's carries its spots and gallery as well; the
  * others the web SDRs' list, with their marks, and a FlexRadio's antennas and
  * the radios it found on the LAN -- a Kiwi's the receivers' names twice over,
- * with what its own says and both ears. In PSRAM. */
-#if VFO_RADIO_UBERSDR
+ * with what its own says and both ears; an OpenWebRX's its bands. In PSRAM. */
+#if VFO_RADIO_UBERSDR || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
 #define RADIO_JSON_BYTES 8192
 #elif VFO_RADIO_KIWI
 #define RADIO_JSON_BYTES 6144
@@ -2042,6 +2311,12 @@ static esp_err_t radio_get(httpd_req_t *r)
 #if VFO_RADIO_KIWI
     o += kiwi_json(j + o, sizeof j - o);
 #endif
+#if VFO_RADIO_OWRX
+    o += owrx_json(j + o, sizeof j - o);
+#endif
+#if VFO_RADIO_WEBSDR
+    o += wsdr_json(j + o, sizeof j - o);
+#endif
 #if VFO_HAS_SDR
     o += sdr_json(j + o, sizeof j - o);
 #endif
@@ -2105,6 +2380,91 @@ static esp_err_t radio_set(httpd_req_t *r)
     if (refused) {
         httpd_resp_set_status(r, "409 Conflict");
         return httpd_resp_sendstr(r, "one receiver is never in both ears: that one is in the other");
+    }
+    if (!radio_is_ready() && !own) {
+#elif VFO_RADIO_OWRX
+    /* Another receiver, at once -- even while the one in use is down, which
+     * is when another is wanted most -- and the operator's act, even of the
+     * one in use (owrx.h). Another band, by its place in the receiver's own
+     * list: never two within OWRX_SWITCH_GAP_MS, which OpenWebRX+ bans an
+     * address for. A place not in a list is said (400), a band refused
+     * (409, 503), and nothing of the request done. */
+    bool own = false;
+    long rx = -1, band = -1;
+    const int nrx = net_prov_radio_count();
+    if (field_num(q, "receiver", &rx)) {
+        if (rx < 0 || rx >= nrx) {
+            char msg[64];
+            if (nrx > 0) snprintf(msg, sizeof msg, "no receiver %ld: they go from 0 to %d", rx, nrx - 1);
+            else         snprintf(msg, sizeof msg, "no receivers yet: the configuration page adds them");
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, msg);
+            return ESP_FAIL;
+        }
+        own = true;
+        owrx_rx_use((int)rx, true);
+    }
+    if (field_num(q, "band", &band)) {
+        EXT_RAM_BSS_ATTR static owrx_info_t in;
+        owrx_info(&in);
+        const int nb = owrx_bands(NULL, OWRX_BANDS);
+        char msg[96];
+        if (band < 0 || band >= nb) {
+            if (nb > 0) snprintf(msg, sizeof msg, "no band %ld: they go from 0 to %d", band, nb - 1);
+            else        snprintf(msg, sizeof msg, "no bands: the receiver has not said them yet");
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, msg);
+            return ESP_FAIL;
+        }
+        if (!radio_is_ready() || own) {
+            httpd_resp_set_status(r, "503 Service Unavailable");
+            return httpd_resp_sendstr(r, "the receiver is not playing: a band when it is");
+        }
+        if (band != in.band_sel) {
+            if (in.band_wait_s > 0) {
+                snprintf(msg, sizeof msg, "another band in %d s: OpenWebRX+ bans a listener that changes band "
+                         "more often", in.band_wait_s);
+                httpd_resp_set_status(r, "409 Conflict");
+                return httpd_resp_sendstr(r, msg);
+            }
+            if (!owrx_band_choose((int)band)) {
+                httpd_resp_set_status(r, "409 Conflict");
+                return httpd_resp_sendstr(r, "not that band just now");
+            }
+            ESP_LOGI(TAG, "web: band %ld", band);
+        }
+    }
+    if (!radio_is_ready() && !own) {
+#elif VFO_RADIO_WEBSDR
+    /* Another receiver, at once, as on the OpenWebRX firmware. Another band,
+     * or a range of a one-band site's plan, by its place in the list: the
+     * dial onto it -- a WebSDR's bands are each listener's own, so any, any
+     * time, and the session tunes there. A place not in a list is said
+     * (400), and nothing of the request done. */
+    bool own = false;
+    long rx = -1, band = -1;
+    const int nrx = net_prov_radio_count();
+    if (field_num(q, "receiver", &rx)) {
+        if (rx < 0 || rx >= nrx) {
+            char msg[64];
+            if (nrx > 0) snprintf(msg, sizeof msg, "no receiver %ld: they go from 0 to %d", rx, nrx - 1);
+            else         snprintf(msg, sizeof msg, "no receivers yet: the configuration page adds them");
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, msg);
+            return ESP_FAIL;
+        }
+        own = true;
+        wsdr_rx_use((int)rx, true);
+    }
+    if (field_num(q, "band", &band)) {
+        const int nb = wsdr_bands(NULL, 48);
+        if (band < 0 || band >= nb) {
+            char msg[80];
+            if (nb > 0) snprintf(msg, sizeof msg, "no band %ld: they go from 0 to %d", band, nb - 1);
+            else        snprintf(msg, sizeof msg, "no bands: the receiver's page has not been read yet");
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, msg);
+            return ESP_FAIL;
+        }
+        own = true;
+        wsdr_band_choose((int)band);
+        ESP_LOGI(TAG, "web: band %ld", band);
     }
     if (!radio_is_ready() && !own) {
 #else
@@ -2242,6 +2602,9 @@ esp_err_t webcfg_start(void)
         { .uri = "/api/radios",        .method = HTTP_GET,  .handler = radios_get_h },
         { .uri = "/api/radios",        .method = HTTP_POST, .handler = radios_post_h },
         { .uri = "/api/radios/switch", .method = HTTP_POST, .handler = radios_switch_h },
+#if RX_LIST
+        { .uri = "/api/radios/test",   .method = HTTP_POST, .handler = radios_test_h },
+#endif
     };
     for (size_t i = 0; i < sizeof radios_uris / sizeof radios_uris[0]; i++)
         httpd_register_uri_handler(s_srv, &radios_uris[i]);

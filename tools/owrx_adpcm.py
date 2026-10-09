@@ -8,15 +8,20 @@ little-endian, before its first byte and every 1001 bytes after -- and
 FftAdpcmEncoder, the waterfall's, its codec started over each line and ten
 samples of padding in front.
 
+OpenWebRX 1.0 and 1.1 encode with csdr's older encode_ima_adpcm_i16_u8
+instead: the same codec, from index 0 and predictor 0, with no SYNC at all
+-- Encoder(sync=False).
+
 The encoder's own state after each sample is what a decoder must give back
 for it, so encode() returns both: the bytes the receiver sends, and the
 samples the knob's decoder (components/owrx_proto/owrx_adpcm.c) must make of
 them. tools/mock_owrx.py speaks with it; test/host checks the knob's decoder
 against it, sample for sample.
 
-  owrx_adpcm.py vectors OUT_STREAM OUT_EXPECT [--seconds S] [--rate R]
+  owrx_adpcm.py vectors OUT_STREAM OUT_EXPECT [--seconds S] [--rate R] [--plain]
       a test signal (tones, a sweep, noise, silence, full scale) encoded:
-      the stream as the receiver sends it, and the samples, int16 LE
+      the stream as the receiver sends it, and the samples, int16 LE;
+      --plain as OpenWebRX 1.0 and 1.1 send it, without SYNCs
   owrx_adpcm.py check-csdr CSDR_BIN
       the port against csdr's own encoder, built from its source on the PC:
       CSDR_BIN reads int16 LE on stdin and writes its AdpcmEncoder(sync)'s
@@ -101,13 +106,14 @@ class Codec:
 
 class Encoder:
     """AdpcmEncoder(sync=True): one per session's audio, for both its kinds
-    of frame. feed() takes int16 samples, a pair a byte; an odd one waits,
-    as the server's reader holds a lone short back. Returns (bytes, the
-    decoder's samples for them)."""
+    of frame -- or, sync=False, OpenWebRX 1.0's encode_ima_adpcm_i16_u8.
+    feed() takes int16 samples, a pair a byte; an odd one waits, as the
+    server's reader holds a lone short back. Returns (bytes, the decoder's
+    samples for them)."""
 
-    def __init__(self):
+    def __init__(self, sync=True):
         self.codec = Codec()
-        self.counter = 0
+        self.counter = 0 if sync else float("inf")
         self.held = []
 
     def feed(self, samples):
@@ -132,17 +138,62 @@ class Encoder:
 
 class Decoder:
     """The receiving end, as the knob's (owrx_adpcm.c): SYNCs found wherever
-    the frames break them, the state taken from each. feed() returns the
+    the frames break them, the state taken from each -- or, the session's
+    audio not starting with one, plain (OpenWebRX 1.0 and 1.1), a SYNC
+    still looked for over the first two blocks' worth. feed() returns the
     samples; `lost` counts bytes passed over looking for a SYNC."""
+
+    WATCH = 2 * (SYNC_EVERY + 1 + 8)
 
     def __init__(self):
         self.codec = Codec()
-        self.st = 0                 # 0 hunting, 1 the header, 2 data
+        self.st = 0                 # 0 hunting, 1 the header, 2 data, 3 plain
         self.match = 0
         self.hdr = bytearray()
         self.left = 0
         self.syncs = 0
         self.lost = 0
+        self.plain = False
+        self.watch = 0
+
+    def resync(self):
+        """Another SDR's encoder: its SYNC looked for -- plain, on as before."""
+        if not self.plain:
+            self.st, self.match = 0, 0
+
+    def _take(self):
+        idx, pred = struct.unpack("<hh", bytes(self.hdr))
+        if not 0 <= idx <= 88:
+            return False
+        self.codec.index, self.codec.prev = idx, pred
+        self.left, self.st = SYNC_EVERY + 1, 2
+        self.syncs += 1
+        return True
+
+    def _to_plain(self, seen):
+        for b in seen:
+            self.codec.decode(b & 0x0F)
+            self.codec.decode(b >> 4)
+        self.plain, self.st, self.watch, self.match = True, 3, self.WATCH, 0
+
+    def _plain(self, b, out):
+        out.append(self.codec.decode(b & 0x0F))
+        out.append(self.codec.decode(b >> 4))
+        if not self.watch:
+            return
+        self.watch -= 1
+        if self.match == 4:
+            self.hdr.append(b)
+            if len(self.hdr) == 4:
+                self.match = 0
+                if self._take():
+                    self.plain, self.watch = False, 0
+        elif b == b"SYNC"[self.match]:
+            self.match += 1
+            if self.match == 4:
+                self.hdr = bytearray()
+        else:
+            self.match = 1 if b == 0x53 else 0
 
     def feed(self, data):
         out = []
@@ -152,20 +203,22 @@ class Decoder:
                     self.match += 1
                     if self.match == 4:
                         self.st, self.hdr = 1, bytearray()
+                elif not self.syncs and not self.lost:
+                    self._to_plain(b"SYNC"[:self.match])
+                    self._plain(b, out)
                 else:
                     self.lost += self.match + 1 - (b == 0x53)
                     self.match = 1 if b == 0x53 else 0
             elif self.st == 1:
                 self.hdr.append(b)
-                if len(self.hdr) == 4:
-                    idx, pred = struct.unpack("<hh", bytes(self.hdr))
-                    if not 0 <= idx <= 88:
+                if len(self.hdr) == 4 and not self._take():
+                    if not self.syncs and not self.lost:
+                        self._to_plain(b"SYNC" + bytes(self.hdr))
+                    else:
                         self.lost += 8
                         self.st, self.match = 0, 0
-                    else:
-                        self.codec.index, self.codec.prev = idx, pred
-                        self.left, self.st = SYNC_EVERY + 1, 2
-                        self.syncs += 1
+            elif self.st == 3:
+                self._plain(b, out)
             else:
                 out.append(self.codec.decode(b & 0x0F))
                 out.append(self.codec.decode(b >> 4))
@@ -224,7 +277,7 @@ def main(argv):
             seconds = float(argv[argv.index("--seconds") + 1])
         if "--rate" in argv:
             rate = int(argv[argv.index("--rate") + 1])
-        enc = Encoder()
+        enc = Encoder(sync="--plain" not in argv)
         sig = test_signal(seconds, rate)
         stream = bytearray()
         want = []

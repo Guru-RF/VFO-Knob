@@ -2342,6 +2342,170 @@ static void runs(const char *dir)
     batt_check(dir, "owrx-batt", false);
     st.headset = false; st.have_batt = false; run(60);
 }
+#elif VFO_RADIO_WEBSDR
+/* The WebSDR face: Kiwi888's slab and S-meter -- dBm, in S-units -- its own
+ * squelch, on or off, where the gain is, nothing where the AGC is, and its
+ * bands, or a one-band site's band plan, a swipe down away. */
+static lv_obj_t *value_is(const char *text) { return label_is(lv_screen_active(), text); }
+
+static void wsdr_base(void)
+{
+    base();
+    st.freq_hz = 14074000; st.mode = "usb"; st.filt_lo = 300; st.filt_hi = 2700;
+    st.step_hz = 100;
+    st.smeter_dbm = -79.0f;
+    st.users = -1; st.squelch_pct = 0; st.has_squelch = st.have_squelch = true;
+    st.band_sel = 3; st.has_sam = true;
+    strcpy(st.band_name, "hf");
+    strcpy(st.server, "Twente");
+    st.rx_line2 = "20 m  hf";
+    st.rx_line3 = "WebSDR";
+    st.n_radios = 2; st.n_radios_direct = 2; st.radio_sel = 0;
+    strcpy(st.radio_name[0], "Twente");
+    strcpy(st.radio_name[1], "Maasbree");
+}
+
+/* A one-band site's band plan, as the client names it: no SDR, a range. */
+static const ui_band_t PLAN[] = {
+    { "160 m", "", "1.810-1.880" }, { "80 m", "", "3.500-3.800" },   { "49 m BC", "", "5.900-6.200" },
+    { "20 m", "", "14.000-14.350" }, { "10 m", "", "28.000-29.700" },
+};
+#define N_PLAN ((int)(sizeof PLAN / sizeof *PLAN))
+
+static void runs(const char *dir)
+{
+    wsdr_base(); run(5000);                         /* the peak from the harness's first 0 dBm, falling 30 dB/s */
+
+    where = "the face: S-units and dBm, the site's squelch, nothing where the AGC is";
+    /* Eased toward the reading and cut, not rounded (ui.c): -78.99 reads -78. */
+    CHECK(shown("S8") && (shown("-79 dBm") || shown("-78 dBm")));
+    CHECK(shown("SQL") && shown("OPEN"));
+    CHECK(!shown("AGC") && !shown("USERS"));
+    CHECK(shown("hf") && shown("USB") && shown("2400"));
+    CHECK(shown("Twente") && shown("20 m  hf") && shown("WebSDR"));
+    picture(dir, "websdr-face");
+    where = "...over S9, its dB over it";
+    st.smeter_dbm = -53.0f; run(3000);
+    CHECK(shown("S9+20") && shown("-53 dBm"));
+    st.smeter_dbm = -79.0f; run(3000);
+
+    where = "the squelch: where the gain is, tapped; on or off";
+    tap_at(180 + 72, 88, 80); run(100);
+    CHECK(ui_edit_active() && shown("SQUELCH") && shown("OPEN"));
+    ui_edit_rotate(1); run(100);
+    CHECK(value_is("ON"));
+    {
+        ui_commit_t c;
+        commit(&c);
+        CHECK(c.have_squelch && c.squelch_pct == 100);
+    }
+    ui_edit_rotate(3); run(100);
+    CHECK(value_is("ON"));
+    ui_edit_rotate(-1); run(100);
+    CHECK(shown("OPEN"));
+    {
+        ui_commit_t c;
+        commit(&c);
+        CHECK(c.have_squelch && c.squelch_pct == 0);
+    }
+    picture(dir, "websdr-squelch");
+    tap_at(OUTSIDE_X, OUTSIDE_Y, 80); settle(); quiet();
+    st.squelch_pct = 100; run(100);
+    CHECK(shown("ON") && !shown("OPEN"));
+    st.squelch_pct = 0; run(100);
+    where = "...the AGC's place takes no tap";
+    tap_at(180 - 72, 88, 80); run(100);
+    CHECK(!ui_edit_active());
+    after();
+
+    where = "no bands yet: the swipe down opens nothing";
+    swipe(180, 70, 180, 230); run(100);
+    CHECK(!ui_edit_active());
+    after();
+
+    where = "the band plan: a swipe down, on the range the dial is in";
+    CHECK(ui_set_bands(PLAN, N_PLAN));
+    run(60);
+    swipe(180, 70, 180, 230); run(100);
+    CHECK(ui_edit_active() && shown("BAND 4 / 5") && value_is("20 m") && shown("14.000-14.350  -  in use"));
+    where = "...another: any, any time -- nobody else moved";
+    ui_edit_rotate(1); run(100);
+    CHECK(value_is("10 m") && shown("28.000-29.700  -  tap to switch"));
+    {
+        lv_obj_t *v = value_is("10 m");
+        CHECK(v && !lv_color_eq(lv_obj_get_style_text_color(v, 0), lv_color_hex(0x575757)));
+    }
+    picture(dir, "websdr-band");
+    tap_at(PANEL_X, PANEL_Y, 80); run(100);
+    {
+        ui_commit_t c;
+        CHECK(commit(&c) && c.have_band && c.band == 4);
+    }
+    after();
+    where = "...a broadcast band's name whole";
+    swipe(180, 70, 180, 230); run(100);
+    ui_edit_rotate(-1); run(100);
+    CHECK(value_is("49 m BC") && shown("5.900-6.200  -  tap to switch"));
+    after();
+
+    where = "the band's name on the face: the site's";
+    strcpy(st.band_name, "80m"); run(100);
+    CHECK(shown("80m"));
+    strcpy(st.band_name, "hf"); run(100);
+
+    where = "the slab: a tap brings the receivers";
+    tap_at(SLAB_X, SLAB_Y, 80); run(100);
+    CHECK(ui_edit_active() && shown("RECEIVER") && shown("Twente"));
+    after();
+
+    where = "the modes: SAM on Twente's server only, no WFM";
+    tap_at(180, 122, 80); run(100);
+    CHECK(ui_edit_active() && shown("MODE"));
+    ui_edit_rotate(4); run(100);
+    CHECK(shown("SAM"));
+    ui_edit_rotate(1); run(100);
+    CHECK(shown("NFM"));
+    ui_edit_rotate(1); run(100);
+    CHECK(shown("NFM") && !shown("WFM"));
+    after();
+    st.has_sam = false; run(60);
+    tap_at(180, 122, 80); run(100);
+    ui_edit_rotate(4); run(100);
+    CHECK(shown("NFM") && !shown("SAM"));
+    after();
+    st.has_sam = true; run(60);
+
+    where = "the filter: a sideband from 300 Hz off the carrier, as its page";
+    tap_at(180 + 76, 122, 80); run(100);
+    CHECK(ui_edit_active() && shown("FILTER"));
+    ui_edit_rotate(1); run(100);
+    {
+        ui_commit_t c;
+        commit(&c);
+        CHECK(c.have_filter && c.filt_lo == 300 && c.filt_hi == 300 + 2700);
+    }
+    after();
+    where = "...CW around its 750 Hz tone below the carrier";
+    st.mode = "cw"; st.filt_lo = -950; st.filt_hi = -550; run(100);
+    tap_at(180 + 76, 122, 80); run(100);
+    ui_edit_rotate(1); run(100);
+    {
+        ui_commit_t c;
+        commit(&c);
+        CHECK(c.have_filter && c.filt_lo == -750 - 250 && c.filt_hi == -750 + 250);
+    }
+    after();
+    st.mode = "usb"; st.filt_lo = 300; st.filt_hi = 2700; run(100);
+
+    /* The knob's own battery over this face, as on every face. */
+    knob_sweep(dir, "websdr");
+    knob_radio(dir, "websdr");
+
+    st.headset = true; st.have_batt = true; st.batt = 80; run(60);
+    call_check("Twente", NULL);
+    batt_check(dir, "websdr-batt", false);
+    st.headset = false; st.have_batt = false; run(60);
+}
 #endif
 
 int main(int argc, char **argv)

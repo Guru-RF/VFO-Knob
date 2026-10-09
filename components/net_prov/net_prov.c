@@ -102,6 +102,21 @@
 #define DEFAULT_PORT 8073            /* OpenWebRX's own */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_WEBSDR
+/* Its receivers, each by its address whole -- "http://websdr.ewi.utwente.nl:
+ * 8901/", "http://sdr.websdrmaasbree.nl:8901/" -- as the OpenWebRX firmware
+ * keeps its own (owrx_url reads both). No user, no password: a WebSDR asks a
+ * listener for neither. */
+#define KEY_HOST     "wshost"
+#define KEY_RLIST    "wslist"
+#define KEY_RSEL     "wssel"
+#define KEY_PORT     "wsport"
+#define KEY_USER     "wsuser"
+#define KEY_PASS     "wspass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 8901            /* most WebSDRs' */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_XIEGU
 #define KEY_HOST     "xhost"
 #define KEY_RLIST    "xlist"     /* the radios, one in use: see below */

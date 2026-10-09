@@ -286,7 +286,7 @@ owrx_end_t owrx_sess_run(owrx_sess_t *s, const owrx_url_t *u, uint32_t key, cons
 
     while (end == OWRX_END_NONE) {
         wl_piece_t pc;
-        const int r = wl_read(s->wl, LOOP_MS, &pc);
+        const int r = wl_next(s->wl, LOOP_MS, &pc);
         int64_t now = esp_timer_get_time();
         if (r < 0) {
             end = streaming ? OWRX_END_CLOSED : OWRX_END_NO_ANSWER;
@@ -336,7 +336,7 @@ owrx_end_t owrx_sess_run(owrx_sess_t *s, const owrx_url_t *u, uint32_t key, cons
                         end = said->end;
                         break;
                     }
-                    if (ev & OWRX_EV_SDR) owrx_adpcm_reset(&s->ad);
+                    if (ev & OWRX_EV_SDR) owrx_adpcm_resync(&s->ad);
                     if (ev & OWRX_EV_SPAN) {
                         if (!spanned)
                             ESP_LOGI(tag, "%s, audio %s, waterfall %s%s", said->plus ? "OpenWebRX+" : "OpenWebRX",
@@ -350,7 +350,7 @@ owrx_end_t owrx_sess_run(owrx_sess_t *s, const owrx_url_t *u, uint32_t key, cons
                         /* A band refused: its DSP made anew, which plays
                          * nothing until start comes again. */
                         z.tuned = false;
-                        owrx_adpcm_reset(&s->ad);
+                        owrx_adpcm_resync(&s->ad);
                     }
                     if ((ev & OWRX_EV_DEMOD)) ESP_LOGW(tag, "its demodulator: %s", said->log);
                     if ((ev & OWRX_EV_METER) && z.tuned) {

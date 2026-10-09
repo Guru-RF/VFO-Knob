@@ -271,7 +271,12 @@ def case_play(fork):
         el = time.time() - t0
         got = c.samples[2]
         check(abs(got - 12000 * el) < 12000 * 0.6, f"12 kHz of audio: {got} samples in {el:.1f} s")
-        check(c.dec.lost == 0 and c.dec.syncs >= 5, f"decoded cleanly: {c.dec.syncs} SYNCs, {c.dec.lost} bytes lost")
+        if fork == "upstream-1.0":
+            check(c.dec.plain and c.dec.lost == 0 and c.dec.syncs == 0,
+                  f"decoded plain, no SYNC: {c.dec.syncs} SYNCs, {c.dec.lost} bytes lost")
+        else:
+            check(c.dec.lost == 0 and c.dec.syncs >= 5 and not c.dec.plain,
+                  f"decoded cleanly: {c.dec.syncs} SYNCs, {c.dec.lost} bytes lost")
         p = pitch(c.pcm, 12000)
         check(900 < p < 1100, f"the carrier heard at 1 kHz: {p:.0f} Hz")
         check(len(c.of("smeter")) >= 15, f"the S-meter, 4 a second: {len(c.of('smeter'))}")
@@ -532,6 +537,7 @@ CASES = {
     "play_plus": lambda d: case_play("plus"),
     "play_upstream": lambda d: case_play("upstream"),
     "play_122": lambda d: case_play("upstream-1.2.2"),
+    "play_10": lambda d: case_play("upstream-1.0"),
     "wfm_raw": lambda d: case_wfm_and_raw(),
     "prefix": lambda d: case_prefix(),
     "tls": case_tls,

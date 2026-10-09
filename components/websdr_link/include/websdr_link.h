@@ -42,12 +42,15 @@ typedef enum {
 } wl_end_t;
 
 /* A receiver: its address, over TLS or not, and the key its TLS sessions are
- * kept under for the next connection (owrx_key(), kiwi_hp()). */
+ * kept under for the next connection (owrx_key(), kiwi_hp()). `origin`: the
+ * upgrade carries the Origin its own page would send, "http://<Host>" (or
+ * https://) -- a WebSDR's server may want it. */
 typedef struct {
     const char *host;
     uint16_t    port;
     bool        tls;
     uint32_t    key;
+    bool        origin;
 } wl_addr_t;
 
 /* The caller, asked between every slice of a wait (100 ms) and every step
@@ -90,14 +93,16 @@ typedef struct {
     uint8_t        op;                  /* WL_TEXT, WL_BIN */
     bool           first, last;         /* the frame's first piece; its last */
     uint64_t       len;                 /* the frame's length */
-    const uint8_t *p;                   /* valid until the next wl_read() */
+    const uint8_t *p;                   /* valid until the next wl_next() */
     size_t         n;
 } wl_piece_t;
 
-/* The next piece, waiting up to `ms` for one: 1 a piece; 0 none yet; -2 the
+/* (Not wl_read: ESP-IDF's wear levelling has one, and the linker took
+ * theirs for ours once the link order let it.)
+ * The next piece, waiting up to `ms` for one: 1 a piece; 0 none yet; -2 the
  * receiver closed (a close frame, or its end of the socket -- after
  * everything it sent before); -1 failed. A ping is answered and passed by. */
-int wl_read(wl_t *w, int ms, wl_piece_t *pc);
+int wl_next(wl_t *w, int ms, wl_piece_t *pc);
 
 /* Whether more is here already, or comes within `ms`. */
 bool wl_more(wl_t *w, int ms);

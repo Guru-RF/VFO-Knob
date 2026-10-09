@@ -110,6 +110,16 @@ int owrx_path(const owrx_url_t *u, const char *leaf, char *out, size_t cap)
     return n < 0 || (size_t)n >= cap ? -1 : n;
 }
 
+int owrx_url_text(const owrx_url_t *u, char *out, size_t cap)
+{
+    if (!u || !out || !cap) return -1;
+    char pp[8] = "";
+    if (u->port != (u->tls ? 443 : 80)) snprintf(pp, sizeof pp, ":%u", (unsigned)u->port);
+    const int n = snprintf(out, cap, "%s://%s%s%s", u->tls ? "https" : "http", u->host, pp,
+                           u->path[0] ? u->path : "/");
+    return n < 0 || (size_t)n >= cap ? -1 : n;
+}
+
 uint32_t owrx_key(const owrx_url_t *u)
 {
     uint32_t h = OWRX_FNV0;

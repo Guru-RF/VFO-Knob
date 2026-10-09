@@ -79,6 +79,11 @@
 #if VFO_RADIO_OWRX
 #include "owrx.h"
 #endif
+/* The websdr firmware's: the radios' list, one in use, its bands or band
+ * plan. */
+#if VFO_RADIO_WEBSDR
+#include "wsdr.h"
+#endif
 #include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
 #include "ptt_fsm.h"
@@ -143,6 +148,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "Kiwi888";
 #elif VFO_RADIO_OWRX
     const char *name = "OpenWebRX";
+#elif VFO_RADIO_WEBSDR
+    const char *name = "WebSDR";
 #elif VFO_RADIO_SETUP
     const char *name = "Setup";
 #else
@@ -170,7 +177,8 @@ static volatile bool s_in_call;   /* calling, ringing or talking: the dial is th
  * an install stops it first -- one download at a time. */
 static volatile bool s_fill_stop, s_fill_running;
 
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_KIWI && !VFO_RADIO_OWRX
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_KIWI && !VFO_RADIO_OWRX && \
+    !VFO_RADIO_WEBSDR
 /* Another radio, chosen with a swipe up: in use from the next boot, and the
  * knob restarts into it at once -- the clients have no restart path. Never
  * while transmitting. The boot is confirmed first: a restart inside its first
@@ -417,11 +425,12 @@ static void encoder_task(void *arg)
         /* Tuning is silent by design; see the note above. `before` and
          * `after` remain wired up so the band-edge signal can hook in here
          * without restructuring anything. */
-#if VFO_RADIO_OWRX
+#if VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
         /* ...as it does on an OpenWebRX: the dial stops at the edge of the
          * band the receiver is on, which every listener shares, with a
          * click -- a fifth of a second apart at most. Another band is chosen
-         * from its list, never turned into. */
+         * from its list, never turned into. On a WebSDR only at its outer
+         * edges: between them the dial runs on into the next band. */
         if (after == before) {
             static uint32_t clicked;
             if (now_ms - clicked > 200) {
@@ -791,6 +800,8 @@ static bool flush_ok(int64_t settled)
     return !kiwi_audible() || settled > 30000000;
 #elif VFO_RADIO_OWRX
     return !owrx_audible() || settled > 30000000;
+#elif VFO_RADIO_WEBSDR
+    return !wsdr_audible() || settled > 30000000;
 #else
     (void)settled;
     return !audio_busy();
@@ -1085,6 +1096,14 @@ static void ui_task(void *arg)
             if (c.have_band) {
                 ESP_LOGI(TAG, "band -> %u", (unsigned)c.band);
                 refused |= !owrx_band_choose(c.band);
+            }
+#elif VFO_RADIO_WEBSDR
+            /* Another receiver, at once; another of its bands, or of its
+             * band plan's ranges. */
+            if (c.have_radio) refused |= !wsdr_rx_use(c.radio, true);
+            if (c.have_band) {
+                ESP_LOGI(TAG, "band -> %u", (unsigned)c.band);
+                refused |= !wsdr_band_choose(c.band);
             }
 #elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
             if (c.have_radio) switch_radio(c.radio);
@@ -1511,7 +1530,7 @@ static void ui_task(void *arg)
                                                                          : "TX REFUSED";
         else if (nowms < s_note_until && st.note[0]) warn = st.note;
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
-#if VFO_RADIO_KIWI || VFO_RADIO_OWRX
+#if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
         /* A receiver on its way, with nothing said against it: no warning
          * over the face -- its slab says "connecting...". */
         else if ((st.link == RADIO_LINK_CONNECTING || st.link == RADIO_LINK_GREETING) &&
@@ -1711,6 +1730,41 @@ static void ui_task(void *arg)
             }
         }
 #endif
+#if VFO_RADIO_WEBSDR
+        /* The slab: under the site's name, its band -- and the band plan's
+         * range the dial is in -- then that it is a WebSDR, or on its way.
+         * Its bands, or its band plan's ranges, to choose from, given again
+         * whenever they change. In PSRAM: only ui_update reads the lines,
+         * under the LVGL lock. */
+        {
+            EXT_RAM_BSS_ATTR static wsdr_now_t wn;
+            wsdr_now(&wn);
+            u.rx_line2 = wn.line2;
+            u.rx_line3 = wn.line3;
+            u.users    = -1;
+            u.has_sam  = wn.sam;
+            u.band_sel = (int8_t)wn.band_sel;
+            strlcpy(u.band_name, wn.band, sizeof u.band_name);
+            static uint32_t bands_seq = 0xFFFFFFFF;
+            if (wn.bands_seq != bands_seq) {
+                EXT_RAM_BSS_ATTR static wsdr_choice_t wc[UI_BANDS_MAX];
+                EXT_RAM_BSS_ATTR static ui_band_t ub[UI_BANDS_MAX];
+                const int n = wsdr_bands(wc, UI_BANDS_MAX);
+                for (int i = 0; i < n; i++) {
+                    strlcpy(ub[i].name, wc[i].name, sizeof ub[i].name);
+                    ub[i].sdr[0] = 0;
+                    /* Under its name, where it is in MHz. */
+                    char r[48] = "";
+                    if (wc[i].hi > wc[i].lo)
+                        snprintf(r, sizeof r, "%lu.%03lu-%lu.%03lu", (unsigned long)(wc[i].lo / 1000000),
+                                 (unsigned long)(wc[i].lo / 1000 % 1000), (unsigned long)(wc[i].hi / 1000000),
+                                 (unsigned long)(wc[i].hi / 1000 % 1000));
+                    strlcpy(ub[i].range, r, sizeof ub[i].range);
+                }
+                if (ui_set_bands(ub, (uint8_t)n)) bands_seq = wn.bands_seq;
+            }
+        }
+#endif
 #if VFO_RADIO_UBERSDR
         /* The slab: the spots and voices on the band, a second at a time or
          * when they change; the swipe from the right, SSTV. */
@@ -1786,6 +1840,15 @@ static void ui_task(void *arg)
             u.n_radios_direct = u.n_radios;
             u.radio_sel       = (int8_t)owrx_rx_active();
             for (int i = 0; i < u.n_radios; i++) owrx_rx_label(i, u.radio_name[i], sizeof u.radio_name[i]);
+        }
+#elif VFO_RADIO_WEBSDR
+        /* The receivers, another a swipe up away: switched live. */
+        {
+            const int n = net_prov_radio_count();
+            u.n_radios        = (uint8_t)(n < UI_RADIOS_MAX ? n : UI_RADIOS_MAX);
+            u.n_radios_direct = u.n_radios;
+            u.radio_sel       = (int8_t)wsdr_rx_active();
+            for (int i = 0; i < u.n_radios; i++) wsdr_rx_label(i, u.radio_name[i], sizeof u.radio_name[i]);
         }
 #elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
         /* The radios to choose from with a swipe up: not over the cable,
@@ -1999,6 +2062,10 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * none yet, the client says NO RECEIVER, with the knob's address. */
     strlcpy(ip, "OWRX", iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (OpenWebRX) ---");
+#elif VFO_RADIO_WEBSDR
+    /* The same: the radios' list, each WebSDR by its address whole. */
+    strlcpy(ip, "WSDR", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (WebSDR) ---");
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is

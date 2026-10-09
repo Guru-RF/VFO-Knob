@@ -8,4 +8,5 @@ typedef enum {
     ESP_RST_JTAG, ESP_RST_EFUSE, ESP_RST_PWR_GLITCH, ESP_RST_CPU_LOCKUP,
 } esp_reset_reason_t;
 esp_reset_reason_t esp_reset_reason(void);
+void esp_restart(void);
 #endif

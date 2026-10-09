@@ -87,7 +87,7 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   </div>
   <div id="freq" class="freq">--.---.---<small>MHz</small></div>
   <div class="meter"><div id="mbar" class="mbar"></div></div>
-  <div class="scale"><span>S1</span><span>3</span><span>5</span><span>7</span><span>9</span><span>+20</span><span>+40</span><span>+60</span></div>
+  <div class="scale" id="scale"><span>S1</span><span>3</span><span>5</span><span>7</span><span>9</span><span>+20</span><span>+40</span><span>+60</span></div>
   <div class="row between" style="margin-top:6px"><span id="sval" class="sval">S0</span><span id="memtag" class="tag" hidden></span></div>
   <form id="fform" class="fentry" autocomplete="off">
     <input id="fin" inputmode="decimal" placeholder="14.074 MHz, or 14074 kHz">
@@ -99,7 +99,8 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
   </div>
 </section>
 
-<section class="ctl"><h2>Band</h2><div id="bands" class="grid"></div></section>
+<section class="ctl"><h2>Band</h2><div id="bands" class="grid"></div>
+  <p id="bandnote" class="sub" hidden></p></section>
 <section class="ctl"><h2>Mode</h2><div id="modes" class="grid"></div></section>
 <section class="ctl"><h2>Filter</h2><div id="filters" class="grid"></div></section>
 
@@ -176,9 +177,16 @@ body.tx main section.ctl{opacity:.45;pointer-events:none}
      <code>POST /api/radios/switch</code> with <code>to=1</code></p>
   <p id="apirecv" hidden>Another receiver, by its place in the list from 0, at once &mdash; even while the one in
      use is down: <code>receiver=1</code></p>
+  <p id="apiband" hidden>Another band, by its place in the receiver's own list from 0 (<code>owrx.bands</code> in
+     the JSON): <code>band=3</code> &mdash; it moves everyone listening to the receiver, and is refused within
+     11 s of the last change, which OpenWebRX+ bans a listener for.</p>
+  <p id="apiwband" hidden>Another band, by its place in the site's own list from 0 (<code>wsdr.bands</code> in
+     the JSON: its bands, or a one-band site's band plan): <code>band=3</code> &mdash; the dial onto it, moving
+     nobody else.</p>
   <p>Also <code>mode</code>, <code>filter</code> (1&ndash;3), <code>agc</code>, <code>gain</code><span id="apinr" hidden>
      (the noise filter: 0 off, 1 WDSP, 2 LMS, 3 spectral)</span>, <code>rfgain</code> and
-     <code>power</code> (0&ndash;100), <code>squelch</code> (0&ndash;100, 0 open), <code>tuner</code> (on/off),
+     <code>power</code> (0&ndash;100), <code>squelch</code> (0&ndash;100<span id="apisq" hidden> of the S-meter's
+     scale</span>, 0 open), <code>tuner</code> (on/off),
      <code>rx</code> (main/sub), <code>ant</code> and <code>txant</code> (by place in the radio's list, from 1),
      <code>rit</code> (Hz)<span id="apisdr" hidden>, and <code>sdr</code> (<code>local</code>, or a web SDR by its
      place in the list, from 0) and <code>balance</code> (&minus;100 the radio alone, 0 the radio left and the SDR
@@ -205,33 +213,54 @@ const PAL={
  ubersdr:{bg:'#090c12',panel:'#141a25',panel2:'#0f141d',line:'#212a39',text2:'#8d99ad',label:'#5c6779',dim:'#2f3b4e',
        accent:'#08a2fb','accent-hi':'#4db4ff',warn:'#f2b544',danger:'#f2646a',tx:'#f2646a',meter:'#45d69a',ok:'#45d69a'},
  kiwi:{bg:'#000000',panel:'#262626',panel2:'#1a1a1a',line:'#373737',text2:'#d3d3d3',label:'#909090',dim:'#575757',
-       accent:'#ffff50','accent-hi':'#ffff80',on:'#000000',danger:'#ff3030',tx:'#ff3030',meter:'#00ff00',ok:'#00ff00'}};
-const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR',ubersdr:'UberSDR',kiwi:'Kiwi888'};
+       accent:'#ffff50','accent-hi':'#ffff80',on:'#000000',danger:'#ff3030',tx:'#ff3030',meter:'#00ff00',ok:'#00ff00'},
+ owrx:{bg:'#000000',panel:'#373737',panel2:'#2a2a2a',line:'#575757',text2:'#e0e0e0',label:'#b0b0b0',dim:'#6e6e6e',
+       accent:'#ffff50','accent-hi':'#ffff80',on:'#000000',warn:'#fff720',danger:'#ff5939',tx:'#ff5939',meter:'#22ff2f',
+       ok:'#22ff2f'},
+ websdr:{bg:'#0b0f14',panel:'#1a222c',panel2:'#141b23',line:'#2b3644',text2:'#d0d8e2',label:'#8a97a8',dim:'#4a5666',
+       accent:'#4fb3ff','accent-hi':'#80c8ff',on:'#000000',warn:'#f2c14e',danger:'#ff5a5a',tx:'#ff5a5a',meter:'#3ddc84',
+       ok:'#3ddc84'}};
+const NAME={icom:'Icom',xiegu:'Xiegu',multiflex:'FlexRadio',aethersdr:'AetherSDR',ubersdr:'UberSDR',kiwi:'Kiwi888',
+  owrx:'OpenWebRX',websdr:'WebSDR'};
 const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',cwu:'CWU',cwl:'CWL',am:'AM',sam:'SAM',sal:'SAL',sau:'SAU',
-  fm:'FM',nfm:'NFM',nbfm:'NBFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
+  fm:'FM',nfm:'NFM',nbfm:'NBFM',wfm:'WFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
 const MODES={icom:['usb','lsb','cw','cwr','am','fm','rtty','digu','digl'],
   xiegu:['usb','lsb','cw','cwr','am','fm','digu','digl'],
   multiflex:['usb','lsb','cw','am','sam','fm','nfm','digu','digl','rtty'],
   aethersdr:['usb','lsb','cw','cwr','am','sam','fm','nfm','digu','digl','rtty'],
   ubersdr:['usb','lsb','cwu','cwl','am','sam','fm','nfm'],
-  kiwi:['usb','lsb','cw','am','sam','sal','sau','nbfm']};
+  kiwi:['usb','lsb','cw','am','sam','sal','sau','nbfm'],
+  owrx:['usb','lsb','cw','am','sam','nfm','wfm'],websdr:['usb','lsb','cw','am','sam','nfm']};
 const AGCS={icom:['fast','mid','slow'],xiegu:['fast','mid','slow'],multiflex:['fast','med','slow','off'],aethersdr:['fast','med','slow','off'],
-  ubersdr:[],kiwi:['fast','med','slow']};
-const GAINCAP={icom:'P.AMP',xiegu:'PRE',multiflex:'RF.G',aethersdr:'RF.G',ubersdr:'Noise filter',kiwi:'Noise filter'};
-/* An UberSDR and a KiwiSDR only receive: no RIT or microphone, and their
- * passbands by mode (the knob's ui.c) -- an UberSDR's SNR where the AGC is. */
-const RXONLY=r=>r==='ubersdr'||r==='kiwi';
+  ubersdr:[],kiwi:['fast','med','slow'],owrx:[],websdr:[]};
+const GAINCAP={icom:'P.AMP',xiegu:'PRE',multiflex:'RF.G',aethersdr:'RF.G',ubersdr:'Noise filter',kiwi:'Noise filter',owrx:'',websdr:''};
+/* An UberSDR, a KiwiSDR and an OpenWebRX only receive: no RIT or microphone,
+ * and their passbands by mode (the knob's ui.c) -- an UberSDR's SNR where
+ * the AGC is. */
+const RXONLY=r=>r==='ubersdr'||r==='kiwi'||r==='owrx'||r==='websdr';
 const UWID=m=>RADIO==='kiwi'
   ? (/^cw/.test(m)?[60,100,200,300,400,500,800,1000]:/^s?am$/.test(m)?[5000,6000,8000,9800,12000]
     :/^sa[lu]$/.test(m)?[2500,3000,4000,4900,6000]:/fm$/.test(m)?[6000,8000,10000,12000]:[1800,2100,2400,2700,3000,3600])
+  : RADIO==='owrx'
+  ? (m==='cw'?[100,200,300,500,800,1000]:/^s?am$/.test(m)?[5000,6000,8000,10000,12000]
+    :m==='wfm'?[120000,150000,180000,200000]:m==='nfm'?[6000,8000,10000,12000]:[1800,2100,2400,2600,2700,3000,3600])
+  : RADIO==='websdr'
+  ? (m==='cw'?[200,300,400,500,800,1000]:/^s?am$/.test(m)?[5000,6000,8000,9000,10000,12000]
+    :m==='nfm'?[8000,10000,12000,16000]:[1800,2100,2400,2700,3000,3600,4500,6000])
   : (/^cw/.test(m)?[100,200,300,400,500,800,1000]:/^s?am$/.test(m)?[4000,6000,8000,10000,12000]
     :/fm$/.test(m)?[10000,12000,16000]:[1800,2100,2400,2700,3000,3600,4200,5000]);
 const centred=m=>/^cw|^s?am$|fm$/.test(m);
 /* A passband of width w, as the knob's own filter editor sets it: a Kiwi's
- * sideband 300 Hz off the carrier, AM's single sidebands from it out. */
-const edges=(m,w)=>centred(m)?{lo:-Math.round(w/2),hi:Math.round(w/2)}
-  :RADIO==='kiwi'?(m==='sal'?{lo:-w,hi:0}:m==='sau'?{lo:0,hi:w}:lsbSide(m)?{lo:-(300+w),hi:-300}:{lo:300,hi:300+w})
-  :lsbSide(m)?{lo:-w,hi:-50}:{lo:50,hi:w};
+ * sideband 300 Hz off the carrier, AM's single sidebands from it out; an
+ * OpenWebRX's 300 Hz off it, OpenWebRX+'s 150; a WebSDR's 300 off it, its CW
+ * around the 750 Hz tone below the carrier. */
+const edges=(m,w)=>{
+  const off=RADIO==='kiwi'||RADIO==='websdr'?300:RADIO==='owrx'?(R&&R.owrx&&R.owrx.plus?150:300):-1;
+  if(RADIO==='websdr'&&m==='cw') return {lo:-750-Math.round(w/2),hi:-750+Math.round(w/2)};
+  return centred(m)?{lo:-Math.round(w/2),hi:Math.round(w/2)}
+  :RADIO==='kiwi'&&m==='sal'?{lo:-w,hi:0}:RADIO==='kiwi'&&m==='sau'?{lo:0,hi:w}
+  :off>=0?(lsbSide(m)?{lo:-(off+w),hi:-off}:{lo:off,hi:off+w})
+  :lsbSide(m)?{lo:-w,hi:-50}:{lo:50,hi:w}};
 const BANDS=[['160m',1840000],['80m',3700000],['60m',5355000],['40m',7100000],['30m',10130000],['20m',14100000],
   ['17m',18120000],['15m',21200000],['12m',24940000],['10m',28400000],['6m',50200000],['2m',144300000],['70cm',432200000]];
 const WIDTHS=[1800,2100,2400,2700,3000,3600];
@@ -274,6 +303,19 @@ function render(){
   $('rittag').hidden=!R.rit;$('rittag').textContent='RIT '+(R.rit>0?'+':'')+R.rit;
   $('rxtag').hidden=!(R.n_rx>1);$('rxtag').textContent=R.rx?'SUB':'MAIN';
   $('txbadge').hidden=!R.tx;
+  /* An OpenWebRX's meter is its page's: its own dB, on its waterfall's
+     scale, one colour -- green, yellow from 70 %, red from 90. */
+  const O=R.owrx;
+  if(O){
+    /* -150: no reading yet -- the receiver sends none before its audio starts. */
+    const on=ready&&R.smeter>-150, f=Math.max(0,Math.min(1,(R.smeter-O.meter_lo)/((O.meter_hi-O.meter_lo)||1)));
+    $('mbar').style.width=(on?f*100:0)+'%';
+    $('mbar').style.background=f>0.9?'var(--danger)':f>0.7?'var(--warn)':'var(--meter)';
+    const k=O.meter_lo+'|'+O.meter_hi;
+    if($('scale').dataset.k!==k){$('scale').dataset.k=k;
+      $('scale').innerHTML=[0,1,2,3,4,5].map(i=>'<span>'+Math.round(O.meter_lo+(O.meter_hi-O.meter_lo)*i/5)+'</span>').join('')}
+    $('sval').textContent=on?R.smeter.toFixed(1)+' dB':'-- dB';
+  }else{
   const pct=Math.max(0,Math.min(1,(R.smeter+127)/114))*100;
   $('mbar').style.width=(R.tx?0:pct)+'%';
   /* A Kiwi's ADC overloaded, this last second: OV, in red, as its own page has it. */
@@ -281,14 +323,19 @@ function render(){
   $('sval').textContent=ready?(sunits(R.smeter)+'  '+Math.round(R.smeter)+(RADIO==='ubersdr'?' dBFS':' dBm')
     +(ov?'  OV':'')+(R.have_snr?'  \u00b7  SNR '+Math.round(R.snr)+' dB':'')):'--';
   $('sval').style.color=ov?'var(--danger)':'';
+  }
   $('memtag').hidden=!(R.memories&&R.mem_state>0);
   /* A FlexRadio's memories are one list, with no groups: the memory's number alone. */
   $('memtag').textContent='MEM '+(R.mem_all?'':String(R.mem_group).padStart(2,'0')+'/')
     +String(R.mem_ch).padStart(2,'0')+(R.mem_name?' '+R.mem_name:'');
+  if(O) renderOwrx(O,ready);
+  else if(R.wsdr) renderWsdr(R.wsdr);
+  else{
   // bands: 2 m and 70 cm only where the radio tunes that high
   const bands=BANDS.filter(b=>b[1]<=(R.f_max||60000000));
   if($('bands').children.length!==bands.length)btns($('bands'),bands.map(b=>[b[1],b[0]]),hz=>set({freq:hz}));
   const cur=[...bands].reverse().find(b=>Math.abs(R.freq-b[1])<Math.max(500000,b[1]*0.05));mark($('bands'),cur?cur[1]:'');
+  }
   mark($('modes'),R.mode);
   if(R.filter){if($('filters').dataset.kind!=='pre'){$('filters').dataset.kind='pre';btns($('filters'),[[1,'FIL1'],[2,'FIL2'],[3,'FIL3']],n=>set({filter:n}))}mark($('filters'),R.filter)}
   else if(RXONLY(RADIO)){const ws=UWID(R.mode),kind='u'+ws.join(',');
@@ -334,7 +381,14 @@ function render(){
   const many=RS=>RS&&RS.names.length>(RS.live?0:1);
   const RS=R.radios;$('radiosec').hidden=!many(RS);
   $('radiolbl').textContent=RS&&RS.live?'Receiver':'Radio';
-  const K=R.kiwi;$('kiwiinfo').hidden=!K;
+  const K=R.kiwi,W=R.wsdr;$('kiwiinfo').hidden=!K&&!O&&!W;
+  /* A WebSDR: its page's title, its audio's rate, its idle timeout. */
+  if(W) $('kiwiinfo').textContent=[W.name,W.rate>0?(W.rate/1000).toFixed(3)+' kHz audio':'',
+    W.idle_min>0?'lets go after '+(W.idle_min%60?W.idle_min+' min':W.idle_min/60+' h')+' idle':'',
+    ready?'':W.state].filter(Boolean).join(' \u00b7 ');
+  /* An OpenWebRX: what it calls itself, its software, everyone listening. */
+  if(O) $('kiwiinfo').textContent=[O.name,O.version?(O.plus?'OpenWebRX+ ':'OpenWebRX ')+O.version:'',
+    O.users>0?O.users+(O.users_max>0?' of '+O.users_max:'')+' listening':'',ready?'':O.state].filter(Boolean).join(' \u00b7 ');
   if(K) $('kiwiinfo').textContent=[K.model,K.antenna,K.loc,K.users_max>0?K.users+' of '+K.users_max+' in use':'',
     K.rate>0?(K.rate/1000).toFixed(K.rate%1000?3:0)+' kHz audio':'',ready?'':K.state].filter(Boolean).join(' \u00b7 ');
   if(many(RS)){
@@ -364,6 +418,42 @@ function render(){
        +(KR?'this one':'the SDR')+' right':'');
     $('balbox').hidden=E.sel<0;
     if(!busy('bal')){$('bal').value=S.balance;$('balv').textContent=balText(S.balance)}}
+}
+/* An OpenWebRX's bands: its own list -- its profiles -- each with its SDR
+ * and where it is; the one it is on marked. Another moves everyone
+ * listening, and never within 11 s of the last (OpenWebRX+ bans a listener
+ * that changes band more often): greyed until then. SAM only on
+ * OpenWebRX+. */
+const mhz=h=>(h/1e6).toFixed(3);
+function renderOwrx(O,ready){
+  const key=O.bands.map(b=>b.name+'/'+b.sdr).join('|');
+  if($('bands').dataset.k!==key){$('bands').dataset.k=key;
+    btns($('bands'),O.bands.map((b,i)=>[i,b.name]),i=>set({band:i}));
+    [...$('bands').children].forEach((e,i)=>{const b=O.bands[i];
+      e.title=[b.sdr,b.hi>b.lo?mhz(b.lo)+'-'+mhz(b.hi)+' MHz':''].filter(Boolean).join(' \u00b7 ')})}
+  mark($('bands'),O.band_sel);
+  const wait=O.band_wait_s>0;
+  for(const e of $('bands').children)e.disabled=!ready||wait&&+e.dataset.v!==O.band_sel;
+  const b=O.bands[O.band_sel], n=O.users>1?O.users-1:0;
+  $('bandnote').hidden=!ready;
+  $('bandnote').textContent=(b?[b.name,b.sdr,b.hi>b.lo?mhz(b.lo)+'-'+mhz(b.hi)+' MHz':''].filter(Boolean).join(' \u00b7 ')
+    :O.band||'')+(wait?' \u2014 another band in '+O.band_wait_s+' s':n?' \u2014 another band moves '+n
+    +' other listener'+(n===1?'':'s')+' with it':'');
+  for(const e of $('modes').children)e.hidden=e.dataset.v==='sam'&&!O.plus;
+}
+/* A WebSDR's bands -- or a one-band site's band plan -- each the dial onto
+ * it, any time: a band there is every listener's own. */
+function renderWsdr(W){
+  const key=W.bands.map(b=>b.name+'/'+b.lo).join('|');
+  if($('bands').dataset.k!==key){$('bands').dataset.k=key;
+    btns($('bands'),W.bands.map((b,i)=>[i,b.name]),i=>set({band:i}));
+    [...$('bands').children].forEach((e,i)=>{const b=W.bands[i];e.title=mhz(b.lo)+'-'+mhz(b.hi)+' MHz'})}
+  mark($('bands'),W.band_sel);
+  const b=W.bands[W.band_sel];
+  $('bandnote').hidden=!W.band;
+  $('bandnote').textContent=[b?b.name:'',W.band&&(!b||b.plan)?W.band:'',
+    W.hi>W.lo?mhz(W.lo)+'-'+mhz(W.hi)+' MHz':''].filter(Boolean).join(' \u00b7 ');
+  for(const e of $('modes').children)e.hidden=e.dataset.v==='sam'&&!W.sam;
 }
 /* A guest's time left, as the knob's slab says it: whole minutes, hours from
  * a hundred, the seconds too in the last five; an idle limit's last minute. */
@@ -403,7 +493,8 @@ function renderUber(U){
 const balText=b=>b<=-100?(RADIO==='kiwi'?'left':RXONLY(RADIO)?'UberSDR':'radio')
   :b>=100?(RADIO==='kiwi'?'right':RXONLY(RADIO)?'Kiwi':'SDR'):b===0?'L | R':b<0?'\u25c0 '+(-b):b+' \u25b6';
 const pwrText=p=>R&&R.max_w?Math.round(p*R.max_w/100)+' W':p+'%';
-const sqText=v=>v?v+'%':'open';
+/* An OpenWebRX's squelch in its own dB: a share of the meter's scale. */
+const sqText=v=>!v?'open':RADIO==='websdr'?'on':R&&R.owrx?Math.round(R.owrx.meter_lo+(R.owrx.meter_hi-R.owrx.meter_lo)*v/100)+' dB':v+'%';
 /* Another radio: the knob restarts into it, as a swipe up on it does. A
  * receiver is taken over at once -- and the one in use chosen again, which is
  * how one held back by its owner's limits is asked for again. */
@@ -432,9 +523,13 @@ async function init(){
   if(RXONLY(RADIO)){
     /* Nothing to transmit: no RIT, no microphone -- and an UberSDR has no
      * AGC to choose. */
-    $('ritsec').hidden=true;$('microw').hidden=true;$('agcbox').hidden=RADIO==='ubersdr';
+    $('ritsec').hidden=true;$('microw').hidden=true;
+    $('agcbox').hidden=RADIO==='ubersdr'||RADIO==='owrx'||RADIO==='websdr';
   }
-  $('apiradios').hidden=RADIO==='kiwi';$('apirecv').hidden=RADIO!=='kiwi';$('apinr').hidden=RADIO!=='kiwi';
+  const live=RADIO==='kiwi'||RADIO==='owrx'||RADIO==='websdr';
+  $('apiradios').hidden=live;$('apirecv').hidden=!live;$('apinr').hidden=RADIO!=='kiwi';
+  $('apiband').hidden=$('apisq').hidden=RADIO!=='owrx';
+  $('apiwband').hidden=RADIO!=='websdr';
   btns($('steps'),STEPS,s=>{step=s;mark($('steps'),step)});mark($('steps'),step);
   for(const b of document.querySelectorAll('[data-step]'))b.onclick=()=>R&&set({freq:Math.round(R.freq/step)*step+(+b.dataset.step)*step});
   for(const b of document.querySelectorAll('[data-rit]'))b.onclick=()=>R&&set({rit:+b.dataset.rit?Math.max(-9999,Math.min(9999,R.rit+(+b.dataset.rit))):0});
@@ -451,7 +546,12 @@ async function init(){
   $('fform').onsubmit=e=>{e.preventDefault();const t=$('fin').value.trim().replace(',','.');if(!t)return;let f=parseFloat(t);
     if(!isFinite(f))return toast('Not a frequency');
     /* a point means MHz; a whole number below 100000 is kHz; above, Hz */
-    f=t.includes('.')?f*1e6:(f<100000?f*1e3:f);set({freq:Math.round(f)});$('fin').value='';$('fin').blur()};
+    f=t.includes('.')?f*1e6:(f<100000?f*1e3:f);
+    /* An OpenWebRX tunes within the band it is on: another is chosen as a band. */
+    const O=R&&R.owrx;
+    if(O&&O.rate>0&&Math.abs(f-O.center)>O.rate/2)
+      return toast('Outside the band it is on, '+mhz(O.center-O.rate/2)+'-'+mhz(O.center+O.rate/2)+' MHz: choose another band');
+    set({freq:Math.round(f)});$('fin').value='';$('fin').blur()};
   const h=location.host;$('apiget').textContent='http://'+h+'/api/radio';$('apiset').textContent='http://'+h+'/api/radio/set?freq=14074000';
   poll();
 }

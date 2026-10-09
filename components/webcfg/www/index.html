@@ -70,6 +70,9 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   <h2 id="rtitle">Radio</h2>
   <div id="rlist"></div>
   <button id="radd" class="ghost" type="button" hidden>Add a radio</button>
+  <div class="grid" id="wsdrwhorow" hidden><div><label>Your name, for their listeners' lists</label>
+    <input id="wsdrwho" maxlength="31" placeholder="none" autocapitalize="characters" autocorrect="off"
+     spellcheck="false"></div></div>
   <div id="flexfound" hidden>
     <label style="margin-top:16px">On this network</label>
     <div id="flexrows"></div>
@@ -128,6 +131,38 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      turn: the first that answers plays, and is <b>In use</b> from then on.
      One that answers but turns the knob away (full, its password, its time
      up) keeps its turn. Changes here apply on the knob's next boot.</p>
+  <p class="note" id="owrxnote" hidden>Up to four OpenWebRX or OpenWebRX+ receivers,
+     each by its address as its page has it: <b>http://<i>name</i>:8073/</b>, or
+     <b>https://<i>name</i>/<i>path</i>/</b> for one behind a web server under a
+     path &mdash; pasted whole is fine. One that sends <b>http://</b> on to
+     <b>https://</b> is followed there, and <b>Test</b> offers to keep it so.
+     <b>In use</b> is the one the knob plays, and another takes over at once, with no
+     restart: choose it here and <b>Save</b>, or on the knob &mdash; swipe up, or tap the
+     receiver's name at the bottom of the face &mdash; turn to it and tap. One that
+     cannot be reached hands over to the next in the list, in turn: the first that
+     plays is <b>In use</b> from then on. One that turns the knob away &mdash;
+     banned, refused, not an OpenWebRX &mdash; is left alone until it is chosen
+     again: a tap on the one in use chooses it again. <b>Test</b> reads the
+     receiver's status only &mdash; its name, its software, its SDRs and bands
+     &mdash; and never listens, so it is never one of its listeners. A receiver is
+     shared: its SDR is on one band for everyone listening, and <b>BAND</b> on the
+     knob moves them all.</p>
+  <p class="note" id="wsdrnote" hidden>Up to four WebSDR receivers (the ones listed on
+     <b>websdr.org</b>), each by its address as its page has it:
+     <b>http://websdr.ewi.utwente.nl:8901/</b> &mdash; pasted whole is fine.
+     <b>In use</b> is the one the knob plays, and another takes over at once, with no
+     restart: choose it here and <b>Save</b>, or on the knob &mdash; swipe up, or tap the
+     receiver's name at the bottom of the face &mdash; turn to it and tap. One that
+     cannot be reached hands over to the next in the list, in turn. One too busy is
+     tried again by itself after five minutes, as its page asks; one that is no
+     WebSDR, or refuses the knob, is left alone until it is chosen again.
+     <b>Test</b> reads what its page reads first &mdash; its bands, its name &mdash;
+     and never listens, so it never takes a listener's place. A WebSDR tunes every
+     listener on their own: the dial runs from one of its bands into the next, and
+     <b>BAND</b> moves nobody else. A site that lets a listener go after some idle
+     time does so on the knob too: turn the dial and it is back. Its list of
+     listeners shows the knob by the name below &mdash; your call sign, say;
+     left empty, no name.</p>
   <p class="note" id="svxnote" hidden>The reflector's name, as SvxLink knows it:
      its SRV record says which host and port to use (<b>be.svx.link</b> is
      <b>reflector.be.svx.link:5300</b>). The port counts only for a name
@@ -610,6 +645,9 @@ async function load(){
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
   KIWI = c.radio === 'kiwi';              /* web receivers: the list below, one in use */
+  OWRX = c.radio === 'owrx';              /* web receivers: this list, each by its address whole */
+  WSDR = c.radio === 'websdr';            /* ...WebSDRs, the same way */
+  WEBRX = OWRX || WSDR;
   PHONE = c.radio === 'phone';            /* a telephone: its SIP account is its own */
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI;
@@ -619,11 +657,15 @@ async function load(){
   if (PHONE && !phoneLoaded) { document.documentElement.style.setProperty('--accent','#e5a823'); phoneLoad(); }
   LINKNAME = c.link || 'Radio';
   $('rtitle').textContent = icom ? 'Icom radios' : xiegu ? 'X6100 / X6200'
-                          : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : uber ? 'UberSDR' : 'AetherSDR';
+                          : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : uber ? 'UberSDR'
+                          : OWRX ? 'OpenWebRX receivers' : WSDR ? 'WebSDR receivers' : 'AetherSDR';
   $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
   $('ubernote').hidden = !uber;
+  $('owrxnote').hidden = !OWRX;
+  $('wsdrnote').hidden = !WSDR;
+  $('radd').textContent = WEBRX ? 'Add a receiver' : 'Add a radio';
   $('sdruber').hidden = !uber; $('sdrradio').hidden = uber || KIWI;
   /* The kiwi firmware's receivers are this list: one in use, switched live,
      and another of them in the right ear. */
@@ -638,16 +680,16 @@ async function load(){
   $('xiegunote').hidden = !xiegu;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
-  myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !uber ? c.client : '';
+  myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !uber && !WEBRX ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = lan || SVX || flex || uber || !(c.client && c.client_usb);
+  $('hostusb').hidden = lan || SVX || flex || uber || WEBRX || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
-  LIST = !SVX && c.radio !== 'setup' && !KIWI; LAN = lan; UBER = uber; RXONLY = uber || KIWI;
+  LIST = !SVX && c.radio !== 'setup' && !KIWI; LAN = lan; UBER = uber; RXONLY = uber || KIWI || WEBRX;
   /* A receiver's firmware has no microphone: no gain to set for one. */
   $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY; $('volnote').hidden = !RXONLY;
   HOSTLBL = flex || xiegu ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
-          : 'Host (IP, or a name ending .local)';
+          : WEBRX ? 'Address (http://\u2026, or https://\u2026)' : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
   if (LIST) { $('rlogin').hidden = true; rigsLoad(); }
   if (flex) { slLoad(); foundLoad(); }
@@ -917,6 +959,109 @@ function foundAdd(i){
 
 /* ---- the radios: one in use, a swipe up on the knob for another ---- */
 let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, UBER=false, KIWI=false, RXONLY=false, HOSTLBL='Host';
+/* The openwebrx and websdr firmwares' receivers: In use chosen here, and
+   each one's state as the knob knows it, read again every few seconds. */
+let OWRX=false, WSDR=false, WEBRX=false, rigUseDirty=false, rigsTimer=0, RIG_USE0=0;
+/* An OpenWebRX's address as the knob keeps it (owrx_url_text): its scheme --
+   http:// unless it says -- its name, its port where not the scheme's own,
+   and its path, ending in '/', with a page's name, a query and a fragment
+   ("#freq=") left off. '' where it is no address. */
+function owrxAddr(t){
+  const m=/^\s*(?:([a-z][a-z0-9+.-]*):\/\/)?([^\/:?#\s]+)(?::(\d+))?([^?#\s]*)/i.exec(t||'');
+  if(!m||!m[2]) return '';
+  const sc=(m[1]||'http').toLowerCase(); if(sc!=='http'&&sc!=='https') return '';
+  const port=m[3]&&+m[3]!==(sc==='https'?443:80)?':'+(+m[3]):'';
+  let path=m[4]||'/'; if(path[0]!=='/') path='/'+path;
+  path=path.replace(/[^\/]*\.[^\/]*$/,''); if(!path.endsWith('/')) path+='/';
+  return sc+'://'+m[2].toLowerCase()+port+path.replace(/\/{2,}/g,'/');
+}
+/* A receiver's own name, for the dial (15 characters): its first part
+   ("ON4PRA SDR | Brugge" is ON4PRA SDR), cut at a word where it can be. */
+function owrxShort(n){
+  n=String(n||'').split(/\s+[|\u2013\u2014-]\s+|,\s/)[0].trim();
+  if(n.length<=15) return n;
+  const c=n.slice(0,16).lastIndexOf(' ');
+  return (c>=6?n.slice(0,c):n.slice(0,15)).trim();
+}
+/* Why a receiver does not play, as the Test and the list say it. */
+const OWRXWHY={"CAN'T REACH":'no answer there: not reached','NOT FOUND':'its name is not found',
+  'NOT OPENWEBRX':'something answers there, but not an OpenWebRX',
+  'CERTIFICATE?':'its https:// certificate does not check out: not spoken to',
+  REFUSED:'its web server refuses the knob',DOWN:'its web server answers, but no receiver behind it',
+  'NOT A WEBSDR':'something answers there, but not a WebSDR',BUSY:'it is too busy just now',
+  IDLE:'let go after its idle time: turn the dial',
+  MOVED:'it sends the knob to another address',BANNED:'it bans this address',
+  'RECEIVER FULL':'all its listeners\u2019 places are taken','NO SDR':'none of its SDRs is running',
+  'NO ANSWER':'no answer','NO SOCKET':'the knob has no connection free just now: try again',
+  'NO MEMORY':'no memory for a test just now: try again in a moment','NO ADDRESS':'not an address the knob can use'};
+const owrxWhy=w=>OWRXWHY[w]||String(w||'').toLowerCase();
+const owrxSw=y=>y.version?(y.plus?'OpenWebRX+ ':'OpenWebRX ')+y.version:'';
+/* Its state: in use and how, playing in its place, or what holds it back --
+   with what it calls itself. */
+function owrxState(x,i){
+  const y=x.rx; if(!y||x.was<0||rigsDirty&&x.host.trim()!==x.host0) return '';
+  const parts=[];
+  if(y.playing) parts.push(y.in_use?'in use \u00b7 playing':'playing in place of the one in use');
+  else if(y.held) parts.push((y.in_use?'in use, ':'')+'held: '+owrxWhy(y.why)+' \u2014 not again until you choose it');
+  else if(y.wait>0) parts.push((y.in_use?'in use, ':'')+owrxWhy(y.why)+' \u2014 again in '+y.wait+' s');
+  else if(y.in_use) parts.push('in use \u00b7 connecting');
+  const who=[y.name,owrxSw(y)].filter(Boolean).join(' \u00b7 ');
+  if(who) parts.push(who);
+  return parts.join(' \u2014 ');
+}
+function rigsStates(){
+  if(!WEBRX||!RIGS) return;
+  RIGS.forEach((x,i)=>{
+    if(!x.el) return;
+    const p=x.el.querySelector('.rxst'), st=owrxState(x,i);
+    p.textContent=st; p.hidden=!st;
+    const mv=x.el.querySelector('[data-https]'), h=x.rx&&x.rx.https;
+    mv.hidden=!h||x.host.trim()===h; if(h) mv.dataset.https=h;
+    if(!rigUseDirty) x.el.querySelector('input[name=ruse]').checked=i===RIG_USE;
+  });
+}
+async function rigsPoll(){
+  clearTimeout(rigsTimer);
+  if(!WEBRX) return;
+  rigsTimer=setTimeout(rigsPoll,3000);
+  if(document.hidden||!RIGS) return;
+  let s; try{ const r=await fetch('/api/radios',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
+  /* By the place each had when the page read the list: one typed over since
+     keeps what it was. A stand-in that played is In use from then on. */
+  s.list.forEach((y,i)=>{ const x=RIGS.find(z=>z.was===i); if(x&&x.host0===y.host) x.rx=y.rx });
+  if(!rigUseDirty&&!rigsDirty) RIG_USE=s.sel;
+  rigsStates();
+}
+async function owrxTest(x,res,d){
+  const h=owrxAddr(x.host), hi=d.querySelector('input[data-k=host]');
+  if(!h){ res.textContent=x.host.trim()?'Not an address the knob can use':'An address first'; res.style.color='var(--bad)'; return }
+  if(h!==x.host){ x.host=h; hi.value=h; rigsDirty=true }
+  res.style.color='var(--dim)';
+  const what=WSDR?'its page':'its status';
+  res.textContent=/^https:/i.test(h)?'Reading '+what+' over TLS\u2026 the first connection takes a few seconds':'Reading '+what+'\u2026';
+  try{
+    const r=await fetch('/api/radios/test',{method:'POST',body:new URLSearchParams({addr:h})});
+    if(!r.ok) throw new Error(await r.text());
+    const j=await r.json();
+    /* Sent on to https:// on its own host: spoken to there, and kept so --
+       the box says it, and Save keeps it. */
+    let tls='';
+    if(j.url&&j.url!==h){ x.host=j.url; hi.value=j.url; rigsDirty=true; tls=' \u2014 on '+j.url+' from now on, as it asks: Save keeps it' }
+    if(!j.ok){ res.textContent='\u2717 '+owrxWhy(j.error)+tls; res.style.color='var(--bad)'; return }
+    /* No name yet: the one it gives itself, for the dial; Save keeps it. */
+    if(!x.name.trim()&&j.name){
+      x.name=owrxShort(j.name); rigsDirty=true; d.querySelector('input[data-k=name]').value=x.name;
+    }
+    const pl=(n,w)=>n+' '+w+(n===1?'':'s');
+    const idle=m=>m>=60&&m%60===0?pl(m/60,'hour'):pl(m,'minute');
+    res.textContent='\u2713 '+(WSDR
+      ? [j.name,pl(j.bands,'band')+(j.plan?' (and a band plan of '+j.plan+')':''),
+         j.idle_min>0?'lets a listener go after '+idle(j.idle_min)+' idle':'no idle timeout']
+      : [j.name,owrxSw(j),pl(j.sdrs,'SDR'),pl(j.bands,'band'),
+         j.max_clients>0?j.max_clients+' listeners at most':'']).filter(Boolean).join(', ')+tls;
+    res.style.color='var(--ok)';
+  }catch(e){ res.textContent='The test failed: '+e.message; res.style.color='var(--bad)' }
+}
 /* An UberSDR's address as its page has it: https://name, its tunnel, over
    TLS; http://host:port a receiver on the LAN, in the clear. The knob keeps
    the scheme with the name, and the port in its box. Just typed, a scheme
@@ -937,8 +1082,11 @@ function uberAddr(x,typed){
 async function rigsLoad(){
   let s; try{ const r=await fetch('/api/radios',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
   RIGS=s.list.map((x,i)=>({name:x.name,host:x.host,port:String(x.port),user:x.user,pass:'',
-                            hasPass:x.pass,clrPass:false,was:i,host0:x.host,port0:String(x.port)}));
-  RIG_USE=s.sel; rigsDirty=false; rigsRender();
+                            hasPass:x.pass,clrPass:false,was:i,host0:x.host,port0:String(x.port),rx:x.rx}));
+  RIG_USE=RIG_USE0=s.sel; rigsDirty=false; rigUseDirty=false; rigsRender(); rigsPoll();
+  /* A WebSDR's list of listeners shows each by a name: the knob's, here. */
+  $('wsdrwhorow').hidden=!WSDR;
+  if(WSDR){ $('wsdrwho').value=s.ident||''; $('wsdrwho').oninput=()=>{ rigsDirty=true } }
 }
 function rigsRender(){
   const L=$('rlist');
@@ -952,7 +1100,7 @@ function rigsRender(){
       <div><label>Name, on the knob</label><input data-k="name" maxlength="15" placeholder="its address"></div>
       <div><label>${HOSTLBL}${myIp?` <button type="button" class="pill up" data-myip>my IP ${esc(myIp)}</button>`:''}</label>
         <input data-k="host" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
-      <div><label>Port</label><input data-k="port" inputmode="numeric"></div>
+      ${WEBRX?'':'<div><label>Port</label><input data-k="port" inputmode="numeric"></div>'}
       ${UBER?`<div><label>Password (optional)${x.hasPass?' <button type="button" class="pill down" data-clr>clear</button>':''}</label>
         <div class="pw"><input data-k="pass" type="password" autocomplete="new-password" autocapitalize="none"
          autocorrect="off" spellcheck="false"><button type="button" class="show">Show</button></div></div>`:''}
@@ -961,15 +1109,32 @@ function rigsRender(){
         <div class="pw"><input data-k="pass" type="password" autocomplete="new-password" autocapitalize="none"
          autocorrect="off" spellcheck="false"><button type="button" class="show">Show</button></div></div>`:''}
       </div>
-      <div class="sdrrow"><button type="button" class="ghost" data-act="rm"${RIGS.length<2?' hidden':''}>Remove</button></div>`;
+      ${WEBRX?`<p class="note rxst" hidden></p>`:''}
+      <div class="sdrrow">${WEBRX?'<button type="button" class="ghost" data-act="test">Test</button>':''}
+      <button type="button" class="ghost" data-act="rm"${RIGS.length<2?' hidden':''}>Remove</button>
+      ${WEBRX?'<button type="button" class="pill up" data-https hidden>keep https://</button><span class="sdrres note"></span>':''}</div>`;
     for(const inp of d.querySelectorAll('input[data-k]')){
       const k=inp.dataset.k; inp.value=x[k];
       inp.oninput=()=>{ x[k]=inp.value; rigsDirty=true; if(k==='host'||k==='port') pwHint(d,x) };
       /* A pasted link: its scheme and name here, its port in the box. */
       if(UBER&&k==='host') inp.onchange=()=>{ uberAddr(x,true); rigsRender() };
+      /* An OpenWebRX's whole, as the knob keeps it. */
+      if(WEBRX&&k==='host') inp.onchange=()=>{ const a=owrxAddr(x.host); if(a){ x.host=a; inp.value=a } rigsStates() };
     }
     pwHint(d,x);
-    d.querySelector('input[name=ruse]').onchange=()=>{ RIG_USE=i; rigsDirty=true };
+    /* In use: a tap chooses it -- on the openwebrx firmware the one in use
+       too, which is how one held back is asked for once more. */
+    const use=d.querySelector('input[name=ruse]');
+    use.onchange=()=>{ RIG_USE=i; rigsDirty=true };
+    if(WEBRX) use.onclick=()=>{ RIG_USE=i; rigsDirty=true; rigUseDirty=true };
+    if(WEBRX){
+      x.el=d;
+      const res=d.querySelector('.sdrres'), tb=d.querySelector('[data-act=test]');
+      tb.onclick=async()=>{ tb.disabled=true; try{ await owrxTest(x,res,d) }finally{ tb.disabled=false } };
+      const mv=d.querySelector('[data-https]');
+      mv.onclick=()=>{ x.host=mv.dataset.https; d.querySelector('input[data-k=host]').value=x.host;
+                       rigsDirty=true; mv.hidden=true };
+    }
     for(const b of d.querySelectorAll('button.show')) b.onclick=()=>{
       const p=b.previousElementSibling, s=p.type==='password'; p.type=s?'text':'password'; b.textContent=s?'Hide':'Show'; p.focus() };
     for(const b of d.querySelectorAll('[data-clr]')) b.onclick=()=>{ x.hasPass=false; x.clrPass=true; rigsDirty=true; rigsRender() };
@@ -979,7 +1144,8 @@ function rigsRender(){
       rigsDirty=true; rigsRender() };
     L.appendChild(d);
   });
-  $('radd').hidden=RIGS.length>=4; $('rlistnote').hidden=false;
+  $('radd').hidden=RIGS.length>=4; $('rlistnote').hidden=WEBRX;
+  rigsStates();
 }
 $('radd').onclick=()=>{
   RIGS.push({name:'',host:'',port:(RIGS[0]&&RIGS[0].port)||(UBER?'443':'50001'),user:'',pass:'',
@@ -990,14 +1156,30 @@ $('radd').onclick=()=>{
 /* A password goes along only when typed, or cleared: otherwise the knob keeps
    the one it has for that radio, at that address. */
 async function rigsSave(){
-  if(!LIST||!RIGS||!rigsDirty) return '';
-  const b=new URLSearchParams(); b.append('n',RIGS.length); b.append('use',RIG_USE);
+  if(!LIST||!RIGS||!rigsDirty&&!rigUseDirty) return '';
+  /* On the openwebrx firmware In use goes along only when another is chosen
+     here: a list saved alone never moves the knob off the one it plays, and
+     the one in use chosen again is the switch's, below -- one act, one try. */
+  const u=RIGS[RIG_USE], again=WEBRX&&rigUseDirty&&u&&u.was===RIG_USE0&&u.host.trim()===u.host0;
+  const b=new URLSearchParams(); b.append('n',RIGS.length); b.append('use',WEBRX&&(!rigUseDirty||again)?-1:RIG_USE);
   if(UBER) RIGS.forEach(x=>uberAddr(x,false));
+  if(WEBRX){
+    for(const x of RIGS) x.host=owrxAddr(x.host)||x.host.trim();
+    const far=RIGS.find(x=>x.host.length>63);
+    if(far) return 'an address longer than the knob keeps (63 characters): '+far.host;
+  }
   RIGS.forEach((x,i)=>{ b.append('name'+i,x.name.trim()); b.append('host'+i,x.host.trim());
     b.append('port'+i,x.port); b.append('user'+i,x.user); b.append('was'+i,x.was);
     if(x.pass||x.clrPass) b.append('pass'+i,x.pass) });
+  if(WSDR) b.append('ident',$('wsdrwho').value.trim());
   const r=await fetch('/api/radios',{method:'POST',body:b});
-  return r.ok ? '' : await r.text();
+  if(!r.ok) return await r.text();
+  /* The one in use chosen again: the operator's act -- which lets go of
+     what held it back, for one more try. Another chosen is that already. */
+  if(again){
+    try{ const s=await r.json(); if(s.sel>=0) await fetch('/api/radios/switch',{method:'POST',body:'to='+s.sel}) }catch(e){}
+  }
+  return '';
 }
 
 /* ---- WiFi: the networks the knob knows, the one joined last first ---- */
@@ -1499,7 +1681,7 @@ $('save').onclick=async()=>{
   }
   if(r.ok){
     const e=await rigsSave();
-    if(e) say('Radios not saved: '+e,false);
+    if(e) say((WEBRX?'Receivers':'Radios')+' not saved: '+e,false);
     const e2=await sdrSave();
     if(e2&&e2.saved) say('Receivers saved, but not In use: '+e2.saved,false);
     else if(e2) say((KIWI?'Receivers':'Web SDRs')+' not saved: '+e2,false);
@@ -1639,6 +1821,8 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
               {id:'ubersdr',   name:'UberSDR (a web receiver)'},
               {id:'kiwi',      name:'Kiwi888 (KiwiSDR and Web-888 receivers)'},
+              {id:'owrx',      name:'OpenWebRX (OpenWebRX and OpenWebRX+ receivers)', soon:true},
+              {id:'websdr',    name:'WebSDR (the receivers on websdr.org)', soon:true},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

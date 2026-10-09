@@ -26,7 +26,15 @@
  *   untilrx N S                until receiver N plays, S seconds at most
  *   state                      @STATE link=.. rx=.. why=".." state=".." ...
  *   off                        power off now: what is not in flash is lost
- *   quit                       flash what waits, then end */
+ *   quit                       flash what waits, then end
+ *
+ * Built as owrx_web_host (OWRX_WEB), the knob's web server as well:
+ * components/webcfg on shim_httpd.c, its pages and API on 127.0.0.1 at
+ * SHIM_HTTP_PORT, the rest of the knob it asks for stubbed (web_stubs.c).
+ * test/host/owrx_web.py drives its pages in a browser.
+ *
+ *   web                        the server started: @WEB 127.0.0.1:PORT
+ *   serve                      until stdin closes */
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -41,6 +49,9 @@
 #include "owrx.h"
 #include "radio.h"
 #include "shim.h"
+#if OWRX_WEB
+#include "webcfg.h"
+#endif
 
 static const char *LINK[] = { "DOWN", "CONNECTING", "GREETING", "READY", "DEGRADED" };
 
@@ -269,6 +280,16 @@ int main(int argc, char **argv)
             i += 2;
         } else if (!strcmp(cmd, "state")) {
             say_state("STATE");
+#if OWRX_WEB
+        } else if (!strcmp(cmd, "web")) {
+            if (webcfg_start() != ESP_OK) {
+                fprintf(stderr, "owrx_host: no web server\n");
+                return 2;
+            }
+        } else if (!strcmp(cmd, "serve")) {
+            char line[64];
+            while (fgets(line, sizeof line, stdin)) {}
+#endif
         } else if (!strcmp(cmd, "off")) {
             shim_say("@OFF");
             _exit(0);                         /* timers and all, mid-flight */

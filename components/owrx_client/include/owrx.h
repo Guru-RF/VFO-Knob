@@ -37,6 +37,40 @@ bool owrx_rx_label(int i, char *out, size_t cap);
  * than a second, what it let through still in the ring. */
 bool owrx_audible(void);
 
+/* Each receiver in the list as the knob knows it this boot, for the
+ * configuration page: in use, playing, what holds it back, and what its
+ * status.json said. */
+typedef struct {
+    bool     in_use;                /* the one chosen */
+    bool     playing;               /* streaming now: the one in use, or one standing in for it */
+    bool     held;                  /* not again until chosen again (or the list saved, but a ban) */
+    int      wait_s;                /* not again by itself for this long; 0 none */
+    char     why[16];               /* ...for this: the face's word ("BANNED"), "" with neither */
+    char     name[48];              /* its own name and version, "" not read yet */
+    char     version[24];
+    bool     plus;                  /* OpenWebRX+ */
+    uint16_t tls_port;              /* its redirect to https:// on its own host, followed: there; 0 none */
+} owrx_rx_state_t;
+/* False, nothing filled, for a place not in the list. */
+bool owrx_rx_state(int i, owrx_rx_state_t *out);
+
+/* The configuration page's Test of one address: its status.json read --
+ * never a session, so never one of its listeners, and never a band moved.
+ * Blocks the caller for as long as that takes, on a task of its own with
+ * room for TLS. A redirect to https:// on its own host is followed, and
+ * said (url). */
+typedef struct {
+    bool     ok;                    /* an OpenWebRX answered */
+    char     error[16];             /* why not: the face's word ("CAN'T REACH", "NOT OPENWEBRX") */
+    char     name[48];
+    char     version[24];
+    bool     plus;
+    int      sdrs, bands;           /* its SDRs, and their profiles */
+    int      max_clients;           /* -1 not said */
+    char     url[80];               /* where it answered, as the list keeps it: "" where it was asked */
+} owrx_test_t;
+bool owrx_test(const char *addr, owrx_test_t *out);
+
 /* What the receiver in use says, for the face and the pages. */
 typedef struct {
     bool     known;                 /* its status.json read, or its session said */

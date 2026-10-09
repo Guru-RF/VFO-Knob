@@ -254,6 +254,32 @@ def case_band(d):
         m.stop()
 
 
+def case_old(d):
+    print("OpenWebRX 1.0: its audio without SYNCs; then a band changed under it")
+    m = Mock("--fork", "upstream-1.0")
+    try:
+        o = host(f"http://127.0.0.1:{m.port}/", 20, "status")
+        s = o.get("sum", {})
+        check("ok=1" in o.get("status", "") and "plus=0" in o.get("status", ""), "status.json read: " + o.get("status", "")[:90])
+        check(o.get("end") == "left", f"ended by the knob: {o.get('end')}")
+        check(f(o, "played") > 17.5, f"played {s.get('played')} s of 20")
+        check(int(s["lost"]) == 0, f"not a byte of audio passed over looking for a SYNC: {s['lost']}")
+        check(int(s["underruns"]) == 0 and int(s["breaks"]) == 0, f"never dry: underruns {s['underruns']}, breaks {s['breaks']}")
+        check(abs(f(o, "pitch") - 1000) < 15, f"its carrier at 1 kHz: {s['pitch']} Hz")
+    finally:
+        m.stop()
+    m = Mock("--fork", "upstream-1.0")
+    try:
+        o = host(f"http://127.0.0.1:{m.port}/", 20, "band=rspdx|80m@1")
+        s = o.get("sum", {})
+        st = m.stats()
+        check(st["selects"] == 1 and st["starts"] == 2 and len(o["spans"]) == 2, f"onto 80 m: {o['spans'][-1:]}")
+        check(f(o, "played") > 17.5 and int(s["lost"]) == 0,
+              f"played on through it, plain: {s.get('played')} s of 20, {s.get('lost')} bytes lost")
+    finally:
+        m.stop()
+
+
 def case_stall(d):
     print("the network holds it all up 3 s")
     m = Mock("--stall", "6:3")
@@ -308,7 +334,7 @@ def case_ends(d):
 
 
 CASES = {"stream": case_stream, "tls": case_tls, "squelch": case_squelch, "listener": case_listener,
-         "band": case_band, "stall": case_stall, "wfm": case_wfm, "ends": case_ends}
+         "band": case_band, "old": case_old, "stall": case_stall, "wfm": case_wfm, "ends": case_ends}
 
 
 def main():

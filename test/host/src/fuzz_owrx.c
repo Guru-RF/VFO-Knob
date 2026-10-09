@@ -108,6 +108,7 @@ static void feed(const uint8_t *p, size_t n, owrx_said_t *s, owrx_status_t *st, 
 
     /* As audio. */
     if (rnd() % 8 == 0) owrx_adpcm_reset(d);
+    else if (rnd() % 8 == 0) owrx_adpcm_resync(d);
     size_t o = 0;
     for (size_t i = 0; i < n;) {
         size_t k = 1 + rnd() % 2048;
@@ -117,6 +118,7 @@ static void feed(const uint8_t *p, size_t n, owrx_said_t *s, owrx_status_t *st, 
     }
     CHECK(o <= 2 * n);
     CHECK(d->idx >= 0 && d->idx <= 88);
+    CHECK(d->plain == (d->st == 3 /* PLAIN */) && d->watch <= 2 * (1001 + 8));
     o = owrx_pcm_feed(d, p, n, pcm);
     CHECK(o <= n / 2 + 1);
 

@@ -8,7 +8,14 @@
  * where a frame happens to hold them, or across two. The decoder finds them
  * as they come, wherever the pieces break, and takes its state from each:
  * one lost frame costs the audio up to the next, 1001 bytes on (170 ms at
- * 12 kHz), not the rest of the session. */
+ * 12 kHz), not the rest of the session.
+ *
+ * OpenWebRX 1.0 and 1.1 encode with csdr's older encode_ima_adpcm_i16_u8:
+ * the same codec, the same nibble order, from index 0 and predictor 0 -- and
+ * no SYNC ever. Their page decodes it as one stream from the session's
+ * first byte to its last. A session's audio not starting with "SYNC" is
+ * taken as that; a SYNC is still looked for over its first two blocks'
+ * worth, in case it was SYNC-framed audio joined mid-block after all. */
 #include "owrx_proto.h"
 
 #include <string.h>
@@ -26,13 +33,22 @@ static const int16_t STEP[89] = {
 static const int8_t ADJ[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
 
 #define SYNC_EVERY 1001                 /* data bytes between two SYNCs */
+#define PLAIN_WATCH (2 * (SYNC_EVERY + 8))   /* SYNC-framed audio shows one in each block */
 
-enum { HUNT, HDR, DATA };
+enum { HUNT, HDR, DATA, PLAIN };
 
 void owrx_adpcm_reset(owrx_adpcm_t *d)
 {
     memset(d, 0, sizeof *d);
     d->st = HUNT;
+}
+
+void owrx_adpcm_resync(owrx_adpcm_t *d)
+{
+    d->odd = false;
+    if (d->plain) return;
+    d->st = HUNT;
+    d->match = 0;
 }
 
 /* csdr's AdpcmCodec::decodeSample, as it is. */
@@ -53,6 +69,68 @@ static int16_t nib(owrx_adpcm_t *d, uint8_t n)
     return (int16_t)d->pred;
 }
 
+/* A SYNC's index and predictor, as they came: false if no SYNC after all,
+ * its index past 88 ("SYNC" in the audio, by chance). */
+static bool take(owrx_adpcm_t *d)
+{
+    const int16_t idx  = (int16_t)(d->hdr[0] | d->hdr[1] << 8);
+    const int16_t pred = (int16_t)(d->hdr[2] | d->hdr[3] << 8);
+    if (idx < 0 || idx > 88) return false;
+    d->idx  = idx;
+    d->pred = pred;
+    d->left = SYNC_EVERY;
+    d->st   = DATA;
+    d->syncs++;
+    return true;
+}
+
+/* Bytes gone into the state only: a handful of samples not played. */
+static void into_state(owrx_adpcm_t *d, const uint8_t *p, size_t k)
+{
+    for (size_t i = 0; i < k; i++) {
+        nib(d, p[i] & 0x0F);
+        nib(d, p[i] >> 4);
+    }
+}
+
+/* No SYNC where the session's audio starts: plain, from index 0 and
+ * predictor 0. */
+static void to_plain(owrx_adpcm_t *d)
+{
+    d->plain = true;
+    d->st    = PLAIN;
+    d->watch = PLAIN_WATCH;
+    d->match = 0;
+}
+
+/* A plain byte, both its samples -- and while still watching, a SYNC looked
+ * for in it: one with a sound index was SYNC-framed audio joined mid-block,
+ * taken from there on as that. */
+static size_t plain(owrx_adpcm_t *d, uint8_t b, int16_t *out)
+{
+    static const uint8_t SW[4] = { 'S', 'Y', 'N', 'C' };
+    out[0] = nib(d, b & 0x0F);
+    out[1] = nib(d, b >> 4);
+    if (d->watch) {
+        d->watch--;
+        if (d->match == 4) {
+            d->hdr[d->hn++] = b;
+            if (d->hn == 4) {
+                d->match = 0;
+                if (take(d)) {
+                    d->plain = false;
+                    d->watch = 0;
+                }
+            }
+        } else if (b == SW[d->match]) {
+            if (++d->match == 4) d->hn = 0;
+        } else {
+            d->match = b == 'S';
+        }
+    }
+    return 2;
+}
+
 size_t owrx_adpcm_feed(owrx_adpcm_t *d, const uint8_t *in, size_t n, int16_t *out)
 {
     static const uint8_t SW[4] = { 'S', 'Y', 'N', 'C' };
@@ -66,6 +144,11 @@ size_t owrx_adpcm_feed(owrx_adpcm_t *d, const uint8_t *in, size_t n, int16_t *ou
                     d->st = HDR;
                     d->hn = 0;
                 }
+            } else if (!d->syncs && !d->lost) {
+                /* The session's first bytes, and no SYNC: plain. */
+                into_state(d, SW, d->match);
+                to_plain(d);
+                o += plain(d, b, out + o);
             } else {
                 /* Not it -- after as much of it as came, every byte passed
                  * over; this one may start it again. */
@@ -75,21 +158,20 @@ size_t owrx_adpcm_feed(owrx_adpcm_t *d, const uint8_t *in, size_t n, int16_t *ou
             break;
         case HDR:
             d->hdr[d->hn++] = b;
-            if (d->hn == 4) {
-                const int16_t idx  = (int16_t)(d->hdr[0] | d->hdr[1] << 8);
-                const int16_t pred = (int16_t)(d->hdr[2] | d->hdr[3] << 8);
-                if (idx < 0 || idx > 88) {              /* "SYNC" in the audio, by chance */
-                    d->lost += 8;
-                    d->st = HUNT;
-                    d->match = 0;
+            if (d->hn == 4 && !take(d)) {                /* "SYNC" in the audio, by chance */
+                if (!d->syncs && !d->lost) {
+                    into_state(d, SW, 4);
+                    into_state(d, d->hdr, 4);
+                    to_plain(d);
                     break;
                 }
-                d->idx  = idx;
-                d->pred = pred;
-                d->left = SYNC_EVERY;
-                d->st   = DATA;
-                d->syncs++;
+                d->lost += 8;
+                d->st = HUNT;
+                d->match = 0;
             }
+            break;
+        case PLAIN:
+            o += plain(d, b, out + o);
             break;
         default:
             out[o++] = nib(d, b & 0x0F);

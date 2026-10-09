@@ -58,8 +58,10 @@ The rules, as the servers keep them:
     without its key ("This profile is locked, keeping current profile.").
 
 Flags:
-  --fork plus|upstream|upstream-1.2.2   OpenWebRX+ 1.2.126 (default),
-                        OpenWebRX 1.3.0-dev, or 1.2.2
+  --fork plus|upstream|upstream-1.2.2|upstream-1.0
+                        OpenWebRX+ 1.2.126 (default), OpenWebRX 1.3.0-dev,
+                        1.2.2, or 1.0.0: as 1.2.2, its audio without SYNCs
+                        (csdr's encode_ima_adpcm_i16_u8, 1.0 and 1.1)
   --prefix /OWRX/       behind a front that passes this path on: anything
                         else is 404
   --max-clients N       its max_clients (20): "Too many clients" past it
@@ -122,6 +124,7 @@ FORKS = {
     "plus": "v1.2.126",
     "upstream": "v1.3.0-dev",
     "upstream-1.2.2": "v1.2.2",
+    "upstream-1.0": "v1.0.0",
 }
 BAN_MIN = 12 * 60
 ARGS = None
@@ -331,7 +334,7 @@ def sdr_config(sdr):
          "start_mod": p["start_mod"], "start_freq": p["start_freq"], "center_freq": p["center_freq"],
          "initial_squelch_level": -150, "sdr_id": sdr.id, "profile_id": p["profile_id"],
          "squelch_auto_margin": 10, "start_offset_freq": p["start_freq"] - p["center_freq"]}
-    if R.fork != "upstream-1.2.2":
+    if R.fork not in ("upstream-1.2.2", "upstream-1.0"):
         c["waterfall_auto_level_default_mode"] = False
     if R.plus:
         c["tuning_step"] = "500" if p["center_freq"] < 30000000 else 12500
@@ -383,7 +386,7 @@ class Session:
         self.started = False
         self.gen = -1                    # the SDR's generation its DSP is attached to
         self.demod_ok = True
-        self.enc = Encoder()
+        self.enc = Encoder(sync=R.fork != "upstream-1.0")
         self.robot = 0.0
         self.last_change = self.t_start          # its bot score's clock (OpenWebRX+)
         self.last_select = self.t_start
@@ -497,7 +500,7 @@ class Session:
         """Onto an SDR -- a new DSP, its encoder from nothing -- and what it
         says of it."""
         self.sdr = sdr
-        self.enc = Encoder()
+        self.enc = Encoder(sync=R.fork != "upstream-1.0")
         self.started = False
         self.send({"type": "secondary_config", "value": {"secondary_fft_size": 2048}})
         self.on_band()
@@ -615,7 +618,7 @@ class Session:
                 with R.lock:
                     R.stats["locked_refused"] += 1
                 self.send({"type": "log_message", "value": "This profile is locked, keeping current profile."})
-                self.enc = Encoder()                 # resetSdr: a new DSP
+                self.enc = Encoder(sync=R.fork != "upstream-1.0")  # resetSdr: a new DSP
                 self.started = False
                 self.send({"type": "secondary_config", "value": {"secondary_fft_size": 2048}})
                 return

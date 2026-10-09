@@ -300,7 +300,7 @@ typedef wl_end_t (*ask_fn)(conn_t *c, const char *host, uint16_t port, bool tls,
 static wl_end_t ask_ws(conn_t *c, const char *host, uint16_t port, bool tls, const char *path, const wl_ask_t *k,
                        int *code, char *loc, size_t lc, void *x)
 {
-    (void)x;
+    const wl_addr_t *a = x;
     uint8_t key[16];
     esp_fill_random(key, sizeof key);
     static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -314,11 +314,15 @@ static wl_end_t ask_ws(conn_t *c, const char *host, uint16_t port, bool tls, con
         k64[o++] = i + 2 < 16 ? B64[v & 63] : '=';
     }
     k64[o] = 0;
-    char hh[80], req[400];
+    char hh[80], og[100] = "", req[512];
     kiwi_host_hdr(hh, sizeof hh, host, port, tls);
+    /* Where its own page is served from: the scheme spoken here, after a
+     * redirect to https:// too. */
+    if (a && a->origin) snprintf(og, sizeof og, "Origin: %s://%s\r\n", tls ? "https" : "http", hh);
     const int n = snprintf(req, sizeof req,
         "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-        "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nUser-Agent: VFO-Knob\r\n\r\n", path, hh, k64);
+        "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%sUser-Agent: VFO-Knob\r\n\r\n", path, hh, k64,
+        og);
     *code = 0;
     if (n <= 0 || n >= (int)sizeof req || !conn_send(c, req, (size_t)n)) return WL_NO_ANSWER;
     *code = http_head(c, k, loc, lc, NULL);
@@ -453,7 +457,7 @@ wl_end_t wl_open(wl_t *w, const wl_addr_t *a, const char *path, const wl_ask_t *
     w->msg_op = 0;
     w->bytes_in = w->bytes_out = 0;
     conn_t c = { .fd = -1, .tls = NULL };
-    const wl_end_t e = attempt(&c, a, path, k, said, ask_ws, NULL);
+    const wl_end_t e = attempt(&c, a, path, k, said, ask_ws, (void *)a);
     w->fd = c.fd;
     w->tls = c.tls;
     return e;
@@ -547,7 +551,7 @@ bool wl_more(wl_t *w, int ms)
     return w->fd >= 0 && conn_wait(&c, (int64_t)ms * 1000) > 0;
 }
 
-int wl_read(wl_t *w, int ms, wl_piece_t *pc)
+int wl_next(wl_t *w, int ms, wl_piece_t *pc)
 {
     if (w->fd < 0) return -1;
     const int64_t until = esp_timer_get_time() + (int64_t)ms * 1000;

@@ -16,6 +16,8 @@ void   audio_out_sdr_set_preroll(size_t n);
 /* The kiwi firmware's receiver plays as a radio does. */
 bool   audio_out_feed_pcm16(const int16_t *pcm, size_t frames, uint8_t channels);
 void   audio_out_flush(void);
+/* The knob's volume (webcfg.c). */
+void   audio_out_set_volume(uint8_t vol);
 void   audio_out_trim(size_t keep_frames);
 size_t audio_out_queued(void);
 size_t audio_out_room(void);
