@@ -119,4 +119,12 @@ if(VFO_PTT_DRY_RUN)
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_PTT_DRY_RUN=1" APPEND)
     message(WARNING "VFO_PTT_DRY_RUN: this build's PTT keys nothing")
 endif()
+# For the settings' bench tests (components/kvstore/kv_test.c): -D VFO_KV_TEST=1
+# adds /api/kv and /api/kv/test -- a writer that never stops, for power cuts,
+# and made-up card faults for the next start -- and a namespace of its own,
+# "kvtest", on the card. Never for a release.
+if(VFO_KV_TEST)
+    idf_build_set_property(COMPILE_DEFINITIONS "VFO_KV_TEST=1" APPEND)
+    message(WARNING "VFO_KV_TEST: this build has the settings' test endpoints")
+endif()
 project(vfo-knob-${VFO_RADIO})

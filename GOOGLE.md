@@ -184,10 +184,10 @@ client only you use.
 
 | What | Where | |
 |---|---|---|
-| The client ID | flash (NVS namespace `phone`, key `gcid`) | shown on the page, as every sign-in link carries it anyway |
-| The client secret | flash (`gcsec`) | never shown again, and never returned by the API (only whether one is set) |
-| Google's refresh token | flash (`grtok`) | what lets the knob sync without you |
-| The return page's address | flash (`grelay`) | only when it is not the default |
+| The client ID | the knob's settings: its SD card, or its own memory without one (namespace `phone`, key `gcid`) | shown on the page, as every sign-in link carries it anyway |
+| The client secret | the settings (`gcsec`) | never shown again, and never returned by the API (only whether one is set) |
+| Google's refresh token | the settings (`grtok`) | what lets the knob sync without you |
+| The return page's address | the settings (`grelay`) | only when it is not the default |
 | An access token | RAM, during a sync | gone when the sync is done |
 
 **Sign out** on the page deletes the refresh token. The client stays saved for

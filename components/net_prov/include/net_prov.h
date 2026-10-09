@@ -101,6 +101,11 @@ void      net_prov_tick(void);
 /* A one-time flag left in NVS ("vfo" namespace, u8 1) by something outside
  * the firmware -- tools/install-setup.sh's "sdwipe": true once, and gone. */
 bool      net_prov_take_once(const char *key);
+/* The same flag read, and left there. */
+bool      net_prov_peek(const char *key);
+/* Everything but the WiFi and the boot counter, from the settings (kvstore):
+ * after kv_init. */
+void      net_prov_load_settings(void);
 
 /* Credentials for the HTTP configuration page, default admin/admin. */
 const char *net_prov_web_user(void);

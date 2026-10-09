@@ -57,6 +57,8 @@ int net_prov_wifi_count(void) { return 0; }
 bool net_prov_wifi_get(int i, net_wifi_t *out) { (void)i; (void)out; return false; }
 const char *net_prov_wifi_now(void) { return ""; }
 esp_err_t net_prov_wifis_save(const net_wifi_t *list, int n) { (void)list; (void)n; return ESP_OK; }
+bool net_prov_peek(const char *key) { (void)key; return false; }
+bool net_prov_take_once(const char *key) { (void)key; return false; }
 
 /* ------------------------------------------------- OTA: none here */
 

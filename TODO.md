@@ -149,6 +149,38 @@ network protocols as well as Icom's: a reference for those clients.
 
 ## Firmware
 
+- [ ] **Every firmware's settings on the SD card** (components/kvstore,
+      SETTINGS-ON-CARD-PLAN.md). Built and on the bench knob (2026-10-09):
+      every setting but the WiFi, the Bluetooth records and the boot counter
+      is held in RAM and written to `VFO-CFG` on the card -- three copies,
+      read back, one-cluster files written in place -- or to NVS without a
+      card. Its first start moved vfo, svx, svxpki, sl, flex, phone and icom
+      onto the card (0.6 s); later starts read them in about 55 ms; a save
+      takes 3-20 ms; the WebSDR and OpenWebRX firmwares, switched back and
+      forth, each found their receivers. The NVS copies stay where they are,
+      frozen, so a released firmware still finds its settings, and what it
+      changes there is merged back at the next start.
+      - [x] power cuts (2026-10-09, the bench knob's built-in "APPSD" 480 MB
+            card, a test build writing a count and 4 kB beside it): with one
+            save every 5 s, as in use, 10 cuts, every save kept, cuts within a
+            second or two of a save among them. With 25 saves a second
+            nonstop, 7 cuts: 5 kept everything, 2 lost the last 2.4 s and 18 s
+            of saves the card had already taken and read back -- the card's
+            own controller going back, not the store. Every start, in both,
+            loaded a whole save, never a torn one.
+      - [x] a failing card, made up in a test build (`-D VFO_KV_TEST=1`,
+            /api/kv/test): crashes at random and halfway through a write (the
+            next start leaves the card alone, the one after rejects the torn
+            copy), a crash while reading, a damaged copy, unreadable copies
+            (that namespace off the card, SD CARD FAULT), no card (NO SD CARD,
+            a change made meanwhile merged on when it is back), "Carry on
+            without the SD card" and "Use the SD card again" (a restart that
+            merges; it first overwrote the card with NVS's older copy -- fixed)
+      - [ ] the release round that brings every firmware onto it: then the
+            NVS copies emptied after a confirmed start, the floor version
+            (older firmware refused), deletions made while the card was away
+            (`kvs/fbdel`), the page's login without the card (`kvs/wver`),
+            the boot counter's RTC record
 - [x] **PTT keyed on the lift of a tap.** Acting on the touch, as it did, a
       swipe up begun on the slab keyed the radio before it could be seen to
       be a swipe. A tap now keys as the finger lifts without having moved; on

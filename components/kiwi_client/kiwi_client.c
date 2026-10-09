@@ -81,7 +81,7 @@
 #include "kiwi_mark.h"
 #include "kiwi_proto.h"
 #include "kiwi_sess.h"
-#include "nvs.h"
+#include "kvstore.h"
 #include "sdr_rx.h"
 #include "vfo_tune.h"
 
@@ -365,21 +365,23 @@ static void save_cb(void *arg)
     at = (int8_t)place_of(hp);
     S.dirty = false;
     taskEXIT_CRITICAL(&S_LOCK);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_i64(h, "kwf", f);
-    nvs_set_str(h, "kwm", m);
-    nvs_set_i32(h, "kwl", lo);
-    nvs_set_i32(h, "kwh", hi);
-    nvs_set_u8(h, "kwa", agc);
-    nvs_set_u8(h, "kwn", nr);
-    nvs_set_u8(h, "kwq", sq);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_edit_begin(h);
+    kv_set_i64(h, "kwf", f);
+    kv_set_str(h, "kwm", m);
+    kv_set_i32(h, "kwl", lo);
+    kv_set_i32(h, "kwh", hi);
+    kv_set_u8(h, "kwa", agc);
+    kv_set_u8(h, "kwn", nr);
+    kv_set_u8(h, "kwq", sq);
     if (hp) {
-        nvs_set_i8(h, "kwrx", at);
-        nvs_set_u32(h, "kwrxh", hp);
+        kv_set_i8(h, "kwrx", at);
+        kv_set_u32(h, "kwrxh", hp);
     }
-    nvs_commit(h);
-    nvs_close(h);
+    kv_edit_end(h);
+    kv_commit(h);
+    kv_close(h);
 }
 
 /* A setting changed: into flash at a quiet moment -- soon, with nothing
@@ -417,19 +419,19 @@ static void load(void)
     int8_t at = -1;
     uint32_t hp = 0;
     bool have_hp = false;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
         size_t n = sizeof m;
-        nvs_get_i64(h, "kwf", &f);
-        nvs_get_str(h, "kwm", m, &n);
-        nvs_get_i32(h, "kwl", &lo);
-        nvs_get_i32(h, "kwh", &hi);
-        nvs_get_u8(h, "kwa", &agc);
-        nvs_get_u8(h, "kwn", &nr);
-        nvs_get_u8(h, "kwq", &sq);
-        nvs_get_i8(h, "kwrx", &at);
-        have_hp = nvs_get_u32(h, "kwrxh", &hp) == ESP_OK;
-        nvs_close(h);
+        kv_get_i64(h, "kwf", &f);
+        kv_get_str(h, "kwm", m, &n);
+        kv_get_i32(h, "kwl", &lo);
+        kv_get_i32(h, "kwh", &hi);
+        kv_get_u8(h, "kwa", &agc);
+        kv_get_u8(h, "kwn", &nr);
+        kv_get_u8(h, "kwq", &sq);
+        kv_get_i8(h, "kwrx", &at);
+        have_hp = kv_get_u32(h, "kwrxh", &hp) == ESP_OK;
+        kv_close(h);
     }
     hps_fresh();
     uint32_t hps[SDR_MAX];

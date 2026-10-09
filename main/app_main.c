@@ -28,6 +28,7 @@
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "sd_cache.h"
+#include "kvstore.h"
 #include "cJSON.h"
 #include "board_pins.h"
 #include "drv2605.h"
@@ -789,7 +790,26 @@ static bool audio_busy(void)
 #endif
 }
 
-/* The volume and the microphone's gain may go to flash, settled `settled` us
+static bool s_wipe;     /* provisioning's mark: the SD card waits to be emptied, settings and all */
+
+/* Sound playing: an ordinary settings save to NVS (no SD card) waits for it. */
+static bool sound_on(void) { return audio_busy() || audio_out_queued() > 0; }
+
+/* The settings: on the SD card, or in NVS without one (components/kvstore),
+ * read before anything asks for one. Safe mode leaves the card alone, and
+ * provisioning's mark keeps its old settings unread until it is emptied. */
+static esp_err_t settings_up(void)
+{
+    const kv_boot_t b = { .wipe = s_wipe, .safe = net_prov_boot_count() >= 3 };
+    const esp_err_t e = kv_init(&(kv_hooks_t){ .busy = audio_busy, .sound = sound_on }, &b);
+    net_prov_load_settings();
+#if VFO_KV_TEST
+    kv_test_start();                    /* the settings' bench tests: a test build's only */
+#endif
+    return e;
+}
+
+/* The Bluetooth levels may go to flash (NVS), settled `settled` us
  * ago: with nothing on the air -- though a web receiver plays for hours on
  * end, so on the kiwi firmware at its quiet moment, or 30 s after the change.
  * Asked only once a flush is due: on the phone firmware audio_busy() copies
@@ -1155,13 +1175,13 @@ static void ui_task(void *arg)
              * it changes. */
             bt_link_set_volume(vol);
             net_prov_set_audio(vol, hs ? net_prov_mic_gain() : mic, hs ? mic : net_prov_mic_gain_headset());
-            /* Into flash once they have settled -- and never on the air: a
-             * flash write stops the audio's interrupts for up to ~100 ms, a
-             * hole in a call or an over (heard as one, 2026-10-01). A web
-             * receiver plays for hours on end: its quiet moment, or 30 s at
-             * the latest. */
+            /* Into the settings once they have settled. Their writer keeps a
+             * write to NVS (no SD card) off the air and out of the sound
+             * itself -- a flash write stops the audio's interrupts for up to
+             * ~100 ms (heard as a hole, 2026-10-01); one to the card costs
+             * the audio nothing. */
             const int64_t settled = changed_at ? esp_timer_get_time() - changed_at : 0;
-            if (changed_at && settled > 2000000 && flush_ok(settled)) {
+            if (changed_at && settled > 2000000) {
                 net_prov_flush_audio();          /* no-op when unchanged */
                 changed_at = 0;
             }
@@ -1530,6 +1550,12 @@ static void ui_task(void *arg)
                                                                          : "TX REFUSED";
         else if (nowms < s_note_until && st.note[0]) warn = st.note;
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
+        /* The settings' SD card (kvstore): away, failing, or another knob's
+         * -- the page says what may be done about it. */
+        else if (kv_where() == KV_CARD_MISSING)      warn = "NO SD CARD";
+        else if (kv_where() == KV_CARD_TROUBLE || kv_where() == KV_CARD_FAILED)
+                                                     warn = "SD CARD FAULT";
+        else if (kv_where() == KV_CARD_FOREIGN)      warn = "OTHER SD CARD";
 #if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
         /* A receiver on its way, with nothing said against it: no warning
          * over the face -- its slab says "connecting...". */
@@ -2440,6 +2466,10 @@ static void setup_task(void *arg)
         const esp_err_t e = sdc_format();
         ESP_LOGW(TAG, "provisioning: the SD card %s",
                  e == ESP_OK ? "emptied" : e == ESP_ERR_NOT_FOUND ? "is not there" : esp_err_to_name(e));
+        /* The mark goes only now, with the card emptied and the settings on
+         * it: a card held out keeps the old owner's settings unread until
+         * the next start empties it. */
+        if (e == ESP_OK && kv_card_formatted(5000) == ESP_OK) net_prov_take_once("sdwipe");
         ui_setup_show("VFO-KNOB", "Starting");
     }
     s_card_ready = true;
@@ -3442,6 +3472,7 @@ static void boot_ok_cb(void *arg)
 {
     (void)arg;
     net_prov_boot_ok();
+    kv_confirmed();
     /* Same moment, same meaning: this boot looks healthy. If the running image
      * arrived over the air it is on trial until now, and the bootloader will
      * put the previous one back if we never get here. */
@@ -3484,6 +3515,8 @@ void app_main(void)
     return;
 #else
     bring_up("nvs", net_prov_init);
+    s_wipe = net_prov_peek("sdwipe");             /* read, not erased: see setup_task */
+    bring_up("settings", settings_up);
 #if VFO_RADIO_KIWI
     /* The receivers, for the page and the face before the client starts:
      * read here, where the stack may touch flash -- and their day-limit
@@ -3493,8 +3526,9 @@ void app_main(void)
     bring_up("day-limit marks", kiwi_marks_init);
 #endif
 #if VFO_RADIO_SETUP
-    /* tools/install-setup.sh's one-time mark in the settings it wrote. */
-    s_flashed_now = net_prov_take_once("sdwipe");
+    /* tools/install-setup.sh's one-time mark in the settings it wrote: taken
+     * off only once the card has been emptied (setup_task). */
+    s_flashed_now = s_wipe;
 #endif
     /* net_prov_init() brings up esp_netif, so the log server can bind now. */
     netlog_start();

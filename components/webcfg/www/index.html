@@ -60,6 +60,7 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   This knob still uses the shipped password (<b>admin/admin</b>). Anyone on this
   network can key your transmitter with it &mdash; set your own below.
 </div>
+<div id="cardwarn" class="warn" hidden></div>
 
 <section>
   <h2>Status</h2>
@@ -592,6 +593,78 @@ function power(s){
   return [what, rail].filter(Boolean).join(' · ') || '—';
 }
 
+/* Where the knob keeps its settings -- every firmware's: on its built-in SD
+   card, or in its own memory without one (WiFi and Bluetooth always there)
+   -- and, when the card fails or holds another knob's, what the owner may do. */
+const SETW={'card':'on the SD card','memory':"in the knob's memory (no SD card)",
+  'card missing':'the SD card does not answer','card fault':'SD card fault',
+  'card failed':'the SD card stopped taking writes','other card':"another knob's SD card",
+  'wipe':'the SD card waits to be emptied'};
+function settings(s){
+  if(!s.settings) return '—';
+  return esc(SETW[s.settings]||s.settings)+(s.settings_pending?` · ${s.settings_pending} waiting to be written`:'');
+}
+const CARDQ={
+  forget:"Carry on without the SD card? The settings stay in the knob's memory from now on. "
+        +"On SVXConnect a new station key would need signing again.",
+  prepare:'Prepare this card? Everything on it is erased — the firmwares kept there too — '
+         +'and the settings the knob holds go onto it.',
+  use:"Use this card's settings? They become this knob's, and the knob restarts.",
+  fresh:"Start fresh on this card? What it holds is overwritten with the settings this knob has now.",
+  again:"Use the SD card again? The knob restarts, and what you changed meanwhile goes onto it."};
+let CARDHTML='';
+function cardBanner(s){
+  let t='', acts=[];
+  switch(s.settings){
+  case 'card missing':
+    t="The SD card does not answer: the knob runs on the settings it has in memory, and keeps your "
+     +"changes there until the card answers again (a restart tries it). A card that has failed for good: "
+     +"carry on without it.";
+    acts=[['forget','Carry on without the SD card']];
+    if(s.card_prepare) acts.push(['prepare','Prepare this card']);
+    break;
+  case 'memory':
+    if(s.card_again){
+      t="You chose to carry on without the SD card: the settings are in the knob's memory. "
+       +"Should the card answer again, it can be used again.";
+      acts=[['again','Use the SD card again']];
+    }
+    break;
+  case 'card fault':
+    t='SD card fault'+(s.settings_why?': '+esc(s.settings_why):'')
+     +(s.settings_held?` (${esc(s.settings_held)} kept in memory meanwhile)`:'')+'.';
+    if(/gone/.test(s.settings_why||'')) acts=[['fresh','Start fresh on this card']];
+    break;
+  case 'card failed':
+    t="The SD card stopped taking writes: until the next start, settings go to the knob's memory.";
+    break;
+  case 'other card':
+    t="The settings on this SD card are another knob's: this knob runs on its own, in its memory, until you choose.";
+    acts=[['use','Use these settings'],['fresh','Start fresh on this card']];
+    break;
+  case 'wipe':
+    t='The SD card waits to be emptied (the knob was provisioned): its old settings are not read.';
+    acts=[['prepare','Prepare this card']];
+    break;
+  }
+  if(s.nvs_full) t+=(t?' ':'')+"Not saved: the knob's memory is full — fit an SD card.";
+  const h=t+(acts.length?'<br>'+acts.map(([k,l])=>`<button class="pill" data-card="${k}">${l}</button>`).join(''):'');
+  if(h===CARDHTML) return;
+  CARDHTML=h;
+  $('cardwarn').innerHTML=h;
+  $('cardwarn').hidden=!t;
+}
+$('cardwarn').onclick=async e=>{
+  const k=e.target.dataset&&e.target.dataset.card;
+  if(!k||!confirm(CARDQ[k])) return;
+  $('msg').textContent=k==='prepare'?'Preparing the card…':'…';
+  let r;
+  try{ r=await fetch('/api/card',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'do='+k}) }
+  catch(_){ $('msg').textContent='The knob did not answer.'; return }
+  $('msg').textContent=r.ok?(k==='use'||k==='again'?'Restarting…':'Done.'):'Not done: '+await r.text();
+  refresh();
+};
+
 /* The VOLUME as the knob has it now -- its dial, or a speaker's own buttons
    -- while the field is not being edited here: a save sends it only when it
    was (VOLEDIT), never an old one back over the knob's. */
@@ -618,6 +691,7 @@ async function refresh(){
     + row('USB address', esc(s.usb_ip||'—'))
     + row('WiFi address', esc(s.wifi_ip||'—'))
     + row('Power', power(s))
+    + row('Settings', settings(s))
     + row('Sent / echoed', `${s.sends} / ${s.echoes}`)
     + row('Connects / closes', `${s.connects} / ${s.closes}`)
     + row('Rejects / reconciles', `${s.rejects} / ${s.reconciles}`)
@@ -625,6 +699,7 @@ async function refresh(){
     + row('Free internal RAM', `${s.heap_internal} B`)
     + row('Free PSRAM', `${s.heap_psram} B`)
     + row('Boots since healthy', s.boots);
+  cardBanner(s);
 }
 
 async function load(){

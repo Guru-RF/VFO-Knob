@@ -123,7 +123,8 @@ WiFi: on the USB cable the knob then says **Needs WiFi** and carries on as it
 was.
 
 Each firmware keeps its own settings, so going back to one later finds its
-radio, its login and its choices as they were.
+radio, its login and its choices as they were. With an SD card in the knob
+they are kept on the card (see [The SD card](#the-sd-card)).
 
 ## Another network, later
 
@@ -161,9 +162,30 @@ speaker's: the setup firmware puts it there with the others, and a radio's
 firmware hands it to the chip by itself when it is newer than the one the
 chip runs — see [the headset guide](headset.md#the-second-chip).
 
-Everything of the knob's is in one folder on the card, `VFO-KNOB`; nothing
-else on it is touched. A knob without a card works as before, downloading
-each time.
+The card also keeps every firmware's settings, in a folder of their own,
+`VFO-CFG`: the radios and their logins, the levels, the page's password,
+SVXConnect's key and certificate, the telephone's account, history and
+favourites, the SmartLink and Google sign-ins, the receivers. Each is kept
+in three copies, written in turn and read back, so a power cut never leaves
+them half-written: the knob starts with them as they were saved. The WiFi networks and the Bluetooth
+devices stay in the knob itself.
+
+The firmwares are in `VFO-KNOB`, the settings in `VFO-CFG`; nothing else on
+the card is touched. A knob without a card works as before, downloading each
+time and keeping its settings in its own memory.
+
+The card is built in. Should it fail and stop answering, the knob runs on
+what it has in its own memory, keeps your changes there, and says **NO SD
+CARD**; a restart tries the card again, and your changes go onto it once it
+answers. The configuration page says the same under **Settings**, with
+**Carry on without the SD card** for a card that has failed for good (and,
+should it answer again later, **Use the SD card again**), and **Prepare this
+card** for one that answers but can no longer be read: that erases it and
+puts the settings on it.
+
+![NO SD CARD: the card that holds the settings does not answer](setup/16-no-sd-card.svg)
+
+![SD CARD FAULT: part of the settings could not be read](setup/17-sd-card-fault.svg)
 
 ## If something is not right
 
@@ -175,3 +197,5 @@ each time.
 | **WiFi would not start.** | Restart the knob. |
 | **WIFI SETUP**: **None of its networks is in reach** (a radio's firmware) | Join **VFOKnob** with your phone and add the network where the knob is now, or take it back within reach of one it knows. |
 | **Needs WiFi** (from a radio's firmware) | The way back to the list is over WiFi: set up WiFi on that firmware's page, or use **Set up again**. |
+| **NO SD CARD** | The built-in card that holds the settings does not answer: restart the knob. If it stays, the card has failed: **Carry on without the SD card** on the configuration page, and the knob keeps its settings in its own memory. |
+| **SD CARD FAULT** | Part of the settings could not be read from the card, or it stopped taking writes: the knob runs on its own memory meanwhile. Restart it; the page's **Settings** says which part, and offers **Start fresh on this card** when the settings have gone from it. |

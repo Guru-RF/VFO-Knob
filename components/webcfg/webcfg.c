@@ -25,6 +25,7 @@
 #include "board.h"
 #include "bt_level.h"
 #include "bt_link.h"
+#include "kvstore.h"
 #include "net_prov.h"
 #include "ota.h"
 #include "ptt_fsm.h"
@@ -216,8 +217,15 @@ static esp_err_t status_get(httpd_req_t *r)
      * the face shows on the battery (-1 on USB, where it cannot be read). */
     board_power_t pw;
     board_power_get(&pw);
+    /* Where the settings are kept (kvstore): the SD card, or NVS. */
+    kv_status_t ks;
+    kv_status(&ks);
+    char kwhy[96], kheld[96];
+    json_esc(ks.why, kwhy, sizeof kwhy);
+    json_esc(ks.held, kheld, sizeof kheld);
 
-    char buf[1300];
+    /* httpd's one task: a static buffer, not 1.6 kB of its stack. */
+    static EXT_RAM_BSS_ATTR char buf[1600];
     int n = snprintf(buf, sizeof buf,
         "{\"version\":\"%s\",\"uptime_s\":%lld,"
         "\"link\":\"%s\",\"freq\":%lld,\"mode\":\"%s\","
@@ -229,7 +237,9 @@ static esp_err_t status_get(httpd_req_t *r)
         "\"heap_internal\":%u,\"heap_psram\":%u,\"boots\":%u,"
         "\"reflector\":%s,\"tg\":%lu,\"tgname\":\"%s\",\"talker\":\"%s\","
         "\"talking\":%s,\"rx\":\"%s\",\"ant\":\"%s\",\"vol\":%u,"
-        "\"on_usb\":%s,\"rail_mv\":%d,\"batt\":%d}",
+        "\"on_usb\":%s,\"rail_mv\":%d,\"batt\":%d,"
+        "\"settings\":\"%s\",\"settings_why\":\"%s\",\"settings_held\":\"%s\",\"settings_pending\":%u,"
+        "\"nvs_free\":%u,\"nvs_full\":%s,\"card_prepare\":%s,\"card_again\":%s}",
         app->version,
         (long long)(esp_timer_get_time() / 1000000),
         link, (long long)st.f_display, st.mode,
@@ -248,7 +258,9 @@ static esp_err_t status_get(httpd_req_t *r)
         st.talker[0] ? "true" : "false",
         st.n_rx > 1 ? (st.rx ? "SUB" : "MAIN") : "", ant, (unsigned)net_prov_volume(),
         pw.src == KNOB_PWR_USB ? "true" : pw.src == KNOB_PWR_BATTERY ? "false" : "null", (int)pw.mv,
-        (int)pw.pct);
+        (int)pw.pct,
+        kv_where_word(ks.where), kwhy, kheld, (unsigned)ks.pending, (unsigned)ks.nvs_free,
+        ks.nvs_full ? "true" : "false", ks.can_prepare ? "true" : "false", ks.can_again ? "true" : "false");
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
 }
@@ -681,6 +693,101 @@ static esp_err_t reboot_post(httpd_req_t *r)
     if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 300 * 1000);
     return ESP_OK;
 }
+
+/* The owner's choices for the settings' SD card (kvstore.h): carry on
+ * without it, and use it again (then a restart, which merges); prepare one
+ * the knob cannot read; use another knob's settings (then a restart, so
+ * everything reads them), or start fresh on it. */
+static esp_err_t card_post(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char body[64];
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body size");
+        return ESP_FAIL;
+    }
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    char what[12] = "";
+    field(body, "do", what, sizeof what);
+    esp_err_t e;
+    bool restart = false;
+    if (!strcmp(what, "forget")) e = kv_card_forget(10000);
+    else if (!strcmp(what, "prepare")) {
+        e = kv_card_prepare(60000);
+        /* Provisioning's mark: the card it asked to be emptied has been. */
+        if (e == ESP_OK && net_prov_peek("sdwipe")) net_prov_take_once("sdwipe");
+    } else if (!strcmp(what, "use")) {
+        e = kv_card_use(true, 10000);
+        restart = e == ESP_OK;
+    } else if (!strcmp(what, "fresh")) e = kv_card_use(false, 10000);
+    else if (!strcmp(what, "again")) {
+        e = kv_card_again(10000);
+        restart = e == ESP_OK;
+    } else {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "do=forget|prepare|use|fresh|again");
+        return ESP_FAIL;
+    }
+    ESP_LOGW(TAG, "settings' card: %s -> %s", what, esp_err_to_name(e));
+    if (e != ESP_OK) {
+        httpd_resp_set_status(r, "500 Internal Server Error");
+        return httpd_resp_sendstr(r, esp_err_to_name(e));
+    }
+    httpd_resp_sendstr(r, restart ? "restarting" : "done");
+    if (restart) {
+        ota_mark_valid();
+        const esp_timer_create_args_t a = { .callback = reboot_cb, .name = "wcreboot" };
+        esp_timer_handle_t t;
+        if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 300 * 1000);
+    }
+    return ESP_OK;
+}
+
+#if VFO_KV_TEST
+/* The settings' bench tests (components/kvstore/kv_test.c): a test build's
+ * only. GET: every namespace as the writer sees it, never a value. */
+static esp_err_t kv_get_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    static EXT_RAM_BSS_ATTR char b[4096];
+    kv_test_json(b, sizeof b);
+    return send_json(r, b);
+}
+
+/* POST do=hammer|stop|panic|nocard|foreign|ioerr|corrupt|rewrite[&ns=..&slots=ABC] */
+static esp_err_t kv_test_h(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    char body[96];
+    const int total = r->content_len;
+    if (total <= 0 || total >= (int)sizeof body) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body size");
+        return ESP_FAIL;
+    }
+    int got = 0;
+    while (got < total) {
+        const int k = httpd_req_recv(r, body + got, total - got);
+        if (k <= 0) return ESP_FAIL;
+        got += k;
+    }
+    body[got] = 0;
+    char what[12] = "", ns[12] = "", slots[4] = "", say[160];
+    field(body, "do", what, sizeof what);
+    field(body, "ns", ns, sizeof ns);
+    field(body, "slots", slots, sizeof slots);
+    if (kv_test_do(what, ns, slots, say, sizeof say) != ESP_OK) httpd_resp_set_status(r, "400 Bad Request");
+    return httpd_resp_sendstr(r, say);
+}
+#define KV_TEST_URIS 2
+#else
+#define KV_TEST_URIS 0
+#endif
 
 /* ------------------------------------------------------------------ page */
 
@@ -2556,7 +2663,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 10 + n_extra + PORTAL_URIS + WIFI_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
+    c.max_uri_handlers = 11 + KV_TEST_URIS + n_extra + PORTAL_URIS + WIFI_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -2582,6 +2689,7 @@ esp_err_t webcfg_start(void)
         { .uri = "/api/ota",     .method = HTTP_POST, .handler = ota_post },
         { .uri = "/api/ota/upload", .method = HTTP_POST, .handler = ota_upload_post },
         { .uri = "/api/reboot",  .method = HTTP_POST, .handler = reboot_post },
+        { .uri = "/api/card",    .method = HTTP_POST, .handler = card_post },
         { .uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get },
         { .uri = "/config",      .method = HTTP_GET,  .handler = config_page },
     };
@@ -2626,6 +2734,14 @@ esp_err_t webcfg_start(void)
     };
     for (size_t i = 0; i < sizeof bt_uris / sizeof bt_uris[0]; i++)
         httpd_register_uri_handler(s_srv, &bt_uris[i]);
+#endif
+#if VFO_KV_TEST
+    static const httpd_uri_t kv_uris[] = {
+        { .uri = "/api/kv",      .method = HTTP_GET,  .handler = kv_get_h },
+        { .uri = "/api/kv/test", .method = HTTP_POST, .handler = kv_test_h },
+    };
+    for (size_t i = 0; i < sizeof kv_uris / sizeof kv_uris[0]; i++)
+        httpd_register_uri_handler(s_srv, &kv_uris[i]);
 #endif
     for (size_t i = 0; i < n_extra; i++) {
         const httpd_uri_t u = { .uri = extra[i].uri, .method = extra[i].method,

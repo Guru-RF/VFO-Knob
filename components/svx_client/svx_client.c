@@ -37,7 +37,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
-#include "nvs.h"
+#include "kvstore.h"
 
 #include "audio_in.h"
 #include "audio_out.h"
@@ -52,7 +52,6 @@
 
 #include "svx_client.h"
 #include "svx_feed.h"
-#include "svx_flash.h"
 #include "svx_net.h"
 #include "svx_pki.h"
 #include "svx_portal.h"
@@ -162,15 +161,15 @@ __attribute__((weak)) void haptic_hook(uint8_t effect, uint8_t prio)
 
 #define NS "svx"
 
-static void nvs_str(nvs_handle_t h, const char *k, char *out, size_t cap, const char *dflt)
+static void kv_str(kv_handle_t h, const char *k, char *out, size_t cap, const char *dflt)
 {
     size_t n = cap;
-    if (nvs_get_str(h, k, out, &n) != ESP_OK) snprintf(out, cap, "%s", dflt);
+    if (kv_get_str(h, k, out, &n) != ESP_OK) snprintf(out, cap, "%s", dflt);
 }
 
-static void settings_load_now(void *p)
+/* From the settings in RAM (kvstore): any stack will do. */
+static void settings_load(svx_settings_t *s)
 {
-    svx_settings_t *s = p;
     memset(s, 0, sizeof *s);
     /* The CLI's defaults. */
     s->linger_s = 30;
@@ -180,70 +179,54 @@ static void settings_load_now(void *p)
     s->tx_timeout_s = 120;
     s->feed = true;
 
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return;
-    nvs_str(h, "call",  s->call,     sizeof s->call, "");
-    nvs_str(h, "email", s->email,    sizeof s->email, "");
-    nvs_str(h, "loc",   s->location, sizeof s->location, "");
-    nvs_str(h, "lat",   s->lat,      sizeof s->lat, "");
-    nvs_str(h, "lon",   s->lon,      sizeof s->lon, "");
-    nvs_str(h, "sw",    s->sw,       sizeof s->sw, "");
-    nvs_str(h, "mon",   s->mon,      sizeof s->mon, "");
+    kv_handle_t h;
+    if (kv_open(NS, &h) != ESP_OK) return;
+    kv_str(h, "call",  s->call,     sizeof s->call, "");
+    kv_str(h, "email", s->email,    sizeof s->email, "");
+    kv_str(h, "loc",   s->location, sizeof s->location, "");
+    kv_str(h, "lat",   s->lat,      sizeof s->lat, "");
+    kv_str(h, "lon",   s->lon,      sizeof s->lon, "");
+    kv_str(h, "sw",    s->sw,       sizeof s->sw, "");
+    kv_str(h, "mon",   s->mon,      sizeof s->mon, "");
     uint8_t b;
     uint16_t w;
-    nvs_get_u32(h, "deftg", &s->default_tg);
-    if (nvs_get_u8(h, "lock", &b) == ESP_OK)    s->lock_on_start = b;
-    if (nvs_get_u16(h, "linger", &w) == ESP_OK) s->linger_s = w;
-    if (nvs_get_u16(h, "idle", &w) == ESP_OK)   s->idle_s = w;
-    if (nvs_get_u8(h, "roger", &b) == ESP_OK)   s->roger = b;
-    if (nvs_get_u8(h, "agc", &b) == ESP_OK)     s->agc = b;
-    if (nvs_get_u16(h, "txto", &w) == ESP_OK)   s->tx_timeout_s = w;
-    if (nvs_get_u8(h, "feed", &b) == ESP_OK)    s->feed = b;
-    nvs_close(h);
+    kv_get_u32(h, "deftg", &s->default_tg);
+    if (kv_get_u8(h, "lock", &b) == ESP_OK)    s->lock_on_start = b;
+    if (kv_get_u16(h, "linger", &w) == ESP_OK) s->linger_s = w;
+    if (kv_get_u16(h, "idle", &w) == ESP_OK)   s->idle_s = w;
+    if (kv_get_u8(h, "roger", &b) == ESP_OK)   s->roger = b;
+    if (kv_get_u8(h, "agc", &b) == ESP_OK)     s->agc = b;
+    if (kv_get_u16(h, "txto", &w) == ESP_OK)   s->tx_timeout_s = w;
+    if (kv_get_u8(h, "feed", &b) == ESP_OK)    s->feed = b;
+    kv_close(h);
 }
 
-static void settings_load(svx_settings_t *s)
-{
-    svx_flash_safe(settings_load_now, s);
-}
-
-typedef struct {
-    const svx_settings_t *s;
-    esp_err_t r;
-} store_job_t;
-
-static void settings_store_now(void *p)
-{
-    store_job_t *j = p;
-    const svx_settings_t *s = j->s;
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NS, NVS_READWRITE, &h);
-    j->r = e;
-    if (e != ESP_OK) return;
-    nvs_set_str(h, "call", s->call);
-    nvs_set_str(h, "email", s->email);
-    nvs_set_str(h, "loc", s->location);
-    nvs_set_str(h, "lat", s->lat);
-    nvs_set_str(h, "lon", s->lon);
-    nvs_set_str(h, "sw", s->sw);
-    nvs_set_str(h, "mon", s->mon);
-    nvs_set_u32(h, "deftg", s->default_tg);
-    nvs_set_u8(h, "lock", s->lock_on_start);
-    nvs_set_u16(h, "linger", s->linger_s);
-    nvs_set_u16(h, "idle", s->idle_s);
-    nvs_set_u8(h, "roger", s->roger);
-    nvs_set_u8(h, "agc", s->agc);
-    nvs_set_u16(h, "txto", s->tx_timeout_s);
-    nvs_set_u8(h, "feed", s->feed);
-    j->r = nvs_commit(h);
-    nvs_close(h);
-}
-
+/* The fifteen reach the medium together; the page waits until they have. */
 static esp_err_t settings_store(const svx_settings_t *s)
 {
-    store_job_t j = { .s = s, .r = ESP_FAIL };
-    svx_flash_safe(settings_store_now, &j);
-    return j.r;
+    kv_handle_t h;
+    esp_err_t e = kv_open(NS, &h);
+    if (e != ESP_OK) return e;
+    kv_edit_begin(h);
+    e = kv_set_str(h, "call", s->call);
+    if (e == ESP_OK) e = kv_set_str(h, "email", s->email);
+    if (e == ESP_OK) e = kv_set_str(h, "loc", s->location);
+    if (e == ESP_OK) e = kv_set_str(h, "lat", s->lat);
+    if (e == ESP_OK) e = kv_set_str(h, "lon", s->lon);
+    if (e == ESP_OK) e = kv_set_str(h, "sw", s->sw);
+    if (e == ESP_OK) e = kv_set_str(h, "mon", s->mon);
+    if (e == ESP_OK) e = kv_set_u32(h, "deftg", s->default_tg);
+    if (e == ESP_OK) e = kv_set_u8(h, "lock", s->lock_on_start);
+    if (e == ESP_OK) e = kv_set_u16(h, "linger", s->linger_s);
+    if (e == ESP_OK) e = kv_set_u16(h, "idle", s->idle_s);
+    if (e == ESP_OK) e = kv_set_u8(h, "roger", s->roger);
+    if (e == ESP_OK) e = kv_set_u8(h, "agc", s->agc);
+    if (e == ESP_OK) e = kv_set_u16(h, "txto", s->tx_timeout_s);
+    if (e == ESP_OK) e = kv_set_u8(h, "feed", s->feed);
+    kv_edit_end(h);
+    if (e == ESP_OK) e = kv_commit_wait(h, 3000);
+    kv_close(h);
+    return e == ESP_ERR_TIMEOUT ? ESP_OK : e;
 }
 
 /* svx_config from the settings: the form the shared modules take. */
@@ -1251,8 +1234,10 @@ static void svx_task(void *arg)
             if (!pi.have_key) {
                 set_link(RADIO_LINK_DOWN, "making a key");
                 set_phase("making a key (this takes a while)");
-                if (svx_pki_make_key() != ESP_OK) {
-                    set_why("could not make a key");
+                const esp_err_t ke = svx_pki_make_key();
+                if (ke != ESP_OK) {
+                    set_why(ke == ESP_ERR_INVALID_STATE ? "no key while the SD card holding the station's key is away"
+                                                        : "could not make a key");
                     idle_wait(now_ms() + 10000);
                     continue;
                 }
@@ -1355,7 +1340,7 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     /* Core 0 with lwIP. A TLS handshake and an Opus encoder need room, and
      * the stack is in PSRAM: internal RAM is what WiFi sends from, and with
      * 12 kB of it gone to this stack the certificate login's large packets
-     * could not be sent. Flash is reached through svx_flash_safe(). */
+     * could not be sent. Its settings are in RAM (kvstore): no flash from it. */
     if (xTaskCreatePinnedToCoreWithCaps(svx_task, "svx", 16384, NULL, 6, NULL, 0,
                                         MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "no PSRAM for the reflector task");

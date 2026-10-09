@@ -9,6 +9,6 @@
 idf_component_register(
     SRCS "kiwi_proto.c" "kiwi_mark.c" "kiwi_sess.c" "kiwi_tls.c"
     INCLUDE_DIRS "include"
-    REQUIRES nvs_flash
+    REQUIRES nvs_flash kvstore
     PRIV_REQUIRES esp_timer log lwip mbedtls
 )

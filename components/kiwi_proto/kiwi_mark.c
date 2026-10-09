@@ -1,5 +1,5 @@
-/* Day-limit marks: a table in RAM, kept in NVS by an esp_timer. See
- * kiwi_mark.h. */
+/* Day-limit marks: a table in RAM, kept in the knob's settings (kvstore: the
+ * SD card, or NVS without one) by an esp_timer. See kiwi_mark.h. */
 #include "kiwi_mark.h"
 
 #include <stddef.h>
@@ -12,7 +12,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "nvs.h"
+#include "kvstore.h"
 
 /* The table's own lines go out under the tag of its first caller, at boot --
  * "sdr" beside a radio, "kiwi" on the kiwi firmware; a mark's under that of
@@ -25,8 +25,9 @@ static const char *s_tag = "kiwi";
 #define MARK_MAX    8
 #define SOON_US     1000                    /* a set, a try, a lift */
 #define CLEAR_US    (30 * 1000000LL)        /* a rest, failing a quiet moment */
-#define BUSY_US     (1000 * 1000)           /* on the air: look again in a second */
 #define RETRY_US    (30 * 1000000LL)        /* the write failed: a full NVS, say */
+#define LOOK_US     (20 * 1000)             /* handed to the settings: written yet? */
+#define WRITE_US    (5 * 1000000LL)         /* ...and not after this long: failing */
 #define FRESH_US    (120 * 1000000LL)       /* a /status this recent still tells its boot */
 /* NVS entries (32 bytes each) the table must find free to be sure of its
  * place: all eight marks are a 128-byte blob, six entries, and the old copy
@@ -52,6 +53,8 @@ static volatile uint32_t  s_gen, s_must, s_urgent, s_saved;
 static bool (*volatile s_busy)(void);
 static bool               s_failing;        /* said once, not every retry */
 static volatile bool      s_room;           /* NVS had room for the table, and the last write took */
+static uint32_t           s_pend;           /* the generation handed to the settings, not yet written */
+static int64_t            s_pend_at;        /* when; 0 none */
 
 /* How the boots before this one ended, in RTC memory: a crash, a watchdog or
  * a brownout restart leaves it as it was, power-on fills it with noise --
@@ -136,24 +139,51 @@ static void say_gone(const kiwi_mark_t *g, const char *tag)
         ESP_LOGI(tag, "day-limit marks full: %08lx's, at rest, is let go", (unsigned long)g->hp);
 }
 
-/* Room for the table in NVS: from a task whose stack may touch flash. */
-static bool nvs_room(void)
+/* Room for the table: the SD card holds the settings, or NVS has the room. */
+static bool nvs_room(kv_handle_t h)
 {
+    if (kv_on_card(h)) return true;
     nvs_stats_t st;
     return nvs_get_stats(NULL, &st) == ESP_OK && st.available_entries >= ROOM_ENTRIES;
 }
 
+static void save_failed(esp_err_t e)
+{
+    if (!s_failing) ESP_LOGE(s_tag, "day-limit marks not saved (%s): again every 30 s", esp_err_to_name(e));
+    s_failing = true;
+    s_room = false;
+    esp_timer_start_once(s_timer, RETRY_US);
+}
+
+/* The table to the settings, then -- a timer's look every 20 ms, never a
+ * wait -- until they have written it: only then is it saved. The settings
+ * keep a write to NVS off the air themselves; to the card it costs the audio
+ * nothing. */
 static void save_cb(void *arg)
 {
     (void)arg;
-    /* On the air, flash waits -- except for a refusal the receiver counted:
-     * lost to a power cut, it would cost one more, and a ~100 ms hole in an
-     * over is the lesser harm. */
-    if (s_busy && s_busy() && (int32_t)(s_saved - s_urgent) >= 0) {
-        esp_timer_start_once(s_timer, BUSY_US);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
+    if (e != ESP_OK) {
+        save_failed(e);
         return;
     }
-    /* A copy on this (internal) stack: flash is written from it. */
+    if (s_pend_at) {
+        if (!kv_saved(h)) {
+            if (esp_timer_get_time() - s_pend_at < WRITE_US) esp_timer_start_once(s_timer, LOOK_US);
+            else {
+                s_pend_at = 0;
+                save_failed(ESP_ERR_TIMEOUT);
+            }
+            return;
+        }
+        s_pend_at = 0;
+        if (s_failing) ESP_LOGW(s_tag, "day-limit marks saved after all");
+        s_failing = false;
+        s_room = nvs_room(h);
+        s_saved = s_pend;
+        if (s_saved == s_gen) return;
+    }
     kiwi_mark_t tab[MARK_MAX];
     int n = 0;
     portENTER_CRITICAL(&s_mux);
@@ -161,29 +191,23 @@ static void save_cb(void *arg)
         if (s_tab[i].hp) tab[n++] = s_tab[i];
     const uint32_t gen = s_gen;
     portEXIT_CRITICAL(&s_mux);
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
-    if (e == ESP_OK) {
-        e = n ? nvs_set_blob(h, KEY_MARKS, tab, n * sizeof tab[0]) : nvs_erase_key(h, KEY_MARKS);
-        if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;         /* none, and none there */
-        if (e == ESP_OK) e = nvs_commit(h);
-        nvs_close(h);
-    }
-    /* Not in flash, so not saved: a try waits without logging in, rather
+    e = n ? kv_set_blob(h, KEY_MARKS, tab, n * sizeof tab[0]) : kv_erase_key(h, KEY_MARKS);
+    if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;         /* none, and none there */
+    /* A refusal the receiver counted goes even on the air: lost to a power
+     * cut, it would cost one more. */
+    if (e == ESP_OK) e = (int32_t)(gen - s_urgent) <= 0 ? kv_commit_now(h) : kv_commit(h);
+    kv_close(h);
+    /* Not written, so not saved: a try waits without logging in, rather
      * than spend a strike a restart could forget -- and the knob stops
      * logging in on its own where a refusal could not be kept. */
     if (e != ESP_OK) {
-        if (!s_failing) ESP_LOGE(s_tag, "day-limit marks not saved (%s): again every 30 s", esp_err_to_name(e));
-        s_failing = true;
-        s_room = false;
-        esp_timer_start_once(s_timer, RETRY_US);
+        save_failed(e);
         return;
     }
-    if (s_failing) ESP_LOGW(s_tag, "day-limit marks saved after all");
-    s_failing = false;
-    s_room = nvs_room();
-    s_saved = gen;
-    ESP_LOGD(s_tag, "%d day-limit mark%s saved", n, n == 1 ? "" : "s");
+    s_pend = gen;
+    s_pend_at = esp_timer_get_time();
+    esp_timer_start_once(s_timer, LOOK_US);
+    ESP_LOGD(s_tag, "%d day-limit mark%s handed to the settings", n, n == 1 ? "" : "s");
 }
 
 /* Now: stop whatever was set, and start it again; twice more if another
@@ -259,12 +283,12 @@ esp_err_t kiwi_mark_init(const char *tag)
     if (tag) s_tag = tag;
     boot_seen();
     int n = 0;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
         size_t len = 0;
-        if (nvs_get_blob(h, KEY_MARKS, NULL, &len) == ESP_OK && len && len % sizeof(kiwi_mark_t) == 0) {
+        if (kv_get_blob(h, KEY_MARKS, NULL, &len) == ESP_OK && len && len % sizeof(kiwi_mark_t) == 0) {
             kiwi_mark_t *all = malloc(len);
-            if (all && nvs_get_blob(h, KEY_MARKS, all, &len) == ESP_OK) {
+            if (all && kv_get_blob(h, KEY_MARKS, all, &len) == ESP_OK) {
                 /* A larger table, from some other firmware: its first ones. */
                 for (size_t i = 0; i < len / sizeof *all && n < MARK_MAX; i++) {
                     if (!all[i].hp) continue;
@@ -275,7 +299,8 @@ esp_err_t kiwi_mark_init(const char *tag)
             }
             free(all);
         }
-        nvs_close(h);
+        s_room = nvs_room(h);
+        kv_close(h);
     }
     const esp_timer_create_args_t ta = { .callback = save_cb, .name = "kiwimark" };
     const esp_err_t e = esp_timer_create(&ta, &s_timer);
@@ -284,7 +309,6 @@ esp_err_t kiwi_mark_init(const char *tag)
                  (unsigned)s_tab[i].strikes, KIWI_STRIKES_MAX,
                  s_tab[i].flags & KIWI_MARK_UNSURE ? ", one maybe" : "",
                  s_tab[i].flags & KIWI_MARK_REST ? ", at rest" : "");
-    s_room = nvs_room();
     if (!s_room)
         ESP_LOGE(s_tag, "NVS is full: a day-limit mark would not outlive a restart -- receivers with "
                       "time limits are logged in to only when chosen");

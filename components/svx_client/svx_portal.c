@@ -1,6 +1,5 @@
 /* Talkgroup names from the reflector's portal. See svx_portal.h. */
 #include "svx_portal.h"
-#include "svx_flash.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,8 +12,8 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "kvstore.h"
 #include "lwip/inet.h"
-#include "nvs.h"
 
 static const char *TAG = "svx-portal";
 
@@ -22,7 +21,7 @@ static const char *TAG = "svx-portal";
 #define MAX_BODY    (16 * 1024)
 #define DAY_MS      (24ull * 3600 * 1000)
 #define RETRY_MS    (10ull * 60 * 1000)
-#define NS          "svx"
+#define NS          "svxtg"         /* a cache: on the SD card, or this boot's RAM only */
 
 typedef struct {
     uint32_t tg;
@@ -76,30 +75,22 @@ static const char *bare(const char *reflector)
     return strncasecmp(reflector, "reflector.", 10) == 0 ? reflector + 10 : reflector;
 }
 
-static void load_cache_job(void *p)
-{
-    const char *reflector = p;
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return;
-    char host[64] = "";
-    size_t n = sizeof host;
-    nvs_get_str(h, "tghost", host, &n);
-    size_t len = 0;
-    if (strcasecmp(host, bare(reflector)) == 0 &&
-        nvs_get_blob(h, "tgjson", NULL, &len) == ESP_OK && len && len <= MAX_BODY) {
-        char *json = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
-        if (json && nvs_get_blob(h, "tgjson", json, &len) == ESP_OK) {
-            json[len] = 0;
-            if (parse(json) > 0) ESP_LOGI(TAG, "%d talkgroup names from the last visit", s_n);
-        }
-        free(json);
-    }
-    nvs_close(h);
-}
-
+/* The names as last parsed, kept as the table itself: no JSON to parse again. */
 void svx_portal_load_cache(const char *reflector)
 {
-    svx_flash_safe(load_cache_job, (void *)reflector);
+    kv_handle_t h;
+    if (kv_open(NS, &h) != ESP_OK) return;
+    char host[64] = "";
+    size_t n = sizeof host;
+    kv_get_str(h, "host", host, &n);
+    size_t len = sizeof s_names;
+    if (strcasecmp(host, bare(reflector)) == 0 && kv_get_blob(h, "names", s_names, &len) == ESP_OK &&
+        len % sizeof s_names[0] == 0) {
+        s_n = (int)(len / sizeof s_names[0]);
+        for (int i = 0; i < s_n; i++) s_names[i].name[sizeof s_names[i].name - 1] = 0;
+        if (s_n) ESP_LOGI(TAG, "%d talkgroup names from the last visit", s_n);
+    }
+    kv_close(h);
 }
 
 bool svx_portal_due(void)
@@ -110,38 +101,17 @@ bool svx_portal_due(void)
     return !s_t_ok || t - s_t_ok >= DAY_MS;
 }
 
-typedef struct {
-    const char *host, *json;
-    size_t      len;
-} store_job_t;
-
-static void store_job(void *p)
+/* An unchanged table is no write: kvstore sets only what changes. */
+static void store(const char *host)
 {
-    const store_job_t *j = p;
-    const char *host = j->host, *json = j->json;
-    const size_t len = j->len;
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    size_t old = 0;
-    char *prev = NULL;
-    if (nvs_get_blob(h, "tgjson", NULL, &old) == ESP_OK && old == len &&
-        (prev = heap_caps_malloc(old, MALLOC_CAP_SPIRAM)) &&
-        nvs_get_blob(h, "tgjson", prev, &old) == ESP_OK && memcmp(prev, json, len) == 0) {
-        free(prev);                              /* unchanged: spare the flash */
-        nvs_close(h);
-        return;
-    }
-    free(prev);
-    nvs_set_str(h, "tghost", host);
-    nvs_set_blob(h, "tgjson", json, len);
-    nvs_commit(h);
-    nvs_close(h);
-}
-
-static void store(const char *host, const char *json, size_t len)
-{
-    store_job_t j = { .host = host, .json = json, .len = len };
-    svx_flash_safe(store_job, &j);
+    kv_handle_t h;
+    if (kv_open(NS, &h) != ESP_OK) return;
+    kv_edit_begin(h);
+    kv_set_str(h, "host", host);
+    kv_set_blob(h, "names", s_names, (size_t)s_n * sizeof s_names[0]);
+    kv_edit_end(h);
+    kv_commit(h);
+    kv_close(h);
 }
 
 bool svx_portal_fetch(const char *reflector)
@@ -190,7 +160,7 @@ bool svx_portal_fetch(const char *reflector)
     } else {
         ESP_LOGI(TAG, "%d talkgroup names from %s", s_n, url);
         s_t_ok = ms_now();
-        store(host, body, (size_t)len);
+        store(host);
         changed = true;
     }
     free(body);

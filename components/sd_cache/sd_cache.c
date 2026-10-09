@@ -10,9 +10,12 @@
 #include <unistd.h>
 
 #include "board_pins.h"
+#include "ff.h"
+#include "diskio_sdmmc.h"
 #include "driver/sdmmc_host.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -30,6 +33,12 @@ static portMUX_TYPE      s_init = portMUX_INITIALIZER_UNLOCKED;
 static sdmmc_card_t     *s_card;
 static int               s_users;
 static bool              s_said;           /* "no card" logged */
+static esp_err_t         s_err = ESP_OK;   /* the last mount's */
+static void             *s_bounce;         /* 512 B of internal DMA RAM, made once, kept */
+static char              s_drive[8];
+#define FLUSHERS 4
+static void            (*s_flush[FLUSHERS])(void);
+static int               s_nflush;
 
 static const esp_vfs_fat_mount_config_t MOUNT_CFG = {
     .format_if_mount_failed = false,       /* never by itself: see sdc_format() */
@@ -47,15 +56,15 @@ static SemaphoreHandle_t mx(void)
     return s_mx;
 }
 
-bool sdc_mount(void)
+/* Mounted, with `cfg`: under mx(). */
+static esp_err_t mount_locked(const esp_vfs_fat_mount_config_t *cfg)
 {
-    xSemaphoreTake(mx(), portMAX_DELAY);
-    if (s_card) {
-        s_users++;
-        xSemaphoreGive(mx());
-        return true;
-    }
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    /* Transfers from PSRAM (the settings' images, the update's buffers) go
+     * a sector at a time through one fixed bounce: no allocation per write,
+     * and nothing that can fail for want of internal RAM mid-way. */
+    if (!s_bounce) s_bounce = heap_caps_malloc(512, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    host.dma_aligned_buffer = s_bounce;
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
     slot.width = 4;
     slot.clk = BOARD_PIN_SD_CLK;
@@ -64,19 +73,96 @@ bool sdc_mount(void)
     slot.d1  = BOARD_PIN_SD_D1;
     slot.d2  = BOARD_PIN_SD_D2;
     slot.d3  = BOARD_PIN_SD_D3;
-    const esp_err_t e = esp_vfs_fat_sdmmc_mount(MNT, &host, &slot, &MOUNT_CFG, &s_card);
+    const esp_err_t e = esp_vfs_fat_sdmmc_mount(MNT, &host, &slot, cfg, &s_card);
+    s_err = e;
     if (e != ESP_OK) {
         s_card = NULL;
         if (!s_said) ESP_LOGW(TAG, "no card: %s", esp_err_to_name(e));
         s_said = true;
-        xSemaphoreGive(mx());
-        return false;
+        return e;
+    }
+    if (s_said || !s_drive[0]) {             /* once a boot, and after a card came back */
+        const sdmmc_cid_t *c = &s_card->cid;
+        ESP_LOGI(TAG, "card: \"%.8s\" maker 0x%02x OEM 0x%04x rev %d.%d made %d-%02d, %llu MB, %s",
+                 c->name, c->mfg_id, c->oem_id, c->revision >> 4, c->revision & 15, 2000 + (c->date >> 4),
+                 c->date & 15, (unsigned long long)s_card->csd.capacity * s_card->csd.sector_size / (1024 * 1024),
+                 s_card->is_mmc ? "MMC" : (s_card->ocr & (1u << 30)) ? "SDHC/SDXC" : "SDSC");
     }
     s_said = false;
     s_users = 1;
+    snprintf(s_drive, sizeof s_drive, "%u:", (unsigned)ff_diskio_get_pdrv_card(s_card));
     mkdir(OURS, 0777);
+    return ESP_OK;
+}
+
+bool sdc_mount(void)
+{
+    xSemaphoreTake(mx(), portMAX_DELAY);
+    if (s_card) {
+        s_users++;
+        xSemaphoreGive(mx());
+        return true;
+    }
+    const bool ok = mount_locked(&MOUNT_CFG) == ESP_OK;
     xSemaphoreGive(mx());
-    return true;
+    return ok;
+}
+
+esp_err_t sdc_prepare(void)
+{
+    xSemaphoreTake(mx(), portMAX_DELAY);
+    if (s_card) {
+        s_users++;
+        xSemaphoreGive(mx());
+        return ESP_OK;
+    }
+    esp_vfs_fat_mount_config_t cfg = MOUNT_CFG;
+    cfg.format_if_mount_failed = true;          /* the owner's word: see sd_cache.h */
+    const esp_err_t e = mount_locked(&cfg);
+    if (e == ESP_OK) ESP_LOGW(TAG, "card prepared: a new FAT on it");
+    xSemaphoreGive(mx());
+    return e;
+}
+
+esp_err_t sdc_last_error(void) { return s_err; }
+
+const char *sdc_drive(void) { return s_card ? s_drive : NULL; }
+
+uint32_t sdc_cid(void)
+{
+    xSemaphoreTake(mx(), portMAX_DELAY);
+    uint32_t h = 0;
+    if (s_card) {
+        const sdmmc_cid_t *c = &s_card->cid;
+        h = 2166136261u;
+        const int v[] = { c->mfg_id, c->oem_id, c->serial };
+        for (size_t i = 0; i < sizeof v / sizeof v[0]; i++)
+            for (int b = 0; b < 4; b++) h = (h ^ (uint8_t)(v[i] >> (8 * b))) * 16777619u;
+        for (size_t i = 0; i < sizeof c->name && c->name[i]; i++) h = (h ^ (uint8_t)c->name[i]) * 16777619u;
+        if (!h) h = 1;
+    }
+    xSemaphoreGive(mx());
+    return h;
+}
+
+static void sdc_shutdown(void)
+{
+    for (int i = 0; i < s_nflush; i++) s_flush[i]();
+}
+
+esp_err_t sdc_on_restart(void (*fn)(void))
+{
+    if (!fn) return ESP_ERR_INVALID_ARG;
+    xSemaphoreTake(mx(), portMAX_DELAY);
+    esp_err_t e = ESP_OK;
+    if (s_nflush >= FLUSHERS) e = ESP_ERR_NO_MEM;
+    else {
+        if (!s_nflush) e = esp_register_shutdown_handler(sdc_shutdown);
+        if (e == ESP_OK) s_flush[s_nflush++] = fn;
+    }
+    xSemaphoreGive(mx());
+    if (e != ESP_OK) ESP_LOGE(TAG, "a restart flusher not registered: %s", esp_err_to_name(e));
+    return e;
 }
 
 void sdc_unmount(void)
@@ -237,6 +323,13 @@ void sdc_log_state(void)
 
 esp_err_t sdc_format(void)
 {
+    xSemaphoreTake(mx(), portMAX_DELAY);
+    const bool held = s_card && s_users > 0;
+    xSemaphoreGive(mx());
+    if (held) {
+        ESP_LOGW(TAG, "not emptied: the card is in use (the settings let go of it first)");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!sdc_mount()) return ESP_ERR_NOT_FOUND;
     xSemaphoreTake(mx(), portMAX_DELAY);
     esp_vfs_fat_mount_config_t cfg = MOUNT_CFG;

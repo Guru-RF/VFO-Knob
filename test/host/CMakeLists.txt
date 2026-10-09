@@ -99,6 +99,18 @@ foreach(t test_flex_parse test_radio_list)
     add_test(NAME ${t} COMMAND ${t})
 endforeach()
 
+# The settings' copies on the SD card and the merge of NVS into them
+# (components/kvstore's kv_tlv.c and kv_merge.c): pure C, taken here as the
+# knob takes it -- a copy is read off a card that may have lost power mid-write.
+set(KVS ${CMAKE_CURRENT_SOURCE_DIR}/../../components/kvstore)
+add_library(kv_pure STATIC ${KVS}/kv_tlv.c ${KVS}/kv_merge.c)
+target_include_directories(kv_pure PUBLIC ${KVS})
+target_compile_options(kv_pure PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(test_kv src/test_kv.c)
+target_link_libraries(test_kv PRIVATE kv_pure)
+target_compile_options(test_kv PRIVATE -Wall -Wextra)
+add_test(NAME test_kv COMMAND test_kv)
+
 # The second chip's reading of a device's battery (companion/main/batt.c):
 # pure C, taken here as the chip takes it -- the AT commands a headset or a
 # speaker sends come off the air.

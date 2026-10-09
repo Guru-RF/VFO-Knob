@@ -301,7 +301,13 @@ static esp_err_t card_write(const char *radio, const uint8_t *img, size_t size, 
     if (!sdc_room(radio, size)) return ESP_ERR_NO_MEM;
     FILE *f = sdc_image_create(radio);
     if (!f) return ESP_FAIL;
-    esp_err_t err = fwrite(img, 1, size, f) == size ? ESP_OK : ESP_FAIL;
+    /* 4 kB at a time: one 1.9 MB write would hold the card (FatFs's volume
+     * lock) for seconds, and the settings (kvstore) share it. */
+    esp_err_t err = ESP_OK;
+    for (size_t o = 0; o < size && err == ESP_OK; o += 4096) {
+        const size_t k = size - o < 4096 ? size - o : 4096;
+        if (fwrite(img + o, 1, k, f) != k || fflush(f) != 0) err = ESP_FAIL;
+    }
     if (fclose(f) != 0) err = ESP_FAIL;
     if (err == ESP_OK) err = sdc_image_commit(radio, manifest);
     if (err != ESP_OK) sdc_image_discard(radio);

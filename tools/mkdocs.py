@@ -639,6 +639,14 @@ def setup_pictures():
                              setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",
                                           chooser("INSTALL", f"SVXConnect {VERSION}")) + md.knob_battery(85),
                              "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    # The settings' SD card (components/kvstore), on a radio's face: the card
+    # that holds them does not answer, or answers wrong (app_main.c ui_task).
+    icom = radio_face()
+    out["16-no-sd-card"] = knob("setup-16", "NO SD CARD: the card that holds the settings does not answer",
+                                icom + warning("NO SD CARD", "Icom"))
+    out["17-sd-card-fault"] = knob("setup-17", "SD CARD FAULT: part of the settings could not be read",
+                                   icom + warning("SD CARD FAULT", "Icom"))
+    md.use_palette("svxconnect")
     return out
 
 

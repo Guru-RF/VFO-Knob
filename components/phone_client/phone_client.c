@@ -37,7 +37,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
-#include "nvs.h"
+#include "kvstore.h"
 
 #include "audio_in.h"
 #include "audio_out.h"
@@ -93,27 +93,27 @@ static StaticSemaphore_t s_fav_mx_buf;
 EXT_RAM_BSS_ATTR static phone_fav_t s_favs[PHONE_FAV_MAX];
 static int s_nfav;
 
-static void nvs_str(nvs_handle_t h, const char *k, char *out, size_t cap)
+static void kv_str(kv_handle_t h, const char *k, char *out, size_t cap)
 {
     size_t n = cap;
-    if (nvs_get_str(h, k, out, &n) != ESP_OK) out[0] = 0;
+    if (kv_get_str(h, k, out, &n) != ESP_OK) out[0] = 0;
 }
 
 static void settings_load(void)
 {
-    nvs_handle_t h;
+    kv_handle_t h;
     memset(&s_acc, 0, sizeof s_acc);
     s_acc.port = 5060;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
-    nvs_str(h, "user", s_acc.user, sizeof s_acc.user);
-    nvs_str(h, "pass", s_acc.pass, sizeof s_acc.pass);
-    nvs_str(h, "domain", s_acc.domain, sizeof s_acc.domain);
-    nvs_str(h, "number", s_acc.number, sizeof s_acc.number);
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_str(h, "user", s_acc.user, sizeof s_acc.user);
+    kv_str(h, "pass", s_acc.pass, sizeof s_acc.pass);
+    kv_str(h, "domain", s_acc.domain, sizeof s_acc.domain);
+    kv_str(h, "number", s_acc.number, sizeof s_acc.number);
     uint16_t port = 0;
-    if (nvs_get_u16(h, "port", &port) == ESP_OK && port) s_acc.port = port;
+    if (kv_get_u16(h, "port", &port) == ESP_OK && port) s_acc.port = port;
     size_t len = sizeof s_favs;
-    if (nvs_get_blob(h, "favs", s_favs, &len) == ESP_OK) s_nfav = (int)(len / sizeof s_favs[0]);
-    nvs_close(h);
+    if (kv_get_blob(h, "favs", s_favs, &len) == ESP_OK) s_nfav = (int)(len / sizeof s_favs[0]);
+    kv_close(h);
 }
 
 void phone_account_get(sip_account_t *a, bool *has_pass)
@@ -128,16 +128,19 @@ esp_err_t phone_account_set(const sip_account_t *a)
     sip_account_t n = *a;
     if (!n.pass[0]) strlcpy(n.pass, s_acc.pass, sizeof n.pass);
     if (!n.port) n.port = 5060;
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
     if (e != ESP_OK) return e;
-    nvs_set_str(h, "user", n.user);
-    nvs_set_str(h, "pass", n.pass);
-    nvs_set_str(h, "domain", n.domain);
-    nvs_set_str(h, "number", n.number);
-    nvs_set_u16(h, "port", n.port);
-    e = nvs_commit(h);
-    nvs_close(h);
+    kv_edit_begin(h);
+    e = kv_set_str(h, "user", n.user);
+    if (e == ESP_OK) e = kv_set_str(h, "pass", n.pass);
+    if (e == ESP_OK) e = kv_set_str(h, "domain", n.domain);
+    if (e == ESP_OK) e = kv_set_str(h, "number", n.number);
+    if (e == ESP_OK) e = kv_set_u16(h, "port", n.port);
+    kv_edit_end(h);
+    if (e == ESP_OK) e = kv_commit_wait(h, 3000);
+    if (e == ESP_ERR_TIMEOUT) e = ESP_OK;              /* on its way */
+    kv_close(h);
     if (e == ESP_OK) {
         s_acc = n;
         s_acc_dirty = true;
@@ -159,13 +162,14 @@ esp_err_t phone_favs_set(const phone_fav_t *in, int n)
 {
     if (n < 0) n = 0;
     if (n > PHONE_FAV_MAX) n = PHONE_FAV_MAX;
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
     if (e != ESP_OK) return e;
-    e = n ? nvs_set_blob(h, "favs", in, (size_t)n * sizeof *in) : nvs_erase_key(h, "favs");
+    e = n ? kv_set_blob(h, "favs", in, (size_t)n * sizeof *in) : kv_erase_key(h, "favs");
     if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
-    if (e == ESP_OK) e = nvs_commit(h);
-    nvs_close(h);
+    if (e == ESP_OK) e = kv_commit_wait(h, 3000);
+    if (e == ESP_ERR_TIMEOUT) e = ESP_OK;              /* on its way */
+    kv_close(h);
     if (e != ESP_OK) return e;
     xSemaphoreTake(s_fav_mx, portMAX_DELAY);
     memcpy(s_favs, in, (size_t)n * sizeof *in);
@@ -800,7 +804,7 @@ EXT_RAM_BSS_ATTR static phone_call_t s_hist[PHONE_HIST_MAX];
 static int               s_nhist;
 static volatile uint32_t s_hist_seq;
 static volatile uint8_t  s_missed;              /* fresh ones, for the face */
-static volatile bool     s_hist_dirty, s_hist_saving;
+static volatile bool     s_hist_dirty;
 static uint64_t          s_hist_hold;
 static SemaphoreHandle_t s_hist_mx;
 static StaticSemaphore_t s_hist_mx_buf;
@@ -814,46 +818,31 @@ static void history_count(void)
 
 static void history_load(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
     size_t n = sizeof s_hist;
-    if (nvs_get_blob(h, "hist", s_hist, &n) == ESP_OK) s_nhist = (int)(n / sizeof s_hist[0]);
-    nvs_close(h);
+    if (kv_get_blob(h, "hist", s_hist, &n) == ESP_OK) s_nhist = (int)(n / sizeof s_hist[0]);
+    kv_close(h);
     history_count();
 }
 
-static void history_save_task(void *arg)
-{
-    (void)arg;
-    phone_call_t *copy = heap_caps_malloc(sizeof s_hist, MALLOC_CAP_SPIRAM);
-    if (copy) {
-        xSemaphoreTake(s_hist_mx, portMAX_DELAY);
-        const int n = s_nhist;
-        memcpy(copy, s_hist, sizeof s_hist[0] * (size_t)n);
-        xSemaphoreGive(s_hist_mx);
-        nvs_handle_t h;
-        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-            if (nvs_set_blob(h, "hist", copy, sizeof copy[0] * (size_t)n) == ESP_OK) nvs_commit(h);
-            nvs_close(h);
-        }
-        free(copy);
-    }
-    s_hist_saving = false;
-    vTaskDelete(NULL);
-}
-
-/* The history to flash, after a change: on a task of its own, as this one's
- * stack is in PSRAM and a flash write wants an internal one. */
+/* The history to the settings, after a change: RAM, written by kvstore --
+ * from this task's PSRAM stack as from any. */
 static void history_flush(uint64_t t)
 {
-    if (!s_hist_dirty || s_hist_saving || t < s_hist_hold) return;
-    s_hist_dirty  = false;
-    s_hist_saving = true;
-    if (xTaskCreatePinnedToCore(history_save_task, "phist", 4096, NULL, 2, NULL, 0) != pdPASS) {
-        s_hist_saving = false;
-        s_hist_dirty  = true;
-        s_hist_hold   = t + 10000;             /* no memory just now */
+    if (!s_hist_dirty || t < s_hist_hold) return;
+    s_hist_dirty = false;
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    xSemaphoreTake(s_hist_mx, portMAX_DELAY);
+    const esp_err_t e = kv_set_blob(h, "hist", s_hist, sizeof s_hist[0] * (size_t)s_nhist);
+    xSemaphoreGive(s_hist_mx);
+    if (e == ESP_OK) kv_commit(h);
+    else {
+        s_hist_dirty = true;
+        s_hist_hold  = t + 10000;
     }
+    kv_close(h);
 }
 
 /* A call over: into the history, newest first. */

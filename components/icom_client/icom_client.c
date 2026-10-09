@@ -42,7 +42,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
-#include "nvs.h"
+#include "kvstore.h"
 #include "ptt_fsm.h"
 #include "vfo_tune.h"
 
@@ -1703,20 +1703,22 @@ static void mem_nvs(bool save)
 {
     const bool b = model_now()->mem_by_band;
     const char *k_ch = b ? "bmch" : "mch", *k_mode = b ? "bmmode" : "mmode";
-    nvs_handle_t h;
-    if (nvs_open(MEM_NVS_NS, save ? NVS_READWRITE : NVS_READONLY, &h) != ESP_OK) return;
+    kv_handle_t h;
+    if (kv_open(MEM_NVS_NS, &h) != ESP_OK) return;
     if (save) {
-        if (!b) nvs_set_u8(h, "mgrp", C.mem_group);
-        nvs_set_u8(h, k_ch, S.mem_ch);
-        nvs_set_u8(h, k_mode, S.mem_mode);
-        nvs_commit(h);
+        kv_edit_begin(h);
+        if (!b) kv_set_u8(h, "mgrp", C.mem_group);
+        kv_set_u8(h, k_ch, S.mem_ch);
+        kv_set_u8(h, k_mode, S.mem_mode);
+        kv_edit_end(h);
+        kv_commit(h);
     } else {
         uint8_t v;
-        if (!b && nvs_get_u8(h, "mgrp", &v) == ESP_OK && v < 100) C.mem_group = v;
-        if (nvs_get_u8(h, k_ch, &v) == ESP_OK && v < MEM_CHANNELS) S.mem_ch = v;
-        if (nvs_get_u8(h, k_mode, &v) == ESP_OK) S.mem_mode = v != 0;
+        if (!b && kv_get_u8(h, "mgrp", &v) == ESP_OK && v < 100) C.mem_group = v;
+        if (kv_get_u8(h, k_ch, &v) == ESP_OK && v < MEM_CHANNELS) S.mem_ch = v;
+        if (kv_get_u8(h, k_mode, &v) == ESP_OK) S.mem_mode = v != 0;
     }
-    nvs_close(h);
+    kv_close(h);
 }
 
 static void mem_read_from(int16_t ch)
@@ -2284,7 +2286,10 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     if (!s_txa) s_txa = heap_caps_malloc(PKT_AUDIO_HDR + AUDIO_FRAME * 2, MALLOC_CAP_SPIRAM);
     if (!s_txa) ESP_LOGW(TAG, "no PSRAM for TX audio; transmitting silence");
 
-    esp_register_shutdown_handler(on_restart);
+    /* ESP-IDF has five of these, and the knob uses them all on some
+     * firmwares: a refusal said, never silent. */
+    const esp_err_t she = esp_register_shutdown_handler(on_restart);
+    if (she != ESP_OK) ESP_LOGE(TAG, "the restart handler not registered: %s", esp_err_to_name(she));
     if (xTaskCreatePinnedToCore(icom_task, "icom", 6144, NULL, 6, NULL, 0) != pdPASS) {
         ESP_LOGE(TAG, "no internal RAM for the icom task (%u free, largest %u)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),

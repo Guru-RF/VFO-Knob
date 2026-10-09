@@ -463,12 +463,13 @@ no lists set it steps through every talkgroup the reflector's portal names.
    sends the reflector a certificate request and keeps asking every 30 s until
    the sysop has signed it, then logs in by itself. The certificate renews by
    itself; the key never changes, because the reflector knows the callsign by
-   it.
+   it. Key and certificate are kept on the SD card with the other settings; while
+   that card does not answer the knob makes no new key.
 
 ### On an enhanced reflector
 
 Where the reflector has a portal, the knob reads its `talkgroups.json` for the
-names (kept in flash, refreshed daily) and follows its live feed for where each
+names (kept on the SD card, refreshed daily) and follows its live feed for where each
 talker is. The feed is a second connection to the same host; the knob pauses
 it while it logs in, and it can be switched off on the configuration page.
 
@@ -635,6 +636,24 @@ to the setup firmware from the card without a network. Without a card,
 everything downloads as before. The second chip's firmware is kept there
 too, `COMPANIO.BIN`: a radio's firmware sends it to that chip, never
 installing it on its own.
+
+**The settings on the SD card.** Every firmware keeps its settings on the
+card too, in a folder of their own, `VFO-CFG` (components/kvstore): held in
+RAM from boot, written by one task, each namespace three copies (`A`, `B`,
+written in turn and read back, and `C` ten minutes behind), each a
+preallocated one-cluster file written in place, so a save never touches the
+FAT and a power cut never loads a torn copy -- only a whole earlier save
+(tried with the bench knob's card: a save every few seconds, as in use,
+survived every cut; written 25 times a second nonstop, the card itself lost
+its last seconds of saves on two cuts in seven). Only the WiFi networks, the
+Bluetooth records and the boot counter stay in NVS. Without a card the
+settings stay in NVS as before. For now the NVS copy of what moved stays in
+place, frozen: a firmware from before the card still finds its settings, and
+what it changes there is merged back onto the card at the next start
+(against a base of what NVS held at the last merge). The page's **Settings**
+row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
+(built in) fails; the page then offers to carry on without it, and to take
+it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
 `vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi` and `vfo-knob-phone` — and each has its own update
@@ -841,7 +860,8 @@ knob to be made new again. It erases the whole flash and writes the latest
 release's setup firmware (checked against its manifest), with the bootloader
 and partition table from `build_setup/`, and a one-time mark that has the
 setup firmware empty the microSD card as it first starts — the demo's
-pictures off it. Only then: no knob ever empties its card by itself. Then
+pictures off it, and the settings whoever had the knob before left on it;
+the mark goes only once the card has been emptied. Only then: no knob ever empties its card by itself. Then
 every firmware published goes down the cable onto the card
 (`tools/knob-card.py`), each kept only with its manifest's sha256, so the new
 knob installs its radio's in seconds; they are fetched once into

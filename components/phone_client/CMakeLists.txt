@@ -6,6 +6,6 @@ idf_component_register(
     SRCS "phone_client.c" "sip.c" "g722.c" "g711.c" "phone_web.c" "contacts.c"
     INCLUDE_DIRS "include"
     REQUIRES radio
-    PRIV_REQUIRES vfo_core audio bt_link esp_timer esp_netif lwip nvs_flash
+    PRIV_REQUIRES vfo_core audio bt_link esp_timer esp_netif lwip nvs_flash kvstore
                   esp_http_server esp_rom esp_http_client esp-tls mbedtls json net_prov
 )

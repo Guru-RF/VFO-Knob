@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
+#include "kvstore.h"
 #include "lwip/netdb.h"
 #include "mdns.h"
 #include "nvs.h"
@@ -154,6 +155,23 @@
 
 static const char *TAG = "net";
 static const char *NVS_NS = "vfo";
+static kv_handle_t s_kv;            /* the same namespace's settings, on the SD card (kvstore) */
+
+/* NULL until kvstore is up: its calls then do nothing. */
+static kv_handle_t kv(void)
+{
+    if (!s_kv) kv_open(NVS_NS, &s_kv);
+    return s_kv;
+}
+
+/* A page's save: ESP_OK once written -- or still on its way (the timeout),
+ * which is as good as saved; ESP_FAIL when no medium took it. */
+static esp_err_t kv_saved_or(esp_err_t e, const char *what)
+{
+    if (e == ESP_ERR_TIMEOUT) return ESP_OK;
+    if (e != ESP_OK) ESP_LOGE(TAG, "%s not saved: %s", what, esp_err_to_name(e));
+    return e;
+}
 
 static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
 static uint16_t s_dim_min = 5;      /* idle before the screen dims;  0 = never */
@@ -267,19 +285,13 @@ static void radios_parse(const char *blob)
 
 static void radios_load(void)
 {
-    nvs_handle_t h;
     int8_t sel = 0;
     s_nradios = 0;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        size_t n = 0;
-        if (nvs_get_str(h, KEY_RLIST, NULL, &n) == ESP_OK && n > 1) {
-            char *blob = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
-            if (blob && nvs_get_str(h, KEY_RLIST, blob, &n) == ESP_OK) radios_parse(blob);
-            free(blob);
-        }
-        nvs_get_i8(h, KEY_RSEL, &sel);
-        nvs_close(h);
-    }
+    size_t n = 0;
+    char *blob = kv_dup(kv(), KEY_RLIST, &n);
+    if (blob && n) radios_parse(blob);
+    free(blob);
+    kv_get_i8(kv(), KEY_RSEL, &sel);
     if (!s_nradios) {                        /* the one radio it always had */
         memset(&s_radios[0], 0, sizeof s_radios[0]);
         cfg_to_radio(&s_radios[0]);
@@ -301,7 +313,7 @@ static bool clean(const char *s)
 }
 
 /* The list and the one in use, and that one's endpoint as the config's. */
-static esp_err_t radios_write(void)
+static esp_err_t radios_write(bool wait)
 {
     const size_t cap = NET_PROV_RADIOS * 200 + 1;
     char *blob = heap_caps_calloc(1, cap, MALLOC_CAP_SPIRAM);
@@ -312,30 +324,26 @@ static esp_err_t radios_write(void)
         o += snprintf(blob + o, cap - o, "%s\t%s\t%u\t%s\t%s\n",
                       r->name, r->host, (unsigned)r->port, r->user, r->pass);
     }
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
-    if (e == ESP_OK) {
-        /* Every write's word: one refused (NVS full) is the list not saved,
-         * said as such -- never an OK the next boot finds untrue. */
-        e = nvs_set_str(h, KEY_RLIST, blob);
-        if (e == ESP_OK) e = nvs_set_i8(h, KEY_RSEL, (int8_t)s_radio_sel);
-        if (e == ESP_OK) e = nvs_set_str(h, KEY_HOST, s_cfg.radio_host);
-        if (e == ESP_OK) e = nvs_set_u16(h, KEY_PORT, s_cfg.radio_port);
-        if (e == ESP_OK) e = nvs_set_str(h, KEY_USER, s_cfg.radio_user);
-        if (e == ESP_OK) e = nvs_set_str(h, KEY_PASS, s_cfg.radio_pass);
-        if (e == ESP_OK) e = nvs_commit(h);
-        nvs_close(h);
-    }
-    if (e != ESP_OK) {
-        nvs_stats_t st;
-        if (nvs_get_stats(NULL, &st) == ESP_OK)
-            ESP_LOGE(TAG, "the radios not saved: %s (NVS: %u of %u entries used, %u free)", esp_err_to_name(e),
-                     (unsigned)st.used_entries, (unsigned)st.total_entries, (unsigned)st.free_entries);
-        else
-            ESP_LOGE(TAG, "the radios not saved: %s", esp_err_to_name(e));
-    }
+    /* Every write's word: one refused is the list not saved, said as such --
+     * never an OK the next boot finds untrue. The six reach the medium together. */
+    kv_handle_t h = kv();
+    kv_edit_begin(h);
+    esp_err_t e = kv_set_str(h, KEY_RLIST, blob);
+    if (e == ESP_OK) e = kv_set_i8(h, KEY_RSEL, (int8_t)s_radio_sel);
+    if (e == ESP_OK) e = kv_set_str(h, KEY_HOST, s_cfg.radio_host);
+    if (e == ESP_OK) e = kv_set_u16(h, KEY_PORT, s_cfg.radio_port);
+    if (e == ESP_OK) e = kv_set_str(h, KEY_USER, s_cfg.radio_user);
+    if (e == ESP_OK) e = kv_set_str(h, KEY_PASS, s_cfg.radio_pass);
+    kv_edit_end(h);
     free(blob);
-    return e;
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "the radios not saved: %s", esp_err_to_name(e));
+        return e;
+    }
+    /* The one in use changed from a timer, or before a restart: written at
+     * once, not waited for (a restart writes what waits first). */
+    if (!wait) return kv_commit_now(h);
+    return kv_saved_or(kv_commit_wait(h, 3000), "the radios");
 }
 
 int  net_prov_radio_count(void)  { return s_nradios; }
@@ -369,7 +377,7 @@ esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active)
     s_radio_sel = active;
     s_radios_gen++;
     radio_to_cfg(&s_radios[active]);
-    const esp_err_t e = radios_write();
+    const esp_err_t e = radios_write(true);
     if (e == ESP_OK)
         ESP_LOGI(TAG, "%d radio%s saved; in use: %s", n, n == 1 ? "" : "s",
                  list[active].name[0] ? list[active].name : list[active].host);
@@ -381,7 +389,7 @@ esp_err_t net_prov_radio_activate(int i)
     if (i < 0 || i >= s_nradios) return ESP_ERR_INVALID_ARG;
     s_radio_sel = i;
     radio_to_cfg(&s_radios[i]);
-    return radios_write();
+    return radios_write(false);
 }
 
 /* --- the WiFi networks ------------------------------------------------- */
@@ -494,6 +502,16 @@ void net_prov_tick(void)
     if (s_wifis_dirty) wifis_write();
 }
 
+bool net_prov_peek(const char *key)
+{
+    nvs_handle_t h;
+    uint8_t v = 0;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
+    nvs_get_u8(h, key, &v);
+    nvs_close(h);
+    return v == 1;
+}
+
 bool net_prov_take_once(const char *key)
 {
     nvs_handle_t h;
@@ -507,7 +525,8 @@ bool net_prov_take_once(const char *key)
     return v == 1;
 }
 
-static void load_or_seed(void)
+/* What stays in NVS: the WiFi, and the boot counter. */
+static void load_nvs(void)
 {
     nvs_handle_t h;
     size_t len;
@@ -519,10 +538,8 @@ static void load_or_seed(void)
             len = sizeof s_cfg.pass;     nvs_get_str(h, "pass", s_cfg.pass, &len);
             have = true;
         }
-        len = sizeof s_cfg.radio_host; nvs_get_str(h, KEY_HOST, s_cfg.radio_host, &len);
-        nvs_get_u16(h, KEY_PORT, &s_cfg.radio_port);
-        len = sizeof s_cfg.radio_user; nvs_get_str(h, KEY_USER, s_cfg.radio_user, &len);
-        len = sizeof s_cfg.radio_pass; nvs_get_str(h, KEY_PASS, s_cfg.radio_pass, &len);
+        uint8_t v;
+        if (nvs_get_u8(h, "boots", &v) == ESP_OK) s_boots = v;
         nvs_close(h);
     }
 
@@ -533,27 +550,6 @@ static void load_or_seed(void)
      * used to build the image into every unit flashed from it. */
     if (!have) ESP_LOGW(TAG, "no WiFi credentials stored -- USB only until the "
                              "configuration page is used");
-    if (!s_cfg.radio_host[0])
-        strlcpy(s_cfg.radio_host, DEFAULT_HOST, sizeof s_cfg.radio_host);
-    if (!s_cfg.radio_port) s_cfg.radio_port = DEFAULT_PORT;
-    if (!s_cfg.radio_user[0])
-        strlcpy(s_cfg.radio_user, DEFAULT_USER, sizeof s_cfg.radio_user);
-    if (!s_cfg.radio_pass[0])
-        strlcpy(s_cfg.radio_pass, DEFAULT_PASS, sizeof s_cfg.radio_pass);
-
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        uint8_t v;
-        if (nvs_get_u8(h, "vol",   &v) == ESP_OK) s_volume  = v;
-        if (nvs_get_u8(h, "mic",   &v) == ESP_OK) s_micgain = v;
-        if (nvs_get_u8(h, "mich",  &v) == ESP_OK) s_micgain_hs = v;
-        if (nvs_get_u8(h, "boots", &v) == ESP_OK) s_boots   = v;
-        nvs_get_u16(h, "otah", &s_ota_hours);
-        nvs_get_u16(h, "dim", &s_dim_min);
-        nvs_get_u16(h, "blank", &s_blank_min);
-        len = sizeof s_web_user; nvs_get_str(h, "wuser", s_web_user, &len);
-        len = sizeof s_web_pass; nvs_get_str(h, "wpass", s_web_pass, &len);
-        nvs_close(h);
-    }
     /* Count this boot straight away. If we never reach net_prov_boot_ok(),
      * the next boot sees a higher count and can back off. */
     if (s_boots < 250) s_boots++;
@@ -563,9 +559,36 @@ static void load_or_seed(void)
         nvs_close(h);
     }
     if (s_boots > 1) ESP_LOGW(TAG, "boot #%u since last healthy run", s_boots);
+    wifis_load();
+}
+
+void net_prov_load_settings(void)
+{
+    kv_handle_t h = kv();
+    size_t len;
+    len = sizeof s_cfg.radio_host; kv_get_str(h, KEY_HOST, s_cfg.radio_host, &len);
+    kv_get_u16(h, KEY_PORT, &s_cfg.radio_port);
+    len = sizeof s_cfg.radio_user; kv_get_str(h, KEY_USER, s_cfg.radio_user, &len);
+    len = sizeof s_cfg.radio_pass; kv_get_str(h, KEY_PASS, s_cfg.radio_pass, &len);
+    if (!s_cfg.radio_host[0])
+        strlcpy(s_cfg.radio_host, DEFAULT_HOST, sizeof s_cfg.radio_host);
+    if (!s_cfg.radio_port) s_cfg.radio_port = DEFAULT_PORT;
+    if (!s_cfg.radio_user[0])
+        strlcpy(s_cfg.radio_user, DEFAULT_USER, sizeof s_cfg.radio_user);
+    if (!s_cfg.radio_pass[0])
+        strlcpy(s_cfg.radio_pass, DEFAULT_PASS, sizeof s_cfg.radio_pass);
+
+    uint8_t v;
+    if (kv_get_u8(h, "vol",  &v) == ESP_OK) s_volume  = v;
+    if (kv_get_u8(h, "mic",  &v) == ESP_OK) s_micgain = v;
+    if (kv_get_u8(h, "mich", &v) == ESP_OK) s_micgain_hs = v;
+    kv_get_u16(h, "otah", &s_ota_hours);
+    kv_get_u16(h, "dim", &s_dim_min);
+    kv_get_u16(h, "blank", &s_blank_min);
+    len = sizeof s_web_user; kv_get_str(h, "wuser", s_web_user, &len);
+    len = sizeof s_web_pass; kv_get_str(h, "wpass", s_web_pass, &len);
 
     radios_load();
-    wifis_load();
 
     /* Never log the passphrase, only whether one is present. */
     ESP_LOGI(TAG, "ssid=\"%s\" psk=%s (%d network%s known) host=%s:%u user=%s",
@@ -733,7 +756,7 @@ esp_err_t net_prov_init(void)
     }
     ESP_RETURN_ON_ERROR(err, TAG, "nvs");
     s_wmx = xSemaphoreCreateMutex();
-    load_or_seed();
+    load_nvs();
 
     /* The TCP/IP stack and the default event loop are prerequisites for ANY
      * netif -- WiFi, USB-NCM or the log server -- so they belong here, not in
@@ -784,13 +807,13 @@ void net_prov_flush_audio(void)
 {
     if (!s_audio_dirty) return;
     s_audio_dirty = false;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u8(h, "vol", s_volume);
-    nvs_set_u8(h, "mic", s_micgain);
-    nvs_set_u8(h, "mich", s_micgain_hs);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h = kv();
+    kv_edit_begin(h);
+    kv_set_u8(h, "vol", s_volume);
+    kv_set_u8(h, "mic", s_micgain);
+    kv_set_u8(h, "mich", s_micgain_hs);
+    kv_edit_end(h);
+    kv_commit(h);
     ESP_LOGI(TAG, "saved volume=%u mic=%u headset mic=%u", s_volume, s_micgain, s_micgain_hs);
 }
 
@@ -802,13 +825,13 @@ void net_prov_save_audio(uint8_t volume, uint8_t mic_gain, uint8_t mic_gain_head
     s_volume = volume;
     s_micgain = mic_gain;
     s_micgain_hs = mic_gain_headset;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u8(h, "vol", volume);
-    nvs_set_u8(h, "mic", mic_gain);
-    nvs_set_u8(h, "mich", mic_gain_headset);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h = kv();
+    kv_edit_begin(h);
+    kv_set_u8(h, "vol", volume);
+    kv_set_u8(h, "mic", mic_gain);
+    kv_set_u8(h, "mich", mic_gain_headset);
+    kv_edit_end(h);
+    kv_commit_now(h);
     ESP_LOGI(TAG, "saved volume=%u mic=%u headset mic=%u", volume, mic_gain, mic_gain_headset);
 }
 bool net_prov_is_connected(void)    { return s_connected; }
@@ -827,15 +850,14 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
     /* A network given the old way, one at a time: to the list. */
     if (cfg->ssid[0] && (strcmp(cfg->ssid, s_cfg.ssid) || strcmp(cfg->pass, s_cfg.pass)))
         net_prov_wifi_add(cfg->ssid, cfg->pass);
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
-    if (err != ESP_OK) return err;
-    nvs_set_str(h, KEY_HOST, cfg->radio_host);
-    nvs_set_u16(h, KEY_PORT, cfg->radio_port);
-    nvs_set_str(h, KEY_USER, cfg->radio_user);
-    nvs_set_str(h, KEY_PASS, cfg->radio_pass);
-    err = nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h = kv();
+    kv_edit_begin(h);
+    esp_err_t err = kv_set_str(h, KEY_HOST, cfg->radio_host);
+    if (err == ESP_OK) err = kv_set_u16(h, KEY_PORT, cfg->radio_port);
+    if (err == ESP_OK) err = kv_set_str(h, KEY_USER, cfg->radio_user);
+    if (err == ESP_OK) err = kv_set_str(h, KEY_PASS, cfg->radio_pass);
+    kv_edit_end(h);
+    if (err == ESP_OK) err = kv_saved_or(kv_commit_wait(h, 3000), "the radio's address");
     if (err == ESP_OK) {
         /* The network is the list's to say. */
         char ssid[33], pass[65];
@@ -850,7 +872,7 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
             if (strcmp(r->host, cfg->radio_host) || r->port != cfg->radio_port ||
                 strcmp(r->user, cfg->radio_user) || strcmp(r->pass, cfg->radio_pass)) {
                 cfg_to_radio(r);
-                err = radios_write();
+                err = radios_write(true);
             }
         }
     }
@@ -871,23 +893,18 @@ void net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes)
     if (dim_minutes == s_dim_min && blank_minutes == s_blank_min) return;
     s_dim_min   = dim_minutes;
     s_blank_min = blank_minutes;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u16(h, "dim", s_dim_min);
-    nvs_set_u16(h, "blank", s_blank_min);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h = kv();
+    kv_set_u16(h, "dim", s_dim_min);
+    kv_set_u16(h, "blank", s_blank_min);
+    kv_commit_now(h);
 }
 
 void net_prov_save_ota_hours(uint16_t hours)
 {
     if (hours == s_ota_hours) return;
     s_ota_hours = hours;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u16(h, "otah", hours);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_set_u16(kv(), "otah", hours);
+    kv_commit_now(kv());
 }
 
 const char *net_prov_web_user(void) { return s_web_user; }
@@ -902,12 +919,12 @@ void net_prov_save_web(const char *user, const char *pass)
 {
     if (user && *user) strlcpy(s_web_user, user, sizeof s_web_user);
     if (pass && *pass) strlcpy(s_web_pass, pass, sizeof s_web_pass);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_str(h, "wuser", s_web_user);
-    nvs_set_str(h, "wpass", s_web_pass);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h = kv();
+    kv_edit_begin(h);
+    kv_set_str(h, "wuser", s_web_user);
+    kv_set_str(h, "wpass", s_web_pass);
+    kv_edit_end(h);
+    kv_saved_or(kv_commit_wait(h, 3000), "the page's login");
 }
 
 esp_err_t net_prov_wifi_stop(void)

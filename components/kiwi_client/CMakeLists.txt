@@ -6,5 +6,5 @@ idf_component_register(
     SRCS "kiwi_client.c"
     INCLUDE_DIRS "include"
     REQUIRES radio
-    PRIV_REQUIRES kiwi_proto sdr_rx vfo_core audio esp_timer nvs_flash
+    PRIV_REQUIRES kiwi_proto sdr_rx vfo_core audio esp_timer nvs_flash kvstore
 )

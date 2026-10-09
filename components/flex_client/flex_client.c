@@ -77,7 +77,7 @@
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
-#include "nvs.h"
+#include "kvstore.h"
 #include <fcntl.h>
 #include "ptt_fsm.h"
 #include "vfo_tune.h"
@@ -949,23 +949,25 @@ static void on_client_status(const char *body)
 
 static void pick_save(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_str(h, "pickid", C.pick_id);
-    nvs_set_str(h, "pickname", C.pick_name);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_edit_begin(h);
+    kv_set_str(h, "pickid", C.pick_id);
+    kv_set_str(h, "pickname", C.pick_name);
+    kv_edit_end(h);
+    kv_commit(h);
+    kv_close(h);
 }
 
 static void pick_load(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
     size_t n = sizeof C.pick_id;
-    if (nvs_get_str(h, "pickid", C.pick_id, &n) != ESP_OK) C.pick_id[0] = 0;
+    if (kv_get_str(h, "pickid", C.pick_id, &n) != ESP_OK) C.pick_id[0] = 0;
     n = sizeof C.pick_name;
-    if (nvs_get_str(h, "pickname", C.pick_name, &n) != ESP_OK) C.pick_name[0] = 0;
-    nvs_close(h);
+    if (kv_get_str(h, "pickname", C.pick_name, &n) != ESP_OK) C.pick_name[0] = 0;
+    kv_close(h);
 }
 
 /* Ask on the dial: our own station, or the dial for one already on the
@@ -1425,20 +1427,22 @@ static void on_status(char *body, uint32_t t)
 
 static void uuid_save(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_str(h, "uuid", C.uuid);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    /* A new station id: written at once. While the SD card that holds the
+     * settings is away, it is this session's only (kvstore keeps it in RAM). */
+    kv_set_str(h, "uuid", C.uuid);
+    kv_commit_now(h);
+    kv_close(h);
 }
 
 static void uuid_load(void)
 {
-    nvs_handle_t h;
+    kv_handle_t h;
     size_t n = sizeof C.uuid;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        if (nvs_get_str(h, "uuid", C.uuid, &n) != ESP_OK) C.uuid[0] = 0;
-        nvs_close(h);
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
+        if (kv_get_str(h, "uuid", C.uuid, &n) != ESP_OK) C.uuid[0] = 0;
+        kv_close(h);
     }
     if (C.uuid[0]) return;
     uint8_t r[16];
@@ -2422,7 +2426,10 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     s_rxq = xRingbufferCreateWithCaps(RXQ_BYTES, RINGBUF_TYPE_NOSPLIT, MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(C.line && C.meters && s_req && s_rxq, ESP_ERR_NO_MEM, TAG, "buffers");
 
-    esp_register_shutdown_handler(on_restart);
+    /* ESP-IDF has five of these, and the knob uses them all on some
+     * firmwares: a refusal said, never silent. */
+    const esp_err_t she = esp_register_shutdown_handler(on_restart);
+    if (she != ESP_OK) ESP_LOGE(TAG, "the restart handler not registered: %s", esp_err_to_name(she));
     /* For the flex task's 10 s report: the allocations that fail. */
     heap_caps_register_failed_alloc_callback(on_alloc_failed);
     /* The codec's stack in PSRAM: Opus is deep, internal RAM is what WiFi

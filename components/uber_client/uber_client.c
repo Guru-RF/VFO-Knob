@@ -53,7 +53,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "net_prov.h"
-#include "nvs.h"
+#include "kvstore.h"
 #include "ptt_fsm.h"
 #include "vfo_tune.h"
 
@@ -207,15 +207,17 @@ static void save_cb(void *arg)
     hi = S.hi;
     if (S.nr_want > 0 && S.nr_want <= s_n_nr) strlcpy(nr, s_nr[S.nr_want - 1], sizeof nr);
     taskEXIT_CRITICAL(&S_LOCK);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_i64(h, "ubf", f);
-    nvs_set_str(h, "ubm", m);
-    nvs_set_i32(h, "ubl", lo);
-    nvs_set_i32(h, "ubh", hi);
-    nvs_set_str(h, "ubn", nr);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_edit_begin(h);
+    kv_set_i64(h, "ubf", f);
+    kv_set_str(h, "ubm", m);
+    kv_set_i32(h, "ubl", lo);
+    kv_set_i32(h, "ubh", hi);
+    kv_set_str(h, "ubn", nr);
+    kv_edit_end(h);
+    kv_commit(h);
+    kv_close(h);
 }
 
 static void save_later(void)
@@ -229,19 +231,19 @@ static char s_nr_saved[6];             /* the filter at the last boot, by name *
 
 static void load(void)
 {
-    nvs_handle_t h;
+    kv_handle_t h;
     int64_t f = 0;
     char m[8] = "";
     int32_t lo = 0, hi = 0;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
         size_t n = sizeof m;
-        nvs_get_i64(h, "ubf", &f);
-        nvs_get_str(h, "ubm", m, &n);
-        nvs_get_i32(h, "ubl", &lo);
-        nvs_get_i32(h, "ubh", &hi);
+        kv_get_i64(h, "ubf", &f);
+        kv_get_str(h, "ubm", m, &n);
+        kv_get_i32(h, "ubl", &lo);
+        kv_get_i32(h, "ubh", &hi);
         n = sizeof s_nr_saved;
-        nvs_get_str(h, "ubn", s_nr_saved, &n);
-        nvs_close(h);
+        kv_get_str(h, "ubn", s_nr_saved, &n);
+        kv_close(h);
     }
     taskENTER_CRITICAL(&S_LOCK);
     tune_init(&S.tune, f > 0 ? f : 0, 1000);

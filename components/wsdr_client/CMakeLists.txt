@@ -9,5 +9,5 @@ idf_component_register(
     SRCS "wsdr_client.c"
     INCLUDE_DIRS "include"
     REQUIRES radio
-    PRIV_REQUIRES wsdr_proto owrx_proto websdr_link kiwi_proto net_prov vfo_core audio esp_timer nvs_flash
+    PRIV_REQUIRES wsdr_proto owrx_proto websdr_link kiwi_proto net_prov vfo_core audio esp_timer nvs_flash kvstore
 )

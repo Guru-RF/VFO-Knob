@@ -30,7 +30,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
-#include "nvs.h"
+#include "kvstore.h"
 
 #include "phone_priv.h"
 
@@ -69,10 +69,10 @@ static void set_state(const char *st, const char *why)
     taskEXIT_CRITICAL(&s_lock);
 }
 
-static void nvs_str(nvs_handle_t h, const char *k, char *out, size_t cap)
+static void kv_str(kv_handle_t h, const char *k, char *out, size_t cap)
 {
     size_t n = cap;
-    if (nvs_get_str(h, k, out, &n) != ESP_OK) out[0] = 0;
+    if (kv_get_str(h, k, out, &n) != ESP_OK) out[0] = 0;
 }
 
 /* cJSON in PSRAM. A reply of Google's parses into thousands of small nodes,
@@ -86,31 +86,40 @@ static void *ext_malloc(size_t n)
 
 void contacts_load(void)
 {
-    nvs_handle_t h;
+    kv_handle_t h;
     cJSON_InitHooks(&(cJSON_Hooks){ .malloc_fn = ext_malloc, .free_fn = free });
     strlcpy(G.relay, DEFAULT_RELAY, sizeof G.relay);
     strlcpy(G.state, "idle", sizeof G.state);
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
-    nvs_str(h, "gcid", G.cid, sizeof G.cid);
-    nvs_str(h, "gcsec", G.csec, sizeof G.csec);
-    nvs_str(h, "grtok", G.rtok, sizeof G.rtok);
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_str(h, "gcid", G.cid, sizeof G.cid);
+    kv_str(h, "gcsec", G.csec, sizeof G.csec);
+    kv_str(h, "grtok", G.rtok, sizeof G.rtok);
     char relay[128];
-    nvs_str(h, "grelay", relay, sizeof relay);
+    kv_str(h, "grelay", relay, sizeof relay);
     if (relay[0]) strlcpy(G.relay, relay, sizeof G.relay);
-    nvs_close(h);
+    kv_close(h);
     if (G.rtok[0]) G.due = true;                  /* synced once registered */
 }
 
+/* Into the settings (RAM), written soon: from any stack. */
 static esp_err_t save(const char *k, const char *v)
 {
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
     if (e != ESP_OK) return e;
-    e = v[0] ? nvs_set_str(h, k, v) : nvs_erase_key(h, k);
+    e = v[0] ? kv_set_str(h, k, v) : kv_erase_key(h, k);
     if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
-    if (e == ESP_OK) e = nvs_commit(h);
-    nvs_close(h);
+    if (e == ESP_OK) e = kv_commit_now(h);
+    kv_close(h);
     return e;
+}
+
+static esp_err_t saved(void)
+{
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return ESP_FAIL;
+    const esp_err_t e = kv_commit_wait(h, 3000);
+    return e == ESP_ERR_TIMEOUT ? ESP_OK : e;
 }
 
 /* What the page gave, without what would break the JSON or a URL: no
@@ -136,6 +145,7 @@ esp_err_t contacts_set_client(const char *cid, const char *csec, const char *rel
     esp_err_t e = save("gcid", G.cid);
     if (e == ESP_OK) e = save("gcsec", G.csec);
     if (e == ESP_OK) e = save("grelay", strcmp(G.relay, DEFAULT_RELAY) ? G.relay : "");
+    if (e == ESP_OK) e = saved();
     return e;
 }
 
@@ -143,39 +153,20 @@ void contacts_forget(void)
 {
     G.rtok[0] = 0;
     save("grtok", "");
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) kv_scrub_wait(h, 5000);       /* off every copy, NVS's too */
     set_state("idle", "signed out");
     ESP_LOGI(TAG, "signed out of Google");
 }
 
-/* ---------------------------------------------------------------- flash, later */
+/* ---------------------------------------------------------------- saving */
 
 /* The sync runs on a PSRAM stack -- TLS wants 8 kB of one, and internal RAM
- * is the WiFi's -- and a task on a PSRAM stack must not write flash. What
- * it saves, a short task with an internal stack writes. */
-typedef struct {
-    void (*fn)(void *);
-    void  *arg;
-} later_t;
-
-static void later_task(void *p)
+ * is the WiFi's. What it saves goes to the settings, which are RAM: straight
+ * from that stack (kvstore writes them). */
+static bool run_save(void (*fn)(void *), void *arg)
 {
-    const later_t l = *(later_t *)p;
-    free(p);
-    l.fn(l.arg);
-    vTaskDelete(NULL);
-}
-
-static bool on_internal(void (*fn)(void *), void *arg)
-{
-    later_t *l = malloc(sizeof *l);
-    if (!l) return false;
-    l->fn  = fn;
-    l->arg = arg;
-    if (xTaskCreatePinnedToCore(later_task, "cflash", 3584, l, 3, NULL, 0) != pdPASS) {
-        ESP_LOGW(TAG, "no memory to save just now");
-        free(l);
-        return false;
-    }
+    fn(arg);
     return true;
 }
 
@@ -350,7 +341,7 @@ static bool exchange_code(body_t *b, char *access, size_t cap)
     bool ok = st == 200 && rt && at;
     if (ok) {
         strlcpy(G.rtok, rt, sizeof G.rtok);
-        on_internal(save_token, NULL);
+        run_save(save_token, NULL);
         strlcpy(access, at, cap);
         ESP_LOGI(TAG, "signed in to Google");
     } else if (st < 0) {
@@ -384,7 +375,7 @@ static bool refresh_access(body_t *b, char *access, size_t cap)
         /* Revoked, or expired: a Google Cloud app still in Testing gives
          * refresh tokens a week. Signed in again from the page. */
         G.rtok[0] = 0;
-        on_internal(save_token, NULL);
+        run_save(save_token, NULL);
         set_state("failed", "Google's sign-in expired: sign in again");
     } else {
         set_state("failed", st < 0 ? "Google not reached" : "Google refused the token");
@@ -476,7 +467,7 @@ static int sync_starred(body_t *b, const char *access)
     if (j) {
         j->f = f;                               /* saved, then freed, there */
         j->n = k;
-        if (!on_internal(save_favs, j)) {
+        if (!run_save(save_favs, j)) {
             free(f);
             free(j);
         }
@@ -560,7 +551,7 @@ void contacts_tick(bool online)
     G.t_try = now_ms();
     G.last_ok = false;
     /* Its stack in PSRAM: TLS wants 8 kB, which internal RAM -- the WiFi's
-     * -- can spare only barely. Flash is written by on_internal(). */
+     * -- can spare only barely. What it saves goes to the settings (RAM). */
     if (xTaskCreatePinnedToCoreWithCaps(sync_task, "contacts", 8192, NULL, 3, NULL, 0,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         G.busy = false;

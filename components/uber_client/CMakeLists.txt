@@ -6,6 +6,6 @@ idf_component_register(
     SRCS "uber_client.c" "uber_aux.c" "uber_net.c" "uber_json.c" "uber_png.c"
     INCLUDE_DIRS "include"
     REQUIRES radio
-    PRIV_REQUIRES vfo_core audio esp_timer esp_system esp_app_format esp-tls lwip nvs_flash
+    PRIV_REQUIRES vfo_core audio esp_timer esp_system esp_app_format esp-tls lwip nvs_flash kvstore
                   mbedtls esp_rom esphome__micro-opus net_prov
 )

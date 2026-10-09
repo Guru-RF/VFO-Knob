@@ -24,6 +24,9 @@ knob clicks, and browse to the address on the card; user `admin`, password
    the reflector a certificate request, and keeps asking every 30 s until the
    sysop has signed it — then it logs in by itself. The certificate renews by
    itself; the key never changes, because the reflector knows the callsign by it.
+   With an SD card in the knob, the key and the certificate are kept on it; while
+   that card does not answer (**NO SD CARD**) the knob makes no new key, until
+   you choose **Carry on without the SD card** on the configuration page.
 
 ## The face
 
@@ -75,8 +78,8 @@ click. On the air the arc is the microphone.
 
 ## On an enhanced reflector
 
-Where the reflector has a portal, the knob reads its talkgroup names (kept in
-flash, refreshed daily) and follows its live feed for where each talker is.
+Where the reflector has a portal, the knob reads its talkgroup names (kept on
+the SD card, refreshed daily) and follows its live feed for where each talker is.
 The feed is a second connection to the same host; it can be switched off on
 the configuration page.
 

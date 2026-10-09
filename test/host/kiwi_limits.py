@@ -434,9 +434,11 @@ def selection_by_address(c):
 
 
 def on_the_air(c):
-    """Flash waits while the radio transmits -- except for a refusal the
-    receiver counted: a power cut in the over keeps the mark. A try waits for
-    flash, so no login happens until the over ends."""
+    """A refusal the receiver counted is kept through a power cut in the
+    over. The marks go to the settings (kvstore), here as on the SD card,
+    whose write costs the audio nothing: a try chosen in an over is written
+    at once and goes ahead -- counted, refused, held. (Without a card,
+    kvstore itself holds the NVS write, and so the try, until the over ends.)"""
     m = c.mock("--ip-limit-at-login")
     k = c.knob()
     rx = m.rx
@@ -450,10 +452,10 @@ def on_the_air(c):
     time.sleep(4.5)
     during = m.stats()["refused_at_login"]
     b = k.finish(p, cmds)
-    c.check(during == 1, f"chosen again in an over: no login until it ends ({during})")
-    c.check(b.state(0).get("state") == "connecting", f"...the try waiting for flash ({b.state(0)})")
+    c.check(during == 2, f"chosen again in an over: the try goes ahead ({during})")
+    c.check(b.state(0).get("state") == "daily limit reached", f"...refused, and held ({b.state(0)})")
     c.check(m.stats()["refused_at_login"] == 2 and b.marks() == [{0: 2}],
-            "the over ended: the try, counted, refused, held")
+            "the over ended: no more tries -- counted once, held")
 
 
 def time_limit_password(c):

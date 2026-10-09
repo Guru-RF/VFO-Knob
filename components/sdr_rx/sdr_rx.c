@@ -64,7 +64,7 @@
 #include "kiwi_mark.h"
 #include "kiwi_proto.h"
 #include "kiwi_sess.h"
-#include "nvs.h"
+#include "kvstore.h"
 
 static const char *TAG = "sdr";
 
@@ -260,12 +260,12 @@ esp_err_t sdr_list_init(void)
     if (!s_list_timer) esp_timer_create(&ta, &s_list_timer);
     if (s_list_loaded) return ESP_OK;
     char who[KIWI_IDENT_MAX] = "";
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
         size_t n = 0;
-        if (nvs_get_str(h, KEY_LIST, NULL, &n) == ESP_OK && n > 1) {
+        if (kv_get_str(h, KEY_LIST, NULL, &n) == ESP_OK && n > 1) {
             char *blob = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
-            if (blob && nvs_get_str(h, KEY_LIST, blob, &n) == ESP_OK) {
+            if (blob && kv_get_str(h, KEY_LIST, blob, &n) == ESP_OK) {
                 taskENTER_CRITICAL(&s_lock);
                 list_parse(blob);
                 taskEXIT_CRITICAL(&s_lock);
@@ -273,8 +273,8 @@ esp_err_t sdr_list_init(void)
             free(blob);
         }
         n = sizeof who;
-        if (nvs_get_str(h, KEY_IDENT, who, &n) != ESP_OK) who[0] = 0;
-        nvs_close(h);
+        if (kv_get_str(h, KEY_IDENT, who, &n) != ESP_OK) who[0] = 0;
+        kv_close(h);
     }
     /* Who the owners see, for every session from the first. */
     kiwi_ident_set(who);
@@ -305,13 +305,14 @@ esp_err_t sdr_ident_save(const char *who)
     char was[KIWI_IDENT_MAX];
     kiwi_ident(was, sizeof was);
     if (!strcmp(was, w)) return ESP_OK;
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
     if (e == ESP_OK) {
-        e = w[0] ? nvs_set_str(h, KEY_IDENT, w) : nvs_erase_key(h, KEY_IDENT);
+        e = w[0] ? kv_set_str(h, KEY_IDENT, w) : kv_erase_key(h, KEY_IDENT);
         if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;         /* none, and none there */
-        if (e == ESP_OK) e = nvs_commit(h);
-        nvs_close(h);
+        if (e == ESP_OK) e = kv_commit_wait(h, 3000);
+        if (e == ESP_ERR_TIMEOUT) e = ESP_OK;               /* on its way */
+        kv_close(h);
     }
     if (e != ESP_OK) return e;
     kiwi_ident_set(w);
@@ -376,14 +377,17 @@ static void list_blob(const sdr_cfg_t *list, int n, char *blob, size_t cap, int 
     }
 }
 
-static esp_err_t list_nvs(const char *blob)
+/* The list to the settings (kvstore): a page's save waits until it is
+ * written (a timeout is as good as saved), a timer's does not. */
+static esp_err_t list_nvs(const char *blob, bool wait)
 {
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
     if (e == ESP_OK) {
-        e = nvs_set_str(h, KEY_LIST, blob);
-        if (e == ESP_OK) e = nvs_commit(h);
-        nvs_close(h);
+        e = kv_set_str(h, KEY_LIST, blob);
+        if (e == ESP_OK) e = wait ? kv_commit_wait(h, 3000) : kv_commit(h);
+        if (e == ESP_ERR_TIMEOUT) e = ESP_OK;
+        kv_close(h);
     }
     return e;
 }
@@ -430,7 +434,7 @@ esp_err_t sdr_save(const sdr_cfg_t *list, int n, int sel)
     /* A list a redirect moved, on its way to flash (list_cb): written first,
      * and this one over it -- and that one waits until this is the list. */
     while (!list_write_take()) vTaskDelay(pdMS_TO_TICKS(10));
-    const esp_err_t e = list_nvs(blob);
+    const esp_err_t e = list_nvs(blob, true);
     if (e == ESP_OK) {
         taskENTER_CRITICAL(&s_lock);
         const int was = s_want;
@@ -518,7 +522,7 @@ static void list_cb(void *arg)
     taskEXIT_CRITICAL(&s_lock);
     if (dirty) {
         list_blob(list, n, blob, SDR_MAX * LIST_LINE + 1, NULL);
-        const esp_err_t e = list_nvs(blob);
+        const esp_err_t e = list_nvs(blob, false);
         if (e == ESP_OK) ESP_LOGI(TAG, "the receivers in flash, https:// kept");
         else ESP_LOGW(TAG, "the receivers not saved (%s): https:// kept until a restart", esp_err_to_name(e));
     }
@@ -542,13 +546,15 @@ static void save_cb(void *arg)
     const int8_t   sel  = (int8_t)s_want;
     const uint32_t selh = s_want >= 0 && s_want < s_n ? s_hp[s_want] : 0;
     taskEXIT_CRITICAL(&s_lock);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_i8(h, KEY_SEL, sel);
-    nvs_set_u32(h, KEY_SELH, selh);
-    nvs_set_i8(h, KEY_BAL, s_bal);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_edit_begin(h);
+    kv_set_i8(h, KEY_SEL, sel);
+    kv_set_u32(h, KEY_SELH, selh);
+    kv_set_i8(h, KEY_BAL, s_bal);
+    kv_edit_end(h);
+    kv_commit(h);
+    kv_close(h);
 }
 
 static void save_later(void)
@@ -1414,12 +1420,12 @@ esp_err_t sdr_rx_init(void)
     sdr_list_init();
     kiwi_mark_init(TAG);
     bool resave = false;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
         int8_t sel = -1, bal = 0;
         uint32_t selh = 0;
-        const bool have_h = nvs_get_u32(h, KEY_SELH, &selh) == ESP_OK;
-        if (nvs_get_i8(h, KEY_SEL, &sel) == ESP_OK && sel >= 0) {
+        const bool have_h = kv_get_u32(h, KEY_SELH, &selh) == ESP_OK;
+        if (kv_get_i8(h, KEY_SEL, &sel) == ESP_OK && sel >= 0) {
             /* The receiver by its address, as the list may have moved under
              * the place kept; gone, none. A knob that kept no address yet
              * trusts the place, this once. */
@@ -1429,8 +1435,8 @@ esp_err_t sdr_rx_init(void)
             s_want = i;
             resave = !have_h || i != sel;
         }
-        if (nvs_get_i8(h, KEY_BAL, &bal) == ESP_OK && bal >= -100 && bal <= 100) s_bal = bal;
-        nvs_close(h);
+        if (kv_get_i8(h, KEY_BAL, &bal) == ESP_OK && bal >= -100 && bal <= 100) s_bal = bal;
+        kv_close(h);
     }
     audio_out_set_balance(s_bal);
     const esp_timer_create_args_t ta = { .callback = save_cb, .name = "sdrsave" };

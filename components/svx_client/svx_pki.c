@@ -1,5 +1,6 @@
-/* The station's credentials in NVS, with mbedTLS: SVXConnect-CLI's pki.c and
- * cert.c, from files and OpenSSL to the knob. See svx_pki.h for the rules. */
+/* The station's credentials in the knob's settings (kvstore: the SD card, or
+ * NVS without one), with mbedTLS: SVXConnect-CLI's pki.c and cert.c, from
+ * files and OpenSSL to the knob. See svx_pki.h for the rules. */
 #include "svx_pki.h"
 
 #include <stdio.h>
@@ -18,16 +19,16 @@
 #include "mbedtls/sha256.h"
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/x509_csr.h"
-#include "nvs.h"
+#include "kvstore.h"
 
 #include "common/proto.h"
-#include "svx_flash.h"
 
 static const char *TAG = "svx-pki";
 
 #define NS       "svxpki"
 #define PEM_MAX  4096               /* a key, a request or a certificate */
 #define CA_MAX   16384              /* the reflector's whole bundle */
+#define CRT_MAX  7168               /* a certificate kept: the namespace must fit one copy */
 #define DAY      86400
 
 static SemaphoreHandle_t s_mx;
@@ -109,96 +110,62 @@ static int64_t x509_epoch(const mbedtls_x509_time *t)
          + t->hour * 3600 + t->min * 60 + t->sec;
 }
 
-/* ------------------------------------------------------------------- NVS */
+/* -------------------------------------------------------------- storage */
 
-static char *nvs_load(nvs_handle_t h, const char *k)
+/* The settings are RAM: sets and gets here are fine under LOCK, and no flash
+ * is touched from any stack. Only the key's write is waited for -- outside
+ * LOCK (svx_pki_make_key). */
+static kv_handle_t kvh(void)
+{
+    static kv_handle_t h;
+    if (!h) kv_open(NS, &h);
+    return h;
+}
+
+static char *kv_load(const char *k)
 {
     size_t n = 0;
-    if (nvs_get_blob(h, k, NULL, &n) != ESP_OK || n == 0) return NULL;
-    char *p = heap_caps_malloc(n + 1, MALLOC_CAP_SPIRAM);
-    if (!p) return NULL;
-    if (nvs_get_blob(h, k, p, &n) != ESP_OK) { free(p); return NULL; }
-    p[n] = 0;
+    char *p = kv_dup(kvh(), k, &n);
+    if (p && !n) {
+        free(p);
+        p = NULL;
+    }
     return p;
 }
 
-/* n == 0 erases the key. */
-static esp_err_t nvs_save_now(const char *k, const void *v, size_t n)
+/* n == 0 erases the key. Written soon, never waited for. */
+static esp_err_t kv_save(const char *k, const void *v, size_t n)
 {
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NS, NVS_READWRITE, &h);
-    if (e != ESP_OK) return e;
-    e = n ? nvs_set_blob(h, k, v, n) : nvs_erase_key(h, k);
-    if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
-    if (e == ESP_OK) e = nvs_commit(h);
-    nvs_close(h);
+    esp_err_t e = n ? kv_set_blob(kvh(), k, v, n) : kv_erase_key(kvh(), k);
+    if (e == ESP_OK) e = kv_commit(kvh());
     if (e != ESP_OK) ESP_LOGE(TAG, "cannot store %s: %s", k, esp_err_to_name(e));
     return e;
 }
 
-typedef struct {
-    const char *k;
-    const void *v;
-    size_t      n;
-    esp_err_t   r;
-} save_job_t;
-
-static void save_job(void *p)
-{
-    save_job_t *j = p;
-    j->r = nvs_save_now(j->k, j->v, j->n);
-}
-
-static esp_err_t nvs_save(const char *k, const void *v, size_t n)
-{
-    save_job_t j = { .k = k, .v = v, .n = n, .r = ESP_FAIL };
-    svx_flash_safe(save_job, &j);
-    return j.r;
-}
-
 static esp_err_t save_str(const char *k, const char *s)
 {
-    return nvs_save(k, s, s ? strlen(s) : 0);
+    return kv_save(k, s, s ? strlen(s) : 0);
 }
 
-/* What NVS holds, into P; the mutex is held. */
+/* What the settings hold, into P; the mutex is held. (The CA bundle is kept
+ * in memory only -- svx_pki_store_ca -- and the copy an older firmware stored
+ * in NVS is erased by kvstore at boot.) */
 static void load(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return;     /* nothing yet */
-    P.key = nvs_load(h, "key");
-    P.csr = nvs_load(h, "csr");
-    P.crt = nvs_load(h, "crt");
+    kv_handle_t h = kvh();
+    P.key = kv_load("key");
+    P.csr = kv_load("csr");
+    P.crt = kv_load("crt");
     size_t n = sizeof P.csr_for - 1;
-    if (nvs_get_blob(h, "csrfor", P.csr_for, &n) == ESP_OK) P.csr_for[n] = 0;
+    if (kv_get_blob(h, "csrfor", P.csr_for, &n) == ESP_OK) P.csr_for[n] = 0;
     n = sizeof P.refused;
-    P.have_refused = nvs_get_blob(h, "refused", P.refused, &n) == ESP_OK && n == 32;
+    P.have_refused = kv_get_blob(h, "refused", P.refused, &n) == ESP_OK && n == 32;
     uint8_t pend = 0;
-    P.pending = nvs_get_u8(h, "pending", &pend) == ESP_OK && pend;
-    nvs_get_i64(h, "reqtime", &P.requested);
-    /* The CA bundle is kept in memory only (svx_pki_store_ca): the reflector
-     * sends it before every TLS start, and it is no trust anchor. A copy an
-     * older firmware stored goes, once -- some 3 kB, and room the
-     * certificate needs in a shared NVS that had filled up (2026-10-02:
-     * "cannot store crt: ESP_ERR_NVS_NOT_ENOUGH_SPACE"). */
-    size_t ca_n = 0;
-    const bool old_ca = nvs_get_blob(h, "ca", NULL, &ca_n) == ESP_OK;
-    nvs_close(h);
-    if (old_ca && nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
-        if (nvs_erase_key(h, "ca") == ESP_OK && nvs_commit(h) == ESP_OK)
-            ESP_LOGI(TAG, "the stored CA bundle erased (%u bytes): it is kept in memory now",
-                     (unsigned)ca_n);
-        nvs_close(h);
-    }
+    P.pending = kv_get_u8(h, "pending", &pend) == ESP_OK && pend;
+    kv_get_i64(h, "reqtime", &P.requested);
     ESP_LOGI(TAG, "key %s, request %s, certificate %s%s",
              P.key ? "yes" : "no", P.csr ? "yes" : "no", P.crt ? "yes" : "no",
              P.pending ? "; a request is pending" : "");
-}
-
-static void load_job(void *p)
-{
-    (void)p;
-    load();
 }
 
 /* The first caller -- the reflector task, or the web page before WiFi has
@@ -212,7 +179,7 @@ static void lock(void)
     xSemaphoreTake(s_mx, portMAX_DELAY);
     if (!s_loaded) {
         s_loaded = true;
-        svx_flash_safe(load_job, NULL);
+        load();
     }
 }
 
@@ -355,9 +322,17 @@ char *svx_pki_ca_pem(void)  { LOCK(); char *p = copy_of(P.ca);  UNLOCK(); return
 
 /* ------------------------------------------------------------- the key */
 
+static bool s_making;                        /* a key on its way to the medium; under LOCK */
+
 esp_err_t svx_pki_make_key(void)
 {
     if (svx_pki_have_key()) return ESP_OK;      /* never replaced */
+    /* A new key for a known callsign looks like a hijack to the reflector:
+     * none is made while the SD card that holds the station's key is away. */
+    if (!kv_identity_ok(kvh())) {
+        ESP_LOGE(TAG, "no key made: the SD card that holds the station's key does not answer");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     ESP_LOGI(TAG, "making an RSA-2048 key; this takes a while");
     const int64_t t0 = esp_log_timestamp();
@@ -370,15 +345,29 @@ esp_err_t svx_pki_make_key(void)
     if (r == 0) r = mbedtls_rsa_gen_key(mbedtls_pk_rsa(pk), rng_yield, NULL, 2048, 65537);
     if (r == 0) r = mbedtls_pk_write_key_pem(&pk, (unsigned char *)pem, PEM_MAX);
     if (r == 0) {
+        /* Into the settings; published only once written -- a request never
+         * goes out for a key a power cut could lose. The wait is outside
+         * LOCK: the page reads through it. */
+        bool mine = false;
         LOCK();
-        if (!P.key && save_str("key", pem) == ESP_OK) {
-            P.key = dup_psram(pem, strlen(pem));
-            P.match_known = false;
-            err = P.key ? ESP_OK : ESP_ERR_NO_MEM;
-        } else if (P.key) {
-            err = ESP_OK;                        /* someone was quicker */
-        }
+        if (P.key || s_making) err = ESP_OK;     /* someone was quicker */
+        else if (kv_set_blob(kvh(), "key", pem, strlen(pem)) == ESP_OK) mine = s_making = true;
         UNLOCK();
+        if (mine) {
+            const esp_err_t w = kv_commit_wait(kvh(), 10000);
+            LOCK();
+            s_making = false;
+            if (w == ESP_OK) {
+                P.key = dup_psram(pem, strlen(pem));
+                P.match_known = false;
+                err = P.key ? ESP_OK : ESP_ERR_NO_MEM;
+            } else {
+                ESP_LOGE(TAG, "the key was not written (%s): not used", esp_err_to_name(w));
+                kv_erase_key(kvh(), "key");
+                kv_commit(kvh());
+            }
+            UNLOCK();
+        }
         ESP_LOGI(TAG, "key made in %lu ms", (unsigned long)(esp_log_timestamp() - t0));
     } else {
         ESP_LOGE(TAG, "key generation failed: -0x%04x", (unsigned)-r);
@@ -449,7 +438,10 @@ esp_err_t svx_pki_make_csr(const char *call, const char *email)
     if (r == 0) r = mbedtls_x509write_csr_pem(&req, (unsigned char *)pem, PEM_MAX, rng, NULL);
     if (r == 0) {
         LOCK();
-        if (save_str("csr", pem) == ESP_OK && nvs_save("csrfor", want, strlen(want)) == ESP_OK) {
+        kv_edit_begin(kvh());
+        const bool kept = save_str("csr", pem) == ESP_OK && kv_save("csrfor", want, strlen(want)) == ESP_OK;
+        kv_edit_end(kvh());
+        if (kept) {
             free(P.csr);
             P.csr = dup_psram(pem, strlen(pem));
             snprintf(P.csr_for, sizeof P.csr_for, "%s", want);
@@ -542,14 +534,25 @@ pki_push_t svx_pki_store_cert(const uint8_t *body, size_t len, const char *call,
         goto out;
     }
 
-    if (save_str("crt", pem) != ESP_OK) { res = PKI_PUSH_FAILED; goto out; }
+    if (strlen(pem) > CRT_MAX) {
+        ESP_LOGE(TAG, "certificate of %u bytes not kept", (unsigned)strlen(pem));
+        res = PKI_PUSH_FAILED;
+        goto out;
+    }
+    /* The certificate, and the refusal and the request it ends, as one. */
+    kv_edit_begin(kvh());
+    const esp_err_t se = save_str("crt", pem);
+    if (se == ESP_OK) {
+        kv_save("refused", NULL, 0);
+        kv_save("pending", NULL, 0);
+    }
+    kv_edit_end(kvh());
+    if (se != ESP_OK) { res = PKI_PUSH_FAILED; goto out; }
     free(P.crt);
     P.crt = pem;
     pem = NULL;
     P.have_refused = false;
-    nvs_save("refused", NULL, 0);
     P.pending = false;
-    nvs_save("pending", NULL, 0);
     res = PKI_PUSH_STORED;
     ESP_LOGI(TAG, "certificate stored for %s", cn);
 
@@ -567,26 +570,11 @@ void svx_pki_refused(void)
     if (P.crt && crt_parse_first(&c, P.crt) >= 0) {
         crt_fp(&c, P.refused);
         P.have_refused = true;
-        nvs_save("refused", P.refused, sizeof P.refused);
+        kv_save("refused", P.refused, sizeof P.refused);
         ESP_LOGW(TAG, "the reflector refused the certificate; the next login asks for a new one");
     }
     mbedtls_x509_crt_free(&c);
     UNLOCK();
-}
-
-static void pending_job(void *p)
-{
-    (void)p;
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    if (P.pending) {
-        nvs_set_u8(h, "pending", 1);
-        nvs_set_i64(h, "reqtime", P.requested);
-    } else {
-        nvs_erase_key(h, "pending");
-    }
-    nvs_commit(h);
-    nvs_close(h);
 }
 
 void svx_pki_set_pending(bool on, time_t now)
@@ -595,7 +583,16 @@ void svx_pki_set_pending(bool on, time_t now)
     if (P.pending != on) {
         P.pending = on;
         if (on) P.requested = svx_time_known(now) ? (int64_t)now : 0;
-        svx_flash_safe(pending_job, NULL);
+        kv_handle_t h = kvh();
+        kv_edit_begin(h);
+        if (P.pending) {
+            kv_set_u8(h, "pending", 1);
+            kv_set_i64(h, "reqtime", P.requested);
+        } else {
+            kv_erase_key(h, "pending");
+        }
+        kv_edit_end(h);
+        kv_commit(h);
     }
     UNLOCK();
 }
@@ -608,17 +605,6 @@ bool svx_pki_pending(void)
     return p;
 }
 
-static void forget_job(void *p)
-{
-    (void)p;
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    static const char *k[] = { "key", "csr", "csrfor", "crt", "refused", "pending", "reqtime" };
-    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) nvs_erase_key(h, k[i]);
-    nvs_commit(h);
-    nvs_close(h);
-}
-
 void svx_pki_forget(void)
 {
     LOCK();
@@ -628,7 +614,13 @@ void svx_pki_forget(void)
     P.match_known = false;
     P.have_refused = false;
     P.pending = false;
-    svx_flash_safe(forget_job, NULL);
+    kv_handle_t h = kvh();
+    static const char *k[] = { "key", "csr", "csrfor", "crt", "refused", "pending", "reqtime" };
+    kv_edit_begin(h);
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) kv_erase_key(h, k[i]);
+    kv_edit_end(h);
     UNLOCK();
+    /* Off every copy -- the frozen NVS one first -- outside LOCK. */
+    kv_scrub_wait(h, 5000);
     ESP_LOGW(TAG, "key, request and certificate deleted");
 }

@@ -44,7 +44,7 @@
 #include "freertos/task.h"
 #include "mbedtls/sha256.h"
 #include "mbedtls/ssl.h"
-#include "nvs.h"
+#include "kvstore.h"
 #include <fcntl.h>
 
 static const char *TAG = "smartlink";
@@ -86,7 +86,7 @@ static void unlock(void) { xSemaphoreGive(s_mx); }
 
 /* The list as one string for NVS: serial \t name \t model \t status \t ip
  * \t tls \t udp, a line each. */
-static void list_to_nvs(nvs_handle_t h)
+static void list_to_nvs(kv_handle_t h)
 {
     char *b = heap_caps_calloc(1, SL_MAX * 200 + 1, MALLOC_CAP_SPIRAM);
     if (!b) return;
@@ -97,7 +97,7 @@ static void list_to_nvs(nvs_handle_t h)
                       r->name, r->model, r->status, r->ip, (unsigned)r->tls_port,
                       (unsigned)r->udp_port);
     }
-    nvs_set_str(h, "list", b);
+    kv_set_str(h, "list", b);
     free(b);
 }
 
@@ -130,7 +130,7 @@ static void list_from(const char *b)
     }
 }
 
-static void pins_to_nvs(nvs_handle_t h)
+static void pins_to_nvs(kv_handle_t h)
 {
     const size_t cap = SL_MAX * 2 * 92 + 1;
     char *b = heap_caps_calloc(1, cap, MALLOC_CAP_SPIRAM);   /* off the flex task's stack */
@@ -139,7 +139,7 @@ static void pins_to_nvs(nvs_handle_t h)
     for (size_t i = 0; i < sizeof s.pin / sizeof s.pin[0]; i++)
         if (s.pin[i].serial[0])
             o += snprintf(b + o, cap - o, "%s %s\n", s.pin[i].serial, s.pin[i].fp);
-    nvs_set_str(h, "pins", b);
+    kv_set_str(h, "pins", b);
     free(b);
 }
 
@@ -167,24 +167,24 @@ void sl_init(void)
     if (s_mx) return;
     s_mx = xSemaphoreCreateMutex();
     memset(&s, 0, sizeof s);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
     uint8_t on = 0;
-    nvs_get_u8(h, "on", &on);
+    kv_get_u8(h, "on", &on);
     s.on = on;
-    size_t len = sizeof s.email;    nvs_get_str(h, "email", s.email, &len);
-    len = sizeof s.callsign;        nvs_get_str(h, "call", s.callsign, &len);
-    len = sizeof s.rt;              nvs_get_str(h, "rt", s.rt, &len);
-    len = sizeof s.active;          nvs_get_str(h, "active", s.active, &len);
+    size_t len = sizeof s.email;    kv_get_str(h, "email", s.email, &len);
+    len = sizeof s.callsign;        kv_get_str(h, "call", s.callsign, &len);
+    len = sizeof s.rt;              kv_get_str(h, "rt", s.rt, &len);
+    len = sizeof s.active;          kv_get_str(h, "active", s.active, &len);
     size_t n = 0;
-    if (nvs_get_str(h, "list", NULL, &n) == ESP_OK && n > 1) {
+    if (kv_get_str(h, "list", NULL, &n) == ESP_OK && n > 1) {
         char *b = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
-        if (b && nvs_get_str(h, "list", b, &n) == ESP_OK) list_from(b);
+        if (b && kv_get_str(h, "list", b, &n) == ESP_OK) list_from(b);
         free(b);
     }
     char pins[SL_MAX * 2 * 92 + 1];
     len = sizeof pins;
-    if (nvs_get_str(h, "pins", pins, &len) == ESP_OK) {
+    if (kv_get_str(h, "pins", pins, &len) == ESP_OK) {
         size_t i = 0;
         for (char *p = strtok(pins, "\n"); p && i < sizeof s.pin / sizeof s.pin[0];
              p = strtok(NULL, "\n")) {
@@ -196,7 +196,7 @@ void sl_init(void)
             i++;
         }
     }
-    nvs_close(h);
+    kv_close(h);
     ESP_LOGI(TAG, "%s; %d radio%s known%s%s", s.rt[0] ? "logged in" : "not logged in",
              s.n, s.n == 1 ? "" : "s", s.on ? ", offered on the dial" : "",
              s.active[0] ? ", one in use" : "");
@@ -229,12 +229,14 @@ esp_err_t sl_set_active(const char *serial)
     lock();
     strlcpy(s.active, serial ? serial : "", sizeof s.active);
     unlock();
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
     if (e != ESP_OK) return e;
-    nvs_set_str(h, "active", serial ? serial : "");
-    e = nvs_commit(h);
-    nvs_close(h);
+    /* Before a restart, mostly: written at once, and the restart writes
+     * whatever still waits. */
+    e = kv_set_str(h, "active", serial ? serial : "");
+    if (e == ESP_OK) e = kv_commit_now(h);
+    kv_close(h);
     return e;
 }
 
@@ -708,14 +710,18 @@ static void keep(const job_t *j, const char *email)
         s.n = j->n;
     }
     unlock();
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_str(h, "rt", s.rt);
-    nvs_set_str(h, "email", s.email);
-    nvs_set_str(h, "call", s.callsign);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    /* A rotated refresh token: the old one is spent, so this one is written
+     * at once. */
+    kv_edit_begin(h);
+    kv_set_str(h, "rt", s.rt);
+    kv_set_str(h, "email", s.email);
+    kv_set_str(h, "call", s.callsign);
     list_to_nvs(h);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_edit_end(h);
+    kv_commit_now(h);
+    kv_close(h);
 }
 
 esp_err_t sl_open(uint16_t udp_port, sl_link_t *out, char *why, size_t cap)
@@ -743,11 +749,11 @@ esp_err_t sl_open(uint16_t udp_port, sl_link_t *out, char *why, size_t cap)
             lock();
             pin_set(j->serial, j->fp);
             unlock();
-            nvs_handle_t h;
-            if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            kv_handle_t h;
+            if (kv_open(NVS_NS, &h) == ESP_OK) {
                 pins_to_nvs(h);
-                nvs_commit(h);
-                nvs_close(h);
+                kv_commit_now(h);
+                kv_close(h);
             }
             ESP_LOGI(TAG, "pinned %s's certificate (sha256 %.16s...)", j->serial, j->fp);
         }
@@ -868,11 +874,11 @@ static esp_err_t web_login(httpd_req_t *r)
         lock();
         memset(s.pin, 0, sizeof s.pin);
         unlock();
-        nvs_handle_t h;
-        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        kv_handle_t h;
+        if (kv_open(NVS_NS, &h) == ESP_OK) {
             pins_to_nvs(h);
-            nvs_commit(h);
-            nvs_close(h);
+            kv_commit_wait(h, 3000);
+            kv_close(h);
         }
         ESP_LOGI(TAG, "logged in; %d radio%s", j->n, j->n == 1 ? "" : "s");
     }
@@ -889,12 +895,15 @@ static esp_err_t web_logout(httpd_req_t *r)
     s.active[0] = 0;
     memset(s.pin, 0, sizeof s.pin);
     unlock();
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_erase_all(h);
-        nvs_set_u8(h, "on", s.on);
-        nvs_commit(h);
-        nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
+        kv_edit_begin(h);
+        kv_erase_all(h);
+        kv_set_u8(h, "on", s.on);
+        kv_edit_end(h);
+        /* The token gone from every copy, NVS's too. */
+        kv_scrub_wait(h, 5000);
+        kv_close(h);
     }
     ESP_LOGI(TAG, "logged out");
     return send_state(r, ESP_OK, NULL);
@@ -907,11 +916,11 @@ static esp_err_t web_post(httpd_req_t *r)
     if (!body_of(r, body, sizeof body)) return send_state(r, ESP_ERR_INVALID_ARG, "body size");
     if (field(body, "enabled", v, sizeof v)) {
         s.on = v[0] == '1';
-        nvs_handle_t h;
-        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-            nvs_set_u8(h, "on", s.on);
-            nvs_commit(h);
-            nvs_close(h);
+        kv_handle_t h;
+        if (kv_open(NVS_NS, &h) == ESP_OK) {
+            kv_set_u8(h, "on", s.on);
+            kv_commit_wait(h, 3000);
+            kv_close(h);
         }
     }
     if (field(body, "refresh", v, sizeof v) && v[0] == '1') {

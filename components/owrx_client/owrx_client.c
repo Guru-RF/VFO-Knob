@@ -47,7 +47,7 @@
 #include "freertos/task.h"
 #include "kiwi_proto.h"
 #include "net_prov.h"
-#include "nvs.h"
+#include "kvstore.h"
 #include "owrx_proto.h"
 #include "owrx_sess.h"
 #include "vfo_tune.h"
@@ -337,12 +337,14 @@ static void save_cb(void *arg)
     const int use = S.use_dirty ? place_of(S.want) : -1;
     S.dirty = S.use_dirty = false;
     taskEXIT_CRITICAL(&S_LOCK);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_blob(h, "owt", kept, sizeof kept);
-    nvs_set_u8(h, "owq", sq);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_edit_begin(h);
+    kv_set_blob(h, "owt", kept, sizeof kept);
+    kv_set_u8(h, "owq", sq);
+    kv_edit_end(h);
+    kv_commit(h);
+    kv_close(h);
     /* The one in use, as the list keeps it: where the knob starts next. */
     if (use >= 0 && use != net_prov_radio_active()) {
         const esp_err_t e = net_prov_radio_activate(use);
@@ -379,11 +381,11 @@ static void load(void)
 {
     uint8_t sq = 0;
     size_t n = sizeof s_kept;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        if (nvs_get_blob(h, "owt", s_kept, &n) != ESP_OK || n != sizeof s_kept) memset(s_kept, 0, sizeof s_kept);
-        nvs_get_u8(h, "owq", &sq);
-        nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
+        if (kv_get_blob(h, "owt", s_kept, &n) != ESP_OK || n != sizeof s_kept) memset(s_kept, 0, sizeof s_kept);
+        kv_get_u8(h, "owq", &sq);
+        kv_close(h);
     }
     keys_fresh();
     const int a = net_prov_radio_active();

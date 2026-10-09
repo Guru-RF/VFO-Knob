@@ -4,12 +4,12 @@
 # laid out as in its source tree; the rest is the knob's side of them.
 idf_component_register(
     SRCS "svx_client.c" "svx_net.c" "svx_udp.c" "svx_pki.c" "svx_portal.c" "svx_feed.c"
-         "svx_web.c" "svx_flash.c"
+         "svx_web.c"
          "svx/common/proto.c" "svx/common/util.c" "svx/audio/codec.c"
          "svx/tg/tgmanager.c" "svx/reflector/nodeinfo.c"
     PRIV_INCLUDE_DIRS "svx" "svx/common" "svx/audio"
     REQUIRES radio
-    PRIV_REQUIRES vfo_core audio esp_timer esp_netif lwip mbedtls nvs_flash
+    PRIV_REQUIRES vfo_core audio esp_timer esp_netif lwip mbedtls nvs_flash kvstore
                   esp_http_client esp_http_server json esphome__micro-opus
                   esp_websocket_client
 )

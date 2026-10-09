@@ -46,7 +46,7 @@
 #include "freertos/task.h"
 #include "kiwi_proto.h"
 #include "net_prov.h"
-#include "nvs.h"
+#include "kvstore.h"
 #include "owrx_proto.h"
 #include "vfo_tune.h"
 #include "wsdr_proto.h"
@@ -452,12 +452,14 @@ static void save_cb(void *arg)
     const int use = S.use_dirty ? place_of(S.want) : -1;
     S.dirty = S.use_dirty = false;
     taskEXIT_CRITICAL(&S_LOCK);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_blob(h, "wst", kept, sizeof kept);
-    nvs_set_u8(h, "wsq", sq);
-    nvs_commit(h);
-    nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) != ESP_OK) return;
+    kv_edit_begin(h);
+    kv_set_blob(h, "wst", kept, sizeof kept);
+    kv_set_u8(h, "wsq", sq);
+    kv_edit_end(h);
+    kv_commit(h);
+    kv_close(h);
     if (use >= 0 && use != net_prov_radio_active()) {
         const esp_err_t e = net_prov_radio_activate(use);
         if (e != ESP_OK) ESP_LOGE(TAG, "receiver %d in use, not saved: %s", use, esp_err_to_name(e));
@@ -494,11 +496,11 @@ static void save_now(void)
 static void ident_load(void)
 {
     size_t n = sizeof s_ident;
-    nvs_handle_t h;
+    kv_handle_t h;
     s_ident[0] = 0;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        if (nvs_get_str(h, "sdrid", s_ident, &n) != ESP_OK) s_ident[0] = 0;
-        nvs_close(h);
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
+        if (kv_get_str(h, "sdrid", s_ident, &n) != ESP_OK) s_ident[0] = 0;
+        kv_close(h);
     }
 }
 
@@ -506,11 +508,11 @@ static void load(void)
 {
     uint8_t sq = 0;
     size_t n = sizeof s_kept;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        if (nvs_get_blob(h, "wst", s_kept, &n) != ESP_OK || n != sizeof s_kept) memset(s_kept, 0, sizeof s_kept);
-        nvs_get_u8(h, "wsq", &sq);
-        nvs_close(h);
+    kv_handle_t h;
+    if (kv_open(NVS_NS, &h) == ESP_OK) {
+        if (kv_get_blob(h, "wst", s_kept, &n) != ESP_OK || n != sizeof s_kept) memset(s_kept, 0, sizeof s_kept);
+        kv_get_u8(h, "wsq", &sq);
+        kv_close(h);
     }
     ident_load();
     keys_fresh();
@@ -1274,13 +1276,14 @@ esp_err_t wsdr_ident_save(const char *who)
     char was[sizeof s_ident];
     wsdr_ident(was, sizeof was);
     if (!strcmp(was, w)) return ESP_OK;
-    nvs_handle_t h;
-    esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    kv_handle_t h;
+    esp_err_t e = kv_open(NVS_NS, &h);
     if (e == ESP_OK) {
-        e = w[0] ? nvs_set_str(h, "sdrid", w) : nvs_erase_key(h, "sdrid");
+        e = w[0] ? kv_set_str(h, "sdrid", w) : kv_erase_key(h, "sdrid");
         if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
-        if (e == ESP_OK) e = nvs_commit(h);
-        nvs_close(h);
+        if (e == ESP_OK) e = kv_commit_wait(h, 3000);
+        if (e == ESP_ERR_TIMEOUT) e = ESP_OK;               /* on its way */
+        kv_close(h);
     }
     if (e != ESP_OK) return e;
     taskENTER_CRITICAL(&S_LOCK);
