@@ -39,6 +39,8 @@ typedef enum {
     WL_CERT,            /* its certificate does not verify: not spoken to */
     WL_HTTP,            /* answered with another status: wl_said_t's */
     WL_MOVED,           /* a redirect not followed: wl_said_t's `to` */
+    WL_CUT,             /* the GET's 200, its body stopped short: less than its
+                           Content-Length, or 5 s of silence before its close */
 } wl_end_t;
 
 /* A receiver: its address, over TLS or not, and the key its TLS sessions are
@@ -116,9 +118,10 @@ void wl_counts(const wl_t *w, uint64_t *in, uint64_t *out);
 
 /* An HTTP GET of `path` on a connection of its own -- a redirect to https://
  * on its own host followed as for wl_open -- its body to `body` a piece at a
- * time, `max` bytes at most: WL_OK on a 200, WL_HTTP on any other status,
- * or why there was none. Read to the receiver's close or its Content-Length;
- * 5 s of silence ends it. */
+ * time, `max` bytes at most: WL_OK on a 200 read whole, WL_CUT on one that
+ * stopped short (a WebSDR's server can pause a file for seconds), WL_HTTP on
+ * any other status, or why there was none. Read to the receiver's close or
+ * its Content-Length; 5 s of silence ends it. */
 wl_end_t wl_get(const wl_addr_t *a, const char *path, void (*body)(void *ctx, const uint8_t *p, size_t n),
                 void *bctx, size_t max, const wl_ask_t *k, wl_said_t *said);
 

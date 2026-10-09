@@ -254,6 +254,34 @@ def case_refusals(d):
     check(o.get("end") == "CAN'T REACH", f"nothing listening: {o.get('end')}")
 
 
+def case_cut(d):
+    print("a file stopped short, as a site's server was seen pausing one: asked again")
+    m = Mock("--site", "maasbree", "--strict-path", "--cut", "websdr-sound.js:2000")
+    try:
+        o = host(f"http://127.0.0.1:{m.port}/", 4, "dial=7074000")
+        st = m.stats()
+        check("v11=1" in o.get("path", "") and st["cut"] == 1 and st["sound_js"] == 2,
+              f"stopped short, asked again, ?v=11 found: {o.get('path')} cut={st['cut']} reads={st['sound_js']}")
+        check(o.get("end") == "left", f"...its own path opened: {o.get('end')}")
+        check(any("stopped short" in l for l in o["lines"]), "...and the log says so")
+    finally:
+        m.stop()
+    m = Mock("--site", "maasbree", "--cut", "websdr-sound.js:2000:2")
+    try:
+        o = host(f"http://127.0.0.1:{m.port}/", 3, "dial=7074000")
+        check("v11=1" in o.get("path", "") and m.stats()["cut"] == 2,
+              f"short twice, no ?v=11 seen: taken for a distributed server's ({o.get('path')})")
+    finally:
+        m.stop()
+    m = Mock("--site", "twente", "--cut", "tmp/bandinfo.js:3000:2")
+    try:
+        o = host(f"http://127.0.0.1:{m.port}/", 3, "dial=14074000")
+        check("bands=1 " in o.get("info", "") and o.get("end") == "left",
+              f"bandinfo.js short twice inside its band: the band kept, and it plays ({o.get('info', '')[:40]})")
+    finally:
+        m.stop()
+
+
 def case_stall(d):
     print("a stall: 3 s of nothing, then the backlog left out in one jump")
     m = Mock("--site", "twente", "--stall", "5:3")
@@ -291,7 +319,7 @@ def case_tls(d):
 
 
 CASES = {"stream": case_stream, "bands": case_bands, "turn": case_turn, "am": case_am, "mute": case_mute,
-         "idle": case_idle, "refusals": case_refusals, "stall": case_stall, "tls": case_tls}
+         "idle": case_idle, "refusals": case_refusals, "cut": case_cut, "stall": case_stall, "tls": case_tls}
 
 
 def main():

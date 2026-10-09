@@ -356,6 +356,7 @@ static wl_end_t ask_get(conn_t *c, const char *host, uint16_t port, bool tls, co
     if (*code != 200) return WL_HTTP;
     size_t got = 0, want = clen >= 0 && (unsigned long long)clen < g->max ? (size_t)clen : g->max;
     int64_t until = esp_timer_get_time() + CONNECT_US;
+    bool cut = false;
     while (got < want) {
         const size_t room = want - got < RX_BYTES ? want - got : RX_BYTES;
         const int r = conn_recv(c, g->buf, room, MSG_DONTWAIT);
@@ -365,13 +366,21 @@ static wl_end_t ask_get(conn_t *c, const char *host, uint16_t port, bool tls, co
             until = esp_timer_get_time() + CONNECT_US;
             continue;
         }
-        if (r == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) break;    /* its end: the body's */
+        if (r == 0) break;                                  /* its end: the body's */
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            cut = true;
+            break;
+        }
         if (!asked(k)) return WL_WANT;
         const int64_t left = until - esp_timer_get_time();
-        if (left <= 0) break;
-        if (conn_wait(c, left < SLICE_MS * 1000LL ? left : SLICE_MS * 1000LL) < 0) break;
+        if (left <= 0 || conn_wait(c, left < SLICE_MS * 1000LL ? left : SLICE_MS * 1000LL) < 0) {
+            cut = true;                                     /* silent, before its close */
+            break;
+        }
     }
-    return WL_OK;
+    /* Closed before all its Content-Length came: short too. */
+    if (clen >= 0 && got < want) cut = true;
+    return cut ? WL_CUT : WL_OK;
 }
 
 /* Connected to the first of its addresses that takes it, TLS spoken, the

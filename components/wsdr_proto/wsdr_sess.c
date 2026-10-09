@@ -373,25 +373,64 @@ static void info_body(void *ctx, const uint8_t *p, size_t n) { wsdr_info_feed(ct
 static void v11_body(void *ctx, const uint8_t *p, size_t n) { wsdr_v11_feed(ctx, p, n); }
 static void title_body(void *ctx, const uint8_t *p, size_t n) { wsdr_title_feed(ctx, p, n); }
 
+/* A body on its way to its reader, counted for the log. */
+typedef struct {
+    void  (*body)(void *, const uint8_t *, size_t);
+    void   *ctx;
+    size_t  n;
+} counted_t;
+static void counted(void *ctx, const uint8_t *p, size_t n)
+{
+    counted_t *c = ctx;
+    c->n += n;
+    c->body(c->ctx, p, n);
+}
+
 static wsdr_end_t get(const wsdr_where_t *w, const char *leaf, void (*body)(void *, const uint8_t *, size_t),
-                      void *bctx, size_t max, uint16_t *tls_port, bool (*go_on)(void *), void *ctx, const char *tag)
+                      void (*rewind)(void *), void *bctx, size_t max, uint16_t *tls_port, bool (*go_on)(void *),
+                      void *ctx, const char *tag, bool *cut)
 {
     char path[96];
     if (path_of(w, leaf, path, sizeof path) < 0) return WSDR_END_PROTOCOL;
     const wl_addr_t ad = { .host = w->host, .port = w->port, .tls = w->tls, .key = w->key };
     const wl_ask_t ask = { .go_on = go_on, .ctx = ctx, .tag = tag ? tag : "wsdr" };
     wl_said_t ws;
-    const wl_end_t e = wl_get(&ad, path, body, bctx, max, &ask, &ws);
-    if (tls_port) *tls_port = ws.tls_port;
-    return e == WL_OK ? WSDR_END_NONE : end_of(e, &ws);
+    wl_end_t e = WL_CUT;
+    /* A file stopped short -- a site's server can pause one for seconds --
+     * asked for once more, its reader started over. */
+    for (int k = 0; k < 2 && e == WL_CUT; k++) {
+        counted_t c = { .body = body, .ctx = bctx };
+        if (k && rewind) rewind(bctx);
+        const int64_t t0 = esp_timer_get_time();
+        e = wl_get(&ad, path, counted, &c, max, &ask, &ws);
+        if (tls_port) *tls_port = ws.tls_port;
+        /* What the first try on each site must show: its answer, how much, how fast. */
+        if (e != WL_WANT)
+            ESP_LOGI(tag ? tag : "wsdr", "%s:%u%s: HTTP %d, %u bytes in %lld ms%s", w->host, (unsigned)w->port,
+                     path, ws.status, (unsigned)c.n, (long long)((esp_timer_get_time() - t0) / 1000),
+                     e == WL_CUT ? ": stopped short" : "");
+    }
+    /* Stopped short twice: what came, the caller judging what it is worth. */
+    if (cut) *cut = e == WL_CUT;
+    return e == WL_OK || e == WL_CUT ? WSDR_END_NONE : end_of(e, &ws);
 }
+
+static void info_rewind(void *ctx)
+{
+    wsdr_info_rd_t *r = ctx;
+    wsdr_info_begin(r, r->out);
+}
+static void v11_rewind(void *ctx) { memset(ctx, 0, sizeof(wsdr_v11_t)); }
+static void title_rewind(void *ctx) { memset(ctx, 0, sizeof(wsdr_title_t)); }
 
 wsdr_end_t wsdr_info_read(const wsdr_where_t *w, wsdr_info_t *out, uint16_t *tls_port, bool (*go_on)(void *),
                           void *ctx, const char *tag)
 {
     wsdr_info_rd_t rd;                  /* a few hundred bytes: the caller's own, never shared */
     wsdr_info_begin(&rd, out);
-    const wsdr_end_t e = get(w, "tmp/bandinfo.js", info_body, &rd, INFO_MAX, tls_port, go_on, ctx, tag);
+    /* Cut short twice: a band that said where it is, kept (wsdr_info_end). */
+    const wsdr_end_t e = get(w, "tmp/bandinfo.js", info_body, info_rewind, &rd, INFO_MAX, tls_port, go_on, ctx,
+                             tag, NULL);
     if (e != WSDR_END_NONE) return e;
     return wsdr_info_end(&rd) ? WSDR_END_NONE : WSDR_END_NOT_WSDR;
 }
@@ -399,8 +438,11 @@ wsdr_end_t wsdr_info_read(const wsdr_where_t *w, wsdr_info_t *out, uint16_t *tls
 wsdr_end_t wsdr_path_read(const wsdr_where_t *w, bool *v11, bool (*go_on)(void *), void *ctx, const char *tag)
 {
     wsdr_v11_t v = { 0 };
-    const wsdr_end_t e = get(w, "websdr-sound.js", v11_body, &v, JS_MAX, NULL, go_on, ctx, tag);
-    if (v11) *v11 = v.v11;
+    bool cut = false;
+    const wsdr_end_t e = get(w, "websdr-sound.js", v11_body, v11_rewind, &v, JS_MAX, NULL, go_on, ctx, tag, &cut);
+    /* Cut short without its ?v=11: not known -- a distributed server's, as
+     * every site's but Twente's. */
+    if (v11) *v11 = v.v11 || cut;
     return e;
 }
 
@@ -409,7 +451,7 @@ wsdr_end_t wsdr_title_read(const wsdr_where_t *w, char *out, size_t cap, bool (*
 {
     wsdr_title_t t;
     memset(&t, 0, sizeof t);
-    const wsdr_end_t e = get(w, "", title_body, &t, PAGE_MAX, NULL, go_on, ctx, tag);
+    const wsdr_end_t e = get(w, "", title_body, title_rewind, &t, PAGE_MAX, NULL, go_on, ctx, tag, NULL);
     if (out && cap) snprintf(out, cap, "%s", e == WSDR_END_NONE ? wsdr_title_end(&t) : "");
     return e;
 }

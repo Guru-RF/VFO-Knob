@@ -315,14 +315,24 @@ static esp_err_t radios_write(void)
     nvs_handle_t h;
     esp_err_t e = nvs_open(NVS_NS, NVS_READWRITE, &h);
     if (e == ESP_OK) {
-        nvs_set_str(h, KEY_RLIST, blob);
-        nvs_set_i8(h, KEY_RSEL, (int8_t)s_radio_sel);
-        nvs_set_str(h, KEY_HOST, s_cfg.radio_host);
-        nvs_set_u16(h, KEY_PORT, s_cfg.radio_port);
-        nvs_set_str(h, KEY_USER, s_cfg.radio_user);
-        nvs_set_str(h, KEY_PASS, s_cfg.radio_pass);
-        e = nvs_commit(h);
+        /* Every write's word: one refused (NVS full) is the list not saved,
+         * said as such -- never an OK the next boot finds untrue. */
+        e = nvs_set_str(h, KEY_RLIST, blob);
+        if (e == ESP_OK) e = nvs_set_i8(h, KEY_RSEL, (int8_t)s_radio_sel);
+        if (e == ESP_OK) e = nvs_set_str(h, KEY_HOST, s_cfg.radio_host);
+        if (e == ESP_OK) e = nvs_set_u16(h, KEY_PORT, s_cfg.radio_port);
+        if (e == ESP_OK) e = nvs_set_str(h, KEY_USER, s_cfg.radio_user);
+        if (e == ESP_OK) e = nvs_set_str(h, KEY_PASS, s_cfg.radio_pass);
+        if (e == ESP_OK) e = nvs_commit(h);
         nvs_close(h);
+    }
+    if (e != ESP_OK) {
+        nvs_stats_t st;
+        if (nvs_get_stats(NULL, &st) == ESP_OK)
+            ESP_LOGE(TAG, "the radios not saved: %s (NVS: %u of %u entries used, %u free)", esp_err_to_name(e),
+                     (unsigned)st.used_entries, (unsigned)st.total_entries, (unsigned)st.free_entries);
+        else
+            ESP_LOGE(TAG, "the radios not saved: %s", esp_err_to_name(e));
     }
     free(blob);
     return e;
@@ -360,8 +370,9 @@ esp_err_t net_prov_radios_save(const net_radio_t *list, int n, int active)
     s_radios_gen++;
     radio_to_cfg(&s_radios[active]);
     const esp_err_t e = radios_write();
-    ESP_LOGI(TAG, "%d radio%s saved; in use: %s", n, n == 1 ? "" : "s",
-             list[active].name[0] ? list[active].name : list[active].host);
+    if (e == ESP_OK)
+        ESP_LOGI(TAG, "%d radio%s saved; in use: %s", n, n == 1 ? "" : "s",
+                 list[active].name[0] ? list[active].name : list[active].host);
     return e;
 }
 

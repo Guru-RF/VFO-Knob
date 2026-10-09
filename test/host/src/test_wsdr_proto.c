@@ -305,6 +305,17 @@ static void test_bands(void)
     CHECK_EQ(wsdr_band_of(&in, INT64_C(1000000000000), 0), -1);
     CHECK_EQ(in.idle_ms, 0);
 
+    /* Cut short in its scale images' names, as a stalled download is: the
+     * band it said already kept. */
+    {
+        static char cut[2048];
+        snprintf(cut, sizeof cut, "%.*s", (int)(strstr(WIDE, "[\"b\"") - WIDE), WIDE);
+        read_info(cut, 3, &in);
+        CHECK_EQ(in.n_bands, 1);
+        CHECK_EQ(in.band[0].center_hz, 14579800);
+        CHECK_STR(in.band[0].name, "hf");
+    }
+
     /* Not a bandinfo.js at all. */
     wsdr_info_rd_t r;
     wsdr_info_begin(&r, &in);
@@ -464,6 +475,9 @@ static void test_ends(void)
             break;
         }
     }
+    wsdr_title_t q = { 0 };
+    wsdr_title_feed(&q, (const uint8_t *)"<title>\"WebSDR 2.1 Low at PH4RTM\"</title>", 41);
+    CHECK_STR(wsdr_title_end(&q), "WebSDR 2.1 Low at PH4RTM");
     wsdr_title_t u = { 0 };
     wsdr_title_feed(&u, (const uint8_t *)"<html><body>no title</body>", 27);
     CHECK_STR(wsdr_title_end(&u), "");

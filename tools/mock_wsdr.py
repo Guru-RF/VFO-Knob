@@ -49,6 +49,9 @@ Flags:
   --bandinfo-kb K       bandinfo.js padded to about K kB with scale names
   --idle-page MS        the idle timeout bandinfo.js gives its page, in place
                         of the site's (a test's few seconds)
+  --cut PATH:N[:K]      the first K (1) GETs of PATH ("websdr-sound.js") stop
+                        after N bytes of its Content-Length, 7 s silent, then
+                        closed -- as a site's server was seen pausing a file
 """
 import argparse
 import itertools
@@ -106,6 +109,10 @@ class Receiver:
         self.site = SITES[a.site]
         self.stations = list(a.station) or [7075500.0, 14075500.0, 3630500.0, 1000000.0]
         self.max_users = a.max_users
+        self.cuts = {}
+        for c in a.cut:
+            p, n, k = (c.split(":") + ["1"])[:3]
+            self.cuts[p] = [int(n), int(k)]
         self.others = a.others
         self.stall_until = 0.0
         self.open = []
@@ -117,7 +124,7 @@ class Receiver:
                           bandinfo=0, sound_js=0, index=0, commands=0, tunings=0, too_fast=0, unknown_keys=[],
                           foreign_keys=[], bad_values=[], outside=0, names=[], agents=[], origins=[], paths=[],
                           max_open=0, two_at_once=0, idle_closed=0, closed_by_mock=0, blocks=0, silent_blocks=0,
-                          rates=[], tls=0, tls_failed=0, pings=0)
+                          rates=[], tls=0, tls_failed=0, pings=0, cut=0)
         self.sent = []
 
     def bandinfo(self):
@@ -148,8 +155,8 @@ class Receiver:
 
     def sound_js(self):
         # Not the page's script: only the line a client reads the path from.
-        return ("/* mock_wsdr.py: a stand-in for websdr-sound.js */\n"
-                f'function soundinit(){{ ws=new WebSocket("ws://"+window.location.host+"{self.site["path"]}"); '
+        return ("/* mock_wsdr.py: a stand-in for websdr-sound.js */\n" + "// " + "x" * 76 + "\n") * 60 + \
+               (f'function soundinit(){{ ws=new WebSocket("ws://"+window.location.host+"{self.site["path"]}"); '
                 'ws.binaryType="arraybuffer"; }\n')
 
 
@@ -331,12 +338,23 @@ class Session:
 
 # --------------------------------------------------------------- the wire
 
-def reply(sock, code, body, ctype="text/plain"):
+def reply(sock, code, body, ctype="text/plain", path=""):
     if isinstance(body, str):
         body = body.encode()
     reason = {200: "OK", 403: "Forbidden", 404: "Not Found"}.get(code, "")
-    sock.sendall(f"HTTP/1.1 {code} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
-                 "Connection: close\r\n\r\n".encode() + body)
+    head = (f"HTTP/1.1 {code} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
+            "Connection: close\r\n\r\n").encode()
+    with R.lock:
+        cut = path and path in R.cuts and R.cuts[path][1] > 0
+        if cut:
+            n = R.cuts[path][0]
+            R.cuts[path][1] -= 1
+            R.stats["cut"] += 1
+    if cut:
+        sock.sendall(head + body[:n])
+        time.sleep(7)
+        return
+    sock.sendall(head + body)
 
 
 def read_head(sock):
@@ -407,12 +425,12 @@ def on_client(sock, addr, control_ok=True, tls=False):
         if url.path == "/tmp/bandinfo.js":
             with R.lock:
                 R.stats["bandinfo"] += 1
-            reply(sock, 200, R.bandinfo(), "application/javascript")
+            reply(sock, 200, R.bandinfo(), "application/javascript", "tmp/bandinfo.js")
             return sock.close()
         if url.path == "/websdr-sound.js":
             with R.lock:
                 R.stats["sound_js"] += 1
-            reply(sock, 200, R.sound_js(), "application/javascript")
+            reply(sock, 200, R.sound_js(), "application/javascript", "websdr-sound.js")
             return sock.close()
         if url.path in ("/", "/index.html"):
             with R.lock:
@@ -610,6 +628,7 @@ def main():
     ap.add_argument("--tls", default="", metavar="CERT:KEY")
     ap.add_argument("--bandinfo-kb", type=int, default=-1, metavar="K")
     ap.add_argument("--idle-page", type=int, default=-1, metavar="MS")
+    ap.add_argument("--cut", action="append", default=[], metavar="PATH:N[:K]")
     ARGS = ap.parse_args()
     R = Receiver(ARGS)
     if ARGS.tls:

@@ -235,6 +235,10 @@ bool wsdr_info_end(wsdr_info_rd_t *r)
 {
     if (r->st == T_WORD) word_end(r, false);
     r->st = T_IDLE;
+    /* Cut short inside a band -- Twente's closes only after 60 kB of scale
+     * images' names -- what it said of itself is kept. */
+    if (r->in_rec && r->depth >= REC_DEPTH) rec_end(r);
+    r->in_rec = 0;
     return r->out->n_bands > 0;
 }
 
@@ -467,6 +471,11 @@ void wsdr_title_feed(wsdr_title_t *t, const uint8_t *p, size_t n)
 const char *wsdr_title_end(wsdr_title_t *t)
 {
     while (t->n && t->title[t->n - 1] == ' ') t->n--;
+    /* A title in quotes of its own ("\"WebSDR 2.1 at ...\""): without them. */
+    if (t->n >= 2 && t->title[0] == '"' && t->title[t->n - 1] == '"') {
+        memmove(t->title, t->title + 1, t->n - 2);
+        t->n = (uint8_t)(t->n - 2);
+    }
     /* A character cut short at the end: left out whole. */
     size_t k = t->n;
     while (k && ((uint8_t)t->title[k - 1] & 0xC0) == 0x80) k--;
