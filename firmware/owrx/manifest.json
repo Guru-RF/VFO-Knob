@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-owrx",
-  "version": "1.20.0",
-  "file": "vfo-knob-owrx-1.20.0.bin",
-  "sha256": "66cb6b44398c9d97155dc30fa2e9bceeafae0184072418b0c383d15ecfdf0ac1",
+  "version": "1.20.1",
+  "file": "vfo-knob-owrx-1.20.1.bin",
+  "sha256": "4195c3a6f4a6315b74276c372c91b83bfe54f76c336f129c9f40708f48be7376",
   "size": 2166784
 }
