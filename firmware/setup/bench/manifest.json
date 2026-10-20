@@ -1,6 +1,6 @@
 {
   "project": "vfo-knob-setup",
-  "release": "1.20.1",
+  "release": "1.20.2",
   "chip": "esp32s3",
   "flash": {
     "mode": "dio",
