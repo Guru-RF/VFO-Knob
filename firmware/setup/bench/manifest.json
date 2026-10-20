@@ -1,0 +1,29 @@
+{
+  "project": "vfo-knob-setup",
+  "release": "1.20.1",
+  "chip": "esp32s3",
+  "flash": {
+    "mode": "dio",
+    "freq": "80m",
+    "size": "keep",
+    "erase_all": true
+  },
+  "app_offset": "0x20000",
+  "files": {
+    "bootloader.bin": {
+      "offset": "0x0",
+      "sha256": "f8cf83657320526508bc96622f1db4603a66b93360ab3319c555536cb2654d45",
+      "size": 22416
+    },
+    "partition-table.bin": {
+      "offset": "0x8000",
+      "sha256": "ae6b95be9b3159fd4778eaac70d36fd1ef01e5fe4bc469aa90d5a5ae17db3d8b",
+      "size": 3072
+    },
+    "sdwipe.bin": {
+      "offset": "0x9000",
+      "sha256": "9810bcb3771606f04a26f233e7edfb7b5efd403c55f9902efacce0e18034fa25",
+      "size": 24576
+    }
+  }
+}
