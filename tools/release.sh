@@ -151,6 +151,38 @@ PY
 # -- its version and the release mark set here, never by git describe -- and
 # checked as the knob, the chip and the bench will check it. Staged, with its
 # bench files and what the bench must show; nothing is published.
+# The ESP32-S3's bench files, published with the setup firmware: what a
+# cable writes on a new knob besides it (tools/install-setup.sh, and the
+# website's provisioning in a browser) -- its bootloader and partition table,
+# as built beside it, and a settings partition holding only the one-time mark
+# (NVS "vfo"/"sdwipe" = 1) that has the setup firmware empty the SD card as
+# it first starts. The setup firmware itself goes at app_offset; the whole
+# flash is erased first.
+s3_bench() {
+    local d=$1 nvsgen
+    mkdir -p "$d"
+    cp "$BUILD/bootloader/bootloader.bin" "$BUILD/partition_table/partition-table.bin" "$d/"
+    nvsgen="${IDF_PATH:-$HOME/esp/esp-idf}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
+    printf 'key,type,encoding,value\nvfo,namespace,,\nsdwipe,data,u8,1\n' >"$d/sdwipe.csv"
+    python3 "$nvsgen" generate "$d/sdwipe.csv" "$d/sdwipe.bin" 0x6000 >/dev/null
+    rm -f "$d/sdwipe.csv"
+    python3 - "$d" "$VER" <<'PY'
+import hashlib, json, os, sys
+d, ver = sys.argv[1], sys.argv[2]
+at = {"bootloader.bin": "0x0", "partition-table.bin": "0x8000", "sdwipe.bin": "0x9000"}
+files = {}
+for name, off in at.items():
+    data = open(os.path.join(d, name), "rb").read()
+    files[name] = {"offset": off, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+with open(os.path.join(d, "manifest.json"), "w") as f:
+    json.dump({"project": "vfo-knob-setup", "release": ver, "chip": "esp32s3",
+               "flash": {"mode": "dio", "freq": "80m", "size": "keep", "erase_all": True},
+               "app_offset": "0x20000", "files": files}, f, indent=2)
+    f.write("\n")
+PY
+    echo "==> the S3's bench files staged in $d"
+}
+
 companion_stage() {
     rm -rf "$BUILD"
     mkdir -p "$BUILD"
@@ -346,6 +378,7 @@ JSON
 
     echo "==> staged $DIR/$OUT ($((SIZE/1024)) KB)"
     cat "$DIR/manifest.json"
+    [ "$RADIO" = setup ] && s3_bench "$DIR/bench"
 
     [ "$PUSH" = "--push" ] || { echo "==> not pushed (pass --push)"; exit 0; }
 fi
@@ -381,6 +414,13 @@ if [ "$RADIO" = companion ]; then
            "$DIR/bench/manifest.json" "$TMP/wt/$DIR/bench/"
         echo "==> the second chip's first release: its bench files go with it, never to change"
     fi
+fi
+
+# The S3's bench files with every setup release: they follow its build.
+if [ "$RADIO" = setup ]; then
+    mkdir -p "$TMP/wt/$DIR/bench"
+    cp "$DIR/bench/bootloader.bin" "$DIR/bench/partition-table.bin" "$DIR/bench/sdwipe.bin" \
+       "$DIR/bench/manifest.json" "$TMP/wt/$DIR/bench/"
 fi
 
 # Every firmware published, with its name and version: what the setup

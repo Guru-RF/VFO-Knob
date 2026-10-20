@@ -896,10 +896,18 @@ be turned over and writes the second chip, its whole flash erased first: a
 bootloader that can go back, the partition table and the latest release of
 its firmware, from the bench files published with that firmware's first
 release, then reads the chip's console as it starts. `--second-chip` does
-only that, on a knob in use, keeping its headset's pairing. With the plug the
-wrong way round at the start it finds the second chip's CH340 instead and
-says to turn the plug over; a knob running the USB-networked AetherSDR
-firmware is asked to restart and caught in those 6 seconds.
+only that, on a knob in use, keeping its headset's pairing. It waits for the
+knob and says what to do: plug it in, or, finding the second chip's CH340
+instead of the S3, turn the plug over; it starts as soon as the plug sits
+right. A knob running the USB-networked AetherSDR firmware is asked to
+restart and caught in those 6 seconds.
+
+For a row of new knobs, `tools/install-setup.sh --line`: the firmwares are
+fetched once, then each knob is provisioned as it is plugged in, and the
+script asks for the next, until Ctrl-C. Each knob gets a line in
+`~/.local/share/vfo-knob/provisioned.log`: its MAC, the setup firmware, how
+many firmwares its card took, the second chip's version, ok or FAILED, and
+how long it took.
 
 ## Safety
 

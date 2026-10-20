@@ -18,6 +18,9 @@
 #                                         build (companion/build_a, say)
 #   tools/install-setup.sh -p PORT        a serial port of your choosing (the
 #                                         second chip's, with --second-chip)
+#   tools/install-setup.sh --line         one new knob after another: Enter
+#                                         for each, q to stop; a line each in
+#                                         ~/.local/share/vfo-knob/provisioned.log
 #
 # Linux, with ESP-IDF 5.5 (for esptool; found through $IDF_PATH or in
 # ~/esp/esp-idf) and the repository (the bootloader and partition table are
@@ -28,8 +31,9 @@
 # is: the ESP32-S3 -- Espressif's USB serial port, 303a:1001 -- or the ESP32
 # beside it, the second chip, behind a CH340 (1a86:7523). This writes the S3
 # first, then asks for the plug to be turned over and writes the second chip.
-# Started the wrong way round, it says so: turn the plug over and run it
-# again, or write the second chip alone with --second-chip. A knob running
+# It waits for the knob, and says what to do: plug it in, or -- the second
+# chip's CH340 on USB instead of the S3 -- turn the plug over; it starts as
+# soon as the S3 is there. (The second chip alone: --second-chip.) A knob running
 # the AetherSDR firmware has USB networking instead of a serial port
 # (303a:4000): it is asked to restart, and caught in the six seconds its ROM
 # serial port is open at boot.
@@ -67,8 +71,9 @@ CHIP=1                  # the second chip as well, after the S3
 ONLY_CHIP=0             # --second-chip: the second chip alone, its settings kept
 CHIP_BUILD=""           # its parts from this build directory, not the release
 PORT=""
+LINE=0                  # --line: one knob after another
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
     case "$1" in
         --local)          LOCAL=1 ;;
@@ -77,12 +82,14 @@ while [ $# -gt 0 ]; do
         --second-chip)    ONLY_CHIP=1 ;;
         --chip-build)     CHIP_BUILD="${2:?a build directory after $1}"; shift ;;
         -p|--port)        PORT="${2:?a port after $1}"; shift ;;
+        --line)           LINE=1 ;;
         -h|--help)        usage 0 ;;
         *)                echo "What is $1?" >&2; usage 2 ;;
     esac
     shift
 done
 [ "$ONLY_CHIP" = 1 ] && [ "$CHIP" = 0 ] && { echo "--second-chip or --no-second-chip: not both" >&2; exit 2; }
+[ "$LINE" = 1 ] && { [ "$ONLY_CHIP" = 1 ] || [ -n "$PORT" ]; } && { echo "--line takes knob after knob as they come: not with --second-chip or -p" >&2; exit 2; }
 if [ "$LOCAL" = 1 ] && [ -z "$CHIP_BUILD" ]; then
     CHIP_BUILD=companion/build
 fi
@@ -103,6 +110,17 @@ usb_has() {
         [ "$(cat "$d/idVendor")" = "$1" ] && [ "$(cat "$d/idProduct")" = "$2" ] && return 0
     done
     return 1
+}
+
+# The ESP32-S3s' serial ports on USB, by their serial numbers, one a line.
+# A glob, not ls: ls fails with none there, and pipefail and set -e then end
+# the script without a word.
+s3_ports() {
+    local p
+    for p in /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*; do
+        [ -e "$p" ] && echo "$p"
+    done
+    return 0
 }
 
 # The ESP32-S3's serial port, if exactly one is on USB.
@@ -307,49 +325,71 @@ it alone until a release is handed to it (POST /api/bt/update?force=1)."
 fi
 CHIP_PORT=""
 
-# --- the ESP32-S3 ----------------------------------------------------------------
+# --- the knob on the cable, the right way round ------------------------------------
 
-if [ -z "$PORT" ]; then
-    n=$(ls /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_* 2>/dev/null | wc -l)
-    [ "$n" -gt 1 ] && fail "$n knobs on USB: choose one with -p, from
-$(ls /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*)"
-    if ! PORT=$(find_s3); then
-        if usb_has 303a 4000; then
-            # Our AetherSDR firmware: USB networking, no serial port. Ask it to
-            # restart; its ROM serial port is open for six seconds at boot.
-            say "The knob runs a firmware with USB networking: asking it to restart ..."
-            echo reboot | timeout 3 nc 10.55.42.1 3333 >/dev/null 2>&1 || true
-            for _ in $(seq 1 40); do
-                PORT=$(find_s3) && break
-                sleep 0.25
-            done
-            [ -n "$PORT" ] || fail "It did not come back as a serial port. Unplug the knob, plug it
-in again, and run this within six seconds -- or install the setup
-firmware from its configuration page instead (Firmware: Radio, Setup)."
-        elif usb_has 1a86 7523; then
-            fail "The USB-C plug is the wrong way round for the ESP32-S3: this way it
-reaches the board's second chip (its CH340), which comes after it.
-Turn the plug over and run this again -- or, for the second chip alone,
-run it with --second-chip."
-        else
-            fail "No knob on USB. Plug it in -- with a data cable, not a charging
-one -- and run this again."
-        fi
+# The CH340s on USB before any knob: another device's, never taken for one.
+CH340_BEFORE=$(chip_ports)
+
+# The plug as it sits: "s3" (the ESP32-S3's serial port: the right way
+# round), "net" (our AetherSDR firmware, USB networking: right too, but no
+# serial port until it restarts), "chip" (a CH340 that was not there
+# before: the knob's second chip, the plug the wrong way round) or "none".
+plug_state() {
+    if [ -n "$(s3_ports)" ]; then
+        echo s3
+    elif usb_has 303a 4000; then
+        echo net
+    elif chip_ports | grep -qvxF -f <(printf '%s\n' "$CH340_BEFORE"); then
+        echo chip
+    else
+        echo none
     fi
-fi
-[ -e "$PORT" ] || fail "No such port: $PORT"
-# Its name by its serial number: the one it comes back under after restarts.
-BYID=""
-for l in /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*; do
-    [ -e "$l" ] && [ "$(readlink -f "$l")" = "$(readlink -f "$PORT")" ] && BYID="$l"
-done
-[ -w "$PORT" ] || fail "$PORT is not yours to write: add yourself to its group
-($(stat -c %G "$PORT")) and log in again."
-say "The knob's ESP32-S3: $PORT"
+}
 
-esptool_ready
+# Waits for a knob's ESP32-S3 on USB, saying what to do meanwhile -- plug it
+# in, or turn the plug over -- and sets PORT, and S3_ID, its name by its
+# serial number. A knob running the AetherSDR firmware (USB networking, no
+# serial port) is asked to restart: its ROM serial port is open for six
+# seconds at boot. DONE_ID, the knob a --line has just done, is never taken
+# again: still on the cable, it is waited off.
+DONE_ID=""
+wait_s3() {
+    local st said="" asked=0 n
+    while :; do
+        n=$(s3_ports | grep -c . || true)
+        [ "$n" -gt 1 ] && fail "$n knobs on USB: one at a time, or choose one with -p, from
+$(s3_ports)"
+        st=$(plug_state)
+        if [ "$st" = s3 ]; then
+            S3_ID=$(s3_ports)
+            if [ -n "$DONE_ID" ] && [ "$S3_ID" = "$DONE_ID" ]; then
+                st=same
+            else
+                PORT=$(readlink -f "$S3_ID")
+                return 0
+            fi
+        fi
+        if [ "$st" != "$said" ]; then
+            case $st in
+                same) say "That is the knob just done: unplug it, and plug in the next ..." ;;
+                none) say "Waiting for a knob: plug it in -- a data cable, not a charging one ..." ;;
+                chip) say "The plug is the wrong way round: it reaches the knob's second chip (its
+CH340), not its ESP32-S3. Turn the USB-C plug over ..." ;;
+                net)  say "The knob runs a firmware with USB networking: asking it to restart ..." ;;
+            esac
+            said=$st
+        fi
+        if [ "$st" = net ] && [ "$asked" = 0 ]; then
+            echo reboot | timeout 3 nc 10.55.42.1 3333 >/dev/null 2>&1 || true
+            asked=1
+        fi
+        sleep 0.3
+    done
+}
 
 # --- what goes on it -----------------------------------------------------------
+
+esptool_ready
 
 if [ ! -f "$BUILD/bootloader/bootloader.bin" ] || [ ! -f "$BUILD/partition_table/partition-table.bin" ] ||
    { [ "$LOCAL" = 1 ] && [ ! -f "$BUILD/vfo-knob-setup.bin" ]; }; then
@@ -362,13 +402,16 @@ if [ ! -f "$BUILD/bootloader/bootloader.bin" ] || [ ! -f "$BUILD/partition_table
 fi
 
 # Every firmware published, the setup firmware with them: into the cache
-# when it does not have them yet, each against its manifest's sha256.
+# when it does not have them yet, each against its manifest's sha256 --
+# once, for every knob of a --line.
 say "The firmwares, from the release ..."
 python tools/knob-card.py fetch "$CACHE" "$TMP/plan.json" || fail "Could not fetch the firmwares."
+NFW=$(python -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["images"]))' "$TMP/plan.json")
 
 if [ "$LOCAL" = 1 ]; then
     APP="$BUILD/vfo-knob-setup.bin"
-    WHAT="this tree's build ($(git describe --tags --dirty 2>/dev/null || echo '?'))"
+    VER="$(git describe --tags --dirty 2>/dev/null || echo '?')"
+    WHAT="this tree's build ($VER)"
 else
     read -r APP VER < <(python -c 'import json,sys
 for x in json.load(open(sys.argv[1]))["images"]:
@@ -391,45 +434,107 @@ printf 'key,type,encoding,value\nvfo,namespace,,\nsdwipe,data,u8,1\n' >"$TMP/mar
 python "$NVSGEN" generate "$TMP/mark.csv" "$TMP/mark.bin" 0x6000 >"$TMP/mark.log" 2>&1 ||
     { cat "$TMP/mark.log"; fail "Could not make the settings partition."; }
 
-# --- on it -----------------------------------------------------------------------
+# --- one knob --------------------------------------------------------------------
 
-say "Erasing the knob and writing $WHAT (about a minute) ..."
-if ! python -m esptool --chip esp32s3 -p "$PORT" -b 921600 --before default_reset --after hard_reset \
-        write_flash --erase-all --flash_mode dio --flash_freq 80m --flash_size keep \
-        0x0 "$BUILD/bootloader/bootloader.bin" \
-        0x8000 "$BUILD/partition_table/partition-table.bin" \
-        0x9000 "$TMP/mark.bin" \
-        0x20000 "$APP" >"$TMP/flash.log" 2>&1; then
-    tr '\r' '\n' <"$TMP/flash.log" | grep -v "([0-9]* %)$" | tail -15
-    fail "esptool failed: see above. Unplug the knob, plug it in again, and run this again."
-fi
-tr '\r' '\n' <"$TMP/flash.log" | grep -E "^(Chip is|MAC|Wrote|Hash of data)" | uniq
-
-# --- the firmwares onto its SD card ---------------------------------------------
-
-if [ "$CARD" = 1 ]; then
-    say "The knob starts, and empties its SD card; then the firmwares go onto it ..."
-    # The emptying first, undisturbed: opening the port could restart the
-    # knob, and the card must not be half-emptied. Then the port, as it comes
-    # back after the restart esptool gave it.
-    sleep 15
-    P="${BYID:-$PORT}"
-    for _ in $(seq 1 40); do
-        [ -e "$P" ] && break
-        sleep 0.5
+# The knob on PORT: erased, the setup firmware, the firmwares onto its card,
+# its second chip. What became of it in $TMP/knob.status, a key=value a line,
+# for the --line's log.
+one_knob() {
+    local P SHOWS mac
+    : >"$TMP/knob.status"
+    [ -e "$PORT" ] || fail "No such port: $PORT"
+    # Its name by its serial number: the one it comes back under after restarts.
+    BYID=""
+    for l in /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*; do
+        [ -e "$l" ] && [ "$(readlink -f "$l")" = "$(readlink -f "$PORT")" ] && BYID="$l"
     done
-    python tools/knob-card.py push "$P" "$TMP/plan.json" ||
-        fail "The SD card did not get every firmware: run this again, or install them over WiFi from the knob."
-fi
+    [ -w "$PORT" ] || fail "$PORT is not yours to write: add yourself to its group
+($(stat -c %G "$PORT")) and log in again."
+    say "The knob's ESP32-S3: $PORT"
 
-# --- its second chip -------------------------------------------------------------
+    say "Erasing the knob and writing $WHAT (about a minute) ..."
+    if ! python -m esptool --chip esp32s3 -p "$PORT" -b 921600 --before default_reset --after hard_reset \
+            write_flash --erase-all --flash_mode dio --flash_freq 80m --flash_size keep \
+            0x0 "$BUILD/bootloader/bootloader.bin" \
+            0x8000 "$BUILD/partition_table/partition-table.bin" \
+            0x9000 "$TMP/mark.bin" \
+            0x20000 "$APP" >"$TMP/flash.log" 2>&1; then
+        tr '\r' '\n' <"$TMP/flash.log" | grep -v "([0-9]* %)$" | tail -15
+        fail "esptool failed: see above. Unplug the knob, plug it in again, and run this again."
+    fi
+    tr '\r' '\n' <"$TMP/flash.log" | grep -E "^(Chip is|MAC|Wrote|Hash of data)" | uniq
+    mac=$(tr '\r' '\n' <"$TMP/flash.log" | sed -n 's/^MAC: //p' | head -1)
+    echo "mac=$mac" >>"$TMP/knob.status"
+    echo "setup=$VER" >>"$TMP/knob.status"
 
-SHOWS="restarts and shows"
-if [ "$CHIP" = 1 ]; then
-    second_chip new
-    SHOWS="shows"
-fi
+    if [ "$CARD" = 1 ]; then
+        say "The knob starts, and empties its SD card; then the firmwares go onto it ..."
+        # The emptying first, undisturbed: opening the port could restart the
+        # knob, and the card must not be half-emptied. Then the port, as it comes
+        # back after the restart esptool gave it.
+        sleep 15
+        P="${BYID:-$PORT}"
+        for _ in $(seq 1 40); do
+            [ -e "$P" ] && break
+            sleep 0.5
+        done
+        if ! python tools/knob-card.py push "$P" "$TMP/plan.json" | tee "$TMP/push.log"; then
+            echo "card=$(sed -n 's/^The SD card holds \([0-9]*\) of.*/\1/p' "$TMP/push.log")/$NFW" >>"$TMP/knob.status"
+            fail "The SD card did not get every firmware: run this again, or install them over WiFi from the knob."
+        fi
+        echo "card=$(sed -n 's/^The SD card holds \([0-9]*\) of.*/\1/p' "$TMP/push.log")/$NFW" >>"$TMP/knob.status"
+    fi
 
-say "Done. The knob $SHOWS WIFI SETUP: join the network VFOKnob
+    SHOWS="restarts and shows"
+    if [ "$CHIP" = 1 ]; then
+        second_chip new
+        echo "chip=$CHIP_VER" >>"$TMP/knob.status"
+        SHOWS="shows"
+    fi
+
+    say "Done. The knob $SHOWS WIFI SETUP: join the network VFOKnob
 with a phone, and choose your WiFi on the page that opens; then it lists the
 firmwares on its dial."
+}
+
+if [ "$LINE" = 0 ]; then
+    [ -n "$PORT" ] || wait_s3
+    one_knob
+    exit 0
+fi
+
+# --- a line of knobs ---------------------------------------------------------------
+
+LOG="${XDG_DATA_HOME:-$HOME/.local/share}/vfo-knob/provisioned.log"
+mkdir -p "${LOG%/*}"
+say "One knob after another: Enter for each, q to stop. Each goes in
+$LOG"
+n=0 ok=0 bad=0
+while :; do
+    printf '\n\033[1m%s\033[0m' "$([ "$n" = 0 ] && echo "Plug in the first knob" || echo "Unplug it and plug in the next knob"), and press Enter -- or q and Enter to stop: "
+    ans=""
+    read -r ans </dev/tty || ans=q
+    case $ans in [qQ]*) break ;; esac
+    PORT=""
+    wait_s3
+    n=$((n + 1))
+    t0=$(date +%s)
+    # A subshell, so one knob's failure ends that knob only; its status
+    # taken apart from it -- `( ... ) || rc=$?` would turn set -e off inside.
+    set +e
+    ( set -e; one_knob )
+    rc=$?
+    set -e
+    DONE_ID=$S3_ID
+    mac="" setup="" card="" chip=""
+    while IFS='=' read -r k v; do
+        case $k in mac) mac=$v ;; setup) setup=$v ;; card) card=$v ;; chip) chip=$v ;; esac
+    done <"$TMP/knob.status"
+    dt=$(( $(date +%s) - t0 ))
+    if [ "$rc" = 0 ]; then ok=$((ok + 1)); else bad=$((bad + 1)); fi
+    printf '%s  knob %-3s %-17s  setup %-8s  card %-6s  second chip %-10s  %s  (%dm%02ds)\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$n" "${mac:--}" "${setup:--}" "${card:--}" "${chip:--}" \
+        "$([ "$rc" = 0 ] && echo ok || echo FAILED)" $((dt / 60)) $((dt % 60)) | tee -a "$LOG"
+    [ "$rc" = 0 ] || printf '\033[1;31mThis knob is not done: see above. Plug it in again later to start over.\033[0m\n'
+done
+say "$n knob$([ "$n" = 1 ] || echo s): $ok done$([ "$bad" = 0 ] || echo ", $bad FAILED"). The log: $LOG"

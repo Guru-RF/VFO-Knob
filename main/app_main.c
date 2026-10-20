@@ -57,6 +57,7 @@
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "esp_app_desc.h"
+#include "esp_mac.h"
 #include "esp_ota_ops.h"
 /* Web SDRs as a second receiver: the Icom, Xiegu, FlexRadio and UberSDR
  * firmwares -- and the kiwi one's right ear. */
@@ -640,6 +641,181 @@ static bool card_session(void)
 }
 #endif
 
+/* --- the WiFi, through the cable --------------------------------------------
+ *
+ * The website's WiFi page (vfoknob.com/wifi), on the console of any firmware
+ * that has one -- every one but the AetherSDR firmware over USB networking,
+ * whose configuration page is on the cable instead. A line each way; the
+ * knob's replies on lines of their own, among its log:
+ *
+ *   @wifi hello                       -> @wifi knob {"firmware","version","mac","now",
+ *                                        "ip","known":[ssid ...],"hotspot"}
+ *   @wifi scan                        -> @wifi seen [{"ssid","rssi","open"} ...]
+ *   @wifi join {"ssid":..,"pass":..}  -> @wifi trying {"ssid"}, then
+ *                                        @wifi ok {"ssid","ip"} | @wifi bad {"why"}
+ *
+ * A network joined is kept beside the ones the knob knows, as one chosen on
+ * its hotspot's page is -- by that page itself while the hotspot is up. A
+ * password never goes back out, nor into the log: a cable is no less the
+ * owner's than the knob in their hand. */
+#define CON_LINE 256                      /* the console driver's receive buffer */
+
+/* A reply, on a line of its own: what the host reads first may be the end
+ * of a log line the USB FIFO held while nobody was listening. */
+static void con_say(const char *fmt, ...)
+{
+    EXT_RAM_BSS_ATTR static char l[1400];
+    l[0] = '\n';
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(l + 1, sizeof l - 2, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    n += 1;
+    if (n > (int)sizeof l - 2) n = (int)sizeof l - 2;
+    l[n++] = '\n';
+    l[n] = 0;
+    fputs(l, stdout);
+    fflush(stdout);
+}
+
+/* A line, without its end; false after `ms` of nothing. */
+static bool con_line(char *buf, size_t cap, int ms)
+{
+    size_t n = 0;
+    for (;;) {
+        uint8_t c;
+        if (usb_serial_jtag_read_bytes(&c, 1, pdMS_TO_TICKS(ms)) != 1) return false;
+        if (c == '\n') break;
+        if (c != '\r' && n + 1 < cap) buf[n++] = (char)c;
+    }
+    buf[n] = 0;
+    return true;
+}
+
+/* A cJSON reply, then gone. */
+static void con_json(const char *what, cJSON *o)
+{
+    char *t = o ? cJSON_PrintUnformatted(o) : NULL;
+    con_say("@wifi %s %s", what, t ? t : "{}");
+    cJSON_free(t);
+    cJSON_Delete(o);
+}
+
+static void con_wifi_bad(const char *why)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "why", why);
+    con_json("bad", o);
+}
+
+static void sta_ip(char *out, size_t cap)
+{
+    esp_netif_ip_info_t ip;
+    esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    out[0] = 0;
+    if (n && esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr) snprintf(out, cap, IPSTR, IP2STR(&ip.ip));
+}
+
+static void con_wifi(const char *cmd)
+{
+    if (!strcmp(cmd, "hello")) {
+        cJSON *o = cJSON_CreateObject();
+        uint8_t m[6];
+        char ms[18], ip[16];
+        esp_efuse_mac_get_default(m);
+        snprintf(ms, sizeof ms, "%02X:%02X:%02X:%02X:%02X:%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+        sta_ip(ip, sizeof ip);
+        cJSON_AddStringToObject(o, "firmware", ota_radio());
+        cJSON_AddStringToObject(o, "version", esp_app_get_description()->version);
+        cJSON_AddStringToObject(o, "mac", ms);
+        cJSON_AddStringToObject(o, "now", net_prov_wifi_now());
+        cJSON_AddStringToObject(o, "ip", ip);
+        cJSON *k = cJSON_AddArrayToObject(o, "known");
+        for (int i = 0; i < net_prov_wifi_count(); i++) {
+            net_wifi_t w;
+            if (net_prov_wifi_get(i, &w)) cJSON_AddItemToArray(k, cJSON_CreateString(w.ssid));
+        }
+        cJSON_AddBoolToObject(o, "hotspot", net_prov_ap_active());
+        con_json("knob", o);
+        return;
+    }
+    if (!strcmp(cmd, "scan")) {
+        EXT_RAM_BSS_ATTR static net_prov_net_t nets[20];
+        const int n = net_prov_scan(nets, 20);
+        cJSON *a = cJSON_CreateArray();
+        for (int i = 0; i < n; i++) {
+            cJSON *e = cJSON_CreateObject();
+            cJSON_AddStringToObject(e, "ssid", nets[i].ssid);
+            cJSON_AddNumberToObject(e, "rssi", nets[i].rssi);
+            cJSON_AddBoolToObject(e, "open", nets[i].open);
+            cJSON_AddItemToArray(a, e);
+        }
+        con_json("seen", a);
+        return;
+    }
+    if (!strncmp(cmd, "join ", 5)) {
+        cJSON *j = cJSON_Parse(cmd + 5);
+        const char *ssid = cJSON_GetStringValue(cJSON_GetObjectItem(j, "ssid"));
+        const char *pass = cJSON_GetStringValue(cJSON_GetObjectItem(j, "pass"));
+        char want[33];
+        const size_t pl = pass ? strlen(pass) : 0;
+        if (!ssid || !ssid[0] || strlen(ssid) > 32) {
+            cJSON_Delete(j);
+            con_wifi_bad("no network named, or a name longer than 32 bytes");
+            return;
+        }
+        if (pl && (pl < 8 || pl > 63)) {
+            cJSON_Delete(j);
+            con_wifi_bad("a WiFi password is 8 to 63 characters");
+            return;
+        }
+        strlcpy(want, ssid, sizeof want);
+        const esp_err_t e = net_prov_join(want, pass ? pass : "");
+        cJSON_Delete(j);                    /* the password with it */
+        if (e != ESP_OK) {
+            con_wifi_bad("the knob's WiFi is not running");
+            return;
+        }
+        cJSON *t = cJSON_CreateObject();
+        cJSON_AddStringToObject(t, "ssid", want);
+        con_json("trying", t);
+        bool tried = false;
+        for (int ms = 0; ms < 45000; ms += 250) {
+            char s[33], why[48], ip[16];
+            const net_join_t st = net_prov_join_state(s, sizeof s, why, sizeof why);
+            tried |= st == NET_JOIN_TRYING;
+            /* OK: kept here -- or, the hotspot up, by its page, which then
+             * says IDLE with the knob on that network. */
+            const bool ok = st == NET_JOIN_OK ||
+                            (tried && st == NET_JOIN_IDLE && net_prov_is_connected() &&
+                             !strcmp(net_prov_wifi_now(), want));
+            if (ok) {
+                if (st == NET_JOIN_OK && !net_prov_ap_active()) net_prov_join_keep();
+                for (int w = 0; w < 40; w++) {     /* its address, a moment later */
+                    sta_ip(ip, sizeof ip);
+                    if (ip[0]) break;
+                    vTaskDelay(pdMS_TO_TICKS(250));
+                }
+                cJSON *o = cJSON_CreateObject();
+                cJSON_AddStringToObject(o, "ssid", want);
+                cJSON_AddStringToObject(o, "ip", ip);
+                con_json("ok", o);
+                ESP_LOGI(TAG, "console: on \"%s\" (%s), set through the cable", want, ip[0] ? ip : "no address yet");
+                return;
+            }
+            if (st == NET_JOIN_FAILED) {
+                con_wifi_bad(why[0] ? why : "it did not join");
+                return;
+            }
+            vTaskDelay(pdMS_TO_TICKS(250));
+        }
+        con_wifi_bad("no answer from the network in 45 s");
+        return;
+    }
+    con_wifi_bad("@wifi hello | scan | join {\"ssid\":..,\"pass\":..}");
+}
+
 /* Serial console. Touch does not exist yet, and every PTT fault path needs
  * exercising long before a real transmitter is involved. */
 static void console_task(void *arg)
@@ -675,15 +851,17 @@ static void console_task(void *arg)
         case 'r': ui_cycle_rotation();
                   ESP_LOGI(TAG, "rotation -> %u degrees", ui_rotation() * 90u);
                   break;
-#if VFO_RADIO_SETUP
         case '@': {
+            char l[CON_LINE] = "@";
+            if (!con_line(l + 1, sizeof l - 1, 1000)) break;
+            if (!strncmp(l, "@wifi ", 6)) con_wifi(l + 6);
+#if VFO_RADIO_SETUP
             /* tools/install-setup.sh's "@card begin", too late: only on the
              * start right after it wrote the knob (card_console_task). */
-            char l[16] = "@";
-            if (card_line(l + 1, sizeof l - 1, 1000) && !strcmp(l, "@card begin")) card_say("@card closed");
+            else if (!strcmp(l, "@card begin")) card_say("@card closed");
+#endif
             break;
         }
-#endif
         case 's': {
             radio_status_t st; radio_get_status(&st);
             ESP_LOGI(TAG, "ptt=%s rung=%u reason=%s permit=0x%03X%s "
