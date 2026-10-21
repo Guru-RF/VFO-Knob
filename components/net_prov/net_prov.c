@@ -118,6 +118,17 @@
 #define DEFAULT_PORT 8901            /* most WebSDRs' */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_OPENX6X00
+#define KEY_HOST     "oxhost"
+#define KEY_RLIST    "oxlist"    /* the radios, one in use: see below */
+#define KEY_RSEL     "oxsel"
+#define KEY_PORT     "oxport"
+#define KEY_USER     "oxuser"    /* unused: its TCI server has no login */
+#define KEY_PASS     "oxpass"
+#define DEFAULT_HOST "x6100.local"   /* OpenX6X00 announces it over Avahi (rootfs/etc/avahi) */
+#define DEFAULT_PORT 50001           /* OpenX6X00's TCI server (src/tci_server.h) */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_XIEGU
 #define KEY_HOST     "xhost"
 #define KEY_RLIST    "xlist"     /* the radios, one in use: see below */

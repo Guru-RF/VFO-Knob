@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom xiegu svxconnect multiflex ubersdr kiwi owrx websdr setup phone)
+set(_vfo_radios aethersdr icom xiegu openx6x00 svxconnect multiflex ubersdr kiwi owrx websdr setup phone)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -40,6 +40,8 @@ endif()
 # one may be built: two would be two definitions of everything in it. The
 # Xiegu X6100 and X6200 run wfview's server, which speaks Icom's network
 # protocol and presents the radio as an IC-705: they share the Icom client.
+# openx6x00 is the X6100 running the OpenX6X00 firmware, whose own TCI server
+# speaks what AetherSDR serves: the AetherSDR firmware's TCI client, over WiFi.
 # svxconnect is not a radio but an SvxLink reflector: its client speaks the
 # reflector protocol, and the dial picks talkgroups instead of frequencies.
 # multiflex speaks a FlexRadio's own API, with no computer in between: the
@@ -52,7 +54,7 @@ endif()
 # has no radio at all: it sets up the knob's WiFi from a phone and installs
 # one of the others. phone is a telephone: a SIP account, called and answered
 # on SVXConnect's face.
-if(VFO_RADIO STREQUAL "aethersdr")
+if(VFO_RADIO STREQUAL "aethersdr" OR VFO_RADIO STREQUAL "openx6x00")
     set(_vfo_client tci_client)
 elseif(VFO_RADIO STREQUAL "svxconnect")
     set(_vfo_client svx_client)

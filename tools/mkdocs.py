@@ -884,6 +884,37 @@ def aethersdr_pictures():
     return out
 
 
+def openx6x00_pictures():
+    """The openx6x00 firmware: AetherSDR's face and TCI client, over WiFi to
+    an X6100 on OpenX6X00, in its RF.Guru colours."""
+    R = dict(dbm=-86, band="20m", mode="USB", filt="2800", digits=" 14200" "00", active=6,
+             step="100 Hz", agc="AUTO", gain_cap="RF.G", gain="", gain_known=False)
+    f = face("openx6x00", **R)
+    quiet = face("openx6x00", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
+    left, right = radio_parts("RF.G · greyed: not over TCI")
+    out = {}
+    out["01-face"] = callouts("ox-01", "The OpenX6X00 firmware's face", f, left, right)
+    out["02-no-link"] = knob("ox-02", "NO LINK: the radio not reached yet",
+                             quiet + warning("NO LINK", "OpenX6X00"))
+    out["03-mode"] = knob("ox-03", "The mode, chosen on the dial",
+                          f + editor("MODE", "USB"), turn(),
+                          "tap the mode  \u00b7  turn  \u00b7  tap the panel")
+    out["04-radio"] = knob("ox-04", "Swipe up: another X6100",
+                           f + editor("RADIO", "portable", 28, hint="LAN  -  tap to switch"),
+                           swipe_at("up"), "swipe up  \u00b7  tap the panel")
+    out["05-tx"] = knob("ox-05", "On the air: SWR, power and the microphone",
+                        tx_face("openx6x00", swr=1.2, watts=5, fs=10,
+                                pegs=((1, "1"), (5, "5"), (10, "10")), band="20m", mode="USB",
+                                filt="2800", digits=" 14200" "00"))
+    out["06-headset"] = knob("ox-06", "A Bluetooth headset: its button is the PTT",
+                             headset_face(f), "", "the headset's button: key, and key off")
+    md.use_palette("openx6x00")
+    out["07-battery"] = knob("ox-07", "On its own battery: the knob's charge at the top of the arc",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    return out
+
+
 def svxconnect_pictures():
     f = reflector()
     left = [(64, 64, "audio, dBFS · hold: addresses"), (88, 122, "lock"),
@@ -1475,7 +1506,8 @@ def kiwi_pictures():
 
 
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
-             "aethersdr": aethersdr_pictures, "svxconnect": svxconnect_pictures,
+             "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
+             "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
              "headset": headset_pictures}
 

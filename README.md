@@ -1,7 +1,8 @@
 # VFO-Knob
 
 A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
-FlexRadio and the Icom IC-705, IC-7610, IC-9700 and IC-R8600, built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
+FlexRadio, the Icom IC-705, IC-7610, IC-9700 and IC-R8600, and the Xiegu X6100 on
+[OpenX6X00](https://github.com/Guru-RF/OpenX6X00), built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
 over WiFi. And, with firmware of their own, SVXConnect, a talkgroup knob for
 SvxLink reflectors, a dial for UberSDR web receivers, one for KiwiSDR and
@@ -38,6 +39,11 @@ With a **FlexRadio** it is one of the radio's MultiFlex stations, over the
 radio's own API: a station of its own, with Opus audio both ways, or the dial
 and PTT for a SmartSDR, AetherSDR or Maestro station already on the radio. In
 the Maestro's colours. See [FlexRadio](#flexradio-multiflex).
+
+With an **X6100 running OpenX6X00**, the X6100's open firmware, the knob
+talks to the radio's own TCI server over WiFi, with audio both ways and no
+computer in between. It finds the radio as `x6100.local`, and its face wears
+OpenX6X00's RF.Guru colours. See [OpenX6X00](#openx6x00).
 
 With the **SVXConnect** firmware there is no radio at all: the knob is an
 [SvxLink](https://www.svxlink.org/) reflector client over WiFi, in the style of
@@ -297,6 +303,24 @@ self-signed; the knob pins it the first time, as AetherSDR does, and refuses a
 different one until you log in again. After that it is the same station as on
 the LAN, Opus audio and PTT included. A radio reachable only by hole punching
 — neither a forwarded port nor UPnP — is listed but not yet connected to.
+
+## OpenX6X00
+
+The openx6x00 firmware (`vfo-knob-openx6x00`) is a dial for a Xiegu X6100
+running [OpenX6X00](https://github.com/Guru-RF/OpenX6X00). It uses the same
+TCI as the AetherSDR firmware, but talks to the radio itself, over WiFi, on
+the radio's TCI server (port 50001, on by default).
+
+It looks for the radio as `x6100.local`, the name OpenX6X00 announces over
+mDNS, so it follows the radio when its address changes. A radio given
+another network name is listed as `<name>.local`, or by its IP address, with
+up to four radios in the list.
+
+The radio's audio plays on the jack, and the knob's microphone transmits.
+The radio unkeys by itself after half a second without the knob's audio,
+when the link drops, or after three minutes on the air.
+
+Step by step: [the OpenX6X00 guide](docs/openx6x00.md).
 
 ## Web SDRs
 
@@ -681,7 +705,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr` and `vfo-knob-phone` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr` and `vfo-knob-phone` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -724,9 +748,12 @@ idf.py -B build_icom -D VFO_RADIO=icom \
        build flash
 ```
 
-So are the multiflex, svxconnect, ubersdr, kiwi, phone and setup firmwares:
+So are the openx6x00, multiflex, svxconnect, ubersdr, kiwi, phone and setup firmwares:
 
 ```sh
+idf.py -B build_openx6x00 -D VFO_RADIO=openx6x00 \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.openx6x00" \
+       build flash
 idf.py -B build_multiflex -D VFO_RADIO=multiflex \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.multiflex" \
        build flash

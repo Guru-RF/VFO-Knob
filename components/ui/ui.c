@@ -118,6 +118,31 @@ LV_FONT_DECLARE(font_hack_46);
 #define C_TX_RED    lv_color_hex(0xE8262B)
 #define C_GREEN     lv_color_hex(0x43B649)   /* multiFLEX green         */
 #define PWR_HEX     0x43B649                 /* Po in green, as on the Maestro */
+#elif VFO_RADIO_OPENX6X00
+/* --- OpenX6X00 palette -----------------------------------------------------
+ * The X6100's own screen under the OpenX6X00 firmware: its RF.Guru theme
+ * (OpenX6X00 src/theme.h) -- near-black surfaces, gold for what is on, its
+ * text greys, the S-meter slate up to S9 and green to red over it, its
+ * electric blue as the second accent, and TX in its own red. The layout is
+ * the other faces'; the colours say which radio this knob is for. */
+#define C_BG        lv_color_hex(0x08090C)   /* bg                      */
+#define C_BG1       lv_color_hex(0x13161D)   /* bar: the PTT slab       */
+#define C_BG_TX     lv_color_hex(0x3A1414)   /* err_bg: a red tint on the air */
+#define C_ACCENT    lv_color_hex(0xE5A823)   /* accent: gold            */
+#define C_ACCENT_HI lv_color_hex(0xF2D886)   /* accent_soft             */
+#define C_TEXT      lv_color_hex(0xF1F5F9)   /* text                    */
+#define C_TEXT2     lv_color_hex(0xCBD5E1)   /* text_soft               */
+#define C_LABEL     lv_color_hex(0x94A3B8)   /* text_dim                */
+#define C_DISABLED  lv_color_hex(0x475569)   /* text_faint              */
+#define C_SUBTLE    lv_color_hex(0x1B1F29)   /* btn: the tracks         */
+#define C_WARN      lv_color_hex(0xFBBF24)   /* warn                    */
+#define C_DANGER    lv_color_hex(0xF87171)   /* err                     */
+#define C_TX_BORDER lv_color_hex(0xEF4444)   /* err_strong              */
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xF1F5F9)   /* meter_over              */
+#define C_TX_RED    lv_color_hex(0xB91C1C)   /* tx_bg: its TX red       */
+#define C_GREEN     lv_color_hex(0x34D399)   /* ok, meter_low           */
+#define PWR_HEX     0x4F8BF5                 /* vfo, info: the electric blue */
 #elif VFO_RADIO_XIEGU
 /* --- Xiegu palette ---------------------------------------------------------
  * The X6100 and X6200 highlight in orange. Black, white digits, an orange
@@ -540,6 +565,10 @@ static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
     { -40.0f, -10.0f, 0x2A9DF4 },   /* blue  */
     { -10.0f,   0.0f, 0xFFB000 },   /* amber */
     {   0.0f,  10.0f, 0xF0302C },   /* red   */
+#elif VFO_RADIO_OPENX6X00
+    { -40.0f, -10.0f, 0x34D399 },   /* ok      */
+    { -10.0f,   0.0f, 0xFBBF24 },   /* bar_mid */
+    {   0.0f,  10.0f, 0xF87171 },   /* bar_high */
 #elif VFO_RADIO_XIEGU
     { -40.0f, -10.0f, 0xFF8C1A },   /* orange */
     { -10.0f,   0.0f, 0xFFD000 },   /* yellow */
@@ -739,6 +768,10 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0x2A9DF4 },   /* blue  */
     { 2.0f, 2.5f, 0xFFB000 },   /* amber */
     { 2.5f, 3.0f, 0xF0302C },   /* red   */
+#elif VFO_RADIO_OPENX6X00
+    { 1.0f, 2.0f, 0x34D399 },   /* ok       */
+    { 2.0f, 2.5f, 0xFBBF24 },   /* bar_mid  */
+    { 2.5f, 3.0f, 0xF87171 },   /* bar_high */
 #elif VFO_RADIO_XIEGU
     { 1.0f, 2.0f, 0xFF8C1A },   /* orange */
     { 2.0f, 2.5f, 0xFFD000 },   /* yellow */
@@ -789,6 +822,15 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0xF26A6A },   /* S9 to +20: red over S9, as on the Maestro */
     {  -53.0f,  -33.0f, 0xEE4444 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0xE8262B },   /* +40 to +60 */
+#elif VFO_RADIO_OPENX6X00
+    { -127.0f, -121.0f, 0x94A3B8 },   /* S0 to S1: meter_weak, slate brightening */
+    { -121.0f, -109.0f, 0xA2AFC3 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0xB0BCCD },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0xBEC8D7 },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0xCBD5E1 },   /* S7 to S9: meter_bar */
+    {  -73.0f,  -53.0f, 0x34D399 },   /* S9 to +20: meter_low, green over S9 */
+    {  -53.0f,  -33.0f, 0xFBBF24 },   /* +20 to +40: warn */
+    {  -33.0f,  -13.0f, 0xF87171 },   /* +40 to +60: meter_high */
 #elif VFO_RADIO_XIEGU
     { -127.0f, -121.0f, 0x5C2A00 },   /* S0 to S1: orange, brightening */
     { -121.0f, -109.0f, 0x7F3A00 },   /* S1 to S3   */
@@ -982,6 +1024,12 @@ static const char *AGCS[]  = { "fast","mid","slow" };
 static const char *MODES[] = { "usb","lsb","cw","am","sam","fm","nfm",
                                "digu","digl","rtty" };
 static const char *AGCS[]  = { "fast","med","slow","off" };
+#define GAIN_CAPTION "RF.G"
+#elif VFO_RADIO_OPENX6X00
+/* The modes and AGCs OpenX6X00's TCI server names (src/tci_server.c), the
+ * X6100's own. TCI carries no RF gain: shown greyed, as on AetherSDR. */
+static const char *MODES[] = { "usb","lsb","cw","cwr","am","nfm","digu","digl" };
+static const char *AGCS[]  = { "auto","fast","slow","off" };
 #define GAIN_CAPTION "RF.G"
 #elif VFO_RADIO_XIEGU
 /* The X6100 and X6200 are HF and 6 m radios behind an IC-705's CI-V, so

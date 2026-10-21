@@ -138,6 +138,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "Icom";
 #elif VFO_RADIO_XIEGU
     const char *name = "Xiegu";
+#elif VFO_RADIO_OPENX6X00
+    const char *name = "OpenX6X00";
 #elif VFO_RADIO_SVXCONNECT
     const char *name = "SVXConnect";
 #elif VFO_RADIO_PHONE
@@ -2482,6 +2484,7 @@ static const struct { const char *radio, *name; } FIRMWARES[] = {
     { "kiwi",       "Kiwi888"   },
     { "owrx",       "OpenWebRX" },
     { "websdr",     "WebSDR"    },
+    { "openx6x00",  "OpenX6X00" },
     { "svxconnect", "SVXConnect" },
     { "phone",      "Telephone" },
 };

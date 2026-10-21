@@ -20,6 +20,7 @@
  */
 #include "radio.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "antiecho.h"
@@ -292,7 +293,11 @@ static void apply_fact(const tci_fact_t *f)
         /* tx_sensors:0,<mic_dbm>,<fwd_w>,<peak_w>,<swr>,<alc_dbfs>;
          * Field 2 is "peak" but carries the same cached value as fwd, so it is
          * never rendered. */
+#if !VFO_RADIO_OPENX6X00
+        /* OpenX6X00 sends a fixed -20 here, the X6100 having no mic meter to
+         * read: that firmware's ring is the knob's own, from send_tx_audio. */
         S.tx_mic_dbm = f->f0;
+#endif
         S.tx_fwd_w   = f->f1;
         S.tx_peak_w  = f->f2;
         S.tx_swr     = f->f3;
@@ -443,6 +448,15 @@ static void send_tx_audio(uint32_t receiver)
     int16_t *pcm = (int16_t *)(s_txa + sizeof *h);
     if (!audio_in_take(pcm, TX_CHRONO_FRAMES))
         memset(pcm, 0, TX_CHRONO_FRAMES * sizeof(int16_t));
+#if VFO_RADIO_OPENX6X00
+    /* The same scale the other firmwares' mic meters use: dB below full. */
+    int peak = 0;
+    for (int i = 0; i < TX_CHRONO_FRAMES; i++) {
+        const int v = pcm[i] < 0 ? -pcm[i] : pcm[i];
+        if (v > peak) peak = v;
+    }
+    S.tx_mic_dbm = peak ? 20.0f * log10f((float)peak / 32767.0f) : -60.0f;
+#endif
 
     const int64_t t0 = esp_timer_get_time();
     const int n = esp_websocket_client_send_bin(s_ws, (const char *)s_txa,

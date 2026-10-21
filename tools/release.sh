@@ -67,7 +67,7 @@ fi
 # second chip's above all, which no knob may install as its own. So a radio
 # is released only once it is named here: published unnamed, its knobs would
 # update, and no new knob could ever choose it.
-NAMES='{"aethersdr": "AetherSDR", "icom": "Icom", "multiflex": "FlexRadio", "ubersdr": "UberSDR",
+NAMES='{"aethersdr": "AetherSDR", "icom": "Icom", "openx6x00": "OpenX6X00", "multiflex": "FlexRadio", "ubersdr": "UberSDR",
         "kiwi": "Kiwi888", "owrx": "OpenWebRX", "websdr": "WebSDR", "svxconnect": "SVXConnect",
         "phone": "Telephone", "setup": "Setup"}'
 if [ "$RADIO" != companion ] &&

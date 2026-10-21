@@ -136,6 +136,23 @@ PALETTES = {
                           ((-127, -121), (-121, -109), (-109, -97), (-97, -85),
                            (-85, -73), (-73, -53), (-53, -33), (-33, -13))],
                  SWRZONES=SWRZONES, MICZONES=MICZONES),
+    # The openx6x00 firmware's face (ui.c under VFO_RADIO_OPENX6X00): the
+    # X6100's own screen under OpenX6X00, its RF.Guru theme -- near-black,
+    # gold for what is on, slate text, the S-meter slate up to S9 and green
+    # to red over it, power in its electric blue.
+    "openx6x00": dict(BG="#08090C", BG1="#13161D", BG_TX="#3A1414", ACCENT="#E5A823",
+                      ACCENT_HI="#F2D886", TEXT="#F1F5F9", TEXT2="#CBD5E1",
+                      LABEL="#94A3B8", SUBTLE="#1B1F29", WARN="#FBBF24",
+                      DANGER="#F87171", TX_RED="#B91C1C", TX_TEXT="#FFFFFF",
+                      GREEN="#34D399", BATT_OK="#34D399", DISABLED="#475569", PWR="#4F8BF5",
+                      RXZONES=[(-127, -121, "#94A3B8"), (-121, -109, "#A2AFC3"),
+                               (-109,  -97, "#B0BCCD"), (-97,   -85, "#BEC8D7"),
+                               (-85,   -73, "#CBD5E1"), (-73,   -53, "#34D399"),
+                               (-53,   -33, "#FBBF24"), (-33,   -13, "#F87171")],
+                      SWRZONES=[(1.0, 2.0, "#34D399"), (2.0, 2.5, "#FBBF24"),
+                                (2.5, 3.0, "#F87171")],
+                      MICZONES=[(-40, -10, "#34D399"), (-10, 0, "#FBBF24"),
+                                (0, 10, "#F87171")]),
 }
 # The phone firmware wears SVXConnect's face (ui.c SVX_LOOK), colours and all.
 PALETTES["phone"] = PALETTES["svxconnect"]

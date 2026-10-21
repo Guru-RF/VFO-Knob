@@ -719,6 +719,7 @@ async function load(){
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
+  const ox = c.radio === 'openx6x00';    /* an X6100 on OpenX6X00: TCI, found as x6100.local */
   KIWI = c.radio === 'kiwi';              /* web receivers: the list below, one in use */
   OWRX = c.radio === 'owrx';              /* web receivers: this list, each by its address whole */
   WSDR = c.radio === 'websdr';            /* ...WebSDRs, the same way */
@@ -733,7 +734,8 @@ async function load(){
   LINKNAME = c.link || 'Radio';
   $('rtitle').textContent = icom ? 'Icom radios' : xiegu ? 'X6100 / X6200'
                           : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : uber ? 'UberSDR'
-                          : OWRX ? 'OpenWebRX receivers' : WSDR ? 'WebSDR receivers' : 'AetherSDR';
+                          : OWRX ? 'OpenWebRX receivers' : WSDR ? 'WebSDR receivers'
+                          : ox ? 'OpenX6X00' : 'AetherSDR';
   $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
@@ -755,10 +757,10 @@ async function load(){
   $('xiegunote').hidden = !xiegu;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
-  myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !uber && !WEBRX ? c.client : '';
+  myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !uber && !WEBRX && !ox ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = lan || SVX || flex || uber || WEBRX || !(c.client && c.client_usb);
+  $('hostusb').hidden = lan || SVX || flex || uber || WEBRX || ox || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
   LIST = !SVX && c.radio !== 'setup' && !KIWI; LAN = lan; UBER = uber; RXONLY = uber || KIWI || WEBRX;
   /* A receiver's firmware has no microphone: no gain to set for one. */
@@ -1891,13 +1893,14 @@ $('upload').onclick = async()=>{
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 / IC-9700 / IC-R8600 (LAN)'},
               {id:'xiegu',     name:'Xiegu X6100 / X6200 (LAN)', soon:true},
+              {id:'openx6x00', name:'OpenX6X00 (an X6100 on the OpenX6X00 firmware, TCI)'},
               {id:'svxconnect',name:'SVXConnect (SvxLink reflectors)'},
               {id:'phone',     name:'Telephone (SIP)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
               {id:'ubersdr',   name:'UberSDR (a web receiver)'},
               {id:'kiwi',      name:'Kiwi888 (KiwiSDR and Web-888 receivers)'},
-              {id:'owrx',      name:'OpenWebRX (OpenWebRX and OpenWebRX+ receivers)', soon:true},
-              {id:'websdr',    name:'WebSDR (the receivers on websdr.org)', soon:true},
+              {id:'owrx',      name:'OpenWebRX (OpenWebRX and OpenWebRX+ receivers)'},
+              {id:'websdr',    name:'WebSDR (the receivers on websdr.org)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

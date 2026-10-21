@@ -9,6 +9,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [Setup](setup.md) | `vfo-knob-setup` — what every knob ships with: WiFi from a phone, then the firmware for your radio |
 | [Icom](icom.md) | `vfo-knob-icom` — the IC-705, the IC-7610, the IC-9700 and the IC-R8600 receiver, over the radio's own LAN |
 | [FlexRadio](multiflex.md) | `vfo-knob-multiflex` — a MultiFlex station, on the LAN and through SmartLink |
+| [OpenX6X00](openx6x00.md) | `vfo-knob-openx6x00` — a Xiegu X6100 running OpenX6X00, over the radio's own TCI on WiFi, found as x6100.local |
 | [AetherSDR](aethersdr.md) | `vfo-knob-aethersdr` — a dial for AetherSDR, over the USB cable or WiFi |
 | [SVXConnect](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
 | [Telephone](phone.md) | `vfo-knob-phone` — a telephone on one SIP account: favourites on the dial, a keypad, a call history, Google Contacts |

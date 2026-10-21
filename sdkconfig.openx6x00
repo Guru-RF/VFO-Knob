@@ -1,0 +1,15 @@
+# The openx6x00 firmware: a Xiegu X6100 running the OpenX6X00 firmware, over
+# its TCI server on WiFi (VFO_RADIO=openx6x00) -- the AetherSDR firmware's
+# client, with no computer in between.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the knob reaches
+# the radio over WiFi, and the USB link has no route to it. Leaving TinyUSB
+# out also frees the internal RAM its buffers take, and keeps the serial
+# console on the cable (the website's WiFi page uses it).
+
+# The radio's socket beside the web page's and the log's, and a browser's.
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# AES in software, as every other firmware: the engine's DMA takes its bounce
+# buffers from internal RAM, and an update's download needs it to spare.
+CONFIG_MBEDTLS_HARDWARE_AES=n
