@@ -11,6 +11,11 @@
       "version": "1.21.0"
     },
     {
+      "radio": "openx6x00",
+      "name": "OpenX6X00",
+      "version": "1.21.0"
+    },
+    {
       "radio": "multiflex",
       "name": "FlexRadio",
       "version": "1.20.2"
