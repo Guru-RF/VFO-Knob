@@ -189,6 +189,19 @@ puts the settings on it.
 
 ![SD CARD FAULT: part of the settings could not be read](setup/17-sd-card-fault.svg)
 
+## Safe mode
+
+A knob that restarts three times in a row before it has been up 20 seconds
+is taken to be stuck in a crash, and the next start comes up in **safe
+mode**: WiFi and audio off, and the settings' card left alone, so that what
+crashed it is not started again. The face says **SAFE MODE**. Restart the
+knob, or unplug it and switch it off and on: the count is cleared once safe
+mode has been up 20 seconds, so the next start is an ordinary one. A restart
+asked for on the configuration page, or a radio chosen on the dial, does not
+count.
+
+![SAFE MODE: three failed starts in a row](setup/18-safe-mode.svg)
+
 ## If something is not right
 
 | The knob says | What to do |
@@ -200,4 +213,5 @@ puts the settings on it.
 | **WIFI SETUP**: **None of its networks is in reach** (a radio's firmware) | Join **VFOKnob** with your phone and add the network where the knob is now, or take it back within reach of one it knows. |
 | **Needs WiFi** (from a radio's firmware) | The way back to the list is over WiFi: set up WiFi on that firmware's page, or use **Set up again**. |
 | **NO SD CARD** | The built-in card that holds the settings does not answer: restart the knob. If it stays, the card has failed: **Carry on without the SD card** on the configuration page, and the knob keeps its settings in its own memory. |
+| **SAFE MODE** | Three starts in a row ended before 20 seconds, so this one runs without WiFi, audio or the settings' card: restart the knob, and it starts as usual. If it comes back to SAFE MODE every time, something crashes it at every start: install its firmware again over the USB cable. |
 | **SD CARD FAULT** | Part of the settings could not be read from the card, or it stopped taking writes: the knob runs on its own memory meanwhile. Restart it; the page's **Settings** says which part, and offers **Start fresh on this card** when the settings have gone from it. |

@@ -608,6 +608,18 @@ void net_prov_load_settings(void)
              s_cfg.radio_user[0] ? s_cfg.radio_user : "-");
 }
 
+/* A network of several access points under one name -- a mesh, a house
+ * with a repeater -- is joined at its strongest. Left at ESP-IDF's default,
+ * a fast scan, the station took the first it heard going up the channels:
+ * one at -91 dBm on channel 1 over one at -65 on channel 6 (2026-10-21),
+ * where nothing got through and the link came and went for minutes. A scan
+ * of every channel costs a second or two at each join. */
+static void sta_strongest(wifi_config_t *wc)
+{
+    wc->sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wc->sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+}
+
 /* The station at network i of the list, asked to join it. */
 static void sta_try(int i)
 {
@@ -621,6 +633,7 @@ static void sta_try(int i)
     }
     taskEXIT_CRITICAL(&s_wlock);
     if (!wc.sta.ssid[0]) return;
+    sta_strongest(&wc);
     esp_wifi_set_config(WIFI_IF_STA, &wc);
     esp_wifi_connect();
 }
@@ -728,6 +741,7 @@ esp_err_t net_prov_join(const char *ssid, const char *pass)
     wifi_config_t wc = { 0 };
     strlcpy((char *)wc.sta.ssid, s_join_ssid, sizeof wc.sta.ssid);
     strlcpy((char *)wc.sta.password, s_join_pass, sizeof wc.sta.password);
+    sta_strongest(&wc);
     s_join_fails = 0;
     s_join_why[0] = 0;
     s_join = NET_JOIN_TRYING;
@@ -970,6 +984,7 @@ esp_err_t net_prov_wifi_start(void)
     wifi_config_t wc = { 0 };
     strlcpy((char *)wc.sta.ssid,     s_cfg.ssid, sizeof wc.sta.ssid);
     strlcpy((char *)wc.sta.password, s_cfg.pass, sizeof wc.sta.password);
+    sta_strongest(&wc);
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wc), TAG, "cfg");
     /* Keep the radio off the power-save duty cycle: it adds tens of ms of

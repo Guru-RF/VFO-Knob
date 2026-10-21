@@ -101,6 +101,9 @@ static const char *TAG = "vfo";
 RTC_NOINIT_ATTR static uint32_t s_picker_on_boot;
 static bool     s_picker_accepted;
 
+/* Three failed boots in a row: WiFi and audio off, the card left alone. */
+static bool s_safe_mode;
+
 /* The timer that declares this boot healthy, 20 s in: see boot_ok_cb(). */
 static esp_timer_handle_t s_boot_ok_t;
 /* ...and it has: this image is confirmed. */
@@ -1730,6 +1733,10 @@ static void ui_task(void *arg)
                                                                          : "TX REFUSED";
         else if (nowms < s_note_until && st.note[0]) warn = st.note;
         else if (atomic_load(&s_flip_hint))          warn = "FLIP USB-C";
+        /* Before the card's: safe mode leaves the card alone, and NO SD
+         * CARD with no network said nothing of why, nor that a restart -- the
+         * counter cleared 20 s in -- brings it all back. */
+        else if (s_safe_mode)                        warn = "SAFE MODE";
         /* The settings' SD card (kvstore): away, failing, or another knob's
          * -- the page says what may be done about it. */
         else if (kv_where() == KV_CARD_MISSING)      warn = "NO SD CARD";
@@ -3724,6 +3731,7 @@ void app_main(void)
     /* Three failed boots in a row: come up with the bare minimum so the device
      * stays usable and flashable while the cause is found. */
     const bool safe = net_prov_boot_count() >= 3;
+    s_safe_mode = safe;
     if (safe)
         ESP_LOGE(TAG, "SAFE MODE after %u boots -- audio and WiFi disabled",
                  net_prov_boot_count());

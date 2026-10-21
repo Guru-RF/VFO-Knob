@@ -646,6 +646,10 @@ def setup_pictures():
                                 icom + warning("NO SD CARD", "Icom"))
     out["17-sd-card-fault"] = knob("setup-17", "SD CARD FAULT: part of the settings could not be read",
                                    icom + warning("SD CARD FAULT", "Icom"))
+    # Three starts in a row that never got 20 s in: WiFi and audio off, the
+    # card left alone, and no address to give (app_main.c, s_safe_mode).
+    out["18-safe-mode"] = knob("setup-18", "SAFE MODE: three failed starts in a row",
+                               icom + warning("SAFE MODE", "Icom", "USB   -\nWiFi  -\nsetup  http://-"))
     md.use_palette("svxconnect")
     return out
 

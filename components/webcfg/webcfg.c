@@ -683,8 +683,11 @@ static esp_err_t reboot_post(httpd_req_t *r)
      * it first. A new image restarted before its 20 s "boot looks healthy"
      * mark counts as a failed boot, and the bootloader goes back to the old
      * one -- which is what saving the radio's settings and rebooting straight
-     * after an update did. */
+     * after an update did. Nor is it a crash: the boot counted healthy too,
+     * as the radio switch's, or three restarts asked for within 20 s of each
+     * other came up in safe mode, WiFi off (2026-10-21). */
     ota_mark_valid();
+    net_prov_boot_ok();
     httpd_resp_sendstr(r, "rebooting");
     /* Answer first, then restart from a timer, so the browser sees the reply
      * rather than a dropped connection. */
@@ -742,6 +745,7 @@ static esp_err_t card_post(httpd_req_t *r)
     httpd_resp_sendstr(r, restart ? "restarting" : "done");
     if (restart) {
         ota_mark_valid();
+        net_prov_boot_ok();
         const esp_timer_create_args_t a = { .callback = reboot_cb, .name = "wcreboot" };
         esp_timer_handle_t t;
         if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 300 * 1000);
