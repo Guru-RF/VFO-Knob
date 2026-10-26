@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-icom",
-  "version": "1.21.1",
-  "file": "vfo-knob-icom-1.21.1.bin",
-  "sha256": "a55dbf97ae5975b6b5b22ada36f1621aaa780c2c3d86867119bec981b066358a",
+  "version": "1.21.2",
+  "file": "vfo-knob-icom-1.21.2.bin",
+  "sha256": "194adb5ce28797f51f082f40a40c2cd8d52651e5c22447359b24b97d3b927960",
   "size": 2232320
 }
