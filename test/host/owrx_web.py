@@ -467,6 +467,23 @@ def case_config():
         check(msg and msg.startswith("Saved") and k.radios()["sel"] == rl["sel"] and m4.stats()["banned_refused"] == 1,
               f"a list saved meanwhile keeps the one playing: {k.radios()['sel']}")
         check(m4.stats()["banned_refused"] == 1, "the banned one asked once only")
+
+        # The problem report: behind the login, the log under its line, and on
+        # the page, a link to the bug form with it filled in.
+        code, rep = k.api("/api/report")
+        check(code == 200 and "--- the log, oldest first ---" in rep and "the host's log" in rep,
+              f"GET /api/report: {code} {rep[:80]!r}")
+        try:
+            urllib.request.urlopen(k.base + "/api/report", timeout=10)
+            check(False, "the report without the login")
+        except urllib.error.HTTPError as e:
+            check(e.code == 401, f"the report without the login: {e.code}")
+        b.js("$('rep').click()")
+        href = b.until("!$('repbox').hidden&&$('reptxt').value.includes('the host')&&$('repgo').getAttribute('href')", 10,
+                       "the report on the page")
+        check(href and href.startswith("https://github.com/Guru-RF/VFO-Knob/issues/new?template=bug.yml&") and
+              "logs=" in href and "the%20host's%20log" in href and b.js("$('repcut').hidden"),
+              f"the bug form's link, the whole report in it: {(href or '')[:90]!r}")
     finally:
         b.stop()
         k.stop()

@@ -19,9 +19,18 @@
 #include "esp_system.h"
 #include "freertos/task.h"
 #include "net_prov.h"
+#include "netlog.h"
 #include "ota.h"
 #include "shim.h"
 #include "ui.h"
+
+/* ------------------------------------------------------------ the log */
+
+/* No ring on the PC: a report's log is this one line. */
+size_t netlog_copy(char *out, size_t cap)
+{
+    return (size_t)snprintf(out, cap, "I (1) vfo: the host's log\n");
+}
 
 /* ------------------------------------------------- the knob's settings */
 
@@ -34,6 +43,7 @@ bool net_prov_ap_active(void) { return false; }
 uint16_t net_prov_blank_min(void) { return 0; }
 uint16_t net_prov_dim_min(void) { return 5; }
 uint8_t net_prov_boot_count(void) { return 0; }
+void net_prov_boot_ok(void) {}
 uint8_t net_prov_volume(void) { return s_vol; }
 uint8_t net_prov_mic_gain(void) { return 100; }
 uint8_t net_prov_mic_gain_headset(void) { return 100; }

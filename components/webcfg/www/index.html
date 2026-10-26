@@ -50,6 +50,12 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
 .sdr{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:4px}
 .sdrrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .sdrres{margin-top:14px}
+textarea{width:100%;margin-top:12px;padding:8px 10px;background:#11131799;color:var(--fg);
+      border:1px solid var(--line);border-radius:6px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;
+      resize:vertical;white-space:pre;overflow:auto}
+.note a{color:var(--accent)}
+a.btn{display:inline-block;margin:14px 6px 0 0;padding:9px 16px;border-radius:6px;
+      background:var(--accent);color:#1a1205;font-weight:600;text-decoration:none}
 </style>
 </head>
 <body><div class="wrap">
@@ -292,6 +298,13 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
 
 <section id="btsec" hidden>
   <h2>Bluetooth headset or speaker</h2>
+  <p class="note" id="btnone" hidden>The knob's second chip does not answer: it has
+     no Bluetooth firmware on it yet. Add it from
+     <a href="https://vfoknob.com/bluetooth" target="_blank" rel="noopener">vfoknob.com/bluetooth</a>,
+     with the knob on a computer's USB port: the page says when to turn its
+     plug over. A few minutes, once; from then on the knob keeps it up to date
+     by itself.</p>
+  <div id="btbody">
   <div id="btrows"></div>
   <div id="btfound"></div>
   <button id="btscan" class="ghost" type="button">Find headsets</button>
@@ -357,6 +370,7 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
      do &mdash; turns itself to the knob's VOLUME, and its own volume buttons
      turn the knob's; one that does not keeps its own, and the knob turns down
      what it sends.</span></p>
+  </div>
 </section>
 
 <section id="svxstation" hidden>
@@ -563,6 +577,27 @@ button.show,button.show:active{position:absolute;right:4px;top:50%;transform:tra
   </details>
 </section>
 
+<section>
+  <h2>Report a problem</h2>
+  <p class="note">Something not working as it should? <b>Make a report</b> gathers
+     what the knob knows of it &mdash; its firmware and version, how it last
+     started, its power, network and link, a crash it remembers, and its recent
+     log &mdash; for a bug report on GitHub, where you add what you did and what
+     you saw, and send it. It needs a GitHub account, and a browser that
+     reaches the internet.</p>
+  <button id="rep" class="ghost" type="button">Make a report</button>
+  <div id="repbox" hidden>
+    <textarea id="reptxt" readonly rows="12" spellcheck="false"></textarea>
+    <p class="note">The report is public on GitHub. The knob has starred out the
+       passwords it keeps. Read it for anything else you would rather keep to
+       yourself &mdash; a network's name, an address, a call sign &mdash; and take it
+       out in GitHub's form before you send it.</p>
+    <a id="repgo" class="btn" target="_blank" rel="noopener">Open it on GitHub</a>
+    <button id="repcopy" class="ghost" type="button">Copy it</button>
+    <p class="note" id="repcut" hidden></p>
+  </div>
+</section>
+
 <button id="save">Save</button>
 <button id="reboot" class="ghost">Reboot</button>
 <div id="msg"></div>
@@ -670,8 +705,10 @@ $('cardwarn').onclick=async e=>{
    was (VOLEDIT), never an old one back over the knob's. */
 let VOLEDIT=false;
 $('vol').oninput=()=>{ VOLEDIT=true };
+let UPTIME=0;                          /* the knob's, as of the last status */
 async function refresh(){
   let s; try{ s=await (await fetch('/api/status')).json() }catch(e){ return }
+  UPTIME=s.uptime_s||0;
   if(s.vol!==undefined && !VOLEDIT && document.activeElement!==$('vol')) $('vol').value=s.vol;
   $('ident').textContent = `${s.version} · ${s.transport} · up ${hhmmss(s.uptime_s)}`;
   /* Back to the radio's controls, while it is connected (not a reflector's). */
@@ -780,8 +817,12 @@ async function btLoad(){
   const at=Date.now();                  /* when asked: a level stepped here before it is in the answer */
   let s; try{ const r=await fetch('/api/bt',{cache:'no-store'}); if(!r.ok) return; s=await r.json() }catch(e){ return }
   s.at=at;
-  /* Only where the second chip runs the companion firmware. */
-  $('btsec').hidden=!s.companion; BT=s;
+  /* Only where the second chip runs the companion firmware -- and where it
+     has said nothing half a minute into the knob's start, with no update of
+     it restarting it, a word on where to get it. */
+  const busy0 = s.upd && !['idle','waiting'].includes(s.upd.phase);
+  const none = !s.companion && UPTIME>=30 && !busy0;
+  $('btsec').hidden=!s.companion && !none; $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
   if(s.companion){ btShow(s); chipPush(s) }
   const busy = s.upd && !['idle','waiting'].includes(s.upd.phase);
   clearTimeout(btTimer); btTimer=setTimeout(btLoad, s.scanning||busy?1000:3000);
@@ -1934,6 +1975,55 @@ $('switch').onclick=async()=>{
     if(u.ok) setTimeout(poll,4000);
   }catch(e){ $('msg').textContent='Could not switch: '+e.message; $('msg').style.color='var(--bad)' }
   $('switch').disabled=false;
+};
+
+/* ---- a problem report (GET /api/report), for a GitHub issue ---- */
+/* The bug form, its fields filled from the link: the firmware, and the
+   report in its log field. GitHub refuses a link much over 7 kB, and one who
+   is not signed in goes through its login with the link encoded once more,
+   where past about 7 kB it is lost: so the link carries the knob's own lines
+   and as many of the newest as fit, and the whole report goes to the
+   clipboard as it opens. */
+const ISSUE='https://github.com/Guru-RF/VFO-Knob/issues/new?template=bug.yml';
+const ISSUE_MAX=6800;                  /* the link, encoded once more */
+let REP='';
+function repCopy(){
+  const t=$('reptxt'); t.focus(); t.select();
+  let ok=false; try{ ok=document.execCommand('copy') }catch(e){}
+  if(!ok && navigator.clipboard) navigator.clipboard.writeText(REP).catch(()=>{});
+  return ok;
+}
+$('rep').onclick=async()=>{
+  $('rep').disabled=true;
+  try{
+    const r=await fetch('/api/report',{cache:'no-store'});
+    if(!r.ok) throw new Error(r.status);
+    REP=await r.text();
+  }catch(e){ $('msg').textContent='No report: the knob did not answer.'; $('msg').style.color='var(--bad)';
+             $('rep').disabled=false; return }
+  $('rep').disabled=false;
+  $('reptxt').value=REP;
+  const fw=(REP.match(/^VFO-Knob (.+?) \(/)||[])[1]||'';
+  const at=REP.indexOf('\n--- the log'), nl=at<0?-1:REP.indexOf('\n',at+1);
+  const head=nl<0?REP:REP.slice(0,nl+1), lines=nl<0?[]:REP.slice(nl+1).replace(/\n$/,'').split('\n');
+  const body=k=>head+(k<lines.length?`(the newest ${k} lines of ${lines.length}: the whole report `
+                                      +'is on your clipboard -- paste it over this to give all of it)\n':'')
+                    +lines.slice(lines.length-k).join('\n');
+  const link=k=>ISSUE+'&firmware='+encodeURIComponent(fw)+'&logs='+encodeURIComponent(body(k));
+  let lo=0, hi=lines.length;
+  while(lo<hi){ const m=(lo+hi+1)>>1; if(encodeURIComponent(link(m)).length<=ISSUE_MAX) lo=m; else hi=m-1 }
+  $('repgo').href=link(lo);
+  $('repcut').hidden=lo===lines.length;
+  $('repcut').textContent=`The link carries the newest ${lo} lines of the log's ${lines.length}. `
+    +'Open it on GitHub puts the whole report on the clipboard too: paste it in the form\'s log, '
+    +'over what is there, to give all of it.';
+  $('repbox').hidden=false;
+};
+$('repgo').onclick=()=>{ if(!$('repcut').hidden) repCopy() };
+$('repcopy').onclick=()=>{
+  const ok=repCopy();
+  $('msg').textContent=ok?'The report is on the clipboard.':'Select the report and copy it (Ctrl+C).';
+  $('msg').style.color='';
 };
 
 load().then(webCheck).then(ota);

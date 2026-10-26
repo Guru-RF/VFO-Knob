@@ -405,7 +405,7 @@ if(KIWI_TLS)
     target_include_directories(owrx_web_host PRIVATE shim ${OC}/include ${WSL}/include ${KIWI}
                                ${CMP}/net_prov/include ${CMP}/radio/include ${CMP}/webcfg/include
                                ${CMP}/ota/include ${CMP}/bt_link/include ${CMP}/ui/include ${CMP}/usb_net/include
-                               ${CMP}/audio/include ${CMP}/board/include)
+                               ${CMP}/audio/include ${CMP}/board/include ${CMP}/netlog/include)
     target_compile_definitions(owrx_web_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM OWRX_WEB=1
                                VFO_RADIO_OWRX=1 VFO_RX_ONLY=1)
     target_link_libraries(owrx_web_host PRIVATE owrx_proto kiwi_proto vfo_core ${KIWI_TLS_LIBS} Threads::Threads)
@@ -429,7 +429,7 @@ if(KIWI_TLS)
     target_include_directories(wsdr_web_host PRIVATE shim ${WC}/include ${WSL}/include ${KIWI}
                                ${CMP}/net_prov/include ${CMP}/radio/include ${CMP}/webcfg/include
                                ${CMP}/ota/include ${CMP}/bt_link/include ${CMP}/ui/include ${CMP}/usb_net/include
-                               ${CMP}/audio/include ${CMP}/board/include)
+                               ${CMP}/audio/include ${CMP}/board/include ${CMP}/netlog/include)
     target_compile_definitions(wsdr_web_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM WSDR_WEB=1
                                VFO_RADIO_WEBSDR=1 VFO_RX_ONLY=1)
     target_link_libraries(wsdr_web_host PRIVATE wsdr_proto owrx_proto kiwi_proto vfo_core ${KIWI_TLS_LIBS}

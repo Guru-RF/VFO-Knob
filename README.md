@@ -71,6 +71,73 @@ both voices on the split arc. See [Telephone](#telephone).
 
 ---
 
+## Reporting a problem
+
+Open a [bug report](https://github.com/Guru-RF/VFO-Knob/issues/new?template=bug.yml),
+one problem per issue, after a look at the
+[open issues](https://github.com/Guru-RF/VFO-Knob/issues). The quickest way
+is from the knob itself: **Report a problem**, at the bottom of its
+[configuration page](#configuration-page), opens the form with the firmware
+and the knob's report filled in. The form asks for these; please give:
+
+1. **The firmware and its version**, as the address card says it (hold a
+   finger on the S-meter until the knob clicks): `OpenX6X00 1.21.1`.
+2. **The radio, receiver or reflector**, with its own software: an IC-705 and
+   its firmware, a FLEX-6600 and SmartSDR's version, AetherSDR's version and
+   the computer it runs on, an X6100 and its OpenX6X00 version, a receiver's
+   or a reflector's address. And how the knob reaches it: WiFi, the USB
+   cable, or SmartLink.
+3. **What happened**: what you did, what you expected and what you got. Give
+   what the face says (**NO LINK** and the reason under it, a message in
+   amber or red), and the frequency, the mode and the screen you were on. A
+   photo of the knob's face helps.
+4. **The knob's report**: **Make a report** on the configuration page gathers
+   its firmware, how it last started (a crash, a watchdog, safe mode), its
+   power, network and link, a crash it remembers, and its recent log, with
+   the passwords the knob keeps starred out; **Open it on GitHub** puts it in
+   the form. Make it right after the problem: the log is kept in the knob's
+   memory, and a restart begins it again. The issue is public, so read the
+   report before you send it, and take out anything you would rather keep to
+   yourself. Without the page, `nc <the knob's address> 3333` on a computer
+   prints the same log.
+5. **WiFi**: for a WiFi problem, the exact message on the face, the router's
+   security (WPA2, WPA2/WPA3, WPA3 only), its 2.4 GHz channel, whether the
+   network has more than one access point (a mesh, a repeater), and whether a
+   phone's hotspot works.
+6. **Audio and Bluetooth**: what you heard (the radio's audio, or your own
+   transmission), the volume and the mic gain, and where: the jack, or a
+   headset or speaker, by its make and model.
+
+## Requesting a feature
+
+Open a [feature request](https://github.com/Guru-RF/VFO-Knob/issues/new?template=feature.yml)
+whose title starts with **Feature:** and names it in a few words
+(`Feature: CW from a SmartCW keyer on SVXConnect`), one feature per issue.
+Look at the open ones first: if the feature is there, add what you would use
+it for to that issue. Please give:
+
+1. **The firmware**: the one it is for, or several, and the version you run
+   (on the address card).
+2. **What you want to do**: the operating it is for (portable, a contest, a
+   remote station, a net on a reflector, listening on a web SDR), not only
+   the feature: "send CW on a talkgroup from my paddle, as the others hear
+   it" says more than "add CW".
+3. **How you do it today**: on the radio itself, with a program on a
+   computer, a phone app or another control head, and what is missing or
+   awkward about it.
+4. **Where it would live**: on the face (a swipe, a tap, an editor, the
+   dial), on the configuration page, or in the API; what you would do and
+   what you would see. A sketch, or a screenshot of another program that does
+   it, helps.
+5. **What it depends on**: a radio's protocol or command (CI-V, the
+   FlexRadio API, TCI, SvxLink), a service or a device, with a link to its
+   documentation, and whether it needs an account or a key.
+6. **How you can help**: testing it on your radio, a pull request, the
+   documentation.
+
+The form asks for each of these, and labels the issue **enhancement**. One
+feature per issue lets each be answered, built and closed on its own.
+
 ## What it does
 
 | | |
@@ -79,7 +146,7 @@ both voices on the split arc. See [Telephone](#telephone).
 | **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. On a radio with a choice of antennas — a FlexRadio's slice, the IC-7610, the IC-R8600 — a press held half a second opens them instead, with a buzz, and keys nothing; there a tap keys 0.15 s after the lift, so that the glass losing a held finger for a moment is never taken for a tap. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
-| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys, with its battery beside it — green, yellow or red — where the headset reports it; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the UberSDR and Kiwi888 firmwares, only for listening. A Bluetooth speaker plays the knob's audio as well as the jack, a fifth of a second or so behind it, and the knob's own microphone transmits: a speaker shows at the slab's end, and it falls silent while you do; one that takes its volume from what plays to it has the knob's VOLUME for its own, both ways. Each headset or speaker has its own level on the configuration page, 24 dB down to 12 dB up — a speaker 12 dB down until it is set. The second chip tells a speaker from a headset by itself; the configuration page can say otherwise. |
+| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys, with its battery beside it — green, yellow or red — where the headset reports it; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the receivers' firmwares (UberSDR, Kiwi888, OpenWebRX and WebSDR), only for listening. A Bluetooth speaker plays the knob's audio as well as the jack, a fifth of a second or so behind it, and the knob's own microphone transmits: a speaker shows at the slab's end, and it falls silent while you do; one that takes its volume from what plays to it has the knob's VOLUME for its own, both ways. Each headset or speaker has its own level on the configuration page, 24 dB down to 12 dB up — a speaker 12 dB down until it is set. The second chip tells a speaker from a headset by itself; the configuration page can say otherwise. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
 | **Memories** | On the IC-705, the IC-9700 and the FlexRadio, **V/M**, last on the swipe down: MEMORY, and the frequency readout becomes the channel — its name, number, frequency, shift and tone — and the knob steps through the programmed channels of one group (tap the group, where the band was, to choose another; on the IC-9700 the group is the band it is on). A FlexRadio's memories have no groups: the knob steps through all of them in order of frequency, each put on the slice by the radio's own *memory apply*. VFO again for the VFO, simplex. |
@@ -589,8 +656,8 @@ it. More: [A Bluetooth speaker](docs/headset.md#a-bluetooth-speaker).
 ## Configuration page
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
-the WiFi networks (up to four), audio levels, access credentials, and firmware
-updates.
+the WiFi networks (up to four), audio levels, access credentials, firmware
+updates, and a problem report.
 
 Opened over WiFi, the host field offers a green **my IP** — the address of the
 computer you are browsing from, one tap to fill in when that is where
@@ -633,6 +700,8 @@ GET /api/radios                       the radios the knob knows, and the one in 
 POST /api/radios/switch  to=1         another in use: the knob restarts into it
 GET /api/status                       the knob itself, its power too: on_usb (null
                                       while it settles), rail_mv, batt (-1 on USB)
+GET /api/report                       a problem report, as text: the knob's own
+                                      lines, then its log, passwords starred out
 ```
 
 A POST with the same fields as a form does the same. Both need the page's
@@ -641,6 +710,24 @@ the radio is on the air.
 
 > **It is HTTP Basic over plain HTTP.** A lock on the door, not a safe — treat
 > the knob as something that belongs on a network you trust.
+
+**Report a problem**, at the bottom of the page, is for a
+[bug report](#reporting-a-problem). **Make a report** shows what the knob
+knows of itself: its firmware and build, how long it has been up and what
+started it (power on, a restart, a crash, a watchdog, a brownout, safe mode),
+a crash its flash still holds — the task, the address and the backtrace, to
+decode against that build's ELF — its power, its network and the signal, its
+link and why it is down, where its settings are kept, its memory, and the
+second chip's firmware with the headset or speaker on it; then its log, as
+far back as the knob still holds it (16 kB, from the start where it has not
+run long). Every password the knob keeps (the page's, the WiFi networks', the
+radios') is starred out; nothing else is, so the page asks the owner to read
+it first: the issue is public. **Open it on GitHub** opens the bug form, its
+firmware and report fields filled in. A link to GitHub can carry only so
+much — through GitHub's login, for someone not signed in, about 7 kB once
+encoded twice — so it holds the knob's lines and the newest of the log that
+fit, and the whole report goes to the clipboard as it opens, to paste over
+it; **Copy it** does that alone.
 
 ## Updates
 

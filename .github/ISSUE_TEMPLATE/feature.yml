@@ -1,0 +1,77 @@
+name: Feature request
+description: Something the knob could do that it does not do yet.
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One feature per issue, named in the title after **Feature:** (`Feature: CW from a SmartCW keyer on SVXConnect`). More in the README's [Requesting a feature](https://github.com/Guru-RF/VFO-Knob#requesting-a-feature).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you start
+      options:
+        - label: I looked at the open issues, and this feature is not among them. If it is, I add what I would use it for to that issue instead.
+          required: true
+  - type: dropdown
+    id: firmware
+    attributes:
+      label: The firmware
+      description: "The one it is for, or several."
+      multiple: true
+      options:
+        - Icom
+        - FlexRadio
+        - OpenX6X00
+        - AetherSDR
+        - SVXConnect
+        - Telephone
+        - UberSDR
+        - Kiwi888
+        - OpenWebRX
+        - WebSDR
+        - Setup
+        - A Bluetooth headset or speaker (the second chip)
+        - Every firmware
+        - A new radio or receiver
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: The version you run
+      description: "On the address card: hold a finger on the S-meter until the knob clicks."
+      placeholder: Icom 1.21.1
+  - type: textarea
+    id: what
+    attributes:
+      label: What you want to do
+      description: "The operating it is for (portable, a contest, a remote station, a net on a reflector, listening on a web SDR), not only the feature: \"send CW on a talkgroup from my paddle, as the others hear it\" says more than \"add CW\"."
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How you do it today
+      description: "On the radio itself, with a program on a computer, a phone app, or another control head, and what is missing or awkward about it."
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where it would live
+      description: "On the face (a swipe, a tap, an editor, the dial), on the configuration page, or in the API; what you would do and what you would see. A sketch, or a screenshot of another program that does it, helps."
+  - type: textarea
+    id: depends
+    attributes:
+      label: What it depends on
+      description: "A radio's protocol or command (CI-V, the FlexRadio API, TCI, SvxLink), a service or a device, with a link to its documentation, and whether it needs an account or a key."
+  - type: checkboxes
+    id: help
+    attributes:
+      label: How you can help
+      options:
+        - label: Testing it on my radio
+        - label: A pull request
+        - label: The documentation

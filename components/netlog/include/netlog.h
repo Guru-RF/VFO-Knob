@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_err.h"
 
 /* Log sink over TCP, for builds that have no serial console.
@@ -33,3 +35,9 @@ esp_err_t netlog_start(void);
 /* Runs just before the "reboot" command restarts the device. Used to release
  * the USB PHY, without which the reboot leaves no way back in. */
 void netlog_on_reboot(void (*fn)(void));
+
+/* The ring as it stands, oldest line first, into out as a string: what a
+ * report carries (webcfg). Where the ring, or out, has less than the whole
+ * log, it starts at the first whole line; control bytes are left out.
+ * Returns the length. */
+size_t netlog_copy(char *out, size_t cap);

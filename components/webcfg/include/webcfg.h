@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_err.h"
 
 /* Configuration and diagnostics over HTTP, on port 80.
@@ -15,3 +17,9 @@
  * trusted LAN and is not acceptable for a shipped product; see TODO.md.
  */
 esp_err_t webcfg_start(void);
+
+/* The knob's own lines at the head of a problem report (GET /api/report):
+ * its firmware, how it started, its power, network and link -- written into
+ * out, at most cap bytes with the terminating 0, returning the length. The
+ * log follows them; the report's passwords are starred out. */
+void webcfg_report_cb(size_t (*fn)(char *out, size_t cap));

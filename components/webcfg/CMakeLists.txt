@@ -12,6 +12,6 @@ endif()
 idf_component_register(
     SRCS "webcfg.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_http_server net_prov radio ${radio_client} usb_net ui audio ota vfo_core esp_app_format mbedtls lwip espcoredump spi_flash sdr_rx kiwi_proto bt_link board ${_more}
+    REQUIRES esp_http_server net_prov radio ${radio_client} usb_net ui audio ota vfo_core esp_app_format mbedtls lwip espcoredump spi_flash sdr_rx kiwi_proto bt_link board netlog ${_more}
     EMBED_TXTFILES ${_pages}
 )

@@ -27,6 +27,7 @@
 #include "bt_link.h"
 #include "kvstore.h"
 #include "net_prov.h"
+#include "netlog.h"
 #include "ota.h"
 #include "ptt_fsm.h"
 #include "radio.h"
@@ -509,6 +510,57 @@ static esp_err_t coredump_get(httpd_req_t *r)
         off += n;
     }
     return httpd_resp_send_chunk(r, NULL, 0);
+}
+
+/* --------------------------------------------------------------- report */
+
+/* A problem report for a GitHub issue (the page's Report a problem): the
+ * knob's own lines first -- app_main's, which knows what the face says --
+ * then the log as netlog's ring holds it. It goes to a public issue, so every
+ * password the knob keeps is starred out of it. */
+static size_t (*s_report_head)(char *out, size_t cap);
+
+void webcfg_report_cb(size_t (*fn)(char *out, size_t cap))
+{
+    s_report_head = fn;
+}
+
+#define REPORT_HEAD 2048
+#define REPORT_SZ   (REPORT_HEAD + 16384 + 64)
+
+/* Stars out each place a secret shows in t. One under four characters --
+ * the shipped admin, a PIN -- is left: it would star out ordinary words. */
+static void report_scrub(char *t, const char *secret)
+{
+    const size_t n = strlen(secret);
+    if (n < 4) return;
+    for (char *p = strstr(t, secret); p; p = strstr(p + n, secret))
+        memset(p, '*', n);
+}
+
+static esp_err_t report_get(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    static EXT_RAM_BSS_ATTR char buf[REPORT_SZ];   /* the server runs one handler at a time */
+    size_t n = s_report_head ? s_report_head(buf, REPORT_HEAD) : 0;
+    if (n >= REPORT_HEAD) n = REPORT_HEAD - 1;
+    n += (size_t)snprintf(buf + n, sizeof buf - n, "\n--- the log, oldest first ---\n");
+    n += netlog_copy(buf + n, sizeof buf - n);
+
+    report_scrub(buf, net_prov_web_pass());
+    report_scrub(buf, net_prov_cfg()->pass);
+    report_scrub(buf, net_prov_cfg()->radio_pass);
+    for (int i = 0; i < NET_PROV_WIFIS; i++) {
+        net_wifi_t w;
+        if (net_prov_wifi_get(i, &w)) report_scrub(buf, w.pass);
+    }
+    for (int i = 0; i < NET_PROV_RADIOS; i++) {
+        net_radio_t rd;
+        if (net_prov_radio_get(i, &rd)) report_scrub(buf, rd.pass);
+    }
+    httpd_resp_set_type(r, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    return httpd_resp_send(r, buf, (ssize_t)n);
 }
 
 /* ?radio=<name> is the page switching the knob to that radio's firmware, on
@@ -2667,7 +2719,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 11 + KV_TEST_URIS + n_extra + PORTAL_URIS + WIFI_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
+    c.max_uri_handlers = 12 + KV_TEST_URIS + n_extra + PORTAL_URIS + WIFI_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -2695,6 +2747,7 @@ esp_err_t webcfg_start(void)
         { .uri = "/api/reboot",  .method = HTTP_POST, .handler = reboot_post },
         { .uri = "/api/card",    .method = HTTP_POST, .handler = card_post },
         { .uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get },
+        { .uri = "/api/report",  .method = HTTP_GET,  .handler = report_get },
         { .uri = "/config",      .method = HTTP_GET,  .handler = config_page },
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++)

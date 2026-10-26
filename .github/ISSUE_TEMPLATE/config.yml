@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: The guides
+    url: https://github.com/Guru-RF/VFO-Knob/blob/main/docs/README.md
+    about: How each firmware works, step by step, with the knob's own screens.
+  - name: vfoknob.com
+    url: https://vfoknob.com/
+    about: The knob, its firmwares and its guides.

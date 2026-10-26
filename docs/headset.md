@@ -34,11 +34,11 @@ While a speaker is connected:
   never red — and its battery beside it, if it reports it. See
   [A Bluetooth speaker](#a-bluetooth-speaker).
 
-The UberSDR and Kiwi888 firmwares only receive: there the headset is for
-listening, and its logo shows beside the spots or the receiver's name, never
-in red, since nothing keys. So it is with the IC-R8600 receiver on the Icom
-firmware: the slab says **RECEIVER**, with the logo at its end, and nothing
-keys.
+The receivers' firmwares, UberSDR, Kiwi888, OpenWebRX and WebSDR, only
+receive: there the headset is for listening, and its logo shows beside the
+spots or the receiver's name, never in red, since nothing keys. So it is with
+the IC-R8600 receiver on the Icom firmware: the slab says **RECEIVER**, with
+the logo at its end, and nothing keys.
 
 The Telephone firmware opens the headset's audio for its calls only, as a
 mobile phone does. The audio opens when a call rings in, so the ring plays in

@@ -59,6 +59,7 @@
 #include "esp_app_desc.h"
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
+#include "esp_wifi.h"
 /* Web SDRs as a second receiver: the Icom, Xiegu, FlexRadio and UberSDR
  * firmwares -- and the kiwi one's right ear. */
 #if VFO_HAS_SDR
@@ -3657,6 +3658,117 @@ static void report_stored_crash(void)
     free(s);
 }
 
+/* A problem report's head (webcfg_report_cb): what is asked first about a
+ * knob that misbehaves -- which firmware, how it last started, its power,
+ * network and link -- and the crash its flash holds. The log under it may no
+ * longer reach back to the start. It goes to a public issue: no network
+ * names, no addresses of the access point. */
+static size_t addf(char *out, size_t cap, size_t n, const char *fmt, ...)
+{
+    if (n + 1 >= cap) return n;
+    va_list ap;
+    va_start(ap, fmt);
+    const int k = vsnprintf(out + n, cap - n, fmt, ap);
+    va_end(ap);
+    return k < 0 ? n : (n + (size_t)k < cap ? n + (size_t)k : cap - 1);
+}
+
+static const char *reset_words(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON:    return "power on";
+    case ESP_RST_SW:         return "a restart";
+    case ESP_RST_PANIC:      return "a crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:        return "a watchdog";
+    case ESP_RST_BROWNOUT:   return "a brownout";
+    case ESP_RST_USB:        return "the USB port";
+    case ESP_RST_JTAG:       return "JTAG";
+    case ESP_RST_EXT:        return "the reset pin";
+    case ESP_RST_PWR_GLITCH: return "a power glitch";
+    case ESP_RST_CPU_LOCKUP: return "a CPU lockup";
+    default:                 return "a reset";
+    }
+}
+
+static size_t report_head(char *out, size_t cap)
+{
+    size_t n = 0;
+    char fw[40];
+    firmware_line(fw, sizeof fw);
+    const esp_app_desc_t *app = esp_app_get_description();
+    n = addf(out, cap, n, "VFO-Knob %s (vfo-knob-%s %s, built %s %s, ESP-IDF %s)\n", fw, ota_radio(),
+             app->version, app->date, app->time, app->idf_ver);
+
+    const int64_t up = esp_timer_get_time() / 1000000;
+    const esp_reset_reason_t why = esp_reset_reason();
+    n = addf(out, cap, n, "up %lldh %02lldm %02llds, after %s%s\n", (long long)(up / 3600),
+             (long long)(up / 60 % 60), (long long)(up % 60), reset_words(why),
+             s_safe_mode ? "; in SAFE MODE (three starts in a row never got 20 s in)" : "");
+
+    if (esp_core_dump_image_check() == ESP_OK) {
+        const bool last = why == ESP_RST_PANIC || why == ESP_RST_TASK_WDT || why == ESP_RST_INT_WDT ||
+                          why == ESP_RST_WDT;
+        esp_core_dump_summary_t *cs = heap_caps_calloc(1, sizeof *cs, MALLOC_CAP_SPIRAM);
+        if (cs && esp_core_dump_get_summary(cs) == ESP_OK) {
+            n = addf(out, cap, n, "crash stored (%s): task \"%s\" pc=0x%08" PRIx32 " cause=%" PRIu32
+                                  " vaddr=0x%08" PRIx32 " elf=%.16s\n  backtrace:",
+                     last ? "it ended the start before this one" : "from an earlier start", cs->exc_task,
+                     cs->exc_pc, cs->ex_info.exc_cause, cs->ex_info.exc_vaddr, (const char *)cs->app_elf_sha256);
+            for (uint32_t i = 0; i < cs->exc_bt_info.depth && i < 16; i++)
+                n = addf(out, cap, n, " 0x%08" PRIx32, cs->exc_bt_info.bt[i]);
+            n = addf(out, cap, n, "%s\n", cs->exc_bt_info.corrupted ? " (corrupted)" : "");
+        }
+        free(cs);
+    }
+
+    board_power_t pw;
+    board_power_get(&pw);
+    if (pw.src == KNOB_PWR_USB)
+        n = addf(out, cap, n, "power: on USB, the rail at %d mV\n", pw.mv);
+    else if (pw.src == KNOB_PWR_BATTERY)
+        n = addf(out, cap, n, "power: battery %d %%, the rail at %d mV\n", pw.pct, pw.mv);
+
+    wifi_ap_record_t ap;
+    if (s_on_usb)
+        n = addf(out, cap, n, "network: the USB cable\n");
+    else if (s_wifi_started && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+        n = addf(out, cap, n, "network: WiFi, %d dBm on channel %u\n", ap.rssi, (unsigned)ap.primary);
+    else
+        n = addf(out, cap, n, "network: none joined\n");
+
+#if !VFO_RADIO_SETUP
+    static const char *L[] = { "DOWN", "CONNECTING", "GREETING", "READY", "DEGRADED" };
+    EXT_RAM_BSS_ATTR static radio_status_t st;     /* the server's one task: not its stack */
+    radio_get_status(&st);
+    n = addf(out, cap, n, "%s link: %s%s%s\n", radio_link_name(), st.link < 5 ? L[st.link] : "?",
+             st.link_why[0] ? ", " : "", st.link_why);
+#endif
+
+    kv_status_t ks;
+    kv_status(&ks);
+    n = addf(out, cap, n, "settings: %s%s%s\n", kv_where_word(ks.where), ks.why[0] ? ", " : "", ks.why);
+    n = addf(out, cap, n, "memory: internal %u B free, %u at the least; PSRAM %u B free\n",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+#if !VFO_RADIO_SETUP
+    EXT_RAM_BSS_ATTR static bt_link_status_t b;
+    bt_link_status(&b);
+    if (!b.companion)
+        n = addf(out, cap, n, "second chip: not answering\n");
+    else if (b.hs.link == BTL_LINK_IDLE)
+        n = addf(out, cap, n, "second chip: companion %s, nothing connected\n", b.version);
+    else
+        n = addf(out, cap, n, "second chip: companion %s, a %s \"%.32s\" %s, %d dBm\n", b.version,
+                 b.hs.kind == BTL_KIND_SPEAKER ? "speaker" : "headset", b.hs.name,
+                 b.hs.link == BTL_LINK_CONNECTED ? "connected" : "connecting", b.hs.rssi);
+#endif
+    return n;
+}
+
 static void boot_ok_cb(void *arg)
 {
     (void)arg;
@@ -3724,6 +3836,7 @@ void app_main(void)
     /* Configuration page. Started before the transport is chosen so it is
      * reachable even when nothing else comes up -- which is exactly when
      * someone needs to correct an SSID or a host address. */
+    webcfg_report_cb(report_head);
     bring_up("webcfg", webcfg_start);
     ota_init();
     ota_set_interval(net_prov_ota_hours());

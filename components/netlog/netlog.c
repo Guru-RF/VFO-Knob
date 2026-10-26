@@ -57,6 +57,34 @@ static size_t ring_read(size_t *rd, char *out, size_t cap)
     return n;
 }
 
+size_t netlog_copy(char *out, size_t cap)
+{
+    if (!s_ring || cap < 2) return 0;
+    portENTER_CRITICAL(&s_mux);
+    const size_t total = s_total;
+    portEXIT_CRITICAL(&s_mux);
+    /* The newest, when out holds less than the ring. */
+    size_t rd = total > RING_SZ ? total - RING_SZ : 0;
+    if (total - rd > cap - 1) rd = total - (cap - 1);
+    const bool cut = rd > 0;
+    size_t n = ring_read(&rd, out, cap - 1);
+    out[n] = 0;
+    /* From a whole line on, where the oldest was cut into. */
+    size_t from = 0;
+    if (cut) {
+        const char *nl = memchr(out, '\n', n);
+        from = nl ? (size_t)(nl + 1 - out) : 0;
+    }
+    /* Only text: a stray control byte would come out as junk. */
+    size_t o = 0;
+    for (size_t i = from; i < n; i++) {
+        const unsigned char c = (unsigned char)out[i];
+        if (c >= 0x20 || c == '\n' || c == '\t') out[o++] = (char)c;
+    }
+    out[o] = 0;
+    return o;
+}
+
 static int log_hook(const char *fmt, va_list ap)
 {
     /* va_list is consumed by the first use, so the console copy needs its own. */

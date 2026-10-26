@@ -215,3 +215,8 @@ count.
 | **NO SD CARD** | The built-in card that holds the settings does not answer: restart the knob. If it stays, the card has failed: **Carry on without the SD card** on the configuration page, and the knob keeps its settings in its own memory. |
 | **SAFE MODE** | Three starts in a row ended before 20 seconds, so this one runs without WiFi, audio or the settings' card: restart the knob, and it starts as usual. If it comes back to SAFE MODE every time, something crashes it at every start: install its firmware again over the USB cable. |
 | **SD CARD FAULT** | Part of the settings could not be read from the card, or it stopped taking writes: the knob runs on its own memory meanwhile. Restart it; the page's **Settings** says which part, and offers **Start fresh on this card** when the settings have gone from it. |
+
+If it goes on, or the knob does anything else it should not, tell us:
+**Report a problem**, at the bottom of the knob's configuration page, gathers
+what the knob knows of it and opens a bug report on GitHub with that filled
+in. See [Reporting a problem](../README.md#reporting-a-problem).
