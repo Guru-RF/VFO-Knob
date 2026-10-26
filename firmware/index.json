@@ -23,7 +23,7 @@
     {
       "radio": "ubersdr",
       "name": "UberSDR",
-      "version": "1.21.1"
+      "version": "1.21.2"
     },
     {
       "radio": "kiwi",
