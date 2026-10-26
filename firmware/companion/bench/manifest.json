@@ -1,0 +1,22 @@
+{
+  "project": "vfo-knob-companion",
+  "release": "1.21.1",
+  "bootloader_version": 2,
+  "files": {
+    "bootloader.bin": {
+      "offset": "0x1000",
+      "sha256": "4811bb30b73771f521064e43ed335ed58c709038c8534fadf90c5bca95696738",
+      "size": 26240
+    },
+    "partition-table.bin": {
+      "offset": "0x8000",
+      "sha256": "66ae1650fdaf89e7672f5c835db003460361d2ce5e12e56d64d8fd5b374aefc6",
+      "size": 3072
+    },
+    "ota_data_initial.bin": {
+      "offset": "0xe000",
+      "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f",
+      "size": 8192
+    }
+  }
+}

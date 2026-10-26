@@ -55,5 +55,12 @@
       "name": "Setup",
       "version": "1.21.1"
     }
-  ]
+  ],
+  "companion": {
+    "version": "1.21.1",
+    "file": "vfo-knob-companion-1.21.1.bin",
+    "sha256": "57c5b1000cfca611242c07687c66afdf80ad663322907d0bd90030edc9e10a45",
+    "size": 921600,
+    "app_sha256": "bb9b80406717057387b1e4c672c2439c687539ce05837b2e3e53f46a585d565c"
+  }
 }
