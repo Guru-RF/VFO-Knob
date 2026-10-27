@@ -23,7 +23,8 @@ numbers are Ofcom's, kept for drama: no one answers them.
 
 Open the knob's configuration page: hold a finger on the meter arc until the
 knob clicks, then browse to the address on the card. The user is `admin` and the
-password is `admin` until you change it.
+password is `admin`; the page first asks for a password of the knob's own, 8 to
+32 characters, and shows nothing else until it has one.
 
 1. Set the WiFi.
 2. Under **Telephone**, enter the account your provider gave you: the SIP user,
@@ -229,8 +230,8 @@ Behind the page's login (HTTP basic auth, `admin` and your password):
 For example:
 
 ```sh
-curl -u admin:admin http://vfo-knob.local/api/phone
-curl -u admin:admin "http://vfo-knob.local/api/phone/dial?number=%2B3212345678"
+curl -u admin:<password> http://vfo-knob.local/api/phone
+curl -u admin:<password> "http://vfo-knob.local/api/phone/dial?number=%2B3212345678"
 ```
 
 ## Google Contacts

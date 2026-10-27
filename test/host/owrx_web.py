@@ -44,7 +44,12 @@ import urllib.request
 
 ARGS = None
 FAILS = []
-AUTH = "Basic " + base64.b64encode(b"admin:admin").decode()
+# A knob starts with the shipped admin/admin, and over anything but the USB
+# cable it does nothing more until it has a password of its own: each Knob
+# below chooses this one first (case_config does it through the page).
+SHIPPED = "Basic " + base64.b64encode(b"admin:admin").decode()
+TEST_PW = "owrx-web-test"
+AUTH = "Basic " + base64.b64encode(f"admin:{TEST_PW}".encode()).decode()
 
 
 def check(cond, what):
@@ -141,7 +146,7 @@ class Knob:
     """One boot of the knob with its web server: owrx_web_host, serving until
     it is stopped."""
 
-    def __init__(self, *saves, env=None):
+    def __init__(self, *saves, env=None, choose=True):
         self.dir = tempfile.mkdtemp(prefix="owrx-web-")
         self.port = free_port()
         self.lines = []
@@ -156,6 +161,10 @@ class Knob:
         if not self.up.wait(10):
             raise RuntimeError("the knob's web server did not start")
         self.base = f"http://127.0.0.1:{self.port}"
+        if choose:
+            st, body = self.api("/api/config", {"user": "admin", "webpass": TEST_PW}, auth=SHIPPED)
+            if st != 200:
+                raise RuntimeError(f"the knob's password not chosen: {st} {body!r}")
 
     def _read(self):
         for line in self.p.stdout:
@@ -166,8 +175,8 @@ class Knob:
             if line.startswith("@WEB"):
                 self.up.set()
 
-    def api(self, path, data=None):
-        req = urllib.request.Request(self.base + path, headers={"Authorization": AUTH},
+    def api(self, path, data=None, auth=None):
+        req = urllib.request.Request(self.base + path, headers={"Authorization": auth or AUTH},
                                      data=urllib.parse.urlencode(data).encode() if data is not None else None)
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -274,7 +283,7 @@ class CDP:
 
 
 class Browser:
-    def __init__(self, knob):
+    def __init__(self, knob, auth=None):
         self.knob = knob
         self.dir = tempfile.mkdtemp(prefix="owrx-web-chromium-")
         self.p = subprocess.Popen([ARGS.chromium, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
@@ -293,8 +302,11 @@ class Browser:
         self.cdp = CDP(page["webSocketDebuggerUrl"])
         self.cdp.send("Network.enable")
         # The page's login, as a browser asked once would send it with every request.
-        self.cdp.send("Network.setExtraHTTPHeaders", headers={"Authorization": AUTH})
+        self.login(auth or AUTH)
         self.cdp.send("Page.enable")
+
+    def login(self, auth):
+        self.cdp.send("Network.setExtraHTTPHeaders", headers={"Authorization": auth})
 
     def go(self, path, ready):
         self.cdp.send("Page.navigate", url=self.knob.base + path)
@@ -360,23 +372,83 @@ def row_state(b, i):
 
 
 def save(b):
-    b.js("$('save').click()")
-    return b.until("/Saved|not saved|failed/.test($('msg').textContent)&&$('msg').textContent", 20, "the save")
+    b.js("$('msg').textContent='';$('save').click()")    # this save's answer, not the last one's
+    return b.until("/Saved|[Nn]ot saved|failed/.test($('msg').textContent)&&$('msg').textContent", 20, "the save")
 
 
 # ------------------------------------------------------------------ the cases
+
+def password_first(k, b):
+    """The shipped password, as a new knob has it on the WiFi: only the
+    choice of another answers, and the page asks for it alone."""
+    st, c = k.api("/api/config", auth=SHIPPED)
+    check(st == 200 and c.get("pwforce") is True and c.get("defaultpw") is True,
+          f"the shipped password: the knob says it must be changed ({st}, pwforce {c.get('pwforce')!r})")
+    st, _ = k.api("/api/radios", auth=SHIPPED)
+    check(st == 403, f"meanwhile its receivers are not given out: {st}")
+    st, _ = k.api("/api/config", {"host": "elsewhere.example"}, auth=SHIPPED)
+    check(st == 403, f"nor is a setting saved without the password: {st}")
+    st, _ = k.api("/api/config", {"webpass": "short"}, auth=SHIPPED)
+    check(st == 400, f"a password under 8 characters refused: {st}")
+    st, _ = k.api("/api/report", auth=SHIPPED)
+    check(st == 403, f"nor the report: {st}")
+    check(b.go("/radio", "document.body&&document.body.classList.contains('pwforce')"),
+          "the radio's page sends the browser to the one that asks")
+    check(b.js("!$('pwfirst').hidden&&getComputedStyle($('save')).display==='none'"
+               "&&getComputedStyle($('radiosec')).display==='none'"),
+          "the page shows the password card, and nothing else")
+    b.js("document.querySelector('#pwfirst button.show').click()")
+    check(b.js("$('pfpass').type==='text'&&$('pfpass2').type==='text'"), "its Show shows both fields")
+    b.js("document.querySelector('#pwfirst button.show').click()")
+    check(b.js("$('pfpass').type==='password'&&$('pfpass2').type==='password'"), "...and hides both again")
+    b.js(f"$('pfpass').value={json.dumps(TEST_PW)};$('pfpass2').value='different';$('pfset').click()")
+    check(b.until("/differ/.test($('pfmsg').textContent)", 5, "the mismatch"), "two passwords that differ: said")
+    b.js(f"$('pfpass2').value={json.dumps(TEST_PW)};$('pfset').click()")
+    check(b.until("/^Set\\./.test($('pfmsg').textContent)", 10, "the password set"), "the password set from the page")
+    st, _ = k.api("/api/config", auth=SHIPPED)
+    check(st == 401, f"the shipped one no longer logs in: {st}")
+    st, c = k.api("/api/config")
+    check(st == 200 and c.get("pwforce") is False and c.get("defaultpw") is False,
+          f"the new one does, and nothing is asked any more ({st})")
+    b.login(AUTH)
+
+
+def access(k, b):
+    """Access: a new password typed twice, shown with both fields, and
+    nothing saved while the two differ or it is too short."""
+    b.js("document.querySelector('#webpass+button.show').click()")
+    check(b.js("$('webpass').type==='text'&&$('webpass2').type==='text'"), "Access: Show shows both fields")
+    b.js("document.querySelector('#webpass+button.show').click()")
+    b.js("$('webpass').value='short';$('webpass2').value='short'")
+    msg = save(b)
+    check(msg == "Not saved: a password of 8 to 32 characters.", f"a short one refused on the page: {msg!r}")
+    b.js(f"$('webpass').value={json.dumps(TEST_PW)};$('webpass2').value='different'")
+    msg = save(b)
+    check(msg == "Not saved: the two passwords differ." and b.js("document.activeElement.id") == "webpass2",
+          f"two that differ refused, the second field to retype: {msg!r}")
+    st, _ = k.api("/api/config")
+    check(st == 200, f"...and nothing changed: the login still works ({st})")
+    b.js(f"$('webpass2').value={json.dumps(TEST_PW)}")
+    msg = save(b)
+    check(msg and msg.startswith("Saved") and b.js("!$('webpass').value&&!$('webpass2').value"),
+          f"the two the same: saved, both fields emptied: {msg!r}")
+    st, _ = k.api("/api/config")
+    check(st == 200, f"the login it set works: {st}")
+
 
 def case_config():
     m1 = Mock("--name", "MOCK One")
     m2 = Mock("--prefix", "/OWRX/", "--fork", "upstream", "--name", "MOCK Two | Somewhere far")
     m3 = Mock("--no-status")
     m4 = Mock("--banned", "--name", "MOCK Banned")
-    k = Knob(f"One={m1.url}")
-    b = Browser(k)
+    k = Knob(f"One={m1.url}", choose=False)
+    b = Browser(k, auth=SHIPPED)
     try:
+        password_first(k, b)
         check(k.until(lambda: k.radio()["ready"], 20, "the knob to play"), "the knob plays the first receiver")
         check(b.go("/config", "typeof RIGS!=='undefined'&&RIGS&&RIGS.length===1"), "the configuration page, one receiver")
         check(b.text("#rtitle") == "OpenWebRX receivers", f"its title: {b.text('#rtitle')!r}")
+        access(k, b)
         check(b.js("!$('owrxnote').hidden&&$('rlistnote').hidden&&$('ubernote').hidden"),
               "the receivers' note, not the radios' one")
         check(b.js("!document.querySelector('#rlist input[data-k=port]')&&!document.querySelector('#rlist input[data-k=pass]')"),

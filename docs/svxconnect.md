@@ -14,7 +14,8 @@ layout (`tools/mkdocs.py`); the orange marks are what your hand does.
 
 Open the knob's configuration page — hold a finger on the S-meter until the
 knob clicks, and browse to the address on the card; user `admin`, password
-`admin` until you change it.
+`admin`; the page first asks for a password of the knob's own, 8 to 32
+characters, and shows nothing else until it has one.
 
 1. Set the WiFi, and the **reflector**: its name, not its host — `be.svx.link`
    is found through its SRV record.

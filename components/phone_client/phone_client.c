@@ -249,6 +249,7 @@ static struct {
     uint32_t   tone_fed;                 /* ms of them queued since */
     uint32_t   rx_packets, tx_packets, rx_lost;
     uint32_t   rx_other, rx_late;        /* dropped: not G.711; behind */
+    uint32_t   rx_foreign;               /* dropped: not from the call's far end */
     uint32_t   rx_shortened;             /* frames of pauses not played: behind */
     uint32_t   rx_lengthened;            /* frames of pauses played twice: short */
     /* The network's lateness: each packet's arrival against its timestamp,
@@ -580,6 +581,21 @@ static void play(const int16_t *pcm16k)
     audio_out_feed_pcm16(pcm16k, FRAME, 1);
 }
 
+/* An address no packet from the internet comes from: a far end that wrote
+ * its own LAN address into its SDP, behind its NAT. Network order in. */
+static bool unroutable(uint32_t ip)
+{
+    const uint32_t h = ntohl(ip);
+    return h == 0 || (h >> 24) == 10 || (h >> 20) == (172 << 4 | 1) || (h >> 16) == (192 << 8 | 168) ||
+           (h >> 22) == (100 << 2 | 1) || (h >> 16) == (169 << 8 | 254);
+}
+
+/* The kinds of packet the call has: its audio, comfort noise, its DTMF. */
+static bool call_pt(uint8_t pt)
+{
+    return pt == 0 || pt == 8 || pt == 9 || pt == 13 || (int)pt == C.media.dtmf_pt;
+}
+
 static void rtp_rx(void)
 {
     uint8_t pkt[512];
@@ -587,14 +603,30 @@ static void rtp_rx(void)
     socklen_t fl = sizeof from;
     const int n = recvfrom(C.rtp_fd, pkt, sizeof pkt, 0, (struct sockaddr *)&from, &fl);
     if (n < 12 || (pkt[0] & 0xC0) != 0x80 || !C.media.on) return;
+    const uint8_t pt = pkt[1] & 0x7F;
     /* Symmetric RTP: the far end's media comes from where we send it --
-     * behind its NAT, a port its SDP could not know. Latched once. */
-    if (!C.latched && (from.sin_addr.s_addr != C.dst.sin_addr.s_addr || from.sin_port != C.dst.sin_port)) {
+     * behind its NAT, a port its SDP could not know. Latched once, to a
+     * packet of the call's own kinds, from where the call's media can come:
+     * the SDP's address on another port, the SIP server's, or anywhere when
+     * the SDP's address is one nothing comes from. Media from the SDP's own
+     * address closes the latch too. The first stranger to send anything
+     * used to take the microphone's audio wherever it came from. */
+    const bool from_dst = from.sin_addr.s_addr == C.dst.sin_addr.s_addr && from.sin_port == C.dst.sin_port;
+    if (!from_dst) {
+        const uint32_t ip = from.sin_addr.s_addr;
+        const bool may = ip == C.media.ip || (ip && ip == sip_server_ip()) || unroutable(C.media.ip);
+        if (C.latched || !call_pt(pt) || !may) {
+            if (!C.rx_foreign++)
+                ESP_LOGW(TAG, "RTP from %s:%u, not the call's: dropped", inet_ntoa(from.sin_addr),
+                         (unsigned)ntohs(from.sin_port));
+            return;
+        }
         C.dst = from;
         C.latched = true;
         ESP_LOGI(TAG, "RTP latched to %s:%u", inet_ntoa(from.sin_addr), (unsigned)ntohs(from.sin_port));
+    } else if (!C.latched && call_pt(pt)) {
+        C.latched = true;
     }
-    const uint8_t pt = pkt[1] & 0x7F;
     const uint16_t seq = (uint16_t)(pkt[2] << 8 | pkt[3]);
     const uint32_t ssrc = (uint32_t)pkt[8] << 24 | (uint32_t)pkt[9] << 16 | (uint32_t)pkt[10] << 8 | pkt[11];
     size_t off = 12 + 4u * (pkt[0] & 0x0F);
@@ -954,12 +986,12 @@ static void on_call(sip_call_t s, const char *peer, const char *number, const ch
         C.key = 0;
         s_dtmf_r = s_dtmf_w;
         if (C.rx_packets || C.tx_packets)
-            ESP_LOGI(TAG, "call over: %lu packets in (%lu lost, %lu late, %lu not audio), %lu out; "
-                     "pauses %lu ms cut, %lu ms added",
+            ESP_LOGI(TAG, "call over: %lu packets in (%lu lost, %lu late, %lu not audio, %lu not the "
+                     "call's), %lu out; pauses %lu ms cut, %lu ms added",
                      (unsigned long)C.rx_packets, (unsigned long)C.rx_lost, (unsigned long)C.rx_late,
-                     (unsigned long)C.rx_other, (unsigned long)C.tx_packets,
+                     (unsigned long)C.rx_other, (unsigned long)C.rx_foreign, (unsigned long)C.tx_packets,
                      (unsigned long)C.rx_shortened * 20, (unsigned long)C.rx_lengthened * 20);
-        C.rx_packets = C.tx_packets = C.rx_lost = C.rx_late = C.rx_other = 0;
+        C.rx_packets = C.tx_packets = C.rx_lost = C.rx_late = C.rx_other = C.rx_foreign = 0;
         C.rx_shortened = C.rx_lengthened = 0;
         C.lt_on = false;
         C.late_ms = C.late_now = 0.0f;

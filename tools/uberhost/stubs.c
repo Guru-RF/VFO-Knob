@@ -648,3 +648,31 @@ void uh_png_last(size_t *n, int *w, int *h)
     *w = s_png_w;
     *h = s_png_h;
 }
+
+/* ------------------------------------------------------------- kvstore */
+/* The knob's settings store (components/kvstore), on the NVS stand-in above:
+ * one store for the run, as the clients read and write it, and as main.c
+ * seeds it through nvs_*. Nothing is ever waiting to be written. */
+#include "kvstore.h"
+static struct kv_ns { int unused; } s_kv_ns;
+esp_err_t kv_open(const char *ns, kv_handle_t *out) { (void)ns; *out = &s_kv_ns; return ESP_OK; }
+esp_err_t kv_get_str(kv_handle_t h, const char *key, char *out, size_t *len) { (void)h; return nvs_get_str(1, key, out, len); }
+esp_err_t kv_set_str(kv_handle_t h, const char *key, const char *s) { (void)h; return nvs_set_str(1, key, s); }
+esp_err_t kv_get_blob(kv_handle_t h, const char *key, void *out, size_t *len) { (void)h; return nvs_get_blob(1, key, out, len); }
+esp_err_t kv_set_blob(kv_handle_t h, const char *key, const void *v, size_t n) { (void)h; return nvs_set_blob(1, key, v, n); }
+esp_err_t kv_get_i8(kv_handle_t h, const char *key, int8_t *out) { (void)h; return nvs_get_i8(1, key, out); }
+esp_err_t kv_set_i8(kv_handle_t h, const char *key, int8_t v) { (void)h; return nvs_set_i8(1, key, v); }
+esp_err_t kv_get_i32(kv_handle_t h, const char *key, int32_t *out) { (void)h; return nvs_get_i32(1, key, out); }
+esp_err_t kv_set_i32(kv_handle_t h, const char *key, int32_t v) { (void)h; return nvs_set_i32(1, key, v); }
+esp_err_t kv_get_i64(kv_handle_t h, const char *key, int64_t *out) { (void)h; return nvs_get_i64(1, key, out); }
+esp_err_t kv_set_i64(kv_handle_t h, const char *key, int64_t v) { (void)h; return nvs_set_i64(1, key, v); }
+esp_err_t kv_get_u32(kv_handle_t h, const char *key, uint32_t *out) { (void)h; return nvs_get_u32(1, key, out); }
+esp_err_t kv_set_u32(kv_handle_t h, const char *key, uint32_t v) { (void)h; return nvs_set_u32(1, key, v); }
+esp_err_t kv_erase_key(kv_handle_t h, const char *key) { (void)h; return nvs_erase_key(1, key); }
+void      kv_edit_begin(kv_handle_t h) { (void)h; }
+void      kv_edit_end(kv_handle_t h) { (void)h; }
+esp_err_t kv_commit(kv_handle_t h) { (void)h; return ESP_OK; }
+esp_err_t kv_commit_now(kv_handle_t h) { (void)h; return ESP_OK; }
+esp_err_t kv_commit_wait(kv_handle_t h, uint32_t ms) { (void)h; (void)ms; return ESP_OK; }
+bool      kv_saved(kv_handle_t h) { (void)h; return true; }
+bool      kv_on_card(kv_handle_t h) { (void)h; return false; }

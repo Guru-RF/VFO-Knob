@@ -189,8 +189,9 @@ static uint16_t s_dim_min = 5;      /* idle before the screen dims;  0 = never *
 static uint16_t s_blank_min = 10;   /* idle before it goes dark;     0 = never */
 
 /* Credentials for the configuration page. Shipped as admin/admin so a new
- * owner can get in, and the page nags until they are changed -- this device
- * can key a transmitter, so leaving the default in place on someone else's
+ * owner can get in; over the network the knob then does nothing more until
+ * the password is one of their own (webcfg's pw_forced) -- this device can
+ * key a transmitter, so leaving the default in place on someone else's
  * network is not a small thing. */
 static char s_web_user[24] = "admin";
 static char s_web_pass[33] = "admin";
@@ -937,7 +938,9 @@ const char *net_prov_web_pass(void) { return s_web_pass; }
 
 bool net_prov_web_is_default(void)
 {
-    return strcmp(s_web_user, "admin") == 0 && strcmp(s_web_pass, "admin") == 0;
+    /* The password alone: another name with "admin" for its password is
+     * as easily guessed. */
+    return strcmp(s_web_pass, "admin") == 0;
 }
 
 void net_prov_save_web(const char *user, const char *pass)

@@ -107,7 +107,8 @@ bool      net_prov_peek(const char *key);
  * after kv_init. */
 void      net_prov_load_settings(void);
 
-/* Credentials for the HTTP configuration page, default admin/admin. */
+/* Credentials for the HTTP configuration page, default admin/admin; "default"
+ * is the shipped password, whatever the name. */
 const char *net_prov_web_user(void);
 const char *net_prov_web_pass(void);
 bool        net_prov_web_is_default(void);

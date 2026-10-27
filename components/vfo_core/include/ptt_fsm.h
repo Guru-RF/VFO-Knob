@@ -54,6 +54,7 @@ typedef enum {
     PTT_AB_LINK_DOWN,
     PTT_AB_TOUCH_FAULT,
     PTT_AB_REMOTE,        /* server said false while we thought we were ON */
+    PTT_AB_NO_CONFIRM,    /* a key never confirmed: it may be on the air  */
 } ptt_abort_t;
 
 typedef enum {

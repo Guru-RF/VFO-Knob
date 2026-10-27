@@ -34,7 +34,8 @@ nothing of it and goes to WiFi.
    — and set it to start by itself in Settings, so the knob finds it every time.
 2. Over the cable, open **`http://10.55.42.1`** — user `admin`, password
    `admin` — and change the password: the page nags until you do, since it can
-   key a transmitter.
+   key a transmitter. Over WiFi it asks for a password of the knob's own first,
+   8 to 32 characters, and shows nothing else until it has one.
 3. For WiFi, set the SSID and the AetherSDR computer. That host is only for
    WiFi: over the cable the knob always talks to the computer it is plugged into.
    Up to four computers can be listed, each with a name for the dial.

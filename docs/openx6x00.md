@@ -25,8 +25,9 @@ layout (`tools/mkdocs.py`). The orange marks show what your hand does.
 
 To open the configuration page, hold the S-meter for the address card. It
 shows the knob's WiFi address: open that address in a browser. The user is
-`admin` and the password `admin`. Change the password: the page nags until
-you do, since the knob can key a transmitter.
+`admin` and the password `admin`. The page first asks for a password of the
+knob's own, 8 to 32 characters, and shows nothing else until it has one, since
+the knob can key a transmitter; your browser then asks for the new one.
 
 If you renamed the radio (*Settings → Wireless → NETWORK NAME* in
 OpenX6X00), give the knob that name followed by `.local`, or the radio's IP

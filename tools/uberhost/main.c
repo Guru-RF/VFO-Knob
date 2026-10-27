@@ -60,6 +60,9 @@
  *                                    "allowed"
  *   uberhost blip    <port> <kiwi>   ...back within it: no other asked
  *   uberhost single  <port> <kiwi>   a single receiver not reached: as ever
+ *   uberhost frames  <port> <kiwi>   WebSocket frames no server sends --
+ *                                    masked, a length wrapping round, 32 MB:
+ *                                    closed; one too big for rx let go by
  *
  * Each check prints PASS or FAIL; the exit status counts the failures. */
 #include <math.h>
@@ -158,7 +161,16 @@ static char s_json[1 << 18];
 
 static uber_spot_t s_sp[UBER_SPOTS];
 static int s_nsp;
-static bool spots_in(void) { return (s_nsp = uber_spots(s_sp, UBER_SPOTS, NULL)) >= 2; }
+/* Two at least, the cluster's OK1ABC among them: the voices come first since
+ * uberaux waits 5 s of READY (v1.20.1), and two of those alone ended the wait
+ * before the cluster had said anything. */
+static bool spots_in(void)
+{
+    s_nsp = uber_spots(s_sp, UBER_SPOTS, NULL);
+    bool dx = false;
+    for (int i = 0; i < s_nsp; i++) dx |= s_sp[i].kind == 'D' && !strcmp(s_sp[i].call, "OK1ABC");
+    return s_nsp >= 2 && dx;
+}
 static bool sstv_listed(void) { return uber_sstv_count() == 3; }
 static uber_sstv_t s_pic;
 static bool picture(void) { return uber_sstv_get(&s_pic, 0); }
@@ -1068,13 +1080,118 @@ static void kiwi(int32_t ctr)
     expect(7030000 - ctr, "cwu", ctr - 150, ctr + 150, "a narrower CW filter");
 }
 
+/* ------------------------------------------------- WebSocket frames */
+
+/* A WebSocket over a socketpair, rx `cap` bytes: the other end, the server. */
+static int ws_pair(uws_t *w, size_t cap)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return -1;
+    memset(w, 0, sizeof *w);
+    w->n.fd = sv[0];
+    w->n.up = true;
+    w->rx = malloc(cap);
+    w->cap = cap;
+    fcntl(sv[0], F_SETFL, fcntl(sv[0], F_GETFL, 0) | O_NONBLOCK);
+    return sv[1];
+}
+
+/* An unmasked frame's header: `op`, a 7-bit, 16-bit or 64-bit length. */
+static size_t ws_head(uint8_t *h, uint8_t op, int width, uint64_t len)
+{
+    size_t k = 0;
+    h[k++] = 0x80 | op;
+    if (width == 7) {
+        h[k++] = (uint8_t)len;
+    } else if (width == 16) {
+        h[k++] = 126;
+        h[k++] = (uint8_t)(len >> 8);
+        h[k++] = (uint8_t)len;
+    } else {
+        h[k++] = 127;
+        for (int s = 56; s >= 0; s -= 8) h[k++] = (uint8_t)(len >> s);
+    }
+    return k;
+}
+
+/* What uws_recv makes of `b`: -1, 0 or 1, and a text frame's payload. */
+static int ws_feed(size_t cap, const uint8_t *b, size_t n, char *text, size_t tn)
+{
+    uws_t w;
+    const int peer = ws_pair(&w, cap);
+    if (peer < 0) return -2;
+    for (size_t o = 0; o < n;) {
+        const ssize_t k = write(peer, b + o, n - o);
+        if (k <= 0) break;
+        o += (size_t)k;
+    }
+    uint8_t op = 0;
+    const uint8_t *p = NULL;
+    size_t pn = 0;
+    const int got = uws_recv(&w, 1000, &op, &p, &pn);
+    text[0] = 0;
+    if (got == 1 && op == 0x1) snprintf(text, tn, "%.*s", (int)pn, (const char *)p);
+    uws_close(&w);
+    close(peer);
+    return got;
+}
+
+/* Frames no server sends, each the end of the connection, and frames merely
+ * too big for rx, let go by, the one after handed out whole. Run under the
+ * sanitizers: a length that wrapped round read past rx. */
+static void frames(void)
+{
+    static uint8_t b[512];
+    char t[32];
+    size_t k;
+
+    k = 0;
+    b[k++] = 0x81;
+    b[k++] = 0x80 | 5;                              /* masked: a client's */
+    memcpy(b + k, "\x11\x22\x33\x44", 4);
+    k += 4;
+    for (int i = 0; i < 5; i++) b[k++] = (uint8_t)("hello"[i] ^ "\x11\x22\x33\x44"[i & 3]);
+    check(ws_feed(256, b, k, t, sizeof t) == -1, "a masked frame from the server: closed (RFC 6455 5.1)");
+
+    k = ws_head(b, 0x2, 64, UINT64_MAX - 7);        /* 10 + len wraps round to 2 */
+    memcpy(b + k, "\x81\x02ok", 4);
+    check(ws_feed(256, b, k + 4, t, sizeof t) == -1, "a 64-bit length that wraps the sum round: closed");
+
+    k = ws_head(b, 0x2, 64, 32u * 1024 * 1024);
+    memset(b + k, 0, 64);
+    check(ws_feed(256, b, k + 64, t, sizeof t) == -1, "a 32 MB frame: closed, not waited out");
+
+    k = ws_head(b, 0x2, 16, 200);                   /* 204 bytes, rx 64 */
+    memset(b + k, 0xA5, 200);
+    k += 200;
+    k += ws_head(b + k, 0x1, 7, 2);
+    memcpy(b + k, "ok", 2);
+    k += 2;
+    int got = ws_feed(64, b, k, t, sizeof t);
+    check(got == 1 && !strcmp(t, "ok"), "a frame bigger than rx let go by, the next one whole (%d \"%s\")", got, t);
+
+    k = ws_head(b, 0x2, 64, 100);                   /* the 64-bit length, sane */
+    memset(b + k, 0x5A, 100);
+    k += 100;
+    k += ws_head(b + k, 0x1, 7, 2);
+    memcpy(b + k, "hi", 2);
+    k += 2;
+    got = ws_feed(64, b, k, t, sizeof t);
+    check(got == 1 && !strcmp(t, "hi"), "...one with a 64-bit length too (%d \"%s\")", got, t);
+
+    k = ws_head(b, 0x1, 7, 5);
+    memcpy(b + k, "fine!", 5);
+    got = ws_feed(64, b, k + 5, t, sizeof t);
+    check(got == 1 && !strcmp(t, "fine!"), "an ordinary frame, as ever (%d \"%s\")", got, t);
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (argc < 4) {
         fprintf(stderr, "usage: %s lan|timeup|countdown|idle|daylimit|dayhold|restart|restartshut|wrongpw|rightpw|"
                         "pwonly|kiwi|kiwisdr|kiwicw|handover|fullnext|chosen|allgone|fullstays|timeupstays|wrongpwstays|"
-                        "gone|tunnelgone|proxygone|blip|single <port> <kiwi-port>\n", argv[0]);
+                        "gone|tunnelgone|proxygone|blip|single|frames <port> <kiwi-port>\n", argv[0]);
         return 2;
     }
     s_port = (uint16_t)atoi(argv[2]);
@@ -1112,6 +1229,7 @@ int main(int argc, char **argv)
     else if (!strcmp(t, "proxygone")) proxygone();
     else if (!strcmp(t, "blip")) blip();
     else if (!strcmp(t, "single")) single();
+    else if (!strcmp(t, "frames")) frames();
     else {
         fprintf(stderr, "no scenario %s\n", t);
         return 2;

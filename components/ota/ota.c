@@ -1097,22 +1097,35 @@ static char                   s_up_want[32];     /* the project it must be */
 
 bool ota_busy(void) { return s_busy || s_up; }
 
+/* Every operation -- a check, an install, a switch, an upload -- claims the
+ * machinery in one step, under the lock. A test and a set apart let two
+ * requests from different tasks both find it idle, and both start. */
+static bool claim(void)
+{
+    portENTER_CRITICAL(&s_lock);
+    const bool ok = !s_busy && !s_up;
+    if (ok) s_busy = true;
+    portEXIT_CRITICAL(&s_lock);
+    return ok;
+}
+
+static esp_err_t start_claimed(bool install);
+
 esp_err_t ota_upload_begin(const char *radio, size_t size)
 {
-    if (s_busy || s_up) return ESP_ERR_INVALID_STATE;
     /* The second chip's firmware is no radio's, and never this chip's: it
      * goes over the link (POST /api/bt/update), refused before any erase. */
     if (radio && strcmp(radio, COMP) == 0) return ESP_ERR_INVALID_ARG;
+    if (!claim()) return ESP_ERR_INVALID_STATE;   /* before the erase: nothing else starts */
     if (radio && *radio)
         snprintf(s_up_want, sizeof s_up_want, OTA_PREFIX "%s", radio);
     else
         strlcpy(s_up_want, esp_app_get_description()->project_name,
                 sizeof s_up_want);
     s_up_part = esp_ota_get_next_update_partition(NULL);
-    if (!s_up_part) return ESP_ERR_NOT_FOUND;
-    if (size > s_up_part->size) return ESP_ERR_INVALID_SIZE;
+    if (!s_up_part) { s_busy = false; return ESP_ERR_NOT_FOUND; }
+    if (size > s_up_part->size) { s_busy = false; return ESP_ERR_INVALID_SIZE; }
     s_up_written = 0;
-    s_busy = true;                  /* before the erase: nothing else starts */
     s_writing = true;
     comp_yield();
 
@@ -1267,9 +1280,10 @@ esp_err_t ota_start_switch(const char *radio)
     if (!radio || !*radio || strlen(radio) >= sizeof s_switch) return ESP_ERR_INVALID_ARG;
     /* The second chip's firmware: no radio's, never this chip's. */
     if (strcmp(radio, COMP) == 0) return ESP_ERR_INVALID_ARG;
-    if (s_busy) return ESP_ERR_INVALID_STATE;
+    /* Claimed before the target is written: the install it starts reads it. */
+    if (!claim()) return ESP_ERR_INVALID_STATE;
     strlcpy(s_switch, radio, sizeof s_switch);
-    const esp_err_t e = ota_start_check(true);
+    const esp_err_t e = start_claimed(true);
     if (e != ESP_OK) s_switch[0] = 0;
     return e;
 }
@@ -1375,8 +1389,14 @@ void ota_mark_valid(void)
 
 esp_err_t ota_start_check(bool install)
 {
-    if (s_busy) return ESP_ERR_INVALID_STATE;
-    s_busy = true;
+    if (!claim()) return ESP_ERR_INVALID_STATE;
+    return start_claimed(install);
+}
+
+/* The machinery claimed (claim()): a check, or an install, under way; the
+ * claim given back if it cannot start. */
+static esp_err_t start_claimed(bool install)
+{
     s_st.percent = 0;
     /* TLS needs a lot of stack, and this runs on core 0 with the rest of the
      * networking so it cannot disturb the knob or the display. */

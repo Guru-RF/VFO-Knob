@@ -63,6 +63,7 @@ typedef struct {
     uint32_t   tx_sensor_frames, tx_sensor_log_ms;
     bool       slice_locked, tx;
     uint8_t    my_trx, n_trx;
+    uint8_t    tx_mask;        /* which transceivers say they transmit */
     uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
     char       last_close[48];
     /* --- PTT --- */
@@ -128,7 +129,11 @@ static void log_refusal(uint32_t missing)
         { PERMIT_BAND, "band" },           { PERMIT_MODE, "mode" },
     };
     if (!missing) {
+#if VFO_RADIO_OPENX6X00
+        ESP_LOGW(TAG, "PTT REFUSED by the radio, or not confirmed in time");
+#else
         ESP_LOGW(TAG, "PTT REFUSED by AetherSDR, or not confirmed in time");
+#endif
         return;
     }
     char   buf[80] = "";
@@ -261,7 +266,16 @@ static void apply_fact(const tci_fact_t *f)
         break;
 
     case TCI_TRX:
-        S.tx = f->b0;
+        /* On the air if any transceiver is; but only our own transceiver's
+         * facts confirm or end our key. Another's trx:false took the knob
+         * out of TX without an unkey, and its trx:true confirmed a key the
+         * radio had not taken. */
+        if (f->trx >= 0 && f->trx < 8) {
+            if (f->b0) S.tx_mask |= (uint8_t)(1u << f->trx);
+            else       S.tx_mask &= (uint8_t)~(1u << f->trx);
+        }
+        S.tx = S.tx_mask != 0;
+        if (f->trx != S.my_trx) break;
         /* One frame, three meanings, disambiguated purely by our own state.
          * In IDLE an unsolicited trx:true is someone ELSE keying -- possibly
          * our own dead previous session -- and we must NOT try to unkey it,
@@ -489,6 +503,7 @@ static void link_lost(void)
     S.closes++;
     S.link = RADIO_LINK_DOWN;
     S.tx   = false;
+    S.tx_mask = 0;
     s_fd   = -1;
 
     /* AetherSDR calls abortTciPtt() when a PTT-owning client disconnects,

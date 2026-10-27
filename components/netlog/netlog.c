@@ -7,6 +7,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -100,8 +101,23 @@ static int log_hook(const char *fmt, va_list ap)
     return r;
 }
 
+/* Whether a connection came in over the USB cable: its local address is the
+ * USB interface's (ETH_DEF, as webcfg's client_addr() reads it). A knob with
+ * no USB networking has none, and every connection is refused the reboot. */
+static bool on_usb(int cs)
+{
+    struct sockaddr_in me;
+    socklen_t ml = sizeof me;
+    if (getsockname(cs, (struct sockaddr *)&me, &ml) != 0 || me.sin_family != AF_INET) return false;
+    esp_netif_t *n = esp_netif_get_handle_from_ifkey("ETH_DEF");
+    esp_netif_ip_info_t ip;
+    return n && esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr &&
+           me.sin_addr.s_addr == ip.ip.addr;
+}
+
 static void serve(int cs)
 {
+    const bool usb = on_usb(cs);
     /* Start at the oldest byte still retained, so a client that connects after
      * boot still gets the boot log. */
     size_t rd;
@@ -130,8 +146,14 @@ static void serve(int cs)
                  * serial port, and the flash window only opens after a reset
                  * -- which without this needs someone to pull the cable. It is
                  * also the safe direction to fail: rebooting drops the TCI
-                 * socket, and AetherSDR unkeys a client that disconnects. */
-                if (strcmp(cmd, "reboot") == 0) {
+                 * socket, and AetherSDR unkeys a client that disconnects.
+                 * Over the USB cable only: anyone on the WiFi could restart
+                 * the knob with it, mid-QSO, with no password. The log itself
+                 * stays open to every interface. */
+                if (strcmp(cmd, "reboot") == 0 && !usb) {
+                    const char *m = "reboot: over the USB cable only (10.55.42.1)\n";
+                    send(cs, m, strlen(m), 0);
+                } else if (strcmp(cmd, "reboot") == 0) {
                     const char *m = "rebooting\n";
                     send(cs, m, strlen(m), 0);
                     vTaskDelay(pdMS_TO_TICKS(100));

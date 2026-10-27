@@ -53,6 +53,16 @@ else()
     message(STATUS "TLS for the kiwi harnesses: none -- no mbedTLS sources found")
 endif()
 
+# The parser is fed arbitrary bytes off the network, so build the tests with
+# sanitizers -- this is where a fuzzer earns its keep. Before the first
+# target: add_compile_options() reaches only the targets made after it, and
+# vfo_core -- the TCI parser, the PTT machine -- had been built without.
+option(VFO_SANITIZE "Build host tests with ASan/UBSan" ON)
+if(VFO_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 set(CORE ${CMAKE_CURRENT_SOURCE_DIR}/../../components/vfo_core)
 
 add_library(vfo_core STATIC
@@ -64,14 +74,6 @@ add_library(vfo_core STATIC
 )
 target_include_directories(vfo_core PUBLIC ${CORE}/include)
 target_compile_options(vfo_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
-
-# The parser is fed arbitrary bytes off the network, so build the tests with
-# sanitizers -- this is where a fuzzer earns its keep.
-option(VFO_SANITIZE "Build host tests with ASan/UBSan" ON)
-if(VFO_SANITIZE)
-    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
-    add_link_options(-fsanitize=address,undefined)
-endif()
 
 enable_testing()
 foreach(t test_tci_parse test_echo_ring test_tune test_ptt_fsm fuzz_tci)
@@ -253,6 +255,21 @@ target_compile_options(fuzz_wsdr PRIVATE -Wall -Wextra)
 add_test(NAME fuzz_wsdr COMMAND fuzz_wsdr)
 # UBSan only prints and goes on unless told: an overflow fails the run.
 set_tests_properties(fuzz_wsdr PROPERTIES TIMEOUT 900 ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+
+# The phone firmware's SIP (components/phone_client/sip.c) over loopback UDP:
+# what anyone reaching its port may send, the mandatory headers left out.
+# Its digest's MD5 is the ROM's, here mbedTLS's: with mbedTLS only.
+if(KIWI_TLS)
+    add_executable(test_sip src/test_sip.c shim/shim.c
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../../components/phone_client/sip.c)
+    target_include_directories(test_sip PRIVATE shim src
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../../components/phone_client)
+    target_compile_definitions(test_sip PRIVATE _GNU_SOURCE)
+    target_link_libraries(test_sip PRIVATE mbedtls_host Threads::Threads)
+    target_compile_options(test_sip PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME test_sip COMMAND test_sip)
+    set_tests_properties(test_sip PROPERTIES ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+endif()
 
 # The web SDR beside a radio -- components/sdr_rx on the session in
 # components/kiwi_proto, with its day-limit marks, as the firmware compiles

@@ -114,7 +114,9 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
             f->rung          = 0;
             enter(f, PTT_IDLE, now_ms);
             out->left_tx     = true;
-            out->haptic      = EFF_UNKEYED;
+            /* A key that was never confirmed is felt as the refusal it was
+             * reported as -- now, with the radio known to be on receive. */
+            out->haptic      = f->reason == PTT_AB_NO_CONFIRM ? EFF_REFUSED : EFF_UNKEYED;
             out->haptic_prio = PRIO_PTT;
         }
         break;
@@ -122,11 +124,16 @@ void ptt_fsm_event(ptt_fsm_t *f, ptt_ev_t ev, uint32_t now_ms,
     case PTT_EV_TICK:
         if (f->state == PTT_REQ_ON) {
             if (since(now_ms, f->t_state_ms) >= PTT_CONFIRM_MS) {
+                /* Refused, as far as the operator is concerned -- but the
+                 * radio may have taken the key and its confirmation been lost
+                 * or late. Going to IDLE here forgot that: a late trx:true was
+                 * then someone else's, and nothing unkeyed it. So unkey, and
+                 * climb the ladder until receive is certain. No haptic yet: it
+                 * may be on the air. */
                 f->refusals++;
-                enter(f, PTT_IDLE, now_ms);
-                out->refused     = true;
-                out->haptic      = EFF_REFUSED;
-                out->haptic_prio = PRIO_PTT;
+                f->reason    = PTT_AB_NO_CONFIRM;
+                out->refused = true;
+                start_ladder(f, 1, now_ms, out);
             }
         } else if (f->state == PTT_RELEASING) {
             uint32_t el = since(now_ms, f->t_rung_ms);
@@ -195,6 +202,7 @@ const char *ptt_abort_name(ptt_abort_t r)
     case PTT_AB_LINK_DOWN:   return "link down";
     case PTT_AB_TOUCH_FAULT: return "touch fault";
     case PTT_AB_REMOTE:      return "remote";
+    case PTT_AB_NO_CONFIRM:  return "never confirmed";
     }
     return "?";
 }

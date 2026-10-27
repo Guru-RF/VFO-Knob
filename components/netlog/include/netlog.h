@@ -15,9 +15,10 @@
  *     nc <device-ip> 3333
  *
  * Connect on any interface the device has (WiFi or USB). Sending the line
- * "reboot" restarts the device -- the only way back into the serial flash
- * window on a build that has no console. Both reading and that command are
- * unauthenticated and unencrypted: this is a LAN debug aid, nothing more.
+ * "reboot" over the USB cable (10.55.42.1) restarts the device -- the only
+ * way back into the serial flash window on a build that has no console; on
+ * any other interface it is refused. Reading is unauthenticated and
+ * unencrypted: this is a LAN debug aid, nothing more.
  */
 #define NETLOG_PORT 3333
 

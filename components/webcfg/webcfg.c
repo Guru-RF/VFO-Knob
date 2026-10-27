@@ -104,7 +104,15 @@ static esp_err_t deny(httpd_req_t *r)
     return httpd_resp_sendstr(r, "authentication required");
 }
 
-#define REQUIRE_AUTH(r) do { if (!authorized(r)) return deny(r); } while (0)
+static bool pw_forced(httpd_req_t *r);
+static bool pw_route_ok(httpd_req_t *r);
+static esp_err_t deny_pw(httpd_req_t *r);
+
+/* The login, and then -- with the shipped password, over the network -- only
+ * what choosing one of their own takes (pw_forced). */
+#define REQUIRE_AUTH(r) do { if (!authorized(r)) return deny(r);                     \
+                             if (pw_forced(r) && !pw_route_ok(r)) return deny_pw(r); \
+                        } while (0)
 
 /* --------------------------------------------------------------- helpers */
 
@@ -158,6 +166,44 @@ static void client_addr(httpd_req_t *r, char *out, size_t len, bool *on_usb)
     esp_netif_ip_info_t ip;
     if (n && esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr)
         *on_usb = (a.s_addr & ip.netmask.addr) == (ip.ip.addr & ip.netmask.addr);
+}
+
+/* The shipped password, over anything but the USB cable: the knob does
+ * nothing more until the owner has chosen one of their own, which the page
+ * asks for first. Anyone who could reach it could otherwise change it, or
+ * key the transmitter. The cable reaches only the computer at its other end,
+ * and stays the way in with the shipped one. */
+static bool pw_forced(httpd_req_t *r)
+{
+    if (!net_prov_web_is_default()) return false;
+    char a[48];
+    bool usb;
+    client_addr(r, a, sizeof a, &usb);
+    return !usb;
+}
+
+/* While it is: the page, what it reads to ask, and the password's save. */
+static bool pw_route_ok(httpd_req_t *r)
+{
+    const size_t n = strcspn(r->uri, "?");
+#define IS(p) (n == sizeof(p) - 1 && strncmp(r->uri, p, n) == 0)
+    if (r->method == HTTP_GET)
+        return IS("/") || IS("/config") || IS("/api/config") || IS("/api/status");
+    return r->method == HTTP_POST && IS("/api/config");
+#undef IS
+}
+
+static esp_err_t deny_pw(httpd_req_t *r)
+{
+    /* A page (the radio's controls) goes to the one that asks. */
+    if (r->method == HTTP_GET && strncmp(r->uri, "/api/", 5) != 0) {
+        httpd_resp_set_status(r, "302 Found");
+        httpd_resp_set_hdr(r, "Location", "/");
+        return httpd_resp_send(r, NULL, 0);
+    }
+    httpd_resp_set_status(r, "403 Forbidden");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(r, "the knob's own password first: its page asks for one");
 }
 
 /* A receiver's name on the pages (kiwi_rx_label, sdr_rx_label): what the
@@ -276,24 +322,34 @@ static esp_err_t config_get(httpd_req_t *r)
     bool client_usb;
     client_addr(r, client, sizeof client, &client_usb);
 
-    char buf[640];
+    /* Every string as JSON: an SSID may hold a quote or a backslash, and one
+     * unescaped made the page unable to read its own settings. */
+    static EXT_RAM_BSS_ATTR char buf[1280], host[130], ssid[68], user[50], ruser[68],
+                                 base[258], root[258];  /* one handler at a time */
+    json_esc(c->radio_host, host, sizeof host);
+    json_esc(c->ssid, ssid, sizeof ssid);
+    json_esc(net_prov_web_user(), user, sizeof user);
+    json_esc(c->radio_user, ruser, sizeof ruser);
+    json_esc(ota_base_url(), base, sizeof base);
+    json_esc(ota_root_url(), root, sizeof root);
     /* The password is deliberately not returned. The page sends one only when
      * the field is non-empty, so a save does not have to round-trip it. */
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"mich\":%u,"
-             "\"user\":\"%s\",\"defaultpw\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
+             "\"user\":\"%s\",\"defaultpw\":%s,\"pwforce\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
              "\"radio\":\"%s\",\"fwbase\":\"%s\",\"fwroot\":\"%s\","
              "\"ruser\":\"%s\",\"rpass\":%s,\"link\":\"%s\","
              "\"client\":\"%s\",\"client_usb\":%s}",
-             c->radio_host, (unsigned)c->radio_port, c->ssid,
+             host, (unsigned)c->radio_port, ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              (unsigned)net_prov_mic_gain_headset(),
-             net_prov_web_user(),
+             user,
              net_prov_web_is_default() ? "true" : "false",
+             pw_forced(r) ? "true" : "false",
              (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
-             (unsigned)net_prov_blank_min(), ota_radio(), ota_base_url(),
-             ota_root_url(), c->radio_user, c->radio_pass[0] ? "true" : "false",
+             (unsigned)net_prov_blank_min(), ota_radio(), base,
+             root, ruser, c->radio_pass[0] ? "true" : "false",
              radio_link_name(), client, client_usb ? "true" : "false");
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
     return send_json(r, buf);
@@ -361,6 +417,32 @@ static esp_err_t config_post(httpd_req_t *r)
     }
     body[got] = 0;
 
+    /* The page's own login, checked before anything is saved: a password the
+     * knob would cut short, or a name with a colon, would lock its owner out
+     * (HTTP Basic splits at the first colon). Saved last, below. */
+    char user[40] = { 0 }, pass[72] = { 0 };
+    const bool got_user = field(body, "user", user, sizeof user);
+    const bool got_pass = field(body, "webpass", pass, sizeof pass);
+    if (got_user && (strlen(user) > 23 || strchr(user, ':'))) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a username of 23 characters at most, without a colon");
+        return ESP_FAIL;
+    }
+    if (got_pass && pass[0] && (strlen(pass) < 8 || strlen(pass) > 32)) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a password of 8 to 32 characters");
+        return ESP_FAIL;
+    }
+    /* With the shipped password, over the network: the password, and nothing
+     * else, until there is one (pw_forced). */
+    if (pw_forced(r)) {
+        if (!got_pass || !pass[0]) {
+            httpd_resp_set_status(r, "403 Forbidden");
+            return httpd_resp_sendstr(r, "the knob's own password first");
+        }
+        net_prov_save_web(got_user ? user : NULL, pass);
+        ESP_LOGW(TAG, "the page's password chosen: the shipped one no longer works");
+        return httpd_resp_sendstr(r, "ok");
+    }
+
     vfo_cfg_t cfg = *net_prov_cfg();
     field(body, "host", cfg.radio_host, sizeof cfg.radio_host);
     field(body, "ssid", cfg.ssid,     sizeof cfg.ssid);
@@ -402,9 +484,6 @@ static esp_err_t config_post(httpd_req_t *r)
     /* Credentials last: changing them invalidates the browser's cached
      * Authorization for the NEXT request, so everything else must already be
      * committed by the time that happens. */
-    char user[24] = { 0 }, pass[33] = { 0 };
-    bool got_user = field(body, "user", user, sizeof user);
-    bool got_pass = field(body, "webpass", pass, sizeof pass);
     if ((got_user && user[0]) || (got_pass && pass[0]))
         net_prov_save_web(got_user ? user : NULL, got_pass ? pass : NULL);
 
@@ -2746,8 +2825,9 @@ static esp_err_t root_get(httpd_req_t *r)
     REQUIRE_AUTH(r);
 #if RADIO_PAGE
     /* The radio's controls while it is connected; the configuration page,
-     * at /config, a button away. */
-    if (radio_is_ready()) return send_page(r, radio_html_start, radio_html_end);
+     * at /config, a button away -- and first of all while it asks for a
+     * password. */
+    if (radio_is_ready() && !pw_forced(r)) return send_page(r, radio_html_start, radio_html_end);
 #endif
     return send_page(r, index_html_start, index_html_end);
 }

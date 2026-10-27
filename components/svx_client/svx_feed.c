@@ -133,7 +133,8 @@ void svx_feed_start(const char *reflector)
     else
         snprintf(uri, sizeof uri, "wss://reflector.%s/", reflector);
 
-    s_msg = heap_caps_malloc(MSG_MAX, MALLOC_CAP_SPIRAM);
+    /* Once, and kept: a new one each session lost 4 kB at every restart. */
+    if (!s_msg) s_msg = heap_caps_malloc(MSG_MAX, MALLOC_CAP_SPIRAM);
     esp_websocket_client_config_t cfg = {
         .uri                  = uri,
         .crt_bundle_attach    = esp_crt_bundle_attach,

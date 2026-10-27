@@ -311,3 +311,16 @@ bool disc_lan_name(int i, char *name, size_t cap) { (void)i; if (cap) name[0] = 
 esp_err_t disc_lan_use(int i) { (void)i; return ESP_FAIL; }
 void disc_news(void) {}
 size_t disc_web_endpoints(const httpd_uri_t **out) { *out = NULL; return 0; }
+
+/* ------------------------------------------------------------- kvstore */
+/* The knob's settings store (components/kvstore), on the NVS stand-in above:
+ * what flex_client keeps -- strings -- for the run. */
+#include "kvstore.h"
+static struct kv_ns { int unused; } s_kv_ns;
+esp_err_t kv_open(const char *ns, kv_handle_t *out) { (void)ns; *out = &s_kv_ns; return ESP_OK; }
+esp_err_t kv_get_str(kv_handle_t h, const char *key, char *out, size_t *len) { (void)h; return nvs_get_str(1, key, out, len); }
+esp_err_t kv_set_str(kv_handle_t h, const char *key, const char *s) { (void)h; return nvs_set_str(1, key, s); }
+void      kv_edit_begin(kv_handle_t h) { (void)h; }
+void      kv_edit_end(kv_handle_t h) { (void)h; }
+esp_err_t kv_commit(kv_handle_t h) { (void)h; return ESP_OK; }
+esp_err_t kv_commit_now(kv_handle_t h) { (void)h; return ESP_OK; }

@@ -51,10 +51,17 @@ uint16_t net_prov_ota_hours(void) { return 0; }
 void net_prov_save_audio(uint8_t volume, uint8_t mic, uint8_t mic_hs) { s_vol = volume; (void)mic; (void)mic_hs; }
 void net_prov_save_dim(uint16_t dim, uint16_t blank) { (void)dim; (void)blank; }
 void net_prov_save_ota_hours(uint16_t hours) { (void)hours; }
-void net_prov_save_web(const char *user, const char *pass) { (void)user; (void)pass; }
-bool net_prov_web_is_default(void) { return true; }
-const char *net_prov_web_user(void) { return "admin"; }
-const char *net_prov_web_pass(void) { return "admin"; }
+/* The page's login as a knob keeps it: shipped admin/admin, so the page asks
+ * for a password of the owner's own first, as on the WiFi. */
+static char s_web_user[24] = "admin", s_web_pass[33] = "admin";
+void net_prov_save_web(const char *user, const char *pass)
+{
+    if (user && *user) snprintf(s_web_user, sizeof s_web_user, "%s", user);
+    if (pass && *pass) snprintf(s_web_pass, sizeof s_web_pass, "%s", pass);
+}
+bool net_prov_web_is_default(void) { return strcmp(s_web_pass, "admin") == 0; }
+const char *net_prov_web_user(void) { return s_web_user; }
+const char *net_prov_web_pass(void) { return s_web_pass; }
 int net_prov_scan(net_prov_net_t *out, int max) { (void)out; (void)max; return 0; }
 esp_err_t net_prov_join(const char *ssid, const char *pass) { (void)ssid; (void)pass; return ESP_FAIL; }
 net_join_t net_prov_join_state(char *ssid, size_t sn, char *why, size_t wn)
@@ -134,6 +141,8 @@ void ui_updating_hide(void) {}
 void ui_updating_progress(int pct) { (void)pct; }
 void ui_updating_result(bool ok, const char *msg) { (void)ok; (void)msg; }
 void ui_switching(const char *name) { (void)name; }
+/* No face on the PC to take a picture of: GET /api/screenshot says so. */
+uint16_t *ui_snapshot(uint32_t *w, uint32_t *h) { (void)w; (void)h; return NULL; }
 void board_power_get(board_power_t *out) { memset(out, 0, sizeof *out); }
 void audio_in_set_gain(uint8_t pct) { (void)pct; }
 void audio_out_set_volume(uint8_t vol) { (void)vol; }

@@ -15,7 +15,7 @@ SRC  := main.c stubs.c \
 CFLAGS := -std=gnu11 -g -O1 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter \
           -fsanitize=address,undefined -fno-omit-frame-pointer \
           -Istub -I../uberhost/stub -I. -I$(C)/flex_client -I$(C)/flex_client/include \
-          -I$(C)/radio/include -I$(C)/vfo_core/include -I$(C)/audio/include \
+          -I$(C)/radio/include -I$(C)/vfo_core/include -I$(C)/audio/include -I$(C)/kvstore/include \
           $(shell pkg-config --cflags opus)
 LDLIBS := -fsanitize=address,undefined $(shell pkg-config --libs opus) -lpthread -lm
 flexhost: $(SRC) $(wildcard stub/*.h stub/*/*.h ../uberhost/stub/*.h ../uberhost/stub/*/*.h) \

@@ -72,5 +72,6 @@ run tunnelgone "--name FIRST" "--name SECOND"
 run proxygone "--name FIRST" "--name SECOND"
 run blip    "--name FIRST" "--name SECOND"
 run single  ""
+run frames  ""
 echo "$fails scenario(s) failed"
 exit $fails

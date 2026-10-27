@@ -60,8 +60,20 @@ static void test_refusals(void)
     CHECK_EQ(f.state, PTT_REQ_ON);       /* must not fire early: the server's
                                             own deadline is 1250ms */
     ptt_fsm_event(&f, PTT_EV_TICK, 1000 + PTT_CONFIRM_MS, PERMIT_ALL, &o);
-    CHECK_EQ(f.state, PTT_IDLE);
+    /* Refused for the operator, but the radio may have keyed: unkeyed and
+     * made sure of, never just forgotten. */
     CHECK(o.refused);
+    CHECK_EQ(o.missing, 0);
+    CHECK(o.send_unkey);
+    CHECK_EQ(f.state, PTT_RELEASING);
+    CHECK_EQ(f.rung, 1);
+    CHECK_EQ(f.reason, PTT_AB_NO_CONFIRM);
+    CHECK_EQ(f.refusals, 1);
+    CHECK_EQ(o.haptic, 0);               /* it may be on the air */
+    ptt_fsm_event(&f, PTT_EV_CONFIRM_FALSE, 1000 + PTT_CONFIRM_MS + 80, PERMIT_ALL, &o);
+    CHECK_EQ(f.state, PTT_IDLE);
+    CHECK_EQ(o.haptic, 12);              /* the refusal, felt on receive */
+    CHECK(!o.send_key && !o.send_unkey);
 
     CASE("blocked by permits");
     ptt_fsm_init(&f);
@@ -198,6 +210,61 @@ static void test_remote_and_idle(void)
     CHECK(o.send_unkey);
 }
 
+/* A key whose confirmation is lost or late: the radio may be on the air
+ * while the knob believes it was refused. The audit's sequence (F01), and
+ * what must follow from it. */
+static void test_unconfirmed_key(void)
+{
+    CASE("a late confirmation is not a new transmission");
+    ptt_fsm_t f; ptt_out_t o;
+    ptt_fsm_init(&f);
+    ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
+    ptt_fsm_event(&f, PTT_EV_TICK, PTT_CONFIRM_MS, PERMIT_ALL, &o);
+    CHECK(o.send_unkey);
+    CHECK_EQ(f.state, PTT_RELEASING);
+    ptt_fsm_event(&f, PTT_EV_CONFIRM_TRUE, PTT_CONFIRM_MS + 1, PERMIT_ALL, &o);
+    CHECK_EQ(f.state, PTT_RELEASING);    /* still unkeying it */
+    CHECK(!o.entered_tx);
+    CHECK_EQ(o.haptic, 0);
+
+    CASE("the operator's taps cannot key it again meanwhile");
+    ptt_fsm_event(&f, PTT_EV_TAP_UNKEY, PTT_CONFIRM_MS + 2, PERMIT_ALL, &o);
+    CHECK(!o.send_key);
+    CHECK_EQ(f.state, PTT_RELEASING);
+    CHECK_EQ(f.rung, 1);                 /* the ladder carries on as it was */
+    ptt_fsm_event(&f, PTT_EV_TAP_KEY, PTT_CONFIRM_MS + 3, PERMIT_ALL, &o);
+    CHECK(!o.send_key);
+    ptt_fsm_event(&f, PTT_EV_CONFIRM_FALSE, PTT_CONFIRM_MS + 400, PERMIT_ALL, &o);
+    CHECK_EQ(f.state, PTT_IDLE);
+    CHECK(o.left_tx);                    /* it was on the air after all */
+    CHECK_EQ(o.haptic, 12);
+
+    CASE("no answer at all: the ladder, to the end");
+    ptt_fsm_init(&f);
+    ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
+    uint32_t t = PTT_CONFIRM_MS;
+    ptt_fsm_event(&f, PTT_EV_TICK, t, PERMIT_ALL, &o);
+    CHECK(o.send_unkey);
+    t += PTT_RUNG1_MS;
+    ptt_fsm_event(&f, PTT_EV_TICK, t, PERMIT_ALL, &o);
+    CHECK(o.close_socket);
+    t += PTT_RUNG2_MS;
+    ptt_fsm_event(&f, PTT_EV_TICK, t, PERMIT_ALL, &o);
+    CHECK(o.destroy_socket);
+    t += PTT_RUNG3_MS;
+    ptt_fsm_event(&f, PTT_EV_TICK, t, PERMIT_ALL, &o);
+    CHECK(o.restart);
+
+    CASE("a stale link while unconfirmed: the ladder already climbs");
+    ptt_fsm_init(&f);
+    ptt_fsm_event(&f, PTT_EV_TAP_KEY, 0, PERMIT_ALL, &o);
+    ptt_fsm_event(&f, PTT_EV_TICK, PTT_CONFIRM_MS, PERMIT_ALL, &o);
+    ptt_fsm_abort(&f, PTT_AB_PONG_STALE, PTT_CONFIRM_MS + 10, &o);
+    CHECK_EQ(f.state, PTT_RELEASING);
+    CHECK_EQ(f.reason, PTT_AB_NO_CONFIRM);
+    CHECK(!o.close_socket);              /* rung 1's deadline still stands */
+}
+
 T_MAIN({
     test_normal_cycle();
     test_refusals();
@@ -205,4 +272,5 @@ T_MAIN({
     test_silent_on_air();
     test_ladder();
     test_remote_and_idle();
+    test_unconfirmed_key();
 })

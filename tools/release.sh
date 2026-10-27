@@ -345,9 +345,23 @@ else
     echo "==> building the $RADIO firmware $VER"
     # reconfigure: CMake reads `git describe` only when it configures, and a new
     # tag on an already-built commit does not make it configure again.
+    # The configuration made afresh from the repository's defaults and this
+    # radio's overlay: an sdkconfig left by a test build keeps every choice
+    # the defaults do not name (menuconfig's, an old overlay's), and the
+    # defaults only ever seed a new file. (On 2026-10-27 all eleven matched.)
+    rm -f "$BUILD/sdkconfig"
+    # The bench's switches off, whatever this build directory held from a test
+    # build: VFO_KV_TEST adds the settings' fault endpoints, VFO_PTT_DRY_RUN
+    # keys nothing. CMake keeps a -D in its cache, so a release made in a
+    # directory last used for one would have carried it, signed.
     idf.py -B "$BUILD" -D VFO_RADIO="$RADIO" \
+           -D VFO_KV_TEST=0 -D VFO_PTT_DRY_RUN=0 \
            -D SDKCONFIG_DEFAULTS="$DEFAULTS;$OVERLAY" \
            reconfigure build >/dev/null
+    if grep -Eiq '^(VFO_KV_TEST|VFO_PTT_DRY_RUN):[A-Z]*=(1|ON|TRUE|YES|Y)$' "$BUILD/CMakeCache.txt"; then
+        echo "$BUILD was configured with a test switch on -- refusing to publish" >&2
+        exit 1
+    fi
 
     BIN="$BUILD/vfo-knob-$RADIO.bin"
     # esp_app_desc_t leads the first segment: magic at byte 32, version at 48.

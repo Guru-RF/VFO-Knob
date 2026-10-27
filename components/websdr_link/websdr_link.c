@@ -271,7 +271,10 @@ static int http_head(conn_t *c, const wl_ask_t *k, char *loc, size_t lc, long lo
             line[got] = 0;
             got = 0;
             if (code == -2) {
-                code = !strncmp(line, "HTTP/1.", 7) && line[8] == ' ' ? atoi(line + 9) : 0;
+                /* "HTTP/1.x NNN" whole before reading at fixed places: a
+                 * shorter line left line[8] unwritten. */
+                code = strlen(line) >= 12 && !strncmp(line, "HTTP/1.", 7) && line[8] == ' '
+                     ? atoi(line + 9) : 0;
                 if (code <= 0) return 0;
             } else if (!line[0]) {
                 return code;

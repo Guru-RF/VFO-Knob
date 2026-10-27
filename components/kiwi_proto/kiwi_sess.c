@@ -462,7 +462,9 @@ static int ws_open(conn_t *c, const char *host, uint16_t port, bool tls, bool (*
             line[got] = 0;
             got = 0;
             if (code == -2) {
-                code = !strncmp(line, "HTTP/1.", 7) && line[8] == ' ' ? atoi(line + 9) : 0;
+                /* "HTTP/1.x NNN" whole before fixed places are read. */
+                code = strlen(line) >= 12 && !strncmp(line, "HTTP/1.", 7) && line[8] == ' '
+                     ? atoi(line + 9) : 0;
             } else if (!line[0]) {
                 return code;                    /* the blank line: the frames from here */
             } else if (loc && lc && !strncasecmp(line, "location:", 9)) {
@@ -1398,7 +1400,7 @@ static const char *status_ask(conn_t *c, const char *host, uint16_t port, bool t
     /* Its body on a 200 only: a 403 is a receiver that will not talk to
      * this address. */
     char *body = strstr(txt, "\r\n\r\n");
-    *code = !strncmp(txt, "HTTP/1.", 7) && txt[8] == ' ' ? atoi(txt + 9) : 0;
+    *code = got >= 12 && !strncmp(txt, "HTTP/1.", 7) && txt[8] == ' ' ? atoi(txt + 9) : 0;
     if (*code != 200 || !body) {
         if (body) body[2] = 0;                      /* the head alone, for its Location */
         if (!kiwi_http_header(txt, "Location", loc, lc) && lc) loc[0] = 0;

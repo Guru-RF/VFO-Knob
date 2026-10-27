@@ -17,7 +17,9 @@ layout (`tools/mkdocs.py`); the orange marks are what your hand does.
 
 Open the knob's configuration page: hold a finger on the S-meter until the
 knob clicks, then browse to the address on the card. The user is `admin` and
-the password `admin` until you change it. Under **UberSDR**:
+the password `admin`; the page first asks for a password of the knob's own,
+8 to 32 characters, and shows nothing else until it has one. Then, under
+**UberSDR**:
 
 | Field | |
 |---|---|

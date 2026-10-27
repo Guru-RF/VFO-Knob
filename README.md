@@ -197,8 +197,9 @@ needed. Step by step, with the knob's own screens: [the setup guide](docs/setup.
 4. Tell the knob where its radio is, on its configuration page: hold a finger
    on the S-meter, at the top of the face, until the knob clicks, and browse
    to the address on the card that comes up — user `admin`, password `admin`.
-   Change the password; the page nags until you do, since it can key a
-   transmitter.
+   The page first asks for a password of the knob's own, 8 to 32 characters,
+   and shows nothing else until it has one, since the knob can key a
+   transmitter; your browser then asks for the new one.
 
 The list comes from the update server each time, so a knob set up long after
 it was made still shows every firmware there is then. A knob that already knows
@@ -237,7 +238,9 @@ running AetherSDR (step by step: [the AetherSDR guide](docs/aethersdr.md)):
    time. That is the only setup on the computer.
 3. Open **`http://10.55.42.1`** — user `admin`, password `admin`.
 4. Change the password. The page will nag until you do; it can key a
-   transmitter.
+   transmitter. Over the cable `admin` keeps opening it; over WiFi the page
+   asks for a password of the knob's own first, and shows nothing else until
+   it has one.
 5. If you want WiFi, set an SSID and the AetherSDR host. The host is only used
    on WiFi: over the cable the knob always talks to the computer it is plugged
    into.
@@ -707,7 +710,10 @@ GET /api/screenshot                   the face as it is drawn, upright: a 24-bit
 
 A POST with the same fields as a form does the same. Both need the page's
 login (`http://user:password@<knob>/api/radio`), and no setting is taken while
-the radio is on the air.
+the radio is on the air. While the password is still `admin`, over WiFi only
+`GET /api/status`, `GET /api/config` and the `POST /api/config` that sets a
+new one (`user`, `webpass`) are answered, the rest with 403; over the USB
+cable all of it, as before.
 
 > **It is HTTP Basic over plain HTTP.** A lock on the door, not a safe — treat
 > the knob as something that belongs on a network you trust.
@@ -924,8 +930,11 @@ its steps and defaults, the old fixed quarter's sums matched, and above
 `test_kiwi_proto` checks the protocol's plain-C parts, the ADPCM decoder
 against kiwiclient's among them and where a receiver centres CW (its
 `load_cfg`, read whole or in pieces of any size), and `fuzz_kiwi` feeds them
-a million rounds of noise and mangled messages. `tools/lvhost` renders parts
-of the face with the knob's own LVGL on the PC: `make kiwi-check OUT=dir`
+a million rounds of noise and mangled messages. `test_sip` sends the phone
+firmware's SIP (`components/phone_client/sip.c`), over loopback, what anyone
+who reaches its port could: a request or a response without one of RFC 3261's
+five mandatory headers is dropped, and a whole INVITE rings. `tools/lvhost`
+renders parts of the face with the knob's own LVGL on the PC: `make kiwi-check OUT=dir`
 draws the kiwi face's S-meter in one object with its red peak mark beside
 the arcs it replaced, pixel by pixel, the readout with OV and the noise
 filter and squelch editors, and the right ear: its line and reading in
@@ -945,7 +954,9 @@ SDR's (`components/uber_client`, `components/sdr_rx` on the session in
 hand-over to the next receiver too, with names that are never looked up on
 the network; on the Kiwi input the app path's ten-digit stamp, the passband,
 the AGC and the squelch asked for again once the audio flows, and CW where
-each flavour centres it (`--kiwi-flavour`, `--kiwi-cw`); `--host 0.0.0.0`
+each flavour centres it (`--kiwi-flavour`, `--kiwi-cw`); and WebSocket frames
+no server sends — masked, a length that wraps round, 32 MB — each the end of
+the connection, one merely too big let go by (`frames`). `--host 0.0.0.0`
 puts it on the LAN for a knob.
 
 `tools/mock_flex.py` is a FlexRadio — its API on 4992 with memories and a
@@ -991,7 +1002,8 @@ not the ESP32-S3.** So the firmware leaves its own way back in.
 - The PHY mux is put back to serial on *every* startup — it lives in the RTC
   domain and survives a reset, so without that a crash would come back with no
   serial port at all.
-- `echo reboot | nc <knob-ip> 3333` restarts it remotely and opens that window.
+- `echo reboot | nc 10.55.42.1 3333` restarts it and opens that window. Over
+  the USB cable only: on the WiFi the log port refuses it.
 - Holding a finger on the screen through boot skips USB networking entirely.
 
 Port 3333 is also a log stream — the USB build has no console, so it is the only

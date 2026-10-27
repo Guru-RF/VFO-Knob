@@ -20,7 +20,7 @@ CFLAGS := -std=gnu11 -g -O1 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter \
           -fsanitize=address,undefined -fno-omit-frame-pointer \
           -Istub -I. -I$(C)/uber_client -I$(C)/uber_client/include -I$(C)/radio/include \
           -I$(C)/vfo_core/include -I$(C)/audio/include -I$(C)/sdr_rx/include -I$(C)/net_prov/include \
-          -I$(C)/kiwi_proto/include -I$(C)/kiwi_proto \
+          -I$(C)/kiwi_proto/include -I$(C)/kiwi_proto -I$(C)/kvstore/include \
           $(shell pkg-config --cflags opus)
 LDLIBS := -fsanitize=address,undefined $(shell pkg-config --libs opus) -lpthread -lm
 uberhost: $(SRC) uberhost.h $(wildcard stub/*.h stub/*/*.h) $(wildcard $(C)/uber_client/*.h) \

@@ -71,6 +71,9 @@ sip_reg_t sip_reg_state(char *why, size_t cap);
 /* The address the far end sees us at, once a registrar has said: for the
  * SDP's c= line, and the log. "" until then. */
 const char *sip_public_ip(void);
+/* The SIP server's address, network order; 0 before it is resolved. Media
+ * may come from it as well as from the SDP's address. */
+uint32_t sip_server_ip(void);
 
 /* A number to call: digits, a leading + allowed, nothing else kept. False if
  * there is a call already, or no registration. */

@@ -18,7 +18,8 @@ through SmartLink it logs in to your SmartLink account.
 
 Open the knob's configuration page — hold a finger on the S-meter until the
 knob clicks, and browse to the address on the card; user `admin`, password
-`admin` until you change it.
+`admin`; the page first asks for a password of the knob's own, 8 to 32
+characters, and shows nothing else until it has one.
 
 - **On the LAN:** a FlexRadio announces itself on its network, and the knob
   listens. Under **FlexRadio**, **On this network** lists every one it hears —

@@ -256,7 +256,8 @@ static int http_on(unet_t *c, rbuf_t *r, const uhost_t *h, bool keep, const char
     int status = -1;
     long clen = -1;
     bool chunked = false, closing = !keep;
-    if (rb_line(r, line, sizeof line) && !strncmp(line, "HTTP/1.", 7)) status = atoi(line + 9);
+    if (rb_line(r, line, sizeof line) && strlen(line) >= 12 && !strncmp(line, "HTTP/1.", 7))
+        status = atoi(line + 9);
     while (status > 0 && rb_line(r, line, sizeof line) && line[0]) {
         if (!strncasecmp(line, "content-length:", 15)) clen = atol(line + 15);
         else if (!strncasecmp(line, "transfer-encoding:", 18) && strcasestr(line + 18, "chunked"))
@@ -398,7 +399,7 @@ bool uws_open(uws_t *w, const uhost_t *h, const char *path, size_t rx_cap,
     r->n = &w->n;
     r->pos = r->len = 0;
     char line[160];
-    if (!rb_line(r, line, sizeof line) || strncmp(line, "HTTP/1.", 7)) {
+    if (!rb_line(r, line, sizeof line) || strlen(line) < 12 || strncmp(line, "HTTP/1.", 7)) {
         snprintf(why, wn, "no answer");
         goto done;
     }
@@ -463,7 +464,14 @@ bool uws_text(uws_t *w, const char *s)
     return ws_send(w, 0x1, s, strlen(s));
 }
 
-/* A complete frame at the front of rx: 1, with it handed out; 0 for more. */
+/* The most of a frame too big for rx that is let go by rather than taken
+ * for a broken connection: far more than anything a receiver sends. */
+#define SKIP_MAX (16u * 1024 * 1024)
+
+/* A complete frame at the front of rx: 1, with it handed out; 0 for more;
+ * -1 for a frame no server may send. Every length is checked before it is
+ * added to anything: a 64-bit one near its top wrapped hl + len round to a
+ * small number, and the frame went out of rx. */
 static int frame(uws_t *w, uint8_t *op, const uint8_t **p, size_t *n, bool *fin)
 {
     if (w->have < 2) return 0;
@@ -480,20 +488,21 @@ static int frame(uws_t *w, uint8_t *op, const uint8_t **p, size_t *n, bool *fin)
         for (int i = 2; i < 10; i++) len = len << 8 | b[i];
         hl = 10;
     }
-    const bool masked = b[1] & 0x80;              /* never, from a server */
-    if (masked) hl += 4;
-    if (hl + len > w->cap) {
+    /* A masked frame from a server is one the client must close on
+     * (RFC 6455 5.1), and a length beyond SKIP_MAX is not worth waiting out. */
+    if (b[1] & 0x80 || len > SKIP_MAX || hl > w->cap) {
+        ESP_LOGW(TAG, "a frame no server sends (%s, %llu bytes): closing",
+                 b[1] & 0x80 ? "masked" : "unmasked", (unsigned long long)len);
+        return -1;
+    }
+    if (len > w->cap - hl) {
         /* Bigger than anything wanted here: let it go by. */
         ESP_LOGW(TAG, "a %llu-byte frame let go", (unsigned long long)len);
-        w->skip = (size_t)(hl + len - w->have);
+        w->skip = hl + (size_t)len - w->have;
         w->have = 0;
         return 0;
     }
-    if (w->have < hl + len) return 0;
-    if (masked) {
-        const uint8_t *m = b + hl - 4;
-        for (size_t i = 0; i < len; i++) w->rx[hl + i] ^= m[i & 3];
-    }
+    if (w->have < hl + (size_t)len) return 0;
     *op  = b[0] & 0x0F;
     *fin = b[0] & 0x80;
     *p   = w->rx + hl;
@@ -513,7 +522,9 @@ int uws_recv(uws_t *w, int timeout_ms, uint8_t *op, const uint8_t **p, size_t *n
             w->used = 0;
         }
         bool fin = true;
-        if (!w->skip && frame(w, op, p, n, &fin)) {
+        const int got = w->skip ? 0 : frame(w, op, p, n, &fin);
+        if (got < 0) return -1;
+        if (got) {
             if (*op == 0x9) {                      /* ping: the pong, here */
                 ws_send(w, 0xA, *p, *n > 125 ? 125 : *n);
                 continue;

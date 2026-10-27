@@ -1200,6 +1200,15 @@ void sip_on_readable(uint64_t now_ms)
     if (n <= 4) return;                      /* a keep-alive's CRLF */
     msg_t m;
     if (!parse(s_rx, (size_t)n, &m)) return;
+    /* RFC 3261 8.1.1: every request and response carries these five, and the
+     * handlers copy them. An INVITE without its Call-ID gave strlcpy() a NULL,
+     * and the knob restarted -- anyone reaching the port could do it. */
+    if (!hdr(&m, "Via") || !hdr(&m, "From") || !hdr(&m, "To") ||
+        !hdr(&m, "Call-ID") || !hdr(&m, "CSeq")) {
+        ESP_LOGW(TAG, "a %s from %s without its mandatory headers: dropped",
+                 m.req ? "request" : "response", inet_ntoa(from.sin_addr));
+        return;
+    }
     if (m.req) on_request(&m);
     else       on_response(&m);
 }
@@ -1260,3 +1269,4 @@ sip_reg_t sip_reg_state(char *why, size_t cap)
 }
 
 const char *sip_public_ip(void) { return S.pip; }
+uint32_t sip_server_ip(void) { return S.srv.sin_addr.s_addr; }

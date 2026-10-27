@@ -56,17 +56,38 @@ textarea{width:100%;margin-top:12px;padding:8px 10px;background:#11131799;color:
 .note a{color:var(--accent)}
 a.btn{display:inline-block;margin:14px 6px 0 0;padding:9px 16px;border-radius:6px;
       background:var(--accent);color:#1a1205;font-weight:600;text-decoration:none}
+/* Until the knob has a password of its own: that card, and nothing else. */
+body.pwforce .wrap>:not(.pwkeep){display:none!important}
 </style>
 </head>
 <body><div class="wrap">
-<h1>VFO-Knob <a id="toradio" class="pill up" href="/radio" hidden
+<h1 class="pwkeep">VFO-Knob <a id="toradio" class="pill up" href="/radio" hidden
     style="font-size:12px;text-decoration:none;margin-left:8px;vertical-align:middle">&#9664; Radio controls</a></h1>
-<p class="sub" id="ident">&nbsp;</p>
+<p class="sub pwkeep" id="ident">&nbsp;</p>
 <div id="warn" class="warn" hidden>
   This knob still uses the shipped password (<b>admin/admin</b>). Anyone on this
   network can key your transmitter with it &mdash; set your own below.
 </div>
 <div id="cardwarn" class="warn" hidden></div>
+<section id="pwfirst" class="pwkeep" hidden>
+  <h2>Choose a password</h2>
+  <p class="note">This knob still has the password it was shipped with,
+     <b>admin</b>, and does nothing more over the network until it has one of
+     your own: anyone who can reach it could otherwise change its settings, or
+     key your transmitter. 8 to 32 characters. Your browser asks for it once
+     it is set.</p>
+  <div class="grid">
+    <div><label>Username</label><input id="pfuser" autocomplete="username"></div>
+    <div></div>
+    <div><label>New password</label><div class="pw"><input id="pfpass" type="password"
+         autocomplete="new-password" autocapitalize="off" spellcheck="false"><button
+         class="show" type="button" data-for="pfpass" data-also="pfpass2">Show</button></div></div>
+    <div><label>Again</label><input id="pfpass2" type="password" autocomplete="new-password"
+         autocapitalize="off" spellcheck="false"></div>
+  </div>
+  <button id="pfset" type="button">Set the password</button>
+  <p class="note" id="pfmsg"></p>
+</section>
 
 <section>
   <h2>Status</h2>
@@ -549,11 +570,16 @@ a.btn{display:inline-block;margin:14px 6px 0 0;padding:9px 16px;border-radius:6p
   <h2>Access</h2>
   <div class="grid">
     <div><label>Username</label><input id="user"></div>
-    <div><label>New password</label><input id="webpass" type="password"
-         placeholder="unchanged"></div>
+    <div></div>
+    <div><label>New password</label><div class="pw"><input id="webpass" type="password"
+         placeholder="unchanged" autocomplete="new-password" autocapitalize="off"
+         spellcheck="false"><button class="show" type="button" data-for="webpass"
+         data-also="webpass2">Show</button></div></div>
+    <div><label>Again</label><input id="webpass2" type="password" autocomplete="new-password"
+         autocapitalize="off" spellcheck="false"></div>
   </div>
-  <p class="note">Guards this page only. It is sent unencrypted, so treat it as
-     a lock on the door rather than a safe.</p>
+  <p class="note">Guards this page only, 8 to 32 characters. It is sent
+     unencrypted, so treat it as a lock on the door rather than a safe.</p>
 </section>
 
 <section>
@@ -612,6 +638,8 @@ const row=(k,v)=>`<div class="row"><span class="k">${k}</span><span class="v">${
 document.querySelectorAll('button.show').forEach(b=>b.onclick=()=>{
   const p=$(b.dataset.for),s=p.type==='password';
   p.type=s?'text':'password';
+  /* The new password and its retyping, shown and hidden together. */
+  if(b.dataset.also) $(b.dataset.also).type=p.type;
   b.textContent=s?'Hide':'Show';
   p.focus();
 });
@@ -739,8 +767,33 @@ async function refresh(){
   cardBanner(s);
 }
 
+/* The shipped password, over the network: the knob answers nothing but the
+   choice of another (PWFORCE), and the page asks for that alone. */
+let PWFORCE=false;
+function pwFirst(c){
+  PWFORCE=true;
+  document.body.classList.add('pwforce');
+  $('pwfirst').hidden=false;
+  if(!$('pfuser').value) $('pfuser').value=c.user;
+}
+$('pfset').onclick=async()=>{
+  const u=$('pfuser').value.trim(), p=$('pfpass').value;
+  const say2=(t,ok)=>{ $('pfmsg').textContent=t; $('pfmsg').style.color=ok?'var(--ok)':'var(--bad)' };
+  if(!u || u.length>23 || u.includes(':')) return say2('A username of 1 to 23 characters, without a colon.',false);
+  if(p.length<8 || p.length>32) return say2('A password of 8 to 32 characters.',false);
+  if(p==='admin') return say2('Not the shipped one.',false);
+  if(p!==$('pfpass2').value) return say2('The two passwords differ.',false);
+  const b=new URLSearchParams({user:u, webpass:p});
+  let r; try{ r=await fetch('/api/config',{method:'POST',body:b}) }catch(e){ return say2('The knob did not answer.',false) }
+  if(!r.ok) return say2('Not set: '+await r.text(),false);
+  $('pfpass').value=$('pfpass2').value='';
+  say2('Set. Your browser asks for the new password now.',true);
+  setTimeout(()=>location.reload(),1500);
+};
+
 async function load(){
   const c=await (await fetch('/api/config')).json();
+  if(c.pwforce){ pwFirst(c); return; }
   $('host').value=c.host; $('port').value=c.port; wifiLoad();
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('mich').value=c.mich??100;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
@@ -1777,6 +1830,21 @@ $('save').onclick=async()=>{
     say(`Not saved: your name for their owners is ${wb} bytes long, 31 at most — a letter like ë takes two.`,false);
     $('sdrwho').focus(); return;
   }
+  /* A new password typed twice, and one the knob keeps: checked before
+     anything is saved, so nothing else is saved with a password refused. */
+  const np=$('webpass').value;
+  if(np || $('webpass2').value){
+    let e='', at='webpass';
+    if(np.length<8 || np.length>32) e='a password of 8 to 32 characters';
+    else if(np==='admin') e='not the shipped password';
+    else if(np!==$('webpass2').value){ e='the two passwords differ'; at='webpass2'; }
+    if(e){ say('Not saved: '+e+'.',false); $(at).focus(); return; }
+  }
+  const u=$('user').value;
+  if(!u || u.length>23 || u.includes(':')){
+    say('Not saved: a username of 1 to 23 characters, without a colon.',false);
+    $('user').focus(); return;
+  }
   const b=new URLSearchParams();
   /* With a list of radios the one in use is saved with the list, below; the
      kiwi firmware's receivers are the web SDRs' list. */
@@ -1808,7 +1876,7 @@ $('save').onclick=async()=>{
   }
   if(r.ok) $('rpass').value='';
   if(r.ok && $('webpass').value){
-    $('webpass').value='';
+    $('webpass').value=$('webpass2').value='';
     $('msg').textContent += ' Password changed \u2014 the browser will ask again.';
   }
   if(r.ok) load();
@@ -2026,8 +2094,12 @@ $('repcopy').onclick=()=>{
   $('msg').style.color='';
 };
 
-load().then(webCheck).then(ota);
-refresh(); setInterval(refresh,2000); setInterval(ota,2000); setInterval(svxPoll,2000);
-setInterval(phonePoll,2000); setInterval(googlePoll,3000);
+refresh(); setInterval(refresh,2000);
+load().catch(()=>{}).then(()=>{
+  if(PWFORCE) return;                  /* nothing else answers until it is set */
+  webCheck().then(ota).catch(()=>{});
+  setInterval(ota,2000); setInterval(svxPoll,2000);
+  setInterval(phonePoll,2000); setInterval(googlePoll,3000);
+});
 </script>
 </body></html>

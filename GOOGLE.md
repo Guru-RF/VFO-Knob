@@ -127,7 +127,9 @@ each knob signs in for itself.
 Open the knob's configuration page:
 - hold a finger on the meter arc until the knob clicks, and browse to the address
   on the card;
-- the user is `admin`, and the password is `admin` until you change it.
+- the user is `admin`, and the password is `admin`; the page first asks for a
+  password of the knob's own, 8 to 32 characters, and shows nothing else until
+  it has one.
 
 Use a computer or phone **on the same network as the knob**. At the end of the
 sign-in, the browser itself goes back to the knob's local address. Open the page
