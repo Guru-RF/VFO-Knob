@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-websdr",
-  "version": "1.21.1",
-  "file": "vfo-knob-websdr-1.21.1.bin",
-  "sha256": "73a9e19d0682e69f7e5517bd34a5d83a04d477d9333e4afe338b842461458ae9",
+  "version": "1.21.2",
+  "file": "vfo-knob-websdr-1.21.2.bin",
+  "sha256": "f09f93ea44450ff9ff6a05f1a747e19d824ee43c30e4ace320bb4dfa54710283",
   "size": 2166784
 }
