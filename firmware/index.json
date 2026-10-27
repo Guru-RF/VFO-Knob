@@ -3,7 +3,7 @@
     {
       "radio": "aethersdr",
       "name": "AetherSDR",
-      "version": "1.21.2"
+      "version": "1.21.3"
     },
     {
       "radio": "icom",
