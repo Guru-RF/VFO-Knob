@@ -33,7 +33,7 @@
     {
       "radio": "owrx",
       "name": "OpenWebRX",
-      "version": "1.21.4"
+      "version": "1.21.5"
     },
     {
       "radio": "websdr",
