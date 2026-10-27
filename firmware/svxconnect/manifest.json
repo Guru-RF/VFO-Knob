@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-svxconnect",
-  "version": "1.21.2",
-  "file": "vfo-knob-svxconnect-1.21.2.bin",
-  "sha256": "e99d7a73051d4b7dd7e385d840712b3817ef1e10f1e8445b50e546e8a793e8f4",
-  "size": 2297856
+  "version": "1.21.3",
+  "file": "vfo-knob-svxconnect-1.21.3.bin",
+  "sha256": "da71938114d9a800c9c5502bd0ab5528ce9a0592f04a81241fc5b00bf0f43820",
+  "size": 2363392
 }
