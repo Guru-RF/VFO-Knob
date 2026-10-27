@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-kiwi",
-  "version": "1.21.2",
-  "file": "vfo-knob-kiwi-1.21.2.bin",
-  "sha256": "34d56dbc29595d20aa07ec2e9844491e44dfae487738b2b25a890735b285ea70",
-  "size": 2166784
+  "version": "1.21.3",
+  "file": "vfo-knob-kiwi-1.21.3.bin",
+  "sha256": "565f4eeb9a3a181e773d605d01e9170c4016f74237fd2168a27249e8594ea202",
+  "size": 2232320
 }
