@@ -45,6 +45,18 @@ static const char *TAG = "tci";
 #define GREET_TMO_MS  4000    /* a socket that accepts but never greets is a
                                  real failure mode when AetherSDR is starting */
 #define AGC_POLL_MS   3000    /* see the AGC poll in tx_task */
+#if VFO_RADIO_OPENX6X00
+/* Where the knob may turn to: OpenX6X00 decides what it takes -- HF and 6 m,
+ * a transverter's band where one is set (the X6100's 2 m and 70 cm, as it
+ * comes), the X6200's FM broadcast and airband, its WR12's 54 MHz to 1 GHz
+ * -- and a frequency it does not take is let go by, the dial pulled back by
+ * the reconcile. Its vfo_limits stay 0.1-55 MHz whatever it is. */
+#define TUNE_LO_HZ    100000LL
+#define TUNE_HI_HZ    1000000000LL
+#else
+#define TUNE_LO_HZ    1000LL
+#define TUNE_HI_HZ    75000000LL
+#endif
 
 typedef struct {
     radio_link_t link;
@@ -64,6 +76,8 @@ typedef struct {
     bool       slice_locked, tx;
     uint8_t    my_trx, n_trx;
     uint8_t    tx_mask;        /* which transceivers say they transmit */
+    int32_t    mods;           /* TCI_MODS_*: modulations_list's, in the greeting */
+    bool       have_mods;
     uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
     char       last_close[48];
     /* --- PTT --- */
@@ -105,6 +119,15 @@ static uint16_t    s_port;
 static uint32_t    s_backoff_ms = 250;
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+#if VFO_RADIO_OPENX6X00
+/* OpenX6X00 calls both radios OpenX6X00; only the X6200's base has SAM and
+ * wide FM (its HW_CAP_SAM_WFM), and its modulations_list names them. */
+static bool is_x6200(void)
+{
+    return S.have_mods && (S.mods & (TCI_MODS_SAM | TCI_MODS_WFM)) == (TCI_MODS_SAM | TCI_MODS_WFM);
+}
+#endif
 
 /* Overridden by the application so this component stays free of a haptic
  * dependency; PTT confirmations are the one place haptics are load-bearing,
@@ -199,14 +222,25 @@ static void apply_fact(const tci_fact_t *f)
         S.f_committed = S.f_server;
         echo_clear(&S.echo);
         taskEXIT_CRITICAL(&S_LOCK);
-        ESP_LOGI(TAG, "ready: trx=%u f=%lld mode=%s filt=%ld..%ld%s",
+        ESP_LOGI(TAG, "ready: trx=%u f=%lld mode=%s filt=%ld..%ld%s%s",
                  (unsigned)S.my_trx, (long long)S.f_server, S.mode,
                  (long)S.filt_lo, (long)S.filt_hi,
-                 S.slice_locked ? " LOCKED" : "");
+                 S.slice_locked ? " LOCKED" : "",
+#if VFO_RADIO_OPENX6X00
+                 !S.have_mods ? "" : is_x6200() ? " (an X6200: SAM, WFM)" : " (an X6100)"
+#else
+                 ""
+#endif
+                 );
         break;
 
     case TCI_TRX_COUNT:
         S.n_trx = (uint8_t)f->i0;
+        break;
+
+    case TCI_MODULATIONS_LIST:
+        S.mods      = f->i0;
+        S.have_mods = true;
         break;
 
     case TCI_ACTIVE_SLICE:
@@ -308,8 +342,8 @@ static void apply_fact(const tci_fact_t *f)
          * Field 2 is "peak" but carries the same cached value as fwd, so it is
          * never rendered. */
 #if !VFO_RADIO_OPENX6X00
-        /* OpenX6X00 sends a fixed -20 here, the X6100 having no mic meter to
-         * read: that firmware's ring is the knob's own, from send_tx_audio. */
+        /* OpenX6X00 sends a fixed -20 here, neither radio having a mic meter
+         * to read: that firmware's ring is the knob's own, from send_tx_audio. */
         S.tx_mic_dbm = f->f0;
 #endif
         S.tx_fwd_w   = f->f1;
@@ -834,7 +868,7 @@ int64_t radio_tune_by(int32_t detents, uint8_t accel_mult, int32_t step_hz)
     taskENTER_CRITICAL(&S_LOCK);
     if (detents) {
         if (S.tune.step_hz != step_hz) tune_set_step(&S.tune, step_hz);
-        tune_apply(&S.tune, detents, accel_mult, SEND_GATE_MS, 1000LL, 75000000LL);
+        tune_apply(&S.tune, detents, accel_mult, SEND_GATE_MS, TUNE_LO_HZ, TUNE_HI_HZ);
         S.t_last_input_ms = t;
         S.reconcile_armed = false;  /* operator intent beats a pending reconcile */
     }
@@ -996,6 +1030,17 @@ void radio_get_status(radio_status_t *o)
     strlcpy(o->mode, S.mode, sizeof o->mode);
     strlcpy(o->agc, S.agc, sizeof o->agc);
     strlcpy(o->last_close, S.last_close, sizeof o->last_close);
+#if VFO_RADIO_OPENX6X00
+    /* Which radio, and its own bands: to 6 m on the X6100, to the airband
+     * on the X6200. */
+    if (S.have_mods) {
+        const bool x6200 = is_x6200();
+        strlcpy(o->model, x6200 ? "X6200" : "X6100", sizeof o->model);
+        o->has_sam = x6200;
+        o->f_min   = 100000;
+        o->f_max   = x6200 ? 137000000 : 55000000;
+    }
+#endif
 }
 
 /* How much of a WebSocket receive buffer internal RAM can spare. */

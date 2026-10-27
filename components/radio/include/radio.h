@@ -111,6 +111,8 @@ typedef struct {
      * choose them in place of memory mode. */
     char       model[16];      /* what the radio calls itself; "" = not said */
     int64_t    f_min, f_max;   /* where it tunes; 0 = not known */
+    /* Synchronous AM and wide FM among its modes (an X6200 on OpenX6X00). */
+    bool       has_sam;
     /* A receiver (the IC-R8600): nothing to key -- the slab says RECEIVER,
      * and neither the glass nor a headset's button or boom arm keys. */
     bool       rx_only;

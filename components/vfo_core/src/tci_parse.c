@@ -181,6 +181,17 @@ bool tci_parse(const char *line, size_t len, tci_fact_t *out)
     if (kind == TCI_PROTOCOL || kind == TCI_DEVICE || kind == TCI_MODULATIONS_LIST) {
         strncpy(out->s0, rest, TCI_STR_MAX - 1);
         out->s0[TCI_STR_MAX - 1] = '\0';
+        if (kind == TCI_MODULATIONS_LIST) {
+            /* Whole names, so that "sam" is never found in another's. */
+            for (char *m = rest; *m; ) {
+                while (*m == ' ') m++;
+                size_t n = strcspn(m, ", ");
+                if (n == 3 && !strncasecmp(m, "sam", 3)) out->i0 |= TCI_MODS_SAM;
+                if (n == 3 && !strncasecmp(m, "wfm", 3)) out->i0 |= TCI_MODS_WFM;
+                m += n;
+                m += strspn(m, ", ");
+            }
+        }
         return true;
     }
 

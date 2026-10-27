@@ -1018,6 +1018,11 @@ esp_err_t net_prov_wifi_start(void)
     return ESP_OK;
 }
 
+/* The name that answered in the given one's place ("" = the given one). */
+static char s_answered[24];
+
+const char *net_prov_host_answered(void) { return s_answered; }
+
 esp_err_t net_prov_resolve(char *out, size_t out_len)
 {
     const char *host = s_cfg.radio_host;
@@ -1030,9 +1035,22 @@ esp_err_t net_prov_resolve(char *out, size_t out_len)
         esp_ip4_addr_t addr = { 0 };
         if (mdns_query_a(base, 2000, &addr) == ESP_OK) {
             snprintf(out, out_len, IPSTR, IP2STR(&addr));
+            s_answered[0] = '\0';
             return ESP_OK;
         }
         ESP_LOGW(TAG, "mDNS could not resolve %s", host);
+#if VFO_RADIO_OPENX6X00
+        /* OpenX6X00 announces an X6100 as x6100.local and an X6200 as
+         * x6200.local: a knob set for the one, as it comes, finds the other. */
+        const char *other = !strcasecmp(base, "x6100") ? "x6200"
+                          : !strcasecmp(base, "x6200") ? "x6100" : NULL;
+        if (other && mdns_query_a(other, 2000, &addr) == ESP_OK) {
+            snprintf(out, out_len, IPSTR, IP2STR(&addr));
+            snprintf(s_answered, sizeof s_answered, "%s.local", other);
+            ESP_LOGW(TAG, "%s answered instead", s_answered);
+            return ESP_OK;
+        }
+#endif
         return ESP_FAIL;
     }
 

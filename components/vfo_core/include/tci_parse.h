@@ -24,7 +24,7 @@ typedef enum {
     TCI_DEVICE,             /* s0                               */
     TCI_READY,
     TCI_TRX_COUNT,          /* i0                               */
-    TCI_MODULATIONS_LIST,   /* s0 (truncated)                   */
+    TCI_MODULATIONS_LIST,   /* s0 (truncated), i0 = TCI_MODS_*  */
     TCI_RECEIVE_ONLY,       /* b0                               */
     TCI_CHANNELS_COUNT,     /* i0                               */
     TCI_VFO_LIMITS,         /* ignored: hardcoded server-side   */
@@ -67,6 +67,12 @@ typedef enum {
 } tci_kind_t;
 
 #define TCI_STR_MAX 32
+
+/* modulations_list's modes the knob looks for, read from the whole list --
+ * s0 keeps only its first 31 characters, and OpenX6X00 names these two
+ * last ("lsb,usb,digl,digu,cw,cwr,am,nfm,sam,wfm", on an X6200). */
+#define TCI_MODS_SAM 0x1
+#define TCI_MODS_WFM 0x2
 
 typedef struct {
     tci_kind_t kind;

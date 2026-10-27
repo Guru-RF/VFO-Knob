@@ -122,11 +122,12 @@ LV_FONT_DECLARE(font_hack_46);
 #define PWR_HEX     0x43B649                 /* Po in green, as on the Maestro */
 #elif VFO_RADIO_OPENX6X00
 /* --- OpenX6X00 palette -----------------------------------------------------
- * The X6100's own screen under the OpenX6X00 firmware: its RF.Guru theme
- * (OpenX6X00 src/theme.h) -- near-black surfaces, gold for what is on, its
- * text greys, the S-meter slate up to S9 and green to red over it, its
- * electric blue as the second accent, and TX in its own red. The layout is
- * the other faces'; the colours say which radio this knob is for. */
+ * The X6100's and X6200's own screen under the OpenX6X00 firmware: its
+ * RF.Guru theme (OpenX6X00 src/theme.h) -- near-black surfaces, gold for
+ * what is on, its text greys, the S-meter slate up to S9 and green to red
+ * over it, its electric blue as the second accent, and TX in its own red.
+ * The layout is the other faces'; the colours say which radio this knob is
+ * for. */
 #define C_BG        lv_color_hex(0x08090C)   /* bg                      */
 #define C_BG1       lv_color_hex(0x13161D)   /* bar: the PTT slab       */
 #define C_BG_TX     lv_color_hex(0x3A1414)   /* err_bg: a red tint on the air */
@@ -1028,9 +1029,12 @@ static const char *MODES[] = { "usb","lsb","cw","am","sam","fm","nfm",
 static const char *AGCS[]  = { "fast","med","slow","off" };
 #define GAIN_CAPTION "RF.G"
 #elif VFO_RADIO_OPENX6X00
-/* The modes and AGCs OpenX6X00's TCI server names (src/tci_server.c), the
- * X6100's own. TCI carries no RF gain: shown greyed, as on AetherSDR. */
-static const char *MODES[] = { "usb","lsb","cw","cwr","am","nfm","digu","digl" };
+/* The modes and AGCs OpenX6X00's TCI server names (src/tci_server.c): an
+ * X6200's, with synchronous AM and wide FM; an X6100's, without (its
+ * modulations_list says which). TCI carries no RF gain: shown greyed, as on
+ * AetherSDR. */
+static const char *MODES[] = { "usb","lsb","cw","cwr","am","sam","nfm","wfm","digu","digl" };
+static const char *MODES_NO_SAM[] = { "usb","lsb","cw","cwr","am","nfm","digu","digl" };
 static const char *AGCS[]  = { "auto","fast","slow","off" };
 #define GAIN_CAPTION "RF.G"
 #elif VFO_RADIO_XIEGU
@@ -1212,6 +1216,11 @@ static const struct { const char *name; int64_t hz; } BANDS[] = {
 #if !VFO_RADIO_UBERSDR
     { "6m",   50200000 },               /* an UberSDR stops at 30 MHz */
 #endif
+#if VFO_RADIO_OPENX6X00
+    /* The X6200's, receive only, where OpenX6X00 opens them (its bands 112
+     * and 113): FM broadcast in wide FM, the airband in AM. */
+    { "FM",  100000000 }, { "AIR", 118000000 },
+#endif
 #if VFO_RADIO_ICOM
     { "4m",   70200000 },               /* the IC-7300MK2's */
     { "2m",  144300000 }, { "70cm", 432200000 },
@@ -1230,7 +1239,7 @@ static const char *const *modes(int *n)
 #if VFO_RADIO_ICOM
     if (s_last.rx_only) { *n = NELEM(MODES_RX); return MODES_RX; }
 #endif
-#if VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
+#if VFO_RADIO_OWRX || VFO_RADIO_WEBSDR || VFO_RADIO_OPENX6X00
     if (!s_last.has_sam) { *n = NELEM(MODES_NO_SAM); return MODES_NO_SAM; }
 #endif
     *n = NELEM(MODES);

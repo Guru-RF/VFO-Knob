@@ -1,6 +1,6 @@
-# The openx6x00 firmware: a Xiegu X6100 running the OpenX6X00 firmware, over
-# its TCI server on WiFi (VFO_RADIO=openx6x00) -- the AetherSDR firmware's
-# client, with no computer in between.
+# The openx6x00 firmware: a Xiegu X6100 or X6200 running the OpenX6X00
+# firmware, over its TCI server on WiFi (VFO_RADIO=openx6x00) -- the AetherSDR
+# firmware's client, with no computer in between.
 #
 # WiFi only, without the USB networking of sdkconfig.usbnet: the knob reaches
 # the radio over WiFi, and the USB link has no route to it. Leaving TinyUSB

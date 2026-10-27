@@ -70,6 +70,18 @@ static void test_greeting(void)
     f = P("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
     CHECK_EQ(f.kind, TCI_MODULATIONS_LIST);
     CHECK(strncmp(f.s0, "usb,lsb,cw", 10) == 0);
+    CHECK_EQ(f.i0, TCI_MODS_SAM);
+    /* OpenX6X00's: an X6100's has neither; an X6200's names both last, past
+     * the 31 characters s0 keeps. */
+    f = P("modulations_list:lsb,usb,digl,digu,cw,cwr,am,nfm;");
+    CHECK_EQ(f.i0, 0);
+    f = P("modulations_list:lsb,usb,digl,digu,cw,cwr,am,nfm,sam,wfm;");
+    CHECK_EQ(f.i0, TCI_MODS_SAM | TCI_MODS_WFM);
+    CHECK_STR(f.s0, "lsb,usb,digl,digu,cw,cwr,am,nfm");
+    /* Whole names only, in either case, spaces let by. */
+    CHECK_EQ(P("modulations_list:SAMX,xwfm,WFM, sam ;").i0, TCI_MODS_SAM | TCI_MODS_WFM);
+    CHECK_EQ(P("modulations_list:samx,xwfm,wfmm;").i0, 0);
+    CHECK_EQ(P("modulations_list:;").i0, 0);
 
     CHECK_EQ(P("trx_count:2;").i0, 2);
     /* Both of these appeared as UNPARSED against a live AetherSDR greeting. */

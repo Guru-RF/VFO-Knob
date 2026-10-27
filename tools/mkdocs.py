@@ -890,7 +890,7 @@ def aethersdr_pictures():
 
 def openx6x00_pictures():
     """The openx6x00 firmware: AetherSDR's face and TCI client, over WiFi to
-    an X6100 on OpenX6X00, in its RF.Guru colours."""
+    an X6100 or X6200 on OpenX6X00, in its RF.Guru colours."""
     R = dict(dbm=-86, band="20m", mode="USB", filt="2800", digits=" 14200" "00", active=6,
              step="100 Hz", agc="AUTO", gain_cap="RF.G", gain="", gain_known=False)
     f = face("openx6x00", **R)
@@ -903,7 +903,7 @@ def openx6x00_pictures():
     out["03-mode"] = knob("ox-03", "The mode, chosen on the dial",
                           f + editor("MODE", "USB"), turn(),
                           "tap the mode  \u00b7  turn  \u00b7  tap the panel")
-    out["04-radio"] = knob("ox-04", "Swipe up: another X6100",
+    out["04-radio"] = knob("ox-04", "Swipe up: another radio",
                            f + editor("RADIO", "portable", 28, hint="LAN  -  tap to switch"),
                            swipe_at("up"), "swipe up  \u00b7  tap the panel")
     out["05-tx"] = knob("ox-05", "On the air: SWR, power and the microphone",
@@ -916,6 +916,11 @@ def openx6x00_pictures():
     out["07-battery"] = knob("ox-07", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
                              "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    # An X6200's two receive bands after 6 m (ui.c BANDS), where OpenX6X00
+    # opens them: FM broadcast in wide FM, the airband in AM.
+    out["08-x6200"] = knob("ox-08", "An X6200: FM broadcast and the airband, after 6 m",
+                           f + editor("BAND", "FM"), turn(),
+                           "tap the band  \u00b7  turn  \u00b7  tap the panel")
     return out
 
 

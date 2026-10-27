@@ -1769,6 +1769,7 @@ static void ui_task(void *arg)
             .no_rit        = st.no_rit,
             .f_min         = st.f_min,
             .f_max         = st.f_max,
+            .has_sam       = st.has_sam,    /* the OpenWebRX's and WebSDR's: below */
             .freq_hz       = st.f_display,
             .step_hz       = atomic_load(&s_step_hz),
             .mode          = st.mode,
@@ -2082,9 +2083,12 @@ static void ui_task(void *arg)
                 if (i < nd) {
                     /* A new knob's one entry, with no address yet: said so,
                      * beside a radio it found on the LAN. */
+                    /* The one in use, unnamed, by the name that answered
+                     * in its place: an X6200 found for x6100.local. */
+                    const char *ans = i == net_prov_radio_active() ? net_prov_host_answered() : "";
                     if (net_prov_radio_get(i, &r))
-                        strlcpy(u.radio_name[i], r.name[0] ? r.name : r.host[0] ? net_prov_host_shown(r.host)
-                                                                                : "NO ADDRESS",
+                        strlcpy(u.radio_name[i], r.name[0] ? r.name : ans[0] ? ans
+                                               : r.host[0] ? net_prov_host_shown(r.host) : "NO ADDRESS",
                                 sizeof u.radio_name[i]);
                 } else {
                     radio_found_get(i - nd, u.radio_name[i], sizeof u.radio_name[i]);

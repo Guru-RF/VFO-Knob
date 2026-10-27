@@ -1,7 +1,7 @@
 # VFO-Knob
 
 A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
-FlexRadio, the Icom IC-705, IC-7610, IC-9700 and IC-R8600, and the Xiegu X6100 on
+FlexRadio, the Icom IC-705, IC-7610, IC-9700 and IC-R8600, and the Xiegu X6100 and X6200 on
 [OpenX6X00](https://github.com/Guru-RF/OpenX6X00), built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
 change step, key the transmitter, watch the S-meter — over a USB-C cable or
 over WiFi. And, with firmware of their own, SVXConnect, a talkgroup knob for
@@ -40,10 +40,11 @@ radio's own API: a station of its own, with Opus audio both ways, or the dial
 and PTT for a SmartSDR, AetherSDR or Maestro station already on the radio. In
 the Maestro's colours. See [FlexRadio](#flexradio-multiflex).
 
-With an **X6100 running OpenX6X00**, the X6100's open firmware, the knob
-talks to the radio's own TCI server over WiFi, with audio both ways and no
-computer in between. It finds the radio as `x6100.local`, and its face wears
-OpenX6X00's RF.Guru colours. See [OpenX6X00](#openx6x00).
+With an **X6100 or X6200 running OpenX6X00**, the radios' open firmware, the
+knob talks to the radio's own TCI server over WiFi, with audio both ways and
+no computer in between. It finds the radio as `x6100.local` or
+`x6200.local`, and its face wears OpenX6X00's RF.Guru colours. See
+[OpenX6X00](#openx6x00).
 
 With the **SVXConnect** firmware there is no radio at all: the knob is an
 [SvxLink](https://www.svxlink.org/) reflector client over WiFi, in the style of
@@ -84,7 +85,7 @@ and the knob's report filled in. The form asks for these; please give:
    finger on the S-meter until the knob clicks): `OpenX6X00 1.21.1`.
 2. **The radio, receiver or reflector**, with its own software: an IC-705 and
    its firmware, a FLEX-6600 and SmartSDR's version, AetherSDR's version and
-   the computer it runs on, an X6100 and its OpenX6X00 version, a receiver's
+   the computer it runs on, an X6100 or X6200 and its OpenX6X00 version, a receiver's
    or a reflector's address. And how the knob reaches it: WiFi, the USB
    cable, or SmartLink.
 3. **What happened**: what you did, what you expected and what you got. Give
@@ -376,15 +377,17 @@ the LAN, Opus audio and PTT included. A radio reachable only by hole punching
 
 ## OpenX6X00
 
-The openx6x00 firmware (`vfo-knob-openx6x00`) is a dial for a Xiegu X6100
-running [OpenX6X00](https://github.com/Guru-RF/OpenX6X00). It uses the same
+The openx6x00 firmware (`vfo-knob-openx6x00`) is a dial for a Xiegu X6100 or
+X6200 running [OpenX6X00](https://github.com/Guru-RF/OpenX6X00). It uses the same
 TCI as the AetherSDR firmware, but talks to the radio itself, over WiFi, on
 the radio's TCI server (port 50001, on by default).
 
-It looks for the radio as `x6100.local`, the name OpenX6X00 announces over
-mDNS, so it follows the radio when its address changes. A radio given
-another network name is listed as `<name>.local`, or by its IP address, with
-up to four radios in the list.
+It looks for the radio as `x6100.local`, the name OpenX6X00 announces for an
+X6100 over mDNS, and for `x6200.local`, an X6200's, when that one does not
+answer (and the other way round), so it follows the radio when its address
+changes. A radio given another network name is listed as `<name>.local`, or
+by its IP address, with up to four radios in the list. On an X6200 the dial
+also offers SAM and WFM, and FM broadcast and the airband, receive only.
 
 The radio's audio plays on the jack, and the knob's microphone transmits.
 The radio unkeys by itself after half a second without the knob's audio,

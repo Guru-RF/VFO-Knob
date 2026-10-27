@@ -1,7 +1,7 @@
 # The OpenX6X00 firmware
 
-`vfo-knob-openx6x00` is a dial for a Xiegu X6100 running
-[OpenX6X00](https://github.com/Guru-RF/OpenX6X00), the radio's open firmware.
+`vfo-knob-openx6x00` is a dial for a Xiegu X6100 or X6200 running
+[OpenX6X00](https://github.com/Guru-RF/OpenX6X00), the radios' open firmware.
 It talks to the radio itself over WiFi, through the radio's **TCI** server,
 with no computer in between. Tune on the radio and the knob follows. Turn the
 knob and the radio moves. The radio's audio plays on the knob's jack, and the
@@ -15,13 +15,17 @@ layout (`tools/mkdocs.py`). The orange marks show what your hand does.
 
 1. On the radio, the TCI server is on by default. Check it under
    *Settings → General → TCI SERVER*, or under *System → TCI* on the radio's
-   web page, `http://x6100.local/`. Its port is 50001.
+   web page, `http://x6100.local/` (an X6200's: `http://x6200.local/`). Its
+   port is 50001.
 2. Put the knob on the same network as the radio: see
    [the setup guide](setup.md). From the setup firmware's list, choose
    **OpenX6X00**.
 3. The knob looks for the radio as **`x6100.local`**, the name OpenX6X00
-   announces on the LAN, so a radio on its default name needs nothing set.
-   When its IP address changes, the knob finds it again by that name.
+   announces for an X6100 on the LAN. An X6200 announces **`x6200.local`**:
+   when `x6100.local` does not answer, the knob asks for that one too, and
+   the other way round. So either radio on its default name needs nothing
+   set, and the dial calls an X6200 found this way `x6200.local`. When its
+   IP address changes, the knob finds it again by that name.
 
 To open the configuration page, hold the S-meter for the address card. It
 shows the knob's WiFi address: open that address in a browser. The user is
@@ -48,8 +52,8 @@ radio is on, on the same network, and has its TCI server on.
 | **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | AUTO, FAST, SLOW, OFF |
 | **RF.G** | — | greyed: TCI does not carry the RF gain |
-| **Band** | the band editor | the band's own frequency, on a tap on the panel |
-| **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, NFM, DIGU, DIGL |
+| **Band** | the band editor | the band's own frequency, on a tap on the panel; on an X6200 also FM and AIR, see [On an X6200](#on-an-x6200) |
+| **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, NFM, DIGU, DIGL; on an X6200 also SAM and WFM |
 | **Filter** | the filter editor | its width, on the side of the carrier the mode uses |
 | **Frequency** | a digit: the tuning step | the underlined digit is the step |
 | **Step, RIT** | RIT: its editor | RIT in amber when set |
@@ -67,6 +71,26 @@ of the arc, as a phone does. On USB power the charge cannot be read, and none
 shows. The address card says which: **battery 85 %**, or **on USB power**.
 
 ![On its own battery: the knob's charge at the top of the arc](openx6x00/07-battery.svg)
+
+## On an X6200
+
+The knob tells the two radios apart by their modes: an X6200's TCI server
+offers two more, and the knob offers them too.
+
+- **Modes**: SAM, synchronous AM, after AM, and WFM, wide FM, after NFM.
+- **Bands**: after 6 m, **FM**, FM broadcast from 100 MHz, and **AIR**, the
+  airband from 118 MHz. The radio opens them in the mode it keeps for each,
+  WFM and AM at first.
+
+![BAND: FM, after 6 m on an X6200](openx6x00/08-x6200.svg)
+
+FM broadcast and the airband are receive only. A key there is refused by the
+radio, which says so on its screen. The knob unkeys and buzzes the refusal.
+
+The knob tunes wherever OpenX6X00 does: HF and 6 m, a transverter's band set
+on the radio, an X6200's FM broadcast and airband, and the WR12's range when
+it is set on the radio. Turned where the radio does not tune, the dial comes
+back.
 
 ## Another radio
 

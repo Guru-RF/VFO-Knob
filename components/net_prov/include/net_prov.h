@@ -143,8 +143,12 @@ esp_err_t net_prov_wifi_stop(void);
 bool net_prov_is_connected(void);
 
 /* Resolve the configured host. mDNS for *.local, getaddrinfo otherwise.
- * Writes a dotted-quad into `out`. */
+ * Writes a dotted-quad into `out`. On the openx6x00 firmware, x6100.local
+ * not answering, x6200.local is asked too, and the other way round. */
 esp_err_t net_prov_resolve(char *out, size_t out_len);
+/* The name that answered in the configured one's place, at the last
+ * resolve ("x6200.local"); "" when the configured one did. */
+const char *net_prov_host_answered(void);
 
 /* --- the knob's own hotspot, for WiFi setup (net_ap.c) ----------------------
  * A hotspot a phone can join, which sends it to the knob's page by itself (a

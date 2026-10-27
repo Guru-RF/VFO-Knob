@@ -25,7 +25,7 @@ body:
     id: radio
     attributes:
       label: The radio, receiver or reflector
-      description: "Its model and its own software's version: an IC-705 and its firmware, a FLEX-6600 and SmartSDR's version, AetherSDR's version and the computer it runs on, an X6100 and its OpenX6X00 version, a receiver's or a reflector's address."
+      description: "Its model and its own software's version: an IC-705 and its firmware, a FLEX-6600 and SmartSDR's version, AetherSDR's version and the computer it runs on, an X6100 or X6200 and its OpenX6X00 version, a receiver's or a reflector's address."
       placeholder: "IC-705, firmware 1.33"
     validations:
       required: true

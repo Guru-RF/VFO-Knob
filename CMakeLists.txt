@@ -40,8 +40,9 @@ endif()
 # one may be built: two would be two definitions of everything in it. The
 # Xiegu X6100 and X6200 run wfview's server, which speaks Icom's network
 # protocol and presents the radio as an IC-705: they share the Icom client.
-# openx6x00 is the X6100 running the OpenX6X00 firmware, whose own TCI server
-# speaks what AetherSDR serves: the AetherSDR firmware's TCI client, over WiFi.
+# openx6x00 is an X6100 or X6200 running the OpenX6X00 firmware, whose own TCI
+# server speaks what AetherSDR serves: the AetherSDR firmware's TCI client,
+# over WiFi.
 # svxconnect is not a radio but an SvxLink reflector: its client speaks the
 # reflector protocol, and the dial picks talkgroups instead of frequencies.
 # multiflex speaks a FlexRadio's own API, with no computer in between: the

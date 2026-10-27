@@ -809,7 +809,7 @@ async function load(){
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
-  const ox = c.radio === 'openx6x00';    /* an X6100 on OpenX6X00: TCI, found as x6100.local */
+  const ox = c.radio === 'openx6x00';    /* an X6100 or X6200 on OpenX6X00: TCI, found as x6100.local or x6200.local */
   KIWI = c.radio === 'kiwi';              /* web receivers: the list below, one in use */
   OWRX = c.radio === 'owrx';              /* web receivers: this list, each by its address whole */
   WSDR = c.radio === 'websdr';            /* ...WebSDRs, the same way */
@@ -2002,7 +2002,7 @@ $('upload').onclick = async()=>{
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 / IC-9700 / IC-R8600 (LAN)'},
               {id:'xiegu',     name:'Xiegu X6100 / X6200 (LAN)', soon:true},
-              {id:'openx6x00', name:'OpenX6X00 (an X6100 on the OpenX6X00 firmware, TCI)'},
+              {id:'openx6x00', name:'OpenX6X00 (an X6100 or X6200 on the OpenX6X00 firmware, TCI)'},
               {id:'svxconnect',name:'SVXConnect (SvxLink reflectors)'},
               {id:'phone',     name:'Telephone (SIP)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
