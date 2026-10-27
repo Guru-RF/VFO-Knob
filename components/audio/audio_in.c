@@ -161,7 +161,8 @@ void audio_in_feed_ext(const int16_t *pcm, size_t n)
             const int32_t m = buf[i] < 0 ? -buf[i] : buf[i];
             if (m > pk) pk = m;
         }
-        s_stats.peak = (float)pk / 32768.0f;
+        const float pkf = (float)pk / 32768.0f;
+        if (pkf > s_stats.peak) s_stats.peak = pkf;     /* held, as the PDM path's */
         if (xRingbufferSend(s_ring, buf, k * sizeof(int16_t), 0) != pdTRUE) s_stats.overruns++;
         else                                                               s_stats.blocks++;
         pcm += k;
