@@ -702,6 +702,7 @@ GET /api/status                       the knob itself, its power too: on_usb (nu
                                       while it settles), rail_mv, batt (-1 on USB)
 GET /api/report                       a problem report, as text: the knob's own
                                       lines, then its log, passwords starred out
+GET /api/screenshot                   the face as it is drawn, upright: a 24-bit BMP
 ```
 
 A POST with the same fields as a form does the same. Both need the page's
