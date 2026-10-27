@@ -11,6 +11,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -563,14 +564,20 @@ static void load_nvs(void)
     if (!have) ESP_LOGW(TAG, "no WiFi credentials stored -- USB only until the "
                              "configuration page is used");
     /* Count this boot straight away. If we never reach net_prov_boot_ok(),
-     * the next boot sees a higher count and can back off. */
-    if (s_boots < 250) s_boots++;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+     * the next boot sees a higher count and can back off. Not a start that a
+     * computer on the cable asked for, by opening the S3's USB port --
+     * esptool, the website's bench and WiFi pages: no crash ever resets it
+     * that way, and three of them inside 20 s each took a knob being
+     * provisioned on the bench into safe mode. */
+    const bool by_usb = esp_reset_reason() == ESP_RST_USB;
+    if (!by_usb && s_boots < 250) s_boots++;
+    if (!by_usb && nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_u8(h, "boots", s_boots);
         nvs_commit(h);
         nvs_close(h);
     }
-    if (s_boots > 1) ESP_LOGW(TAG, "boot #%u since last healthy run", s_boots);
+    if (s_boots > 1) ESP_LOGW(TAG, "boot #%u since last healthy run%s", s_boots,
+                              by_usb ? " (this one, by the USB cable, not counted)" : "");
     wifis_load();
 }
 

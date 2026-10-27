@@ -89,6 +89,7 @@
 #endif
 #include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
+#include "hal/usb_serial_jtag_ll.h"
 #include "ptt_fsm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -822,13 +823,30 @@ static void con_wifi(const char *cmd)
     con_wifi_bad("@wifi hello | scan | join {\"ssid\":..,\"pass\":..}");
 }
 
+/* The USB port's driver, with the port's interrupts off first. A restart, a
+ * crash and the cable's own reset (esptool, the website's pages) all leave
+ * the USB-serial block as it was, interrupts on included, and the driver's
+ * handler clears only the two it uses: any other one on and raised kept
+ * CPU0 in that handler until the interrupt watchdog fired, the moment the
+ * console installed the driver (a bench knob on 1.21.4). The driver turns
+ * its own back on. */
+static esp_err_t usj_install(usb_serial_jtag_driver_config_t *cfg)
+{
+    const uint32_t ena = usb_serial_jtag_ll_get_intr_ena_status();
+    if (ena & ~USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT)
+        ESP_LOGW(TAG, "console: USB interrupts left on 0x%05lx (raised 0x%05lx), turned off",
+                 (unsigned long)ena, (unsigned long)usb_serial_jtag_ll_get_intraw_mask());
+    usb_serial_jtag_ll_disable_intr_mask(USB_SERIAL_JTAG_LL_INTR_MASK);
+    return usb_serial_jtag_driver_install(cfg);
+}
+
 /* Serial console. Touch does not exist yet, and every PTT fault path needs
  * exercising long before a real transmitter is involved. */
 static void console_task(void *arg)
 {
     (void)arg;
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    if (usb_serial_jtag_driver_install(&cfg) != ESP_OK) {
+    if (usj_install(&cfg) != ESP_OK) {
         ESP_LOGW(TAG, "console unavailable");
         vTaskDelete(NULL);
     }
@@ -900,7 +918,7 @@ static void card_console_task(void *arg)
     (void)arg;
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     cfg.rx_buffer_size = CARD_RX_RING;
-    if (usb_serial_jtag_driver_install(&cfg) == ESP_OK) {
+    if (usj_install(&cfg) == ESP_OK) {
         int64_t until = esp_timer_get_time() + CARD_WAIT_US;
         while (esp_timer_get_time() < until) {
             uint8_t ch;
@@ -909,6 +927,8 @@ static void card_console_task(void *arg)
             if (!card_line(l + 1, sizeof l - 1, 1000) || strcmp(l, "@card begin")) continue;
             if (card_session()) {
                 ESP_LOGW(TAG, "provisioning: done, restarting");
+                /* A restart asked for: not one towards safe mode. */
+                boot_ok_now();
                 vTaskDelay(pdMS_TO_TICKS(500));   /* the script's last answer out first */
                 esp_restart();
             }
@@ -2648,6 +2668,20 @@ static void setup_pick(void)
     }
 }
 
+/* Safe mode on the setup firmware: its screens are the setup task's, which
+ * does not start, and the face left under them looked like a radio's
+ * firmware with no network (a knob made on the website's bench, 2026-10-27).
+ * This one says so, and once the count has cleared, 20 s in, that a restart
+ * brings the setup back. */
+static void setup_safe_task(void *arg)
+{
+    (void)arg;
+    ui_setup_show("SAFE MODE", "Three starts in a row\nended within 20 s,\nso WiFi is off.\nOne moment...");
+    while (!s_boot_ok) vTaskDelay(pdMS_TO_TICKS(250));
+    ui_setup_show("SAFE MODE", "Three starts in a row\nended within 20 s.\nRestart the knob:\nit starts as usual.");
+    vTaskDelete(NULL);
+}
+
 static void setup_task(void *arg)
 {
     (void)arg;
@@ -3990,6 +4024,11 @@ void app_main(void)
         xTaskCreatePinnedToCore(net_task, "net_sup", 6144, NULL, 3, NULL, 0);
 #endif
     }
+#if VFO_RADIO_SETUP
+    else if (have_ui) {
+        xTaskCreatePinnedToCore(setup_safe_task, "safe", 4096, NULL, 3, NULL, 0);
+    }
+#endif
 
     /* The console and USB networking cannot coexist: both want the USB pads.
      * usb_serial_jtag_driver_install() re-enables the USJ peripheral, which

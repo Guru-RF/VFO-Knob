@@ -198,9 +198,15 @@ crashed it is not started again. The face says **SAFE MODE**. Restart the
 knob, or unplug it and switch it off and on: the count is cleared once safe
 mode has been up 20 seconds, so the next start is an ordinary one. A restart
 asked for on the configuration page, or a radio chosen on the dial, does not
-count.
+count, nor one from a computer on the USB cable: the website's pages and
+esptool restart the knob as they open its port.
 
 ![SAFE MODE: three failed starts in a row](setup/18-safe-mode.svg)
+
+The setup firmware says so over the whole face, and after 20 seconds that a
+restart brings it back.
+
+![SAFE MODE on the setup firmware: restart it](setup/19-setup-safe-mode.svg)
 
 ## If something is not right
 

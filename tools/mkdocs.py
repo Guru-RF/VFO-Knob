@@ -651,6 +651,11 @@ def setup_pictures():
     out["18-safe-mode"] = knob("setup-18", "SAFE MODE: three failed starts in a row",
                                icom + warning("SAFE MODE", "Icom", "USB   -\nWiFi  -\nsetup  http://-"))
     md.use_palette("svxconnect")
+    # The setup firmware's own, once the count has cleared 20 s in
+    # (app_main.c setup_safe_task): its setup task does not start in it.
+    out["19-setup-safe-mode"] = knob("setup-19", "SAFE MODE on the setup firmware: restart it",
+                                     setup_screen("SAFE MODE", "Three starts in a row\nended within 20 s.\n"
+                                                  "Restart the knob:\nit starts as usual."))
     return out
 
 
