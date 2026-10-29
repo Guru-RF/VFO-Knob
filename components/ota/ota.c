@@ -505,8 +505,12 @@ static esp_err_t get_small(esp_http_client_handle_t h, char *body, size_t cap, i
     if (esp_http_client_fetch_headers(h) < 0) return ESP_FAIL;        /* no answer at all */
     const int status = esp_http_client_get_status_code(h);
     if (status != 200) return status == 404 ? ESP_ERR_NOT_FOUND : ESP_ERR_INVALID_RESPONSE;
+    /* Whole or not at all: an index cut at `cap` parsed as nothing, and its
+     * copy on the card with it. */
+    if (esp_http_client_get_content_length(h) >= (int64_t)cap) return ESP_ERR_INVALID_SIZE;
     const int n = esp_http_client_read_response(h, body, (int)cap - 1);
     if (n <= 0) return ESP_FAIL;
+    if (n == (int)cap - 1 && !esp_http_client_is_complete_data_received(h)) return ESP_ERR_INVALID_SIZE;
     body[n] = 0;
     *out_len = n;
     return ESP_OK;
@@ -540,7 +544,8 @@ static esp_err_t fetch_on(esp_http_client_handle_t *conn, const char *url, char 
         if (conn) *conn = h;
     }
     esp_err_t err = get_small(h, body, cap, out_len);
-    if (again && err != ESP_OK && err != ESP_ERR_NOT_FOUND && err != ESP_ERR_INVALID_RESPONSE) {
+    if (again && err != ESP_OK && err != ESP_ERR_NOT_FOUND && err != ESP_ERR_INVALID_RESPONSE &&
+        err != ESP_ERR_INVALID_SIZE) {
         esp_http_client_close(h);
         err = get_small(h, body, cap, out_len);
     }

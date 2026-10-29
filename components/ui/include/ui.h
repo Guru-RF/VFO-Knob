@@ -365,8 +365,11 @@ uint8_t ui_take_call_req(void);
  * on (the multiflex firmware at boot: a station of its own, or the dial for
  * one already on the radio). Shown like an editor -- the knob chooses, a tap
  * on its panel answers -- but a tap anywhere else leaves it up. Each option
- * is a title over a name ("DIAL FOR" / "SHACK-PC"). n = 0 takes it down. */
-#define UI_CHOICES 10
+ * is a title over a name ("DIAL FOR" / "SHACK-PC"). n = 0 takes it down.
+ * The setup firmware's list is one too: every radio's firmware published,
+ * and WIFI. At 10, the tenth radio's, the Telephone, fell off its end; 100
+ * is room for 99 firmwares to come, and WIFI (the texts are in PSRAM). */
+#define UI_CHOICES 100
 void ui_ask_choice(const char titles[][12], const char names[][24], uint8_t n, uint8_t def);
 bool ui_choice_active(void);
 /* The answer, once: the option's index, or -1 while there is none. */

@@ -70,10 +70,14 @@ def sha256(data):
 
 def fetch(cache, plan_path):
     os.makedirs(cache, exist_ok=True)
-    index = get(ROOT + "index.json")
+    idx = json.loads(get(ROOT + "index.json"))
+    # Compact, as tools/release.sh writes it: the knob takes the index in one
+    # 8 kB block.
+    index = json.dumps(idx, separators=(",", ":")).encode()
+    if len(index) >= 8192:
+        sys.exit(f"The index is {len(index)} bytes: past the knob's 8 kB block.")
     with open(os.path.join(cache, "index.json"), "wb") as f:
         f.write(index)
-    idx = json.loads(index)
     radios = [x["radio"] for x in idx["firmwares"] if x.get("radio")]
     # The second chip's firmware, under a key of its own in the index -- never
     # in "firmwares", the setup firmware's list: onto the card too, where a

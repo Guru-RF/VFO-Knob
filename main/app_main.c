@@ -630,7 +630,8 @@ static bool card_session(void)
             }
             if (lost) break;
         } else if (sscanf(line, "@card index %lu", &size) == 1) {
-            /* One block: an index is a few hundred bytes. */
+            /* One block: tools/release.sh writes the index compact, some 70
+             * bytes a firmware, and refuses one past a block. */
             if (size >= sizeof buf || !card_bytes(buf, size)) break;
             buf[size] = 0;
             card_say(sdc_index_save((const char *)buf) == ESP_OK ? "@card ok index" : "@card bad index");
@@ -961,7 +962,7 @@ __attribute__((unused))
 static void ask_choice(const radio_status_t *st)
 {
     static uint32_t asked_seq, answered_seq;
-    static char titles[UI_CHOICES][12], names[UI_CHOICES][24];
+    EXT_RAM_BSS_ATTR static char titles[RADIO_CHOICES][12], names[RADIO_CHOICES][24];
     const int a = ui_take_choice();
     if (a >= 0) {
         ESP_LOGI(TAG, "choice -> %s %s", titles[a], names[a]);
@@ -976,7 +977,7 @@ static void ask_choice(const radio_status_t *st)
     if (st->choices_seq == answered_seq) return;
     if (ui_choice_active() && st->choices_seq == asked_seq) return;
     uint8_t n = 0;
-    for (uint8_t i = 0; i < st->n_choices && n < UI_CHOICES; i++)
+    for (uint8_t i = 0; i < st->n_choices && n < RADIO_CHOICES; i++)
         if (radio_get_choice(i, titles[n], sizeof titles[n], names[n], sizeof names[n])) n++;
     asked_seq = st->choices_seq;
     ui_ask_choice(titles, names, n, st->choice_default);
@@ -2563,7 +2564,11 @@ static void setup_wifi_page(void)
 /* Every firmware published onto the SD card, in the background while the
  * list is up -- this one too, for the way back to it from a radio's. */
 #define FILL_MAX (UI_CHOICES + 2)
-static char s_fill[FILL_MAX][16];
+/* The index, read whole: 99 firmwares at some 70 bytes each in the compact
+ * form tools/release.sh writes, 7 kB, and room for it pretty-printed. One
+ * that does not fit is refused (components/ota), never parsed cut short. */
+#define SETUP_INDEX_MAX 16384
+EXT_RAM_BSS_ATTR static char s_fill[FILL_MAX][16];
 static int  s_nfill;
 
 static void card_fill_task(void *arg)
@@ -2580,17 +2585,17 @@ static void card_fill_task(void *arg)
 
 static void setup_pick(void)
 {
-    static char titles[UI_CHOICES][12], names[UI_CHOICES][24], radios[UI_CHOICES][16];
+    EXT_RAM_BSS_ATTR static char titles[UI_CHOICES][12], names[UI_CHOICES][24], radios[UI_CHOICES][16];
     static bool filling;
     for (;;) {
         ui_setup_show("FIRMWARE", "Looking up\nthe firmwares...");
         uint8_t n = 0;
-        char *idx = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
+        char *idx = heap_caps_malloc(SETUP_INDEX_MAX, MALLOC_CAP_SPIRAM);
         /* No update server: what the SD card holds, from its copy of the
          * index -- it installs from the card. */
         bool card = false;
-        esp_err_t ie = idx ? ota_fetch_index(idx, 4096) : ESP_ERR_NO_MEM;
-        if (ie != ESP_OK && idx && ota_card_index(idx, 4096) == ESP_OK) {
+        esp_err_t ie = idx ? ota_fetch_index(idx, SETUP_INDEX_MAX) : ESP_ERR_NO_MEM;
+        if (ie != ESP_OK && idx && ota_card_index(idx, SETUP_INDEX_MAX) == ESP_OK) {
             ie   = ESP_OK;
             card = true;
         }

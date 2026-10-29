@@ -192,8 +192,10 @@ static esp_err_t read_all(const char *p, char *buf, size_t cap)
     FILE *f = fopen(p, "r");
     if (!f) return ESP_ERR_NOT_FOUND;
     const size_t n = fread(buf, 1, cap - 1, f);
+    const bool more = n == cap - 1 && fgetc(f) != EOF;     /* not cut short */
     fclose(f);
     buf[n] = 0;
+    if (more) return ESP_ERR_INVALID_SIZE;
     return n ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 

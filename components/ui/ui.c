@@ -957,8 +957,9 @@ static bool    s_ant_slab;
 static uint8_t  s_menu[3], s_menu_n;
 static bool     s_mem_lit;
 static uint32_t s_mem_tapped;
-/* The client's question (ED_CHOICE), and its answer until taken. */
-static char     s_ch_title[UI_CHOICES][12], s_ch_name[UI_CHOICES][24];
+/* The client's question (ED_CHOICE), and its answer until taken. The texts
+ * in PSRAM, beside s_last. */
+EXT_RAM_BSS_ATTR static char s_ch_title[UI_CHOICES][12], s_ch_name[UI_CHOICES][24];
 static volatile int s_ch_answer = -1;
 /* The last state ui_update() saw, so the editors can open on the current
  * value. The touch callback runs on the LVGL task and cannot ask the client.

@@ -442,7 +442,7 @@ fi
 # made before a radio's first release still offers it. Rebuilt from the
 # manifests on the branch; a new radio gets its name in NAMES, at the top.
 python3 - "$TMP/wt/firmware" "$NAMES" <<'PY'
-import glob, json, os, sys
+import glob, json, os, re, sys
 root = sys.argv[1]
 # NAMES above: "firmwares" holds these and no others, in its order.
 NAMES = json.loads(sys.argv[2])
@@ -461,11 +461,32 @@ for m in sorted(glob.glob(os.path.join(root, "*", "manifest.json"))):
         print(f"WARNING: firmware/{d}/ has no name in NAMES (tools/release.sh): left out of the "
               f"setup firmware's list", file=sys.stderr)
 index["firmwares"].sort(key=lambda f: order.index(f["radio"]))
+# Each radio's files on the SD card are named by its key's first 8 letters
+# and digits (components/sd_cache), beside INDEX.JSN; the setup firmware
+# keeps a key in 16 bytes. A key that breaks either would take another
+# firmware's place on the card, or be cut.
+codes = {"INDEX": "the card's INDEX.JSN"}
+for r in list(NAMES) + ["companion"]:
+    if not re.fullmatch(r"[a-z0-9]{1,15}", r):
+        sys.exit(f"'{r}' in NAMES: a key is 1 to 15 lowercase letters and digits")
+    code = re.sub(r"[^a-z0-9]", "", r)[:8].upper()
+    if code in codes:
+        sys.exit(f"'{r}' and '{codes[code]}' share {code} on the SD card: give one another key")
+    codes[code] = r
+# Compact, some 70 bytes a firmware (99 of them: 7 kB): the SD card's session
+# takes the index in one 8 kB block, the setup firmware reads up to 16 kB, and
+# one before 1.21.6 4 kB, about 55 firmwares (past that it falls back to the
+# radios it was built with).
+text = json.dumps(index, separators=(",", ":")) + "\n"
+if len(text) >= 8192:
+    sys.exit(f"index.json would be {len(text)} bytes: past the SD card session's 8 kB block")
+if len(text) >= 4096:
+    print(f"WARNING: index.json is {len(text)} bytes: setup firmwares before 1.21.6 (4 kB) no "
+          f"longer read it and offer only the radios they were built with", file=sys.stderr)
 with open(os.path.join(root, "index.json"), "w") as f:
-    json.dump(index, f, indent=2)
-    f.write("\n")
+    f.write(text)
+print(json.dumps(index, indent=2))
 PY
-cat "$TMP/wt/firmware/index.json"
 
 git -C "$TMP/wt" add firmware
 git -C "$TMP/wt" commit -q -m "firmware $VER for $RADIO"
