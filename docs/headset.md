@@ -256,6 +256,9 @@ The headset's call button keys, and the next press unkeys; a tap on the slab
 does the same, as without a headset. While the headset has its microphone
 muted, neither keys — an over would be a dead carrier — and the knob clicks
 three times and says **HEADSET MUTED**. Unkeying is never refused.
+Locked, with the address card's **LOCK**, the button keys nothing either:
+the knob clicks three times and its padlock goes red. On the air it still
+unkeys.
 
 ![On the air through the headset](headset/04-on-the-air.svg)
 
@@ -274,7 +277,9 @@ raising it stops.
 Never by itself: when the headset connects, or the knob starts, with the boom
 down, the slab says **RAISE BOOM** in red, under its caption, and nothing
 transmits until the boom has been up once. The call button works as above all
-the while. The option is the knob's, whichever firmware it runs.
+the while. The option is the knob's, whichever firmware it runs. Locked, with
+the address card's **LOCK**, lowering the boom transmits nothing, and nor
+does unlocking with it down; raising it still stops an over.
 
 ## A Bluetooth speaker
 

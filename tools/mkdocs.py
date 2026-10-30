@@ -246,6 +246,48 @@ def address_card(text):
             .replace('font-family="DejaVu Sans', 'xml:space="preserve" font-family="DejaVu Sans'))
 
 
+def lock_closed(x, y, colour):
+    """font_svx_icons_24's lock (U+F023), centred on (x, y): mkrender's
+    lock_open, its shackle shut."""
+    return (f'<g transform="translate({x - 8:.1f},{y - 11:.1f})">'
+            f'<rect x="0" y="9" width="16" height="12" rx="2.5" fill="{colour}"/>'
+            f'<path d="M3.5,9.5 V6 a4.5,4.5 0 0 1 9,0 V9.5" fill="none" stroke="{colour}" '
+            f'stroke-width="2.6"/></g>')
+
+
+def lock_pill(locked):
+    """The lock's pill (ui.c klock_btn_set), over the S-meter's row with the
+    card: 204 x 44 at y 62, its padlock and word centred together -- LOCK in
+    the card's colours, UNLOCK in amber with the padlock open."""
+    word, col, edge = ("UNLOCK", md.WARN, md.WARN) if locked else ("LOCK", md.ACCENT_HI, md.ACCENT)
+    x0 = 180 - (18 + 8 + montserrat(20).width(word)) / 2
+    icon = mr.lock_open(x0 + 9, 84, col) if locked else lock_closed(x0 + 8, 84, col)
+    return (f'<rect x="79" y="63" width="202" height="42" rx="21" fill="{md.BG1}" '
+            f'stroke="{edge}" stroke-width="2"/>'
+            + icon + md.text(x0 + 26, 91, word, 20, col, 400, anchor="start"))
+
+
+def padlock(batt=False):
+    """The padlock at the top of the arc while locked (ui.c klock_update), in
+    amber, its ink level with the knob's battery's -- left of it when that
+    shows."""
+    return lock_closed(180 - 27 if batt else 180, 47.5, md.WARN)
+
+
+def lock_pictures(out, n, slug, pal, name, face_svg, keys=True):
+    """The lock, on a firmware's face: the card's LOCK, and the face locked.
+    Pictures n and n + 1."""
+    md.use_palette(pal)
+    card = address_card(f"{name} {VERSION}\n{POWER}\n{ADDRESSES}")
+    out[f"{n:02d}-lock"] = knob(f"{slug}-{n:02d}", "The address card's LOCK",
+                                face_svg + card + lock_pill(False), tap(252, 84),
+                                "hold the S-meter for the card  \u00b7  tap LOCK")
+    out[f"{n + 1:02d}-locked"] = knob(f"{slug}-{n + 1:02d}", "Locked: the padlock at the top of the arc",
+                                      face_svg + padlock(), "",
+                                      "turns, taps, swipes and keying refused  \u00b7  the slab still unkeys"
+                                      if keys else "turns, taps and swipes refused")
+
+
 def update_screen(title, middle, msg, msg_colour="#FF9A3C", percent=None):
     """splash.c's update screen: its own, in the RF.Guru colours -- a glow to
     ink, the ring in gold from the top, the title in gold, the middle in
@@ -794,6 +836,7 @@ def icom_pictures():
                              face("icom", **dict(R, dbm=-91, band="2m", mode="USB", digits="144300" "00"),
                                   sdr_note="can't reach"), "",
                              "the SDR quiet, its line gone  \u00b7  back once the radio is within its range")
+    lock_pictures(out, 26, "icom", "icom", "Icom", f)
     return out
 
 
@@ -807,7 +850,7 @@ def multiflex_pictures():
     out["02-station"] = knob("flex-02", "At boot, with others on the radio: what to be",
                              f + chooser("DIAL FOR", "thinkstation"), turn(),
                              "turn: STATION OWN, or DIAL FOR a station  \u00b7  tap the panel")
-    out["03-menu"] = knob("flex-03", "Swipe from the right: TUNE, ATU, MEM",
+    out["03-menu"] = knob("flex-03", "Swipe from the right: the tuner, then the DSP",
                           f + editor("MENU", "MEM"), swipe_at("left"),
                           "swipe from the right  \u00b7  turn  \u00b7  tap the panel")
     out["04-radio"] = knob("flex-04", "Swipe up: the radios, on the LAN or by SmartLink",
@@ -857,6 +900,12 @@ def multiflex_pictures():
                              face("multiflex", **dict(R, dbm=-91, band="6m", digits=" 50150" "00"),
                                   sdr_note="can't reach"), "",
                              "the SDR quiet, its line gone  \u00b7  back once the radio is within its range")
+    lock_pictures(out, 19, "flex", "multiflex", "FlexRadio", f)
+    # The DSP, after the tuner's on the menu (ui.c menu_build): lit when on.
+    md.use_palette("multiflex")
+    out["21-dsp"] = knob("flex-21", "The menu's DSP: NR, on",
+                         f + editor("DSP", "NR"), turn(),
+                         "turn past MEM  \u00b7  lit when on  \u00b7  a tap switches it")
     return out
 
 
@@ -890,6 +939,12 @@ def aethersdr_pictures():
     out["08-battery"] = knob("aether-08", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
                              "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    lock_pictures(out, 9, "aether", "aethersdr", "AetherSDR", f)
+    # The DSP from the right (ui.c menu_build), as AetherSDR offers it: off, dimmed.
+    md.use_palette("aethersdr")
+    out["11-dsp"] = knob("aether-11", "Swipe from the right: the DSP, NB off",
+                         f + editor("DSP", "NB", colour=md.DISABLED), swipe_at("left"),
+                         "swipe from the right  \u00b7  turn  \u00b7  dimmed: off  \u00b7  a tap switches it")
     return out
 
 
@@ -926,6 +981,7 @@ def openx6x00_pictures():
     out["08-x6200"] = knob("ox-08", "An X6200: FM broadcast and the airband, after 6 m",
                            f + editor("BAND", "FM"), turn(),
                            "tap the band  \u00b7  turn  \u00b7  tap the panel")
+    lock_pictures(out, 9, "ox", "openx6x00", "OpenX6X00", f)
     return out
 
 
@@ -959,6 +1015,7 @@ def svxconnect_pictures():
     out["05-battery"] = knob("svx-05", "On its own battery: the knob's charge over who is talking",
                              reflector() + md.knob_battery(85), "",
                              "its charge, by the quarter  \u00b7  on the air too  \u00b7  none on USB power")
+    lock_pictures(out, 6, "svx", "svxconnect", "SVXConnect", reflector())
     return out
 
 
@@ -1043,6 +1100,7 @@ def phone_pictures():
     out["16-battery"] = knob("tel-16", "On its own battery: the knob's charge between the meters",
                              telephone() + md.knob_battery(85), "",
                              "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    lock_pictures(out, 17, "tel", "phone", "Telephone", telephone(), keys=False)
     return out
 
 
@@ -1283,6 +1341,7 @@ def ubersdr_pictures():
                               uber_face(dbm=-97, snr=12, band="6m", digits=" 50150" "00", kiwi_note="can't reach",
                                         spot=("50.150.0", "USB  voice 12 dB", "green", "2 on 6m")), "",
                               "the KiwiSDR quiet, its line gone  \u00b7  back once the dial is within its range")
+    lock_pictures(out, 24, "uber", "ubersdr", "UberSDR", f, keys=False)
     return out
 
 
@@ -1516,6 +1575,7 @@ def kiwi_pictures():
     out["21-battery"] = knob("kiwi-21", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
                              "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    lock_pictures(out, 22, "kiwi", "kiwi", "Kiwi888", f, keys=False)
     return out
 
 

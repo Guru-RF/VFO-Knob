@@ -147,6 +147,17 @@ static void test_state_and_telemetry(void)
     CHECK_EQ(f.trx, 1);
     CHECK_STR(f.s0, "med");
 
+    /* The receiver's DSP, which the swipe from the right switches. */
+    f = P("rx_nr_enable:1,true;");
+    CHECK_EQ(f.kind, TCI_RX_NR_ENABLE);
+    CHECK_EQ(f.trx, 1);
+    CHECK(f.b0);
+    CHECK_EQ(P("rx_nb_enable:0,false;").kind, TCI_RX_NB_ENABLE);
+    CHECK(!P("rx_nb_enable:0,false;").b0);
+    CHECK_EQ(P("rx_anf_enable:0,true;").kind, TCI_RX_ANF_ENABLE);
+    CHECK_EQ(P("rx_apf_enable:0,true;").kind, TCI_RX_APF_ENABLE);
+    CHECK_EQ(P("rx_nr_enable:0;").kind, TCI_UNKNOWN);   /* no state: dropped */
+
     CASE("telemetry");
     f = P("rx_smeter:0,-93;");
     CHECK_EQ(f.kind, TCI_RX_SMETER);

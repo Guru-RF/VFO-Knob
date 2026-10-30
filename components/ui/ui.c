@@ -72,6 +72,17 @@ LV_FONT_DECLARE(font_hack_46);
  * for the svxconnect firmware, and the telephone that wears it. */
 #define SVX_LOOK (VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE)
 
+/* The knob's lock: LOCK on the address card. Then the glass and the dial do
+ * nothing, and nothing keys -- on the air the slab still unkeys -- with a
+ * padlock at the top of the arc, until UNLOCK on the card; a restart
+ * unlocks too. Not on the setup firmware: its list is all it has. */
+#define HAS_LOCK (!VFO_RADIO_SETUP)
+#if HAS_LOCK
+LV_FONT_DECLARE(font_svx_icons_24);
+#define SYM_LOCK    "\xEF\x80\xA3"                  /* U+F023 */
+#define SYM_UNLOCK  "\xEF\x8F\x81"                  /* U+F3C1 */
+#endif
+
 #if VFO_RADIO_ICOM
 /* --- Icom palette ----------------------------------------------------------
  * The IC-705's own screen: black, white digits, the mode in Icom blue, the
@@ -319,9 +330,6 @@ LV_FONT_DECLARE(font_hack_46);
  * frequency is, and the audio level on the arc. */
 #if SVX_LOOK
 #define REFLECTOR_FACE 1
-LV_FONT_DECLARE(font_svx_icons_24);
-#define SYM_LOCK    "\xEF\x80\xA3"                  /* U+F023 */
-#define SYM_UNLOCK  "\xEF\x8F\x81"                  /* U+F3C1 */
 #define SYM_MUTED   "\xEF\x9A\xA9"                  /* U+F6A9 */
 #define SYM_SOUND   "\xEF\x80\xA8"                  /* U+F028 */
 #else
@@ -938,6 +946,24 @@ static char      s_netinfo_text[128] = "no network yet";
 static uint32_t  s_netinfo_until;        /* lv_tick at which it hides again */
 #define NETINFO_MS 10000
 
+#if HAS_LOCK
+/* The lock (HAS_LOCK): its pill -- LOCK, or UNLOCK -- over the S-meter while
+ * the card is up, and while locked with a warning up in the card's place;
+ * when it came up, for KLOCK_ARM_MS: the finger that held the card up may
+ * still flicker on the glass there. The padlock at the top of the arc while
+ * locked, red for a moment when a touch or a turn is refused. */
+static volatile bool s_knob_locked;
+static lv_obj_t *s_klock_btn, *s_klock_icon, *s_klock_txt, *s_klock_badge;
+static uint32_t  s_klock_btn_at;
+static volatile uint32_t s_klock_nudge_at;
+#define KLOCK_BTN_W  204              /* the S-meter's row whole: AGC, S-units, gain */
+#define KLOCK_BTN_H  44
+#define KLOCK_BTN_Y  62               /* under the knob's battery, over the card */
+#define KLOCK_BADGE_Y 35              /* the knob's battery's row, its ink level with it */
+#define KLOCK_ARM_MS 700
+#define KLOCK_NUDGE_MS 800
+#endif
+
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
                ED_CHOICE, ED_RFGAIN, ED_POWER, ED_TUNER, ED_SQUELCH, ED_RXSRC,
@@ -952,11 +978,57 @@ static bool    s_edit_moved;           /* the knob has turned since it opened */
  * down's V/M. */
 static bool    s_ant_slab;
 /* The swipe menu (ED_MENU): its items, UI_ACT_*, as the radio offers them;
- * MEM's light, and when it was last tapped -- until the radio agrees, the
- * light is the tap's. */
-static uint8_t  s_menu[3], s_menu_n;
-static bool     s_mem_lit;
-static uint32_t s_mem_tapped;
+ * the lights of those that switch -- MEM, the DSP's -- and when one was last
+ * tapped: until the radio agrees, the lights are the taps'. */
+static uint8_t  s_menu[8], s_menu_n;
+static uint16_t s_menu_lit;              /* 1 << UI_ACT_* */
+static uint32_t s_menu_tapped;
+
+const char *ui_act_name(uint8_t action)
+{
+    static const char *NAME[] = { "", "TUNE", "ATU", "MEM", "NB", "WNB", "NR", "ANF", "APF" };
+    return action < sizeof NAME / sizeof NAME[0] ? NAME[action] : "";
+}
+
+/* The DSP's bit an item switches, or 0. */
+static uint8_t act_dsp(uint8_t a)
+{
+    switch (a) {
+    case UI_ACT_NB:  return UI_DSP_NB;
+    case UI_ACT_WNB: return UI_DSP_WNB;
+    case UI_ACT_NR:  return UI_DSP_NR;
+    case UI_ACT_ANF: return UI_DSP_ANF;
+    case UI_ACT_APF: return UI_DSP_APF;
+    default:         return 0;
+    }
+}
+
+static bool act_switch(uint8_t a) { return a == UI_ACT_MEM || act_dsp(a); }
+
+/* The switches that are on, as the radio says. */
+static uint16_t menu_lit(const ui_state_t *st)
+{
+    uint16_t m = st->atu_mem ? 1u << UI_ACT_MEM : 0;
+    for (uint8_t a = UI_ACT_NB; a <= UI_ACT_APF; a++)
+        if (st->dsp_on & act_dsp(a)) m |= (uint16_t)(1u << a);
+    return m;
+}
+
+/* The menu's items, as the radio offers them: the tuner's, then the DSP in
+ * SmartSDR's order -- the audio peak filter in CW only. How many. */
+static int menu_build(const ui_state_t *st)
+{
+    static const uint8_t DSP[] = { UI_ACT_NB, UI_ACT_WNB, UI_ACT_NR, UI_ACT_ANF, UI_ACT_APF };
+    const bool cw = st->mode && !strncasecmp(st->mode, "cw", 2);
+    s_menu_n = 0;
+    if (st->has_tune) s_menu[s_menu_n++] = UI_ACT_TUNE;
+    if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_ATU;
+    if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_MEM;
+    for (size_t i = 0; i < sizeof DSP; i++)
+        if ((st->dsp_has & act_dsp(DSP[i])) && (DSP[i] != UI_ACT_APF || cw))
+            s_menu[s_menu_n++] = DSP[i];
+    return s_menu_n;
+}
 /* The client's question (ED_CHOICE), and its answer until taken. The texts
  * in PSRAM, beside s_last. */
 EXT_RAM_BSS_ATTR static char s_ch_title[UI_CHOICES][12], s_ch_name[UI_CHOICES][24];
@@ -1643,14 +1715,13 @@ static void edit_render(void)
         snprintf(v, sizeof v, "%s", s_edit_idx ? "SUB" : "MAIN");
         break;
     case ED_MENU: {
-        static const char *NAME[] = { "", "TUNE", "ATU", "MEM" };
         const uint8_t a = s_menu[s_edit_idx];
-        title = "MENU";
-        /* The tuner's memories light when they are on, as the button on
-         * SmartSDR's TX panel does, and are dimmed when off; a tap turns
-         * them the other way. */
-        snprintf(v, sizeof v, "%s", NAME[a]);
-        vcolor = a == UI_ACT_MEM && !s_mem_lit ? C_DISABLED : C_ACCENT_HI;
+        title = act_dsp(a) ? "DSP" : "MENU";
+        /* The switches -- the tuner's memories, the DSP -- light when they
+         * are on, as SmartSDR's buttons do, and are dimmed when off; a tap
+         * turns them the other way. */
+        snprintf(v, sizeof v, "%s", ui_act_name(a));
+        vcolor = act_switch(a) && !(s_menu_lit >> a & 1) ? C_DISABLED : C_ACCENT_HI;
         break;
     }
     case ED_CHOICE:
@@ -1951,16 +2022,15 @@ static void edit_open(edit_t what, const ui_state_t *st)
         s_edit_n   = st->n_tx_ant;
         break;
     case ED_MENU:
-        s_menu_n = 0;
-        if (st->has_tune) s_menu[s_menu_n++] = UI_ACT_TUNE;
-        if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_ATU;
-        if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_MEM;
-        s_edit_n   = s_menu_n;
-        /* Opened on MEM, the one item that does not transmit: TUNE and the
-         * tuner are a turn away, and then a tap on the panel. */
-        s_edit_idx   = s_menu_n - 1;
-        s_mem_lit    = st->atu_mem;
-        s_mem_tapped = 0;
+        s_edit_n = menu_build(st);
+        /* Opened on MEM, the tuner's one item that does not transmit: TUNE
+         * and the tuner are a turn away, and then a tap on the panel; the
+         * DSP a turn the other way. Without a tuner, on the DSP's first. */
+        s_edit_idx = 0;
+        for (int i = 0; i < s_menu_n; i++)
+            if (s_menu[i] == UI_ACT_MEM) s_edit_idx = i;
+        s_menu_lit    = menu_lit(st);
+        s_menu_tapped = 0;
         break;
     case ED_RXSRC:
         s_edit_n   = 1 + st->n_sdr;
@@ -2084,8 +2154,10 @@ static void edit_fill(void)
         else                                     { s_commit.filt_lo = 300;         s_commit.filt_hi = 300 + w; }
         break;
 #endif
-        if (s_edit_lsb) { s_commit.filt_lo = -w;  s_commit.filt_hi = -100; }
-        else            { s_commit.filt_lo = 100; s_commit.filt_hi =  w;   }
+        /* From 100 Hz off the carrier, the width chosen wide: 3000 set as
+         * 100..3000 came back from the radio as 2900. */
+        if (s_edit_lsb) { s_commit.filt_lo = -(100 + w); s_commit.filt_hi = -100;    }
+        else            { s_commit.filt_lo = 100;        s_commit.filt_hi = 100 + w; }
         break;
     }
     case ED_AGC:
@@ -2579,6 +2651,8 @@ static bool addresses_up(void)
            !lv_obj_has_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
+static void klock_follow(void);
+
 static void netinfo_show(bool on)
 {
     if (!s_netinfo) return;
@@ -2591,6 +2665,74 @@ static void netinfo_show(bool on)
         lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
         s_netinfo_until = 0;
     }
+    klock_follow();
+}
+
+#if HAS_LOCK
+/* The pill says what a tap on it does: LOCK, in the card's colours, or
+ * UNLOCK, in amber -- the padlock's glyph beside the word, both centred. */
+static void klock_btn_set(void)
+{
+    const bool l = s_knob_locked;
+    const lv_color_t c = l ? C_WARN : C_ACCENT_HI;
+    lv_label_set_text(s_klock_icon, l ? SYM_UNLOCK : SYM_LOCK);
+    lv_label_set_text(s_klock_txt, l ? "UNLOCK" : "LOCK");
+    lv_obj_set_style_text_color(s_klock_icon, c, 0);
+    lv_obj_set_style_text_color(s_klock_txt, c, 0);
+    lv_obj_set_style_border_color(s_klock_btn, l ? C_WARN : C_ACCENT, 0);
+    lv_obj_update_layout(s_klock_btn);
+    const int32_t wi = lv_obj_get_width(s_klock_icon), wt = lv_obj_get_width(s_klock_txt);
+    const int32_t x0 = (lv_obj_get_content_width(s_klock_btn) - (wi + 8 + wt)) / 2;
+    lv_obj_align(s_klock_icon, LV_ALIGN_LEFT_MID, x0, 0);
+    lv_obj_align(s_klock_txt, LV_ALIGN_LEFT_MID, x0 + wi + 8, 0);
+}
+
+static void klock_set(bool on)
+{
+    s_knob_locked = on;
+    klock_btn_set();
+    note("knob %s", on ? "locked" : "unlocked");
+}
+
+/* A touch or a turn the lock refused: the padlock says why nothing moved. */
+static void klock_nudge(void) { s_klock_nudge_at = lv_tick_get() | 1; }
+#endif
+
+bool ui_locked(void)
+{
+#if HAS_LOCK
+    return s_knob_locked;
+#else
+    return false;
+#endif
+}
+
+void ui_lock_nudge(void)
+{
+#if HAS_LOCK
+    klock_nudge();
+#endif
+}
+
+/* The pill with the card -- or, locked, with a warning in the card's place,
+ * to unlock where there is no link -- and never under an editor or a
+ * question. */
+static void klock_follow(void)
+{
+#if HAS_LOCK
+    if (!s_klock_btn) return;
+    const bool card = s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
+    const bool warn = s_warn_panel && !lv_obj_has_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+    const bool on = (card || (s_knob_locked && warn)) && s_edit == ED_NONE && !s_asking;
+    if (on == !lv_obj_has_flag(s_klock_btn, LV_OBJ_FLAG_HIDDEN)) return;
+    if (on) {
+        lv_obj_remove_flag(s_klock_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_klock_btn);
+        s_klock_btn_at = lv_tick_get();
+    } else {
+        lv_obj_add_flag(s_klock_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
 }
 
 /* AGC and the gain either side of the S-unit readout, where a tap opens
@@ -2774,6 +2916,14 @@ static void spot_lines(const ui_spot_t *sp, char *l1, size_t n1, char *l2, size_
 static void tap(lv_point_t p, uint32_t held)
 {
     (void)held;
+#if HAS_LOCK
+    /* LOCK, or UNLOCK: the pill over the S-meter -- not in its first
+     * moments, while the finger that brought it up may still flicker. */
+    if (shown_at(s_klock_btn, p)) {
+        if (lv_tick_elaps(s_klock_btn_at) >= KLOCK_ARM_MS) klock_set(!s_knob_locked);
+        return;
+    }
+#endif
     /* The SSTV viewer: any tap, anywhere, and the dial is back. */
     if (s_sv_open) {
         sv_close();
@@ -2797,6 +2947,10 @@ static void tap(lv_point_t p, uint32_t held)
         edit_close();
         return;
     }
+#if HAS_LOCK
+    /* Locked: a client's question still takes its answer, nothing else. */
+    if (s_knob_locked) { klock_nudge(); return; }
+#endif
     if (s_edit != ED_NONE) {
         const edit_t was = s_edit;
         /* A live editor has done its work as it turned: any tap closes it --
@@ -2822,15 +2976,18 @@ static void tap(lv_point_t p, uint32_t held)
         lv_area_t a;
         lv_obj_get_coords(s_edit_panel, &a);
         if (p.x < a.x1 || p.x > a.x2 || p.y < a.y1 || p.y > a.y2) { edit_close(); return; }
-        /* The tuner's memories toggle in place: the menu stays, MEM lit or
-         * dimmed as they now are. Each tap says which, not "the other way",
-         * so two quick ones cannot leave the radio out of step. */
-        if (was == ED_MENU && s_menu[s_edit_idx] == UI_ACT_MEM) {
-            s_mem_lit    = !s_mem_lit;
-            s_mem_tapped = lv_tick_get() | 1;
+        /* The switches -- the tuner's memories, the DSP -- toggle in place:
+         * the menu stays, the item lit or dimmed as it now is. Each tap says
+         * which, not "the other way", so two quick ones cannot leave the
+         * radio out of step. */
+        if (was == ED_MENU && act_switch(s_menu[s_edit_idx])) {
+            const uint8_t a = s_menu[s_edit_idx];
+            s_menu_lit   ^= (uint16_t)(1u << a);
+            s_menu_tapped = lv_tick_get() | 1;
             memset(&s_commit, 0, sizeof s_commit);
-            s_commit.action  = UI_ACT_MEM;
-            s_commit.atu_mem = s_mem_lit;
+            s_commit.action = a;
+            s_commit.on     = s_menu_lit >> a & 1;
+            s_commit.dsp    = act_dsp(a);
             s_have_commit = true;
             edit_render();
             return;
@@ -3132,6 +3289,9 @@ static void gesture_cb(lv_event_t *e)
     if (!indev) return;
     s_gestured = true;
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+#if HAS_LOCK
+    if (s_knob_locked) { klock_nudge(); return; }
+#endif
     if (s_edit != ED_NONE || s_asking || s_last.tx || s_sv_open) return;
 #if PHONE_FACE
     /* The keypad: down brings it, up puts it away. From the left, the
@@ -3167,7 +3327,7 @@ static void gesture_cb(lv_event_t *e)
     if (!s_last.link_ok) return;
     /* From the left: with a web SDR chosen, the balance first -- the one
      * turned most -- then RF gain and power. From the right: the tuner, or
-     * the FlexRadio's TUNE/ATU/MEM. */
+     * the menu -- the FlexRadio's TUNE/ATU/MEM, the receiver's DSP. */
     if (dir == LV_DIR_RIGHT) {
         if (s_last.rxsrc >= 0)                       edit_open(ED_BALANCE, &s_last);
         else if (s_last.has_levels && s_last.have_levels) edit_open(ED_RFGAIN, &s_last);
@@ -3181,7 +3341,7 @@ static void gesture_cb(lv_event_t *e)
         }
         if (s_last.has_tuner && s_last.have_tuner)  edit_open(ED_TUNER, &s_last);
         else if (s_last.has_squelch && s_last.have_squelch) edit_open(ED_SQUELCH, &s_last);
-        else if (s_last.has_tune || s_last.has_atu) edit_open(ED_MENU, &s_last);
+        else if (menu_build(&s_last))                edit_open(ED_MENU, &s_last);
         return;
     }
     if (dir != LV_DIR_BOTTOM) return;
@@ -3258,6 +3418,41 @@ static void touch_cb(lv_event_t *e)
         s_ask_answer = yes ? 1 : -1;
         return;
     }
+
+#if HAS_LOCK
+    /* Locked: the glass opens nothing and keys nothing. The pill answers --
+     * UNLOCK -- and a client's question; a hold on the S-meter, anywhere on
+     * it, still brings the card, and with it the pill and the firmware
+     * picker's hold; and on the air the slab still unkeys, once the finger
+     * has been off it a moment, as it always does (app_main.c makes any PTT
+     * tap an unkey while locked, never a key). */
+    if (s_knob_locked) {
+        s_slab_wait = 0;
+        if (!RX_FACE && !PHONE_FACE && p.y >= PTT_TOP && s_last.keyed) {
+            if (lv_tick_elaps(s_released_at) >= PTT_REARM_MS) s_ptt_tap = true;
+            return;
+        }
+#if PHONE_FACE
+        /* The telephone's slab, as unkeying: it ends a call -- one up, one
+         * being made, one ringing in, declined -- and answers or dials
+         * nothing. */
+        if (p.y >= PTT_TOP && s_last.call >= 1 && s_last.call <= 3) {
+            if (lv_tick_elaps(s_released_at) >= PTT_REARM_MS) {
+                if (s_last.call == 2) s_call_req = 2;
+                else                  s_ptt_tap = true;
+            }
+            return;
+        }
+#endif
+        if (shown_at(s_klock_btn, p) || s_edit == ED_CHOICE) {
+            s_press_tap = true;                  /* see release_cb, tap() */
+            return;
+        }
+        s_press_card = p.y < 104 && !s_press_picker;
+        if (!s_press_card && !s_press_picker) klock_nudge();
+        return;
+    }
+#endif
 
     /* A slab release waiting to be a tap (release_cb), and a finger down
      * again before it is: the glass lost that finger for a moment. In place
@@ -4012,6 +4207,36 @@ static void build(void)
     lv_obj_remove_flag(s_netinfo, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_netinfo, s_netinfo_text);
+
+#if HAS_LOCK
+    /* The lock's pill, over the S-meter with the card (klock_follow()); not
+     * clickable either, tap() looks where the finger was. */
+    s_klock_btn = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_klock_btn);
+    lv_obj_set_size(s_klock_btn, KLOCK_BTN_W, KLOCK_BTN_H);
+    lv_obj_set_style_bg_color(s_klock_btn, C_BG1, 0);
+    lv_obj_set_style_bg_opa(s_klock_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_klock_btn, 2, 0);
+    lv_obj_set_style_radius(s_klock_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_align(s_klock_btn, LV_ALIGN_TOP_MID, 0, KLOCK_BTN_Y);
+    lv_obj_remove_flag(s_klock_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_klock_btn, LV_OBJ_FLAG_SCROLLABLE);
+    s_klock_icon = lv_label_create(s_klock_btn);
+    lv_obj_set_style_text_font(s_klock_icon, &font_svx_icons_24, 0);
+    s_klock_txt = lv_label_create(s_klock_btn);
+    lv_obj_set_style_text_font(s_klock_txt, &lv_font_montserrat_20, 0);
+    klock_btn_set();
+    lv_obj_add_flag(s_klock_btn, LV_OBJ_FLAG_HIDDEN);
+
+    /* ...and the padlock, while locked: at the top of the arc, beside the
+     * knob's battery when that shows (klock_update()). */
+    s_klock_badge = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_klock_badge, &font_svx_icons_24, 0);
+    lv_obj_set_style_text_color(s_klock_badge, C_WARN, 0);
+    lv_label_set_text(s_klock_badge, SYM_LOCK);
+    lv_obj_remove_flag(s_klock_badge, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_klock_badge, LV_OBJ_FLAG_HIDDEN);
+#endif
 
     /* One panel for every editor and chooser, wider for a list of names --
      * a firmware's and its version -- than for a value (fit_text.h). */
@@ -5020,6 +5245,27 @@ static void knob_batt_show(const ui_state_t *st)
     set_text_color(s_knob_batt, batt_colour(st->knob_pct));
 }
 
+/* The padlock while locked, at the top of the arc -- left of the knob's own
+ * battery when that shows, red for a moment after a refused touch or turn.
+ * As the battery, not on a radio's face on the air, nor behind the SSTV
+ * viewer. The pill follows the card, the warning and the editors from here. */
+static void klock_update(const ui_state_t *st)
+{
+#if HAS_LOCK
+    if (!s_klock_badge) return;
+    klock_follow();
+    const bool on = s_knob_locked && !s_sv_open && (REFLECTOR_FACE || !st->tx);
+    vis(s_klock_badge, on);
+    if (!on) return;
+    const bool batt = !lv_obj_has_flag(s_knob_batt, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(s_klock_badge, LV_ALIGN_TOP_MID, batt ? -(BATT_W / 2 + 4 + 11) : 0, KLOCK_BADGE_Y);
+    const uint32_t n = s_klock_nudge_at;
+    set_text_color(s_klock_badge, n && lv_tick_elaps(n) < KLOCK_NUDGE_MS ? C_DANGER : C_WARN);
+#else
+    (void)st;
+#endif
+}
+
 void ui_update(const ui_state_t *st)
 {
     if (!st || !s_scr) return;
@@ -5037,11 +5283,11 @@ void ui_update(const ui_state_t *st)
         s_ask_answer = s_ask_turn && s_ask_knob && !st->tx ? 1 : -1;
     }
 
-    /* MEM's light follows the radio, but not for a moment after a tap: the
-     * radio has not heard it yet. */
-    if (s_edit == ED_MENU && st->atu_mem != s_mem_lit &&
-        (!s_mem_tapped || lv_tick_elaps(s_mem_tapped) > 1500)) {
-        s_mem_lit = st->atu_mem;
+    /* The switches' lights follow the radio, but not for a moment after a
+     * tap: the radio has not heard it yet. */
+    if (s_edit == ED_MENU && menu_lit(st) != s_menu_lit &&
+        (!s_menu_tapped || lv_tick_elaps(s_menu_tapped) > 1500)) {
+        s_menu_lit = menu_lit(st);
         edit_render();
     }
 
@@ -5084,6 +5330,7 @@ void ui_update(const ui_state_t *st)
      * out -- on the setup firmware the list of firmwares is up for minutes.
      * Not behind the SSTV viewer, which covers it. */
     if (!s_sv_open) knob_batt_show(st);
+    klock_update(st);
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter -- nor,
      * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter.
@@ -5097,6 +5344,7 @@ void ui_update(const ui_state_t *st)
     if (s_netinfo_until && lv_tick_get() > s_netinfo_until && !s_press_picker) {
         lv_obj_add_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
         s_netinfo_until = 0;
+        klock_follow();
     }
 
     int64_t f = st->freq_hz < 0 ? 0 : st->freq_hz;

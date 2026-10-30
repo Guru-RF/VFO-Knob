@@ -392,6 +392,9 @@ static void encoder_task(void *arg)
         /* Turning the knob answers a question on the dial: "update?" no, and
          * the knob tunes on; "firmware?" yes, and the turn is spent on it. */
         if (ui_ask_knob_moved()) continue;
+        /* Locked, the knob tunes nothing; a choice the radio put up still
+         * takes its turns. */
+        if (ui_locked() && !ui_edit_active()) { ui_lock_nudge(); continue; }
         if (!moving) { moving = true; run_counts = 0; }
         idle_since  = now_us;
         run_counts += delta;
@@ -950,6 +953,10 @@ _Static_assert((int)UI_MEM_OFF == (int)RADIO_MEM_OFF &&
                (int)UI_MEM_READY == (int)RADIO_MEM_READY &&
                (int)UI_MEM_EMPTY == (int)RADIO_MEM_EMPTY,
                "ui_state_t.mem_state carries radio_mem_state_t");
+/* ...and the DSP's bits. */
+_Static_assert((int)UI_DSP_NB == (int)RADIO_DSP_NB && (int)UI_DSP_NR == (int)RADIO_DSP_NR &&
+               (int)UI_DSP_ANF == (int)RADIO_DSP_ANF && (int)UI_DSP_APF == (int)RADIO_DSP_APF &&
+               (int)UI_DSP_WNB == (int)RADIO_DSP_WNB, "ui_state_t.dsp_* carry RADIO_DSP_*");
 
 /* The client's question, when it has one (radio_get_choice: the multiflex
  * firmware's "which station"), put on the dial and the answer given back.
@@ -1251,10 +1258,14 @@ static void ui_task(void *arg)
                 radio_atu_tune();
                 break;
             case UI_ACT_MEM:
-                ESP_LOGI(TAG, "menu -> tuner memories %s", c.atu_mem ? "on" : "off");
-                radio_atu_memories(c.atu_mem);
+                ESP_LOGI(TAG, "menu -> tuner memories %s", c.on ? "on" : "off");
+                radio_atu_memories(c.on);
                 break;
             default:
+                if (c.dsp) {
+                    ESP_LOGI(TAG, "menu -> %s %s", ui_act_name(c.action), c.on ? "on" : "off");
+                    radio_set_dsp(c.dsp, c.on);
+                }
                 break;
             }
             if (c.have_rit) {
@@ -1434,6 +1445,23 @@ static void ui_task(void *arg)
         }
 #endif
         if (ui_take_ptt_tap() && !s_rx_only) {
+            /* Locked (the address card's LOCK): the slab unkeys -- the
+             * telephone's hangs up -- and keys nothing: ui.c sends a tap
+             * then only on the air, and a key that ended meanwhile is no
+             * reason to start another. */
+            if (ui_locked()) {
+#if VFO_RADIO_PHONE
+                const bool live = s_in_call;  /* the telephone's slab hangs up */
+#else
+                const bool live = radio_on_air();
+#endif
+                if (live) {
+                    ESP_LOGI(TAG, "PTT tapped, locked: unkey");
+                    radio_ptt_unkey();
+                } else {
+                    ui_lock_nudge();
+                }
+            } else
 #if !VFO_RADIO_PHONE && !VFO_RADIO_SETUP && !VFO_RX_ONLY
             /* With a headset connected, its microphone is the one on the air:
              * the glass keys as its button does, and not while that
@@ -1548,7 +1576,16 @@ static void ui_task(void *arg)
          * the knob says so, with a radio refusal's three clicks. Unkeying is
          * never refused. */
         if (bt_link_take_ptt() && !s_rx_only) {
-            if (!radio_on_air() && bt_link_headset_muted()) {
+            if (ui_locked() && !radio_on_air()) {
+                /* Locked: the button unkeys, and keys nothing. */
+                ESP_LOGW(TAG, "headset PTT refused: the knob is locked");
+                ui_lock_nudge();
+                haptic(12);                 /* triple click: refused */
+            } else if (ui_locked()) {
+                ESP_LOGI(TAG, "headset PTT, locked: unkey");
+                radio_ptt_unkey();
+                haptic(26);
+            } else if (!radio_on_air() && bt_link_headset_muted()) {
                 ESP_LOGW(TAG, "headset PTT refused: its microphone is muted");
                 s_hs_refused_ms = esp_timer_get_time() / 1000;
                 haptic(12);                 /* triple click: refused */
@@ -1575,7 +1612,12 @@ static void ui_task(void *arg)
             if (!conn || !boom) armed = false;
             else if (!live)     armed = true;
             if (boom && conn && live != was_live) {
-                if (live && armed && !radio_on_air() && !s_rx_only) {
+                if (live && armed && !radio_on_air() && !s_rx_only && ui_locked()) {
+                    /* Locked: down keys nothing -- nor does unlocking with it
+                     * down; it goes up, and down again. */
+                    ESP_LOGW(TAG, "boom down: not keyed, the knob is locked");
+                    ui_lock_nudge();
+                } else if (live && armed && !radio_on_air() && !s_rx_only) {
 #if VFO_PTT_DRY_RUN
                     ESP_LOGW(TAG, "boom down -- dry run, not sent to the radio");
 #else
@@ -1835,6 +1877,8 @@ static void ui_task(void *arg)
             .has_squelch   = st.has_squelch,
             .have_squelch  = st.have_squelch,
             .squelch_pct   = st.squelch_pct,
+            .dsp_has       = st.dsp_has,
+            .dsp_on        = st.dsp_on,
             .reflector     = st.reflector,
             .connecting    = (st.link == RADIO_LINK_CONNECTING ||
                               st.link == RADIO_LINK_GREETING),

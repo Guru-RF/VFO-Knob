@@ -742,6 +742,170 @@ SOME static void knob_sweep(const char *dir, const char *face)
     CHECK(!knob_battery());
 }
 
+#if !VFO_RADIO_SETUP
+/* ---- the lock (ui.c klock_*): the address card's LOCK ---- */
+#define LOCK_X 180                         /* the pill: ui.c KLOCK_BTN_Y 62, 44 high */
+#define LOCK_Y 84
+#if VFO_RX_ONLY || VFO_RADIO_PHONE
+#define LOCK_KEYS 0                        /* no PTT on this slab */
+#else
+#define LOCK_KEYS 1
+#endif
+
+/* The padlock at the top of the arc, shown: the font's lock glyph on the
+ * face itself, above the S-units -- not the pill's, nor the reflector's
+ * talkgroup padlock further down. */
+static lv_obj_t *padlock(void)
+{
+    lv_obj_t *scr = lv_screen_active();
+    for (uint32_t i = 0; i < lv_obj_get_child_count(scr); i++) {
+        lv_obj_t *o = lv_obj_get_child(scr, (int32_t)i);
+        if (lv_obj_check_type(o, &lv_label_class) && visible(o) && lv_obj_get_y(o) < 56 &&
+            !strcmp(lv_label_get_text(o), "\xEF\x80\xA3"))
+            return o;
+    }
+    return NULL;
+}
+static int padlock_colour(void)
+{
+    lv_obj_t *l = padlock();
+    return l ? colour_is(lv_obj_get_style_text_color(l, 0)) : IS_OTHER;
+}
+
+/* The card up under a finger held on the S-meter, and the pill with it. */
+static void card_up(void) { down(W / 2, 66); run(700); up(); run(SEEN); }
+
+/* Locked: the card's pill, LOCK, takes the tap once it has been up a
+ * moment, not in its first; the padlock comes, amber; the glass opens
+ * nothing -- the frequency, AGC, the swipes -- and keys nothing, the
+ * padlock red a moment for each; on the air the slab still unkeys, and the
+ * telephone's hangs up or declines, never answers. With
+ * no link, the pill over the warning, to unlock there. The padlock beside
+ * the knob's own battery, clear of it; a chooser puts the card away, and
+ * the pill with it. UNLOCK,
+ * and the face as it was. Pictures: the card's pill, the face locked, the
+ * warning, the padlock beside the battery. */
+SOME static void lock_sweep(const char *dir, const char *face)
+{
+    char pic[64];
+    const ui_state_t keep = st;
+    ui_set_netinfo(CARD);
+    settle(); quiet();
+
+    where = "the lock: none at first";
+    CHECK(!ui_locked() && !padlock() && !shown("LOCK"));
+
+    where = "...the card up, and its pill: LOCK";
+    card_up();
+    CHECK(card_label() && shown("LOCK"));
+    snprintf(pic, sizeof pic, "%s-lock-card", face);
+    picture(dir, pic);
+    where = "...a tap on it in its first moments: nothing";
+    tap_at(LOCK_X, LOCK_Y, 60);
+    CHECK(!ui_locked());
+    run(700);
+    where = "...a tap once it has been up a moment: locked";
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(ui_locked() && shown("UNLOCK") && padlock());
+    CHECK(padlock_colour() == IS_YELLOW);
+    printf("  ...the padlock %s\n", IS[padlock_colour()]);
+    where = "...the card goes by itself; the pill with it";
+    run(10500);
+    CHECK(!card_label() && !shown("UNLOCK") && padlock());
+    snprintf(pic, sizeof pic, "%s-locked", face);
+    picture(dir, pic);
+
+    where = "...a tap on the frequency: nothing, the padlock red";
+    quiet();
+    tap_at(PANEL_X, PANEL_Y, 80);
+    CHECK(!ui_edit_active() && !ptt());
+    CHECK(padlock_colour() == IS_RED);
+    run(900);
+    CHECK(padlock_colour() == IS_YELLOW);
+    where = "...a tap on AGC's place: nothing";
+    tap_at(W / 2 - 80, 80, 80); run(60);
+    CHECK(!ui_edit_active());
+    where = "...swipes, from either side and from the top: nothing";
+    swipe(340, 180, 140, 180); run(60);
+    CHECK(!ui_edit_active());
+    swipe(20, 180, 220, 180); run(60);
+    CHECK(!ui_edit_active());
+    swipe(180, 20, 180, 220); run(60);
+    CHECK(!ui_edit_active());
+    where = "...a tap and a hold on the slab: no key, no antennas";
+    tap_at(SLAB_X, SLAB_Y, 80); run(60);
+    CHECK(!ptt());
+    down(SLAB_X, SLAB_Y); run(900); up(); run(SEEN); settle();
+    CHECK(!ptt() && !buzz() && !ui_edit_active());
+#if LOCK_KEYS
+    where = "...on the air: a tap on the slab unkeys";
+    st.keyed = true; run(400); quiet();
+    tap_at(SLAB_X, SLAB_Y, 80); run(60);
+    CHECK(ptt());
+    st.keyed = false; settle(); quiet();
+#endif
+#if VFO_RADIO_PHONE
+    where = "...a call up: a tap on the slab hangs up";
+    st.call = 3; run(400); quiet();
+    tap_at(SLAB_X, SLAB_Y, 80); run(60);
+    CHECK(ptt());
+    where = "...a call ringing in: a tap on either half declines it";
+    st.call = 2; run(400); quiet(); (void)ui_take_call_req();
+    tap_at(SLAB_X + 60, SLAB_Y, 80); run(60);
+    CHECK(ui_take_call_req() == 2 && !ptt());
+    st.call = 0; settle(); quiet(); (void)ui_take_call_req();
+#endif
+
+    where = "...the knob's battery: the padlock left of it, clear of it";
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    {
+        lv_obj_t *l = padlock(), *b = knob_battery();
+        CHECK(l && b);
+        if (l && b) {
+            lv_area_t al, ab;
+            lv_obj_get_coords(l, &al);
+            lv_obj_get_coords(b, &ab);
+            CHECK(al.x2 + ROOM <= ab.x1);
+            CHECK(al.y1 >= 30 && al.y2 <= 60);
+            printf("  ...the padlock %d-%d, %d-%d; the battery from %d\n", (int)al.x1, (int)al.x2,
+                   (int)al.y1, (int)al.y2, (int)ab.x1);
+        }
+    }
+    snprintf(pic, sizeof pic, "%s-locked-batt", face);
+    picture(dir, pic);
+    st.knob_batt = false; run(60);
+
+    where = "...no link: the pill over the warning, to unlock there";
+    st.warn = "NO LINK"; st.link_ok = false; run(100);
+    CHECK(shown("UNLOCK"));
+    snprintf(pic, sizeof pic, "%s-locked-warning", face);
+    picture(dir, pic);
+    st.warn = NULL; st.link_ok = true; run(100);
+    CHECK(!shown("UNLOCK"));
+
+    where = "...a chooser over the card: no pill under it";
+    card_up();
+    CHECK(shown("UNLOCK"));
+    {
+        static const char T[2][12] = { "DIAL FOR", "STATION" };
+        static const char N[2][24] = { "thinkstation", "OWN" };
+        ui_ask_choice(T, N, 2, 0); run(60);
+        CHECK(ui_choice_active() && !shown("UNLOCK"));
+        ui_ask_choice(NULL, NULL, 0, 0); run(60);
+    }
+    CHECK(!card_label() && !shown("UNLOCK"));   /* it put the card away */
+
+    where = "...UNLOCK: the face as it was";
+    card_up(); run(700);
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(!ui_locked() && !padlock() && shown("LOCK"));
+    tap_at(W / 2, 174, 80); settle(); quiet();
+    CHECK(!card_label() && !shown("LOCK"));
+    st = keep;
+    run(100);
+}
+#endif
+
 /* ...and on a radio's face, or the receiver's, over the S-units at their
  * widest and at nothing, the bar and its peak at the top of the arc, right
  * over it, a web SDR's line outside the arc and its reading, and a device's
@@ -1342,6 +1506,7 @@ static void runs(const char *dir)
     radio(); run(120);
     batt_radio(dir, "flex");
     knob_sweep(dir, "flex");
+    lock_sweep(dir, "flex");
     knob_radio(dir, "flex");
     where = "...the memory face";
     st.knob_batt = true; st.knob_pct = 85;
@@ -1469,6 +1634,7 @@ static void runs(const char *dir)
     ic7610(); run(120);
     batt_radio(dir, "icom");
     knob_sweep(dir, "icom");
+    lock_sweep(dir, "icom");
     knob_radio(dir, "icom");
 
     ic7610();
@@ -1487,6 +1653,7 @@ static void runs(const char *dir)
 #if VFO_RADIO_SVXCONNECT
     batt_radio(dir, "svx");
     knob_sweep(dir, "svx");
+    lock_sweep(dir, "svx");
     where = "...over the talker, the longest call, and where he is";
     st.knob_batt = true; st.knob_pct = 85;
     st.tg = 2622; strcpy(st.tg_name, "Belgium");
@@ -1498,10 +1665,12 @@ static void runs(const char *dir)
 #elif VFO_RADIO_AETHERSDR
     batt_radio(dir, "aether");
     knob_sweep(dir, "aether");
+    lock_sweep(dir, "aether");
     knob_radio(dir, "aether");
 #else
     batt_radio(dir, "xiegu");
     knob_sweep(dir, "xiegu");
+    lock_sweep(dir, "xiegu");
     knob_radio(dir, "xiegu");
     /* The web SDR's reading alone, between the AGC and the preamp. */
     base();
@@ -1558,6 +1727,7 @@ static void runs(const char *dir)
      * both meters at full, their peaks at the top beside it; none under the
      * keypad; over the calls' history. */
     knob_sweep(dir, "tel");
+    lock_sweep(dir, "tel");
     where = "...a call ringing in, its slab in halves";
     st.knob_batt = true; st.knob_pct = 85;
     st.call = 2; strcpy(st.peer, "Office"); strcpy(st.peer_num, "+441632960123"); run(60);
@@ -1867,6 +2037,7 @@ static void runs(const char *dir)
     /* The knob's battery over the receiver's face, a KiwiSDR's line beside
      * it; none under the SSTV viewer, whose title is there. */
     knob_sweep(dir, "uber");
+    lock_sweep(dir, "uber");
     knob_radio(dir, "uber");
     where = "...the SSTV viewer, over the whole face: no ink of it";
     st.knob_batt = true; st.knob_pct = 85; st.n_sstv = 3; run(60);
@@ -2067,6 +2238,7 @@ static void runs(const char *dir)
      * reading beside it (knob_radio); and over the reading at its widest,
      * OV after it -- and the right ear's "can't reach" in its place. */
     knob_sweep(dir, "kiwi");
+    lock_sweep(dir, "kiwi");
     knob_radio(dir, "kiwi");
     {
         const ui_state_t keep = st;
@@ -2334,6 +2506,7 @@ static void runs(const char *dir)
 
     /* The knob's own battery over this face, as on every face. */
     knob_sweep(dir, "owrx");
+    lock_sweep(dir, "owrx");
     knob_radio(dir, "owrx");
 
     /* The receiver's name on the slab beside a device's logo and battery. */
@@ -2499,6 +2672,7 @@ static void runs(const char *dir)
 
     /* The knob's own battery over this face, as on every face. */
     knob_sweep(dir, "websdr");
+    lock_sweep(dir, "websdr");
     knob_radio(dir, "websdr");
 
     st.headset = true; st.have_batt = true; st.batt = 80; run(60);

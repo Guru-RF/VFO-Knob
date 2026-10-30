@@ -45,6 +45,7 @@ static const char *TAG = "tci";
 #define GREET_TMO_MS  4000    /* a socket that accepts but never greets is a
                                  real failure mode when AetherSDR is starting */
 #define AGC_POLL_MS   3000    /* see the AGC poll in tx_task */
+#define DSP_TRX       8       /* transceivers whose DSP is kept: a FlexRadio's slices */
 #if VFO_RADIO_OPENX6X00
 /* Where the knob may turn to: OpenX6X00 decides what it takes -- HF and 6 m,
  * a transverter's band where one is set (the X6100's 2 m and 70 cm, as it
@@ -77,6 +78,9 @@ typedef struct {
     uint8_t    my_trx, n_trx;
     uint8_t    tx_mask;        /* which transceivers say they transmit */
     int32_t    mods;           /* TCI_MODS_*: modulations_list's, in the greeting */
+    /* RADIO_DSP_* of each transceiver, as the server last said: it says it
+     * for all of them in its greeting, and the active one can change. */
+    uint8_t    dsp_has[DSP_TRX], dsp_on[DSP_TRX];
     bool       have_mods;
     uint32_t   connects, closes, reconciles, rejects, unknown_cmds, sends, echoes;
     char       last_close[48];
@@ -298,6 +302,20 @@ static void apply_fact(const tci_fact_t *f)
     case TCI_LOCK:
         if (f->trx == S.my_trx) S.slice_locked = f->b0;
         break;
+
+    case TCI_RX_NB_ENABLE:
+    case TCI_RX_NR_ENABLE:
+    case TCI_RX_ANF_ENABLE:
+    case TCI_RX_APF_ENABLE: {
+        const uint8_t b = f->kind == TCI_RX_NB_ENABLE ? RADIO_DSP_NB :
+                          f->kind == TCI_RX_NR_ENABLE ? RADIO_DSP_NR :
+                          f->kind == TCI_RX_ANF_ENABLE ? RADIO_DSP_ANF : RADIO_DSP_APF;
+        if (f->trx < 0 || f->trx >= DSP_TRX) break;
+        S.dsp_has[f->trx] |= b;
+        if (f->b0) S.dsp_on[f->trx] |= b;
+        else       S.dsp_on[f->trx] &= (uint8_t)~b;
+        break;
+    }
 
     case TCI_TRX:
         /* On the air if any transceiver is; but only our own transceiver's
@@ -538,6 +556,7 @@ static void link_lost(void)
     S.link = RADIO_LINK_DOWN;
     S.tx   = false;
     S.tx_mask = 0;
+    memset(S.dsp_has, 0, sizeof S.dsp_has);      /* the next greeting says again */
     s_fd   = -1;
 
     /* AetherSDR calls abortTciPtt() when a PTT-owning client disconnects,
@@ -962,6 +981,15 @@ void radio_set_rf_power(uint8_t pct) { (void)pct; }
 void radio_set_tuner(bool on)        { (void)on; }
 void radio_set_squelch(uint8_t pct)  { (void)pct; }
 
+/* The receiver's DSP, by AetherSDR's TCI names; the FlexRadio's wideband
+ * blanker has none. The server answers with the state it took. */
+void radio_set_dsp(uint8_t which, bool on)
+{
+    const char *n = which == RADIO_DSP_NB  ? "nb"  : which == RADIO_DSP_NR  ? "nr" :
+                    which == RADIO_DSP_ANF ? "anf" : which == RADIO_DSP_APF ? "apf" : NULL;
+    if (n) send_cmd("rx_%s_enable:%u,%s;", n, (unsigned)S.my_trx, on ? "true" : "false");
+}
+
 /* Nothing to ask. */
 bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
 {
@@ -1004,6 +1032,10 @@ void radio_get_status(radio_status_t *o)
     o->tx_swr     = S.tx_swr;
     o->tx_alc     = S.tx_alc;
     o->slice_locked = S.slice_locked;
+    if (S.my_trx < DSP_TRX) {
+        o->dsp_has = S.dsp_has[S.my_trx];
+        o->dsp_on  = S.dsp_on[S.my_trx] & S.dsp_has[S.my_trx];
+    }
     o->tx         = S.tx;
     o->my_trx     = S.my_trx;
     o->n_trx      = S.n_trx;

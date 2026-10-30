@@ -38,4 +38,6 @@
 #define LV_USE_ARC 1
 #define LV_USE_LINE 1
 #define LV_USE_LABEL 1
+/* ui_snapshot(): the face, as GET /api/screenshot takes it. */
+#define LV_USE_SNAPSHOT 1
 #endif

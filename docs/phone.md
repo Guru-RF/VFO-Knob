@@ -49,7 +49,7 @@ Until it is registered, the slab says **NO SERVICE** and a panel says why:
 
 | Part | Tap | |
 |---|---|---|
-| **The arc** | hold: the address card | two meters in dBFS: the other end's audio on the left half, your microphone (what they hear) on the right. Each fills up from its own end towards the top, with a peak that holds for a second, then falls |
+| **The arc** | hold: the address card, and **LOCK** | two meters in dBFS: the other end's audio on the left half, your microphone (what they hear) on the right. Each fills up from its own end towards the top, with a peak that holds for a second, then falls |
 | **Battery** | — | the knob's own, between the meters' tops, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below; under the keypad, none. None on USB power |
 | **Under the arc** | — | the call's time and its state (*in call*, or *HD call* when it runs in G.722; *incoming call*; the seconds it has rung); at rest, the calls you missed (in red), or else how many favourites there are |
 | **The number's row** | — | the favourite's number at rest; in a call, the other end's number |
@@ -212,6 +212,22 @@ calls the dial steps through them in that order, and the slab calls the one
 shown.
 
 The list can also come from Google Contacts (see below). Each sync replaces it.
+
+## Locking the knob
+
+Hold the arc for the address card, let go, and tap **LOCK**, which has come
+up over the meters. A padlock shows at the top of the arc. A turn moves
+nothing, a tap or a swipe opens nothing, and the slab neither calls nor
+answers. Ending a call is never locked: the slab hangs up a call, or one
+being made, and declines one ringing in. A headset's button still answers and
+hangs up. The padlock goes red for a moment when it refuses something.
+
+To unlock, hold the arc again and tap **UNLOCK**. With no link it is over the
+warning. A restart unlocks too.
+
+| The card's LOCK | Locked |
+|---|---|
+| ![Hold the arc for the card, then tap LOCK](phone/17-lock.svg) | ![Locked: the padlock at the top of the arc](phone/18-locked.svg) |
 
 ## For other programs
 

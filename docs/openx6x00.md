@@ -48,7 +48,7 @@ radio is on, on the same network, and has its TCI server on.
 
 | Part | Tap | |
 |---|---|---|
-| **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
+| **S-meter** | hold: the address card, and **LOCK** | S-units, peak held a second; dBm under the reading |
 | **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | AUTO, FAST, SLOW, OFF |
 | **RF.G** | — | greyed: TCI does not carry the RF gain |
@@ -138,6 +138,23 @@ transmit with the knob's own microphone: see
 [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](openx6x00/06-headset.svg)
+
+## Locking the knob
+
+Hold the S-meter for the address card, let go, and tap **LOCK**, which has
+come up over the S-meter. A padlock shows at the top of the arc. A turn tunes
+nothing, a tap or a swipe opens nothing, and nothing keys: not the slab, nor a
+headset's button or its boom arm. Unkeying is never locked: on the air, a tap
+on the slab or the headset's button still unkeys. The padlock goes red for a
+moment when it refuses something. A question the knob asks still takes its
+answer.
+
+To unlock, hold the S-meter again and tap **UNLOCK**. With no link it is over
+the warning. A restart unlocks too.
+
+| The card's LOCK | Locked |
+|---|---|
+| ![Hold the S-meter for the card, then tap LOCK](openx6x00/09-lock.svg) | ![Locked: the padlock at the top of the arc](openx6x00/10-locked.svg) |
 
 ## Another firmware
 

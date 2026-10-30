@@ -138,6 +138,7 @@ typedef struct {
     char       mode[8];              /* the editors' names, lower case */
     int32_t    filt_lo, filt_hi;
     char       agc[6];
+    uint8_t    dsp_has, dsp_on;      /* RADIO_DSP_*: the slice's */
     bool       have_gain;
     int8_t     gain, gain_min, gain_max, gain_step;
     int32_t    rit_hz;
@@ -290,7 +291,7 @@ EXT_RAM_BSS_ATTR static struct {
 } C;
 
 /* What the other tasks asked for, carried out by the flex task. */
-typedef enum { Q_MODE, Q_FILTER, Q_AGC, Q_GAIN, Q_RIT, Q_ATU_MEM } req_kind_t;
+typedef enum { Q_MODE, Q_FILTER, Q_AGC, Q_GAIN, Q_RIT, Q_ATU_MEM, Q_DSP } req_kind_t;
 typedef struct { uint8_t kind; int32_t a, b; char s[8]; } req_t;
 static QueueHandle_t   s_req;
 static RingbufHandle_t s_rxq;        /* [count][Opus bytes], flex -> codec */
@@ -605,6 +606,7 @@ typedef struct {
     char     mode[8], agc[6];
     int32_t  lo, hi;
     long     rit_on, rit_freq;
+    uint8_t  dsp_has, dsp_on;        /* RADIO_DSP_* */
     bool     tx;
     uint32_t pan;
     char     rxant[8], txant[8];     /* its antennas, and the lists to choose from */
@@ -641,6 +643,7 @@ static void lose_slice(void)
     C.slice = -1;
     taskENTER_CRITICAL(&S_LOCK);
     S.have_freq = false;
+    S.dsp_has = 0;
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
@@ -655,6 +658,8 @@ static void follow_slice(int n)
     strlcpy(S.agc, c->agc, sizeof S.agc);
     S.filt_lo  = c->lo;
     S.filt_hi  = c->hi;
+    S.dsp_has  = c->dsp_has;
+    S.dsp_on   = c->dsp_on;
     S.rit_hz   = c->rit_on ? (int32_t)c->rit_freq : 0;
     S.tx_slice = c->tx;
     strlcpy(S.rxant, c->rxant, sizeof S.rxant);
@@ -714,6 +719,20 @@ static void on_slice_status(int n, const char *line)
     if (rf) c->rit_freq = v;
     const bool tx = kv_long(line, "tx", &v);
     if (tx) c->tx = v != 0;
+    /* Its DSP: "nb=1 nb_level=50 nr=0 ... anf=0 apf=0 wnb=0", each with its
+     * level beside it. */
+    static const struct { const char *k; uint8_t b; } DSP[] = {
+        { "nb", RADIO_DSP_NB }, { "nr", RADIO_DSP_NR }, { "anf", RADIO_DSP_ANF },
+        { "apf", RADIO_DSP_APF }, { "wnb", RADIO_DSP_WNB },
+    };
+    bool dsp = false;
+    for (size_t i = 0; i < sizeof DSP / sizeof DSP[0]; i++)
+        if (kv_long(line, DSP[i].k, &v)) {
+            dsp = true;
+            c->dsp_has |= DSP[i].b;
+            if (v) c->dsp_on |= DSP[i].b;
+            else   c->dsp_on &= (uint8_t)~DSP[i].b;
+        }
     uint32_t pan;
     if (kv_hex(line, "pan", &pan) && pan) c->pan = pan;
     /* Its antennas -- "rxant=ANT1 txant=ANT1 ant_list=ANT1,ANT2,RX_A,RX_B,
@@ -745,6 +764,7 @@ static void on_slice_status(int n, const char *line)
     if (hi)  S.filt_hi = c->hi;
     if (ro || rf) S.rit_hz = c->rit_on ? (int32_t)c->rit_freq : 0;
     if (tx)  S.tx_slice = c->tx;
+    if (dsp) { S.dsp_has = c->dsp_has; S.dsp_on = c->dsp_on; }
     if (ra)  strlcpy(S.rxant, c->rxant, sizeof S.rxant);
     if (ta)  strlcpy(S.txant, c->txant, sizeof S.txant);
     if (rl)  strlcpy(S.ants, c->ants, sizeof S.ants);
@@ -2120,6 +2140,18 @@ static void take_requests(void)
             S.filt_lo = s_slc[C.slice].lo = r.a;
             S.filt_hi = s_slc[C.slice].hi = r.b;
             break;
+        case Q_DSP: {
+            const char *k = r.a == RADIO_DSP_NB  ? "nb"  : r.a == RADIO_DSP_NR  ? "nr"  :
+                            r.a == RADIO_DSP_ANF ? "anf" : r.a == RADIO_DSP_APF ? "apf" : "wnb";
+            cmd(P_NONE, "slice set %d %s=%d", C.slice, k, r.b ? 1 : 0);
+            slc_t *c = &s_slc[C.slice];
+            if (r.b) c->dsp_on |= (uint8_t)r.a;
+            else     c->dsp_on &= (uint8_t)~r.a;
+            taskENTER_CRITICAL(&S_LOCK);
+            S.dsp_on = c->dsp_on;
+            taskEXIT_CRITICAL(&S_LOCK);
+            break;
+        }
         case Q_AGC:
             cmd(P_NONE, "slice set %d agc_mode=%s", C.slice, r.s);
             strlcpy(s_slc[C.slice].agc, r.s, sizeof s_slc[C.slice].agc);
@@ -2536,6 +2568,7 @@ void radio_set_rf_gain(uint8_t pct)  { (void)pct; }
 void radio_set_rf_power(uint8_t pct) { (void)pct; }
 void radio_set_tuner(bool on)        { (void)on; }
 void radio_set_squelch(uint8_t pct)  { (void)pct; }
+void radio_set_dsp(uint8_t which, bool on) { request(Q_DSP, which, on, NULL); }
 
 bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
 {
@@ -2603,6 +2636,8 @@ void radio_get_status(radio_status_t *o)
     o->f_server   = S.f_server;
     o->filt_lo    = S.filt_lo;
     o->filt_hi    = S.filt_hi;
+    o->dsp_has    = S.dsp_has;
+    o->dsp_on     = S.dsp_on & S.dsp_has;
     o->have_gain  = S.have_gain;
     o->gain       = S.gain;
     o->gain_min   = S.gain_min;

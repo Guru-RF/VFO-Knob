@@ -37,7 +37,7 @@ The radio face, read differently:
 
 | Part | Tap | |
 |---|---|---|
-| **The arc** | hold: the address card | the received audio in dBFS, and in transmit the microphone |
+| **The arc** | hold: the address card, and **LOCK** | the received audio in dBFS, and in transmit the microphone |
 | **Battery** | — | the knob's own, over who is talking, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below; on the air too. None on USB power |
 | **Who is talking** | — | with where they are when the reflector publishes it, or who spoke last and how long ago |
 | **Lock** | on, off | the talkgroup stays: no busier talkgroup takes you away, no quiet spell drops you to monitoring, and the others are not heard. The dial still switches, and the talkgroup it turns to is locked in its turn |
@@ -98,6 +98,22 @@ A Bluetooth speaker plays the knob's audio with the jack, and you transmit
 with the knob's own microphone: [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](svxconnect/04-headset.svg)
+
+## Locking the knob
+
+Hold the arc for the address card, let go, and tap **LOCK**, which has come
+up over the audio's reading. A padlock shows at the top of the arc. A turn
+changes no talkgroup, a tap or a swipe opens nothing, and nothing keys: not
+the slab, nor a headset's button or its boom arm. Unkeying is never locked: on
+the air, a tap on the slab or the headset's button still unkeys. The padlock
+goes red for a moment when it refuses something.
+
+To unlock, hold the arc again and tap **UNLOCK**. With no link it is over the
+warning. A restart unlocks too.
+
+| The card's LOCK | Locked |
+|---|---|
+| ![Hold the arc for the card, then tap LOCK](svxconnect/06-lock.svg) | ![Locked: the padlock at the top of the arc](svxconnect/07-locked.svg) |
 
 ## Another firmware
 

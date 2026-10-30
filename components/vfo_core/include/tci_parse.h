@@ -46,6 +46,10 @@ typedef enum {
     TCI_TUNE,               /* trx, b0                          */
     TCI_ACTIVE_SLICE,       /* i0 = index, s0 = display letter   */
     TCI_AGC_MODE,           /* trx, s0 = "off" "slow" "med" "fast" */
+    TCI_RX_NB_ENABLE,       /* trx, b0  -- the noise blanker     */
+    TCI_RX_NR_ENABLE,       /* trx, b0  -- noise reduction       */
+    TCI_RX_ANF_ENABLE,      /* trx, b0  -- the automatic notch   */
+    TCI_RX_APF_ENABLE,      /* trx, b0  -- the audio peak filter */
 
     /* Audio stream format, advertised in the greeting. v1 stores and ignores
      * these so that v2's RX audio work does not have to touch the parser. */

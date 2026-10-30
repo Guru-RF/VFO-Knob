@@ -108,6 +108,9 @@ typedef struct {
     /* A squelch (the IC-R8600's): a swipe from the right, without a tuner. */
     bool     has_squelch, have_squelch;
     uint8_t  squelch_pct;
+    /* The receiver's DSP the dial switches (UI_DSP_*, radio.h's RADIO_DSP_*):
+     * in the menu of the swipe from the right, lit while on. */
+    uint8_t  dsp_has, dsp_on;
     /* Web SDRs as a second receiver (components/sdr_rx): a swipe down chooses
      * LOCAL or one of them; while one plays, the radio is heard left and the
      * SDR right, and BALANCE follows POWER on the swipe from the left. */
@@ -198,8 +201,14 @@ typedef struct {
 enum { UI_MEM_OFF = 0, UI_MEM_READING, UI_MEM_READY, UI_MEM_EMPTY };
 
 /* The swipe menu's items: SmartSDR's TX panel -- a tune carrier, a tuner
- * cycle, and the tuner's memories on or off. */
-enum { UI_ACT_NONE = 0, UI_ACT_TUNE, UI_ACT_ATU, UI_ACT_MEM };
+ * cycle, and the tuner's memories on or off -- and the receiver's DSP, each
+ * on or off: the noise blanker, the wideband one, noise reduction, the
+ * automatic notch and the audio peak filter. */
+enum { UI_ACT_NONE = 0, UI_ACT_TUNE, UI_ACT_ATU, UI_ACT_MEM,
+       UI_ACT_NB, UI_ACT_WNB, UI_ACT_NR, UI_ACT_ANF, UI_ACT_APF };
+enum { UI_DSP_NB = 1, UI_DSP_NR = 2, UI_DSP_ANF = 4, UI_DSP_APF = 8, UI_DSP_WNB = 16 };
+/* An item's name, as the menu shows it ("NR"). */
+const char *ui_act_name(uint8_t action);
 
 void ui_update(const ui_state_t *st);
 
@@ -308,6 +317,13 @@ bool ui_take_mute_tap(void);
  * Selection happens on the precise rotary and commitment on the imprecise
  * touch, which is what makes the whole thing usable on 45 mm of round glass. */
 bool ui_edit_active(void);
+
+/* The lock (the address card's LOCK): turns, taps, swipes and keying are
+ * refused while it is on -- unkeying never is. The caller asks before tuning
+ * or keying, and calls ui_lock_nudge() for what it refused: the padlock goes
+ * red a moment. False on the setup firmware, which has none. */
+bool ui_locked(void);
+void ui_lock_nudge(void);
 void ui_edit_rotate(int32_t detents);
 /* The dial as the volume (the telephone's, in a call): VOLUME's panel comes
  * up as it turns and goes by itself 2 s after the last detent. */
@@ -326,7 +342,8 @@ typedef struct {
     bool     have_ant;     uint8_t ant;  bool ant_rx;
     bool     have_tx_ant;  uint8_t tx_ant;          /* by its place in tx_ant_names */
     uint8_t  action;       /* UI_ACT_*: chosen from the swipe's menu */
-    bool     atu_mem;      /* with UI_ACT_MEM: the tuner's memories on */
+    bool     on;           /* with a switch (MEM, a DSP's): on */
+    uint8_t  dsp;          /* with a DSP's: its UI_DSP_* */
     bool     live;         /* sent as the knob turns, not on a tap */
     bool     have_rit;     int32_t rit_hz;
     bool     have_freq;    int64_t freq_hz;

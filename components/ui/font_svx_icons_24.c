@@ -8,10 +8,11 @@
 /* Lock, lock-open, volume-mute and volume-up (U+F023, U+F3C1, U+F6A9, U+F028)
  * from the Font Awesome 5 Free copy LVGL bundles for its own symbols (SIL OFL
  * 1.1), for the svxconnect face: the talkgroup lock and the mute either side
- * of the talker. LVGL's built-in symbol set has no lock. Regenerate with the
- * options above rather than edit. */
+ * of the talker; and on every face, the knob's own lock. LVGL's built-in
+ * symbol set has no lock. Regenerate with the options above rather than
+ * edit. */
 
-#if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE
+#if !VFO_RADIO_SETUP
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"

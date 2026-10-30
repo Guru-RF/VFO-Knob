@@ -8,4 +8,6 @@
 static inline size_t heap_caps_get_free_size(unsigned caps) { (void)caps; return 100000; }
 static inline size_t heap_caps_get_largest_free_block(unsigned caps) { (void)caps; return 50000; }
 static inline void *heap_caps_malloc(size_t n, unsigned caps) { (void)caps; return malloc(n); }
+static inline void *heap_caps_calloc(size_t k, size_t n, unsigned caps) { (void)caps; return calloc(k, n); }
+static inline void heap_caps_free(void *p) { free(p); }
 #endif

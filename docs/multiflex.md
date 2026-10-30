@@ -67,7 +67,7 @@ always its own station.
 
 | Part | Tap | |
 |---|---|---|
-| **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
+| **S-meter** | hold: the address card, and **LOCK** | S-units, peak held a second; dBm under the reading |
 | **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | FAST, MED, SLOW, OFF |
 | **RF.G** | the RF gain editor | the panadapter's RF gain, −8 to +32 dB |
@@ -96,7 +96,7 @@ charge cannot be read, and none shows. The address card says which:
 
 | Swipe | Opens |
 |---|---|
-| **From the right** | the menu: **TUNE**, a carrier at the tune power, for an external tuner or to check SWR — PTT stops it, and it stops by itself after 30 s; **ATU**, one cycle of the radio's tuner; **MEM**, the tuner's memories, lit when on — a tap switches them and the menu stays. It opens on MEM: TUNE and ATU are a turn away |
+| **From the right** | the menu: **TUNE**, a carrier at the tune power, for an external tuner or to check SWR — PTT stops it, and it stops by itself after 30 s; **ATU**, one cycle of the radio's tuner; **MEM**, the tuner's memories, lit when on — a tap switches them and the menu stays; then the slice's DSP, **NB**, **WNB**, **NR**, **ANF**, and **APF** in CW, each switched as MEM is. It opens on MEM: TUNE and ATU are a turn one way, the DSP the other |
 | **Down** | RX: LOCAL or a web SDR, when the knob has some; then the antennas, RX ANT and TX ANT; and last, with memories on the radio, V/M |
 | **From the left** | BALANCE, while a web SDR plays |
 | **Up** | RADIO: another radio — on the LAN or through SmartLink |
@@ -104,6 +104,14 @@ charge cannot be read, and none shows. The address card says which:
 | The menu | Another radio |
 |---|---|
 | ![MENU: MEM](multiflex/03-menu.svg) | ![RADIO: Lombardsijde, SmartLink](multiflex/04-radio.svg) |
+
+The DSP switches the slice's noise blanker (**NB**), wideband noise blanker
+(**WNB**), noise reduction (**NR**), automatic notch (**ANF**) and, in CW, the
+audio peak filter (**APF**) on and off, as SmartSDR's buttons do: lit when on,
+dimmed when off. Their levels stay as SmartSDR has them. The menu says
+**DSP** over them, **MENU** over the tuner's.
+
+![DSP: NR, on](multiflex/21-dsp.svg)
 
 The same radio can be in the list twice, once on the LAN and once through
 SmartLink: **LAN** or **SmartLink** under the name says which. Chosen, the
@@ -286,6 +294,23 @@ A Bluetooth speaker plays the knob's audio with the jack, and you transmit
 with the knob's own microphone: [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](multiflex/11-headset.svg)
+
+## Locking the knob
+
+Hold the S-meter for the address card, let go, and tap **LOCK**, which has
+come up over the S-meter. A padlock shows at the top of the arc. A turn tunes
+nothing, a tap or a swipe opens nothing, and nothing keys: not the slab, nor a
+headset's button or its boom arm. Unkeying is never locked: on the air, a tap
+on the slab or the headset's button still unkeys. The padlock goes red for a
+moment when it refuses something. A question the knob asks still takes its
+answer.
+
+To unlock, hold the S-meter again and tap **UNLOCK**. With no link it is over
+the warning. A restart unlocks too.
+
+| The card's LOCK | Locked |
+|---|---|
+| ![Hold the S-meter for the card, then tap LOCK](multiflex/19-lock.svg) | ![Locked: the padlock at the top of the arc](multiflex/20-locked.svg) |
 
 ## Another firmware
 

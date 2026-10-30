@@ -24,6 +24,10 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "tune",                TCI_TUNE                },
     { "active_slice",        TCI_ACTIVE_SLICE        },
     { "agc_mode",            TCI_AGC_MODE            },
+    { "rx_nb_enable",        TCI_RX_NB_ENABLE        },
+    { "rx_nr_enable",        TCI_RX_NR_ENABLE        },
+    { "rx_anf_enable",       TCI_RX_ANF_ENABLE       },
+    { "rx_apf_enable",       TCI_RX_APF_ENABLE       },
     { "rx_smeter",           TCI_RX_SMETER           },
     { "rx_channel_sensors",  TCI_RX_CHANNEL_SENSORS  },
     { "tx_sensors",          TCI_TX_SENSORS          },
@@ -58,11 +62,7 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "rx_volume",           TCI_IGNORED             },
     { "rx_balance",          TCI_IGNORED             },
     { "agc_gain",            TCI_IGNORED             },
-    { "rx_nb_enable",        TCI_IGNORED             },
-    { "rx_nr_enable",        TCI_IGNORED             },
-    { "rx_anf_enable",       TCI_IGNORED             },
     { "rx_nf_enable",        TCI_IGNORED             },
-    { "rx_apf_enable",       TCI_IGNORED             },
     { "rx_dse_enable",       TCI_IGNORED             },
     { "rx_anc_enable",       TCI_IGNORED             },
     { "rx_bin_enable",       TCI_IGNORED             },
@@ -212,6 +212,10 @@ bool tci_parse(const char *line, size_t len, tci_fact_t *out)
     case TCI_LOCK:
     case TCI_TX_ENABLE:
     case TCI_TUNE:
+    case TCI_RX_NB_ENABLE:
+    case TCI_RX_NR_ENABLE:
+    case TCI_RX_ANF_ENABLE:
+    case TCI_RX_APF_ENABLE:
         out->trx = (int32_t)arg_i64(argv, argc, 0, -1);
         if (argc < 2 || !arg_bool(argv[1], &out->b0)) {
             /* TciProtocol drops a malformed state silently; mirror that. */
@@ -341,6 +345,10 @@ const char *tci_kind_name(tci_kind_t k)
     case TCI_TUNE:                return "tune";
     case TCI_ACTIVE_SLICE:        return "active_slice";
     case TCI_AGC_MODE:            return "agc_mode";
+    case TCI_RX_NB_ENABLE:        return "rx_nb_enable";
+    case TCI_RX_NR_ENABLE:        return "rx_nr_enable";
+    case TCI_RX_ANF_ENABLE:       return "rx_anf_enable";
+    case TCI_RX_APF_ENABLE:       return "rx_apf_enable";
     case TCI_RX_SMETER:           return "rx_smeter";
     case TCI_RX_CHANNEL_SENSORS:  return "rx_channel_sensors";
     case TCI_TX_SENSORS:          return "tx_sensors";

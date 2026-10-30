@@ -80,7 +80,7 @@ the page is easy to find. Until a receiver answers, the knob says why:
 
 | Part | Tap | |
 |---|---|---|
-| **S-meter** | hold: the address card | S-units on the receivers' lime bar, the peak held a second as a red mark, as on their own page; the level in dBm under the reading, and **OV** after it, in red, while the receiver's ADC overloads. With a receiver in the right ear, its S-meter is the thin blue line outside, and its reading, in blue, takes the dBm's place |
+| **S-meter** | hold: the address card, and **LOCK** | S-units on the receivers' lime bar, the peak held a second as a red mark, as on their own page; the level in dBm under the reading, and **OV** after it, in red, while the receiver's ADC overloads. With a receiver in the right ear, its S-meter is the thin blue line outside, and its reading, in blue, takes the dBm's place |
 | **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power |
 | **AGC** | the AGC | FAST, MED or SLOW: the decay of the receivers' own presets, a quarter, one and three seconds |
 | **NR** | the noise filter | OFF, WDSP, LMS or SPEC: the receivers' own noise filters |
@@ -407,6 +407,21 @@ has its own **Level** on the configuration page, 24 dB down to 12 dB up,
 kept for it: [its level](headset.md#its-level).
 
 ![A Bluetooth speaker connected: a speaker beside the name](kiwi/19-speaker.svg)
+
+## Locking the knob
+
+Hold the S-meter for the address card, let go, and tap **LOCK**, which has
+come up over the S-meter. A padlock shows at the top of the arc. A turn tunes
+nothing, and a tap or a swipe opens nothing. The padlock goes red for a
+moment when it refuses something. A question the knob asks still takes its
+answer.
+
+To unlock, hold the S-meter again and tap **UNLOCK**. With no link it is over
+the warning. A restart unlocks too.
+
+| The card's LOCK | Locked |
+|---|---|
+| ![Hold the S-meter for the card, then tap LOCK](kiwi/22-lock.svg) | ![Locked: the padlock at the top of the arc](kiwi/23-locked.svg) |
 
 ## Another firmware
 

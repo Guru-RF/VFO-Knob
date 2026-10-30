@@ -59,7 +59,7 @@ the warning, as the dial names it ([another receiver](#another-receiver)).
 
 | Part | Tap | |
 |---|---|---|
-| **S-meter** | hold: the address card | S-units in UberSDR's colours, red through yellow to green, peak held a second; the level in dBFS under the reading |
+| **S-meter** | hold: the address card, and **LOCK** | S-units in UberSDR's colours, red through yellow to green, peak held a second; the level in dBFS under the reading |
 | **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below; over an SSTV picture, none. None on USB power |
 | **SNR** | — | the signal above the noise in the passband, in dB: red at 0, green from 15, as UberSDR colours it |
 | **FIL** | the noise filter | OFF, NR2, RN2, NR4, whichever the receiver runs |
@@ -322,6 +322,21 @@ so behind the jack, with a speaker beside the spot:
 [A Bluetooth speaker](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth speaker connected: a speaker beside the spot](ubersdr/16-speaker.svg)
+
+## Locking the knob
+
+Hold the S-meter for the address card, let go, and tap **LOCK**, which has
+come up over the S-meter. A padlock shows at the top of the arc. A turn tunes
+nothing, and a tap or a swipe opens nothing. The padlock goes red for a
+moment when it refuses something. A question the knob asks still takes its
+answer.
+
+To unlock, hold the S-meter again and tap **UNLOCK**. With no link it is over
+the warning. A restart unlocks too.
+
+| The card's LOCK | Locked |
+|---|---|
+| ![Hold the S-meter for the card, then tap LOCK](ubersdr/24-lock.svg) | ![Locked: the padlock at the top of the arc](ubersdr/25-locked.svg) |
 
 ## Another firmware
 

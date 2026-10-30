@@ -149,6 +149,11 @@ typedef struct {
      * swipe from the right, where a radio without a tuner has room. */
     bool       has_squelch, have_squelch;
     uint8_t    squelch_pct;
+    /* The receiver's DSP the dial switches (RADIO_DSP_*): AetherSDR's over
+     * TCI, the FlexRadio's. A bit in dsp_has once the radio has said where
+     * that one stands, and in dsp_on while it is on. The swipe from the right
+     * offers them. */
+    uint8_t    dsp_has, dsp_on;
     /* Something to say once, for a moment ("ATU FAILED"): shown whenever
      * note_seq moves on. */
     char       note[16];
@@ -322,6 +327,12 @@ void radio_set_rf_power(uint8_t pct);
 void radio_set_tuner(bool on);
 /* The squelch, 0-100 % (has_squelch); 0 is open. */
 void radio_set_squelch(uint8_t pct);
+/* One of the receiver's DSP functions on or off (dsp_has): the noise
+ * blanker, noise reduction, the automatic notch, the audio peak filter (CW)
+ * and the FlexRadio's wideband blanker. */
+enum { RADIO_DSP_NB = 1, RADIO_DSP_NR = 2, RADIO_DSP_ANF = 4, RADIO_DSP_APF = 8,
+       RADIO_DSP_WNB = 16 };
+void radio_set_dsp(uint8_t which, bool on);
 
 /* A question the client puts to the operator before it can go on -- the
  * multiflex firmware's at boot: be a station of its own, or the dial for one

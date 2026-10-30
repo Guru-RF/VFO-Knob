@@ -81,7 +81,7 @@ Until the radio answers, the knob says so, with its own addresses:
 
 | Part | Tap | |
 |---|---|---|
-| **S-meter** | hold: the address card | S-units, peak held a second; dBm under the reading |
+| **S-meter** | hold: the address card, and **LOCK** | S-units, peak held a second; dBm under the reading |
 | **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | FAST, MID, SLOW |
 | **P.AMP** | the preamp editor | OFF, 1, 2 — or ON where the band has only one |
@@ -357,6 +357,23 @@ A Bluetooth speaker plays the knob's audio with the jack, and you transmit
 with the knob's own microphone: [the guide](headset.md#a-bluetooth-speaker).
 
 ![A Bluetooth headset connected: its button is the PTT](icom/18-headset.svg)
+
+## Locking the knob
+
+Hold the S-meter for the address card, let go, and tap **LOCK**, which has
+come up over the S-meter. A padlock shows at the top of the arc. A turn tunes
+nothing, a tap or a swipe opens nothing, and nothing keys: not the slab, nor a
+headset's button or its boom arm. Unkeying is never locked: on the air, a tap
+on the slab or the headset's button still unkeys. The padlock goes red for a
+moment when it refuses something. A question the knob asks still takes its
+answer.
+
+To unlock, hold the S-meter again and tap **UNLOCK**. With no link it is over
+the warning. A restart unlocks too.
+
+| The card's LOCK | Locked |
+|---|---|
+| ![Hold the S-meter for the card, then tap LOCK](icom/26-lock.svg) | ![Locked: the padlock at the top of the arc](icom/27-locked.svg) |
 
 ## Another firmware
 

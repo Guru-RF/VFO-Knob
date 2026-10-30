@@ -916,6 +916,7 @@ static void log_refusal(uint32_t missing)
 }
 
 static void session_end(bool polite, const char *why);
+static void goodbye(void);
 
 /* The knob's microphone reaches the transmitter only with the radio's
  * modulation input on WLAN. That is switched for our overs alone -- as
@@ -978,6 +979,14 @@ static void ptt_dispatch(const ptt_out_t *o)
      * it over the LAN goes away, so ending the session is the stronger unkey. */
     if (o->close_socket) {
         ESP_LOGW(TAG, "PTT ladder rung 2: logging out");
+        /* A goodbye is a handful of UDP packets. A radio that misses them
+         * keeps the session for about a minute, perhaps still on the air,
+         * and a weak WiFi that lost the unkey loses those too: say it three
+         * times, spread out. */
+        for (int i = 0; i < 2 && s_ctl.fd >= 0; i++) {
+            goodbye();
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
         session_end(true, "PTT ladder");
     }
     if (o->destroy_socket) {
@@ -1326,19 +1335,24 @@ static void set_close_reason(const char *why)
     taskEXIT_CRITICAL(&S_LOCK);
 }
 
-/* Leave. Politely -- token dropped, streams told -- whenever the radio can
- * still hear us, so it frees the session at once instead of holding it busy
- * for the next connection, which is ours. */
+/* The polite way out: the modulation inputs put back, CI-V closed, the token
+ * dropped, each stream told. */
+static void goodbye(void)
+{
+    modin_restore();
+    if (C.civ_open) civ_openclose(false);
+    if (C.authed) send_token(0x01);
+    control(&s_civ, 0x05, 0);
+    control(&s_aud, 0x05, 0);
+    control(&s_ctl, 0x05, 0);
+}
+
+/* Leave. Politely whenever the radio can still hear us, so it frees the
+ * session at once instead of holding it busy for the next connection, which
+ * is ours. */
 static void session_end(bool polite, const char *why)
 {
-    if (polite) {
-        modin_restore();
-        if (C.civ_open) civ_openclose(false);
-        if (C.authed) send_token(0x01);
-        control(&s_civ, 0x05, 0);
-        control(&s_aud, 0x05, 0);
-        control(&s_ctl, 0x05, 0);
-    }
+    if (polite) goodbye();
     stream_close(&s_civ);
     stream_close(&s_aud);
     stream_close(&s_ctl);
@@ -2030,7 +2044,17 @@ static void poll_civ(uint32_t t)
             CIV(0x15, m[C.tx_meter_i++ % 3]);
             C.t_poll_tx = t;
         }
-        if (t - C.t_poll_ptt >= 150) { CIV(0x1C, 0x00); C.t_poll_ptt = t; }
+        if (t - C.t_poll_ptt >= 150) {
+            /* Unkeying: the 1C 00 00 sent at the tap is one UDP packet, and
+             * on a weak WiFi it, its resend and the radio's answers can all
+             * be lost. An owner's IC-705 at -88 dBm stayed on the air through
+             * the whole ladder. So say it again with each question, until
+             * the radio answers that it is receiving. */
+            if (S.ptt.state == PTT_RELEASING && S.ptt.rung == 1 &&
+                t - S.ptt.t_rung_ms >= 150) CIV(0x1C, 0x00, 0x00);
+            CIV(0x1C, 0x00);
+            C.t_poll_ptt = t;
+        }
     } else {
         if (t - C.t_poll_s >= 100) { CIV(0x15, 0x02); C.t_poll_s = t; }
         if (t - C.t_poll_ptt >= 1000 && !model_now()->rx_only) { CIV(0x1C, 0x00); C.t_poll_ptt = t; }
@@ -2239,12 +2263,7 @@ static void icom_task(void *arg)
 static void on_restart(void)
 {
     if (s_ctl.fd < 0) return;
-    modin_restore();
-    if (C.civ_open) civ_openclose(false);
-    if (C.authed) send_token(0x01);
-    control(&s_civ, 0x05, 0);
-    control(&s_aud, 0x05, 0);
-    control(&s_ctl, 0x05, 0);
+    goodbye();
     /* The reset follows within microseconds, and a datagram still queued in
      * the WiFi driver then never leaves: the radio kept the session and
      * refused the next one for over a minute. Give them time to go. */
@@ -2455,6 +2474,7 @@ void radio_set_antenna(uint8_t ant, bool rx_ant)
 void radio_tune(void)     {}
 void radio_atu_tune(void) {}
 void radio_atu_memories(bool on) { (void)on; }
+void radio_set_dsp(uint8_t which, bool on) { (void)which; (void)on; }
 
 /* Nothing to ask. */
 bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)

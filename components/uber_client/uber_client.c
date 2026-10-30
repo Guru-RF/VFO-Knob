@@ -1497,6 +1497,7 @@ void radio_set_antenna(uint8_t ant, bool rx_ant) { (void)ant; (void)rx_ant; }
 void radio_tune(void) {}
 void radio_atu_tune(void) {}
 void radio_atu_memories(bool on) { (void)on; }
+void radio_set_dsp(uint8_t which, bool on) { (void)which; (void)on; }
 void radio_set_rf_gain(uint8_t pct) { (void)pct; }
 void radio_set_rf_power(uint8_t pct) { (void)pct; }
 void radio_set_tuner(bool on) { (void)on; }
