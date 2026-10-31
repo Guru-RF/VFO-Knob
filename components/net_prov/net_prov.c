@@ -188,6 +188,8 @@ static esp_err_t kv_saved_or(esp_err_t e, const char *what)
 static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
 static uint16_t s_dim_min = 5;      /* idle before the screen dims;  0 = never */
 static uint16_t s_blank_min = 10;   /* idle before it goes dark;     0 = never */
+static uint8_t  s_bright = 80;      /* the screen lit, percent: 80 is the 200 of 255 it always was */
+static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
 
 /* Credentials for the configuration page. Shipped as admin/admin so a new
  * owner can get in; over the network the knob then does nothing more until
@@ -604,6 +606,8 @@ void net_prov_load_settings(void)
     kv_get_u16(h, "otah", &s_ota_hours);
     kv_get_u16(h, "dim", &s_dim_min);
     kv_get_u16(h, "blank", &s_blank_min);
+    if (kv_get_u8(h, "bright", &v) == ESP_OK && v >= NET_PROV_BRIGHT_MIN && v <= 100) s_bright = v;
+    if (kv_get_u8(h, "jackdb", &v) == ESP_OK && v <= NET_PROV_JACK_DB_MAX && v % 3 == 0) s_jack_db = v;
     len = sizeof s_web_user; kv_get_str(h, "wuser", s_web_user, &len);
     len = sizeof s_web_pass; kv_get_str(h, "wpass", s_web_pass, &len);
 
@@ -930,6 +934,28 @@ void net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes)
     kv_set_u16(h, "dim", s_dim_min);
     kv_set_u16(h, "blank", s_blank_min);
     kv_commit_now(h);
+}
+
+uint8_t net_prov_brightness(void) { return s_bright; }
+
+void net_prov_save_brightness(uint8_t percent)
+{
+    if (percent < NET_PROV_BRIGHT_MIN) percent = NET_PROV_BRIGHT_MIN;
+    if (percent > 100) percent = 100;
+    if (percent == s_bright) return;
+    s_bright = percent;
+    kv_set_u8(kv(), "bright", percent);
+    kv_commit_now(kv());
+}
+
+uint8_t net_prov_jack_db(void) { return s_jack_db; }
+
+void net_prov_save_jack_db(uint8_t db)
+{
+    if (db > NET_PROV_JACK_DB_MAX || db % 3 || db == s_jack_db) return;
+    s_jack_db = db;
+    kv_set_u8(kv(), "jackdb", db);
+    kv_commit_now(kv());
 }
 
 void net_prov_save_ota_hours(uint16_t hours)

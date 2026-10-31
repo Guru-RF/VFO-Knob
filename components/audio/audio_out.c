@@ -1,5 +1,6 @@
 #include "audio_out.h"
 #include "board_pins.h"
+#include "jack_level.h"
 #include "mix_tap.h"
 
 #include <math.h>
@@ -89,6 +90,27 @@ static volatile audio_out_tap_t s_tap;
 
 void audio_out_set_volume(uint8_t v) { s_vol = v > 100 ? 100 : v; }
 void audio_out_set_tap(audio_out_tap_t tap) { s_tap = tap; }
+
+/* The jack's level (jack_level.h): set from the page, played by the
+ * playback task, which alone holds the frames held back. */
+static volatile uint8_t      s_jack_db;
+EXT_RAM_BSS_ATTR static jack_lim_t s_jack;
+static bool                  s_jack_ahead;
+
+void audio_out_set_jack_level(uint8_t db) { s_jack_db = jack_level_ok(db) ? db : 0; }
+
+uint32_t audio_out_jack_delay_ms(void) { return s_jack_db ? JACK_AHEAD * 1000u / AUDIO_RATE_HZ : 0; }
+
+/* `frames` of the jack's stereo, its VOLUME applied, at its level. Turned
+ * on, held back from then -- a block of silence, once; turned off, what was
+ * held back is not played. At 0 dB, nothing done. */
+static void jack(int16_t *stereo, size_t frames)
+{
+    const uint8_t db = s_jack_db;
+    if (db && !s_jack_ahead) jack_lim_reset(&s_jack);
+    s_jack_ahead = db > 0;
+    if (db) jack_lim_block(&s_jack, stereo, frames, jack_level_gain(db));
+}
 
 void audio_out_stats(audio_stats_t *st) { if (st) *st = s_stats; }
 
@@ -313,6 +335,7 @@ static void mix_block(size_t rbuf)
         out[2 * i]     = sat16(g * (lr * fr[i] + ls * fs[i]));
         out[2 * i + 1] = sat16(g * (rs * fs[i] + rr * fr[i]));
     }
+    jack(out, MIX_FRAMES);
     if (s_dac_mute) memset(out, 0, sizeof out);
     size_t written = 0;
     i2s_channel_write(s_tx, out, sizeof out, &written, portMAX_DELAY);
@@ -393,6 +416,7 @@ static void play_task(void *arg)
             for (size_t i = 0; i < count; i++)
                 smp[i] = (int16_t)(((int32_t)smp[i] * g) / 100);
         }
+        jack(smp, count / 2);
         if (s_dac_mute) memset(smp, 0, n);         /* the headset's alone */
         size_t written = 0;
         const uint32_t done0 = s_dma_done;

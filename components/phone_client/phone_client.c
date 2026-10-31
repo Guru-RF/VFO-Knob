@@ -398,10 +398,12 @@ static void level_push(const int16_t *pcm, int n)
     C.lvl[C.lvl_n++ % LEVELS] = db;
     C.t_audio = now_ms();
     /* Loud: when it will be heard -- behind what is queued, and the jack's
-     * 45 ms of DMA -- not when it came in, and a Bluetooth speaker's lag,
-     * which plays it later still. The echo hold runs from there. */
+     * 45 ms of DMA, and what its level holds back -- not when it came in,
+     * and a Bluetooth speaker's lag, which plays it later still. The echo
+     * hold runs from there. */
     if (db > ECHO_DB)
-        C.t_far = C.t_audio + audio_out_queued() * 1000u / AUDIO_RATE_HZ + 45 + bt_link_speaker_delay_ms();
+        C.t_far = C.t_audio + audio_out_queued() * 1000u / AUDIO_RATE_HZ + 45 + audio_out_jack_delay_ms() +
+                  bt_link_speaker_delay_ms();
 }
 
 static float level_now(uint64_t t)

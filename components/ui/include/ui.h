@@ -416,6 +416,9 @@ void ui_set_netinfo(const char *text);
 void ui_note_activity(void);
 void ui_dim_set_minutes(uint16_t dim_minutes, uint16_t blank_minutes);
 void ui_dim_tick(bool transmitting);
+/* The backlight while lit, percent of full (GitHub #14): lit at once at it.
+ * Dimmed stays at its own level, or at this if this is lower. */
+void ui_set_brightness(uint8_t percent);
 
 void ui_updating_show(void);
 /* The same screen for the moment before a restart that installs at boot:

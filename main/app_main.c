@@ -3953,7 +3953,10 @@ void app_main(void)
     /* After ui_init, not before: this reaches into LVGL, and the version that
      * called it up beside ota_init() crashed on boot -- caught by the OTA
      * rollback, which put the previous image back. */
-    if (have_ui) ui_dim_set_minutes(net_prov_dim_min(), net_prov_blank_min());
+    if (have_ui) {
+        ui_set_brightness(net_prov_brightness());
+        ui_dim_set_minutes(net_prov_dim_min(), net_prov_blank_min());
+    }
 
     bring_up("knob", hal_encoder_init);
 
@@ -3988,6 +3991,7 @@ void app_main(void)
 #endif
         /* The saved levels, even with no display to carry them. */
         audio_out_set_volume(net_prov_volume());
+        audio_out_set_jack_level(net_prov_jack_db());
         audio_in_set_gain(net_prov_mic_gain());
     }
 

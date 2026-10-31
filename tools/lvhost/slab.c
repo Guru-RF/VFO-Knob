@@ -123,7 +123,8 @@ esp_err_t esp_lcd_touch_get_data(esp_lcd_touch_handle_t tp, esp_lcd_touch_point_
 
 esp_lcd_panel_handle_t panel_handle(void) { return NULL; }
 esp_lcd_panel_io_handle_t panel_io_handle(void) { return NULL; }
-void panel_set_brightness(uint8_t duty) { (void)duty; }
+static int backlight = -1;            /* the duty last set: -1, none yet */
+void panel_set_brightness(uint8_t duty) { backlight = duty; }
 
 /* splash.c's: no splash here, and no update screen. */
 void ui_splash_start(void) {}
@@ -2682,6 +2683,42 @@ static void runs(const char *dir)
 }
 #endif
 
+/* The backlight (GitHub #14): the page's brightness, lit at once; dimmed
+ * stays dimmer than lit; dark is dark; and use lights it at the brightness
+ * set. Every face shares it. */
+static void brightness(void)
+{
+    where = "the brightness: 100 % full, 80 % the 200 it always was, lit at once";
+    ui_set_brightness(100);
+    CHECK(backlight == 255);
+    ui_set_brightness(80);
+    CHECK(backlight == 204);
+    where = "...dimmed after its minutes, dark after its own";
+    ui_dim_set_minutes(1, 2);
+    now_ms += 61000;
+    ui_dim_tick(false);
+    CHECK(backlight == 18);
+    now_ms += 60000;
+    ui_dim_tick(false);
+    CHECK(backlight == 0);
+    where = "...a turn lights it at the brightness set";
+    ui_set_brightness(30);
+    CHECK(backlight == 77);
+    now_ms += 61000;
+    ui_dim_tick(false);
+    CHECK(backlight == 18);
+    ui_note_activity();
+    CHECK(backlight == 77);
+    where = "...set lower than dimmed: dimmed is no brighter than lit";
+    ui_set_brightness(5);
+    CHECK(backlight == 13);
+    now_ms += 61000;
+    ui_dim_tick(false);
+    CHECK(backlight == 13);
+    ui_dim_set_minutes(0, 0);
+    ui_set_brightness(80);
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : ".";
@@ -2692,6 +2729,7 @@ int main(int argc, char **argv)
     lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_0);
     run(100);
     runs(dir);
+    brightness();
     if (least_room < 99) printf("%s: the battery, %d px clear of anything else at the least\n", argv[0], least_room);
     if (knob_least_room < 99)
         printf("%s: the knob's own battery, %d px clear of anything else at the least\n", argv[0], knob_least_room);

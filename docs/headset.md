@@ -169,7 +169,7 @@ that device, by its Bluetooth address, on every firmware: each headset or
 speaker has its own back when it connects.
 
 Until one is set, a speaker is sent 12 dB less — a quarter — and a headset
-the jack's level, 0 dB; the page says *a speaker's default* or *a headset's
+0 dB, the jack's loudness at the **VOLUME** alone; the page says *a speaker's default* or *a headset's
 default* beside the level while it is at that. A speaker is a loudspeaker,
 and what suits earphones at a low **VOLUME** fills a room from one; but
 speakers are not all as loud. 12 dB down suits a JLab Pop Party, and a small
@@ -338,8 +338,9 @@ Until its **Level** is set, any speaker is sent a quarter of the level, 12 dB
 less: a quarter of full level where its own volume is the knob's **VOLUME**,
 a quarter of the jack's where it keeps its own. It is a loudspeaker, and what
 suits earphones at a low **VOLUME** fills a room from one. The headset is sent
-the jack's level. Each one's **Level** raises or lowers that, for that device
-alone: [Its level](#its-level).
+the jack's loudness at the **VOLUME** alone. Each one's **Level** raises or lowers that, for that device
+alone: [Its level](#its-level). The jack's own level, for wired earphones
+(**Audio** on the configuration page), changes neither.
 
 When such a speaker connects, its audio waits until it has turned to the
 knob's **VOLUME** — under a second for most, up to five for one slow to bring

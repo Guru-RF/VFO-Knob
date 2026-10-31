@@ -436,6 +436,25 @@ def access(k, b):
     check(st == 200, f"the login it set works: {st}")
 
 
+def screen_and_jack(k, b):
+    """Audio's jack level and the screen's brightness (GitHub #12, #14):
+    shown as the knob has them, saved with Save, and a level that is not one
+    of the steps not taken."""
+    jack, bright = b.js("$('jack').value"), b.js("$('bright').value")
+    check(jack == "0" and bright == "80", f"the jack at 0 dB and the screen at 80 % until set: {jack!r}, {bright!r}")
+    check(b.js("[...$('jack').options].map(o=>o.value).join(' ')") == "0 3 6 9 12", "the jack's steps: 0 to +12 dB, in threes")
+    b.js("$('jack').value='6';$('bright').value='40'")
+    msg = save(b)
+    st, c = k.api("/api/config")
+    check(msg and msg.startswith("Saved") and c.get("jack") == 6 and c.get("bright") == 40,
+          f"saved: the jack at +6 dB, the screen at 40 % ({msg!r}, {c.get('jack')!r}, {c.get('bright')!r})")
+    st, _ = k.api("/api/config", {"jack": "7", "bright": "3"})
+    st, c = k.api("/api/config")
+    check(c.get("jack") == 6 and c.get("bright") == 10,
+          f"+7 dB not a step, so the jack stays; 3 % up to the least, 10 ({c.get('jack')!r}, {c.get('bright')!r})")
+    k.api("/api/config", {"jack": "0", "bright": "80"})
+
+
 def case_config():
     m1 = Mock("--name", "MOCK One")
     m2 = Mock("--prefix", "/OWRX/", "--fork", "upstream", "--name", "MOCK Two | Somewhere far")
@@ -449,6 +468,7 @@ def case_config():
         check(b.go("/config", "typeof RIGS!=='undefined'&&RIGS&&RIGS.length===1"), "the configuration page, one receiver")
         check(b.text("#rtitle") == "OpenWebRX receivers", f"its title: {b.text('#rtitle')!r}")
         access(k, b)
+        screen_and_jack(k, b)
         check(b.js("!$('owrxnote').hidden&&$('rlistnote').hidden&&$('ubernote').hidden"),
               "the receivers' note, not the radios' one")
         check(b.js("!document.querySelector('#rlist input[data-k=port]')&&!document.querySelector('#rlist input[data-k=pass]')"),

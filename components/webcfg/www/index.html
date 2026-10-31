@@ -545,7 +545,16 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
     <div><label>Volume (0&ndash;100)</label><input id="vol" inputmode="numeric"></div>
     <div id="microw"><label>Mic gain, the knob's (0&ndash;200)</label><input id="mic" inputmode="numeric"></div>
     <div id="michrow"><label>Mic gain, a headset's (0&ndash;200)</label><input id="mich" inputmode="numeric"></div>
+    <div><label>The jack's level, above the volume</label>
+         <select id="jack"><option value="0">0 dB</option><option value="3">+3 dB</option>
+           <option value="6">+6 dB</option><option value="9">+9 dB</option>
+           <option value="12">+12 dB</option></select></div>
   </div>
+  <p class="note">The jack's level is for wired earphones or a headset too quiet
+     with the volume at 100: the jack is a line output. Above 0 dB a loud
+     passage is turned down rather than clipped, and the jack plays 10 ms later
+     for it, 15 on SVXConnect and the Telephone. A Bluetooth headset or speaker
+     has a level of its own, above.</p>
   <p class="note" id="micnote">Volume and mic gain take effect immediately. The knob's own
      microphone and a Bluetooth headset's each have their gain: the dial
      turns the one in use.</p>
@@ -556,6 +565,8 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
          <input id="dim" inputmode="numeric"></div>
     <div><label>Go dark after (minutes, 0 = never)</label>
          <input id="blank" inputmode="numeric"></div>
+    <div><label>Brightness (10&ndash;100 %)</label>
+         <input id="bright" inputmode="numeric"></div>
   </div>
   <p class="note" id="dimnote">Turning the knob, touching the screen or
      transmitting all count as use. Dimming leaves the frequency readable;
@@ -564,6 +575,8 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      screen or a call, from its first ring to its end, all count as use: a
      call ringing in lights a screen that had dimmed or gone dark. Dimming
      leaves the screen readable; going dark turns the backlight off.</p>
+  <p class="note">The brightness is the screen's while it is lit, 80 % until
+     it is set, and is seen at once on <b>Save</b>. Dimmed, it stays dimmer.</p>
 </section>
 
 <section>
@@ -798,6 +811,7 @@ async function load(){
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('mich').value=c.mich??100;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
   $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||''; OTAH=+c.otah||0;
+  $('jack').value=String(c.jack??0); $('bright').value=c.bright??80;
   FWROOT=c.fwroot||''; RADIO=c.radio||'aethersdr'; radios();
   /* The address this browser reaches the knob from. Over the cable that is the
      USB link's own 10.55.42.2 -- found automatically there, and unreachable
@@ -1848,7 +1862,7 @@ $('save').onclick=async()=>{
   const b=new URLSearchParams();
   /* With a list of radios the one in use is saved with the list, below; the
      kiwi firmware's receivers are the web SDRs' list. */
-  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','user','otah','dim','blank'])
+  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','jack','user','otah','dim','blank','bright'])
     b.append(k,$(k).value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);

@@ -324,7 +324,7 @@ static esp_err_t config_get(httpd_req_t *r)
 
     /* Every string as JSON: an SSID may hold a quote or a backslash, and one
      * unescaped made the page unable to read its own settings. */
-    static EXT_RAM_BSS_ATTR char buf[1280], host[130], ssid[68], user[50], ruser[68],
+    static EXT_RAM_BSS_ATTR char buf[1536], host[130], ssid[68], user[50], ruser[68],
                                  base[258], root[258];  /* one handler at a time */
     json_esc(c->radio_host, host, sizeof host);
     json_esc(c->ssid, ssid, sizeof ssid);
@@ -337,6 +337,7 @@ static esp_err_t config_get(httpd_req_t *r)
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"mich\":%u,"
+             "\"jack\":%u,\"bright\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"pwforce\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
              "\"radio\":\"%s\",\"fwbase\":\"%s\",\"fwroot\":\"%s\","
              "\"ruser\":\"%s\",\"rpass\":%s,\"link\":\"%s\","
@@ -344,6 +345,7 @@ static esp_err_t config_get(httpd_req_t *r)
              host, (unsigned)c->radio_port, ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              (unsigned)net_prov_mic_gain_headset(),
+             (unsigned)net_prov_jack_db(), (unsigned)net_prov_brightness(),
              user,
              net_prov_web_is_default() ? "true" : "false",
              pw_forced(r) ? "true" : "false",
@@ -470,6 +472,10 @@ static esp_err_t config_post(httpd_req_t *r)
             ui_dim_set_minutes(net_prov_dim_min(), net_prov_blank_min());
         }
     }
+    if (field_num(body, "bright", &v)) {
+        net_prov_save_brightness((uint8_t)clampl(v, NET_PROV_BRIGHT_MIN, 100));
+        ui_set_brightness(net_prov_brightness());
+    }
     if (field_num(body, "otah", &v)) {
         net_prov_save_ota_hours((uint16_t)clampl(v, 0, 720));
         ota_set_interval(net_prov_ota_hours());
@@ -493,6 +499,10 @@ static esp_err_t config_post(httpd_req_t *r)
     ui_set_levels(vol, live);     /* audio is the one thing that applies live */
     audio_out_set_volume(vol);    /* directly too: with no display, no UI task */
     audio_in_set_gain(live);
+    if (field_num(body, "jack", &v)) {
+        net_prov_save_jack_db((uint8_t)clampl(v, 0, NET_PROV_JACK_DB_MAX));
+        audio_out_set_jack_level(net_prov_jack_db());
+    }
 
     ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u",
              cfg.radio_host, (unsigned)cfg.radio_port, cfg.ssid,

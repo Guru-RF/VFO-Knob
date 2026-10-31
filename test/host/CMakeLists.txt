@@ -158,6 +158,17 @@ target_link_libraries(test_bt_level PRIVATE bt_level m)
 target_compile_options(test_bt_level PRIVATE -Wall -Wextra)
 add_test(NAME test_bt_level COMMAND test_bt_level)
 
+# The jack's level (components/audio/jack_level.c): pure C -- its steps and
+# gains, the block it holds back, and a loud passage turned down ahead of it
+# rather than clipped, both ears alike.
+add_library(jack_level STATIC ${CMAKE_CURRENT_SOURCE_DIR}/../../components/audio/jack_level.c)
+target_include_directories(jack_level PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../components/audio)
+target_compile_options(jack_level PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(test_jack_level src/test_jack_level.c)
+target_link_libraries(test_jack_level PRIVATE jack_level m)
+target_compile_options(test_jack_level PRIVATE -Wall -Wextra)
+add_test(NAME test_jack_level COMMAND test_jack_level)
+
 # KiwiSDR's protocol, the plain-C part (components/kiwi_proto/kiwi_proto.c).
 set(KIWI ${CMAKE_CURRENT_SOURCE_DIR}/../../components/kiwi_proto)
 add_library(kiwi_proto STATIC ${KIWI}/kiwi_proto.c)

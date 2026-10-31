@@ -124,6 +124,18 @@ uint16_t net_prov_dim_min(void);
 uint16_t net_prov_blank_min(void);
 void     net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes);
 
+/* The screen's brightness while it is lit, percent: NET_PROV_BRIGHT_MIN to
+ * 100, 80 until one is set (ui_set_brightness). Kept on every firmware. */
+#define NET_PROV_BRIGHT_MIN 10
+uint8_t  net_prov_brightness(void);
+void     net_prov_save_brightness(uint8_t percent);
+
+/* The jack's level above the VOLUME, dB: 0 to NET_PROV_JACK_DB_MAX in steps
+ * of 3 (audio_out_set_jack_level); anything else is not saved. */
+#define NET_PROV_JACK_DB_MAX 12
+uint8_t  net_prov_jack_db(void);
+void     net_prov_save_jack_db(uint8_t db);
+
 /* Boot-loop guard. net_prov_boot_count() is incremented on every boot and
  * cleared once the device has been up long enough to be considered healthy;
  * call net_prov_boot_ok() from a timer for that. Three rapid boots in a row

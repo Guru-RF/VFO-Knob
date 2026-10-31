@@ -59,6 +59,16 @@ bool audio_out_feed_pcm16(const int16_t *pcm, size_t frames, uint8_t channels);
 /* 0..100. Applied in the playback task, not on the network path. */
 void audio_out_set_volume(uint8_t vol);
 
+/* The jack's level on top of the VOLUME, for a wired headset (jack_level.h):
+ * 0 to 12 dB in steps of 3, anything else 0 dB. Above 0 dB the jack plays
+ * JACK_AHEAD frames later, turned down ahead of a loud passage rather than
+ * clipped. A Bluetooth device's audio is the tap's, before it: not touched. */
+void audio_out_set_jack_level(uint8_t db);
+
+/* What the jack's level holds back now, ms: 0 at 0 dB. For the telephone's
+ * echo hold, which reckons when the far end is heard. */
+uint32_t audio_out_jack_delay_ms(void);
+
 /* For a stream with ends -- an SvxLink over. Kick: play what is buffered now,
  * without waiting for the pre-roll, so the tail of a short over is heard
  * rather than left for the start of the next. Flush: drop everything

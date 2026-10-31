@@ -6222,7 +6222,7 @@ bool    ui_take_mute_tap(void)     { bool v = s_mute_tap;    s_mute_tap = false;
  * transmit. Dimming rather than blanking: the frequency stays readable across
  * the room, which is the whole point of the thing, while an OLED-ish panel
  * left at full brightness for days is asking for trouble. */
-#define DIM_FULL  200
+#define DIM_FULL  200      /* until the page's brightness is set: 80 % */
 #define DIM_LOW    18
 #define DIM_BLANK   0
 
@@ -6236,14 +6236,34 @@ static uint32_t s_dim_after_ms   =  5u * 60u * 1000u;
 static uint32_t s_blank_after_ms = 10u * 60u * 1000u;
 static uint32_t s_last_use_ms;
 static uint8_t  s_level = LVL_FULL;
+static volatile uint8_t s_full = DIM_FULL;      /* lit: the page's brightness */
+
+/* Dimmed stays dimmer than lit, however low the brightness is set. */
+static uint8_t duty_of(uint8_t level)
+{
+    const uint8_t full = s_full;
+    return level == LVL_BLANK ? DIM_BLANK
+         : level == LVL_DIM   ? (full < DIM_LOW ? full : DIM_LOW)
+                              : full;
+}
 
 static void set_level(uint8_t level)
 {
     if (level == s_level) return;
     s_level = level;
-    panel_set_brightness(level == LVL_BLANK ? DIM_BLANK
-                       : level == LVL_DIM   ? DIM_LOW
-                                            : DIM_FULL);
+    panel_set_brightness(duty_of(level));
+}
+
+void ui_set_brightness(uint8_t percent)
+{
+    if (percent > 100) percent = 100;
+    s_full = (uint8_t)((percent * 255u + 50u) / 100u);
+    /* Reachable from the configuration page, as ui_note_activity is: lit at
+     * once at the new brightness, for its owner to see. Before the display
+     * exists, kept for when it does. */
+    if (!s_scr) return;
+    ui_note_activity();
+    panel_set_brightness(duty_of(LVL_FULL));
 }
 
 uint32_t ui_last_use(void) { return s_last_use_ms; }
