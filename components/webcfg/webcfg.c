@@ -22,6 +22,7 @@
 
 #include "audio_in.h"
 #include "audio_out.h"
+#include "beam.h"
 #include "board.h"
 #include "bt_level.h"
 #include "bt_link.h"
@@ -337,7 +338,7 @@ static esp_err_t config_get(httpd_req_t *r)
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"mich\":%u,"
-             "\"jack\":%u,\"bright\":%u,"
+             "\"jack\":%u,\"bright\":%u,\"turn\":%u,\"beamn\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"pwforce\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
              "\"radio\":\"%s\",\"fwbase\":\"%s\",\"fwroot\":\"%s\","
              "\"ruser\":\"%s\",\"rpass\":%s,\"link\":\"%s\","
@@ -346,6 +347,7 @@ static esp_err_t config_get(httpd_req_t *r)
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              (unsigned)net_prov_mic_gain_headset(),
              (unsigned)net_prov_jack_db(), (unsigned)net_prov_brightness(),
+             (unsigned)net_prov_turned(), (unsigned)net_prov_beam_dirs(),
              user,
              net_prov_web_is_default() ? "true" : "false",
              pw_forced(r) ? "true" : "false",
@@ -476,6 +478,22 @@ static esp_err_t config_post(httpd_req_t *r)
         net_prov_save_brightness((uint8_t)clampl(v, NET_PROV_BRIGHT_MIN, 100));
         ui_set_brightness(net_prov_brightness());
     }
+    /* Sent with every Save: the face turned, and drawn again whole, only
+     * when it changes. */
+    if (field_num(body, "turn", &v) && (v == 0 || v == 1) && v != net_prov_turned()) {
+        net_prov_save_turned(v);
+        ui_set_turned(net_prov_turned());
+    }
+#if VFO_RADIO_EPIBEAM
+    /* EpiBeam's array, 4 directions or 8: the beam left on its heading where
+     * the other has it, else on the one before it (beam_convert). */
+    if (field_num(body, "beamn", &v) && beam_dirs_ok(v) && v != net_prov_beam_dirs()) {
+        const uint8_t d = beam_convert(net_prov_beam_dirs(), net_prov_beam_dir(), (uint8_t)v);
+        net_prov_save_beam_dirs((uint8_t)v);
+        net_prov_save_beam_dir(d);
+        ui_beam_set(net_prov_beam_dirs(), net_prov_beam_dir());
+    }
+#endif
     if (field_num(body, "otah", &v)) {
         net_prov_save_ota_hours((uint16_t)clampl(v, 0, 720));
         ota_set_interval(net_prov_ota_hours());

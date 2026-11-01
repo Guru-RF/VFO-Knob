@@ -69,7 +69,10 @@ fi
 # update, and no new knob could ever choose it.
 NAMES='{"aethersdr": "AetherSDR", "icom": "Icom", "openx6x00": "OpenX6X00", "multiflex": "FlexRadio", "ubersdr": "UberSDR",
         "kiwi": "Kiwi888", "owrx": "OpenWebRX", "websdr": "WebSDR", "svxconnect": "SVXConnect",
-        "phone": "Telephone", "setup": "Setup"}'
+        "phone": "Telephone", "epibeam": "EpiBeam", "setup": "Setup"}'
+# ...and those of them stamped BETA on the setup firmware's dial (its
+# index.json entry's "beta": true), until they have been tried enough.
+BETA='["epibeam"]'
 if [ "$RADIO" != companion ] &&
    ! python3 -c 'import json, sys; sys.exit(sys.argv[2] not in json.loads(sys.argv[1]))' "$NAMES" "$RADIO"; then
     echo "$RADIO has no name in NAMES (tools/release.sh): the setup firmware would never offer it" >&2
@@ -441,11 +444,14 @@ fi
 # firmware offers. Read from the server, not built in, so a setup firmware
 # made before a radio's first release still offers it. Rebuilt from the
 # manifests on the branch; a new radio gets its name in NAMES, at the top.
-python3 - "$TMP/wt/firmware" "$NAMES" <<'PY'
+python3 - "$TMP/wt/firmware" "$NAMES" "$BETA" <<'PY'
 import glob, json, os, re, sys
 root = sys.argv[1]
 # NAMES above: "firmwares" holds these and no others, in its order.
 NAMES = json.loads(sys.argv[2])
+BETA = set(json.loads(sys.argv[3]))
+if not BETA <= set(NAMES):
+    sys.exit(f"BETA names {sorted(BETA - set(NAMES))}, which NAMES has not")
 order = list(NAMES)
 index = {"firmwares": []}
 for m in sorted(glob.glob(os.path.join(root, "*", "manifest.json"))):
@@ -456,7 +462,8 @@ for m in sorted(glob.glob(os.path.join(root, "*", "manifest.json"))):
         # firmware puts it on the SD card, and tools/knob-card.py too.
         index["companion"] = {k: man[k] for k in ("version", "file", "sha256", "size", "app_sha256")}
     elif d in NAMES:
-        index["firmwares"].append({"radio": d, "name": NAMES[d], "version": man["version"]})
+        index["firmwares"].append({"radio": d, "name": NAMES[d], "version": man["version"],
+                                   **({"beta": True} if d in BETA else {})})
     else:
         print(f"WARNING: firmware/{d}/ has no name in NAMES (tools/release.sh): left out of the "
               f"setup firmware's list", file=sys.stderr)

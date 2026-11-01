@@ -1,0 +1,10 @@
+# The EpiBeam firmware: an array's beam steered from the dial -- a 4-square,
+# or 8 directions -- through EpiCenter, the station's brain (VFO_RADIO=epibeam).
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: EpiCenter is on
+# the station's network, and the USB link has no route to it. Leaving TinyUSB
+# out also keeps the serial console on the cable.
+
+# AES in software, as every firmware: the engine's DMA takes its bounce buffers
+# from internal RAM.
+CONFIG_MBEDTLS_HARDWARE_AES=n

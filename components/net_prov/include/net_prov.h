@@ -130,6 +130,21 @@ void     net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes);
 uint8_t  net_prov_brightness(void);
 void     net_prov_save_brightness(uint8_t percent);
 
+/* The knob mounted with its USB cable at the bottom (GitHub #15): the screen
+ * and its touch turned 180 degrees from the way it comes (ui_set_turned).
+ * Kept on every firmware, as the mount is the same whichever runs. */
+bool     net_prov_turned(void);
+void     net_prov_save_turned(bool turned);
+
+/* The EpiBeam firmware's array: its directions, 4 (a 4-square's N, E, S, W)
+ * or 8, 4 until set; and the one the beam was left on, kept for the next
+ * start -- 0 is N, on round clockwise (components/vfo_core beam.h). Fewer
+ * directions put a beam past them back on N. */
+uint8_t  net_prov_beam_dirs(void);
+void     net_prov_save_beam_dirs(uint8_t n);
+uint8_t  net_prov_beam_dir(void);
+void     net_prov_save_beam_dir(uint8_t dir);
+
 /* The jack's level above the VOLUME, dB: 0 to NET_PROV_JACK_DB_MAX in steps
  * of 3 (audio_out_set_jack_level); anything else is not saved. */
 #define NET_PROV_JACK_DB_MAX 12

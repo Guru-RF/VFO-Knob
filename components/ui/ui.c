@@ -6,6 +6,7 @@
 #include "hal_touch.h"
 #include "panel.h"
 #include "net_prov.h"
+#include "beam.h"
 
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -257,11 +258,11 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define C_GREEN     lv_color_hex(0x22FF2F)   /* its meter's green          */
 #define PWR_HEX     0x22FF2F
 #define SDR_HEX     0x5CA8FF                 /* its links' blue            */
-#elif SVX_LOOK || VFO_RADIO_SETUP
+#elif SVX_LOOK || VFO_RADIO_SETUP || VFO_RADIO_EPIBEAM
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
  * clients use: green connected, amber (re)connecting, red transmitting.
- * The setup firmware wears it too: the same ink and gold are the RF.Guru
+ * The setup firmware and EpiBeam wear it too: the same ink and gold are the RF.Guru
  * site's, and its own WiFi page's (webcfg/www/portal.html). */
 #define C_BG        lv_color_hex(0x08090C)   /* ink-950                 */
 #define C_BG1       lv_color_hex(0x13161D)   /* ink-800: the PTT slab   */
@@ -340,6 +341,13 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define PHONE_FACE 1
 #else
 #define PHONE_FACE 0
+#endif
+/* The epibeam firmware's: a compass for an array's beam, over a face it
+ * leaves unseen (see "EpiBeam" below). */
+#if VFO_RADIO_EPIBEAM
+#define EPI_FACE 1
+#else
+#define EPI_FACE 0
 #endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
@@ -433,7 +441,13 @@ LV_FONT_DECLARE(font_svx_icons_24);
  * ticks at the top of the telephone's arc above it, the S-units under it
  * and the setup firmware's title (knob_batt_show()). */
 #define KNOB_BATT_X (CX - BATT_W / 2)
+#if EPI_FACE
+/* ...on EpiBeam inside its ring of directions, its ink from y 67 to 79, over
+ * the caption: on the ring it sat on N, gold when N is the beam. */
+#define KNOB_BATT_Y 63
+#else
 #define KNOB_BATT_Y 37
+#endif
 
 #define N_DIG 8
 static const int DIG_STEP[N_DIG] = {
@@ -936,7 +950,7 @@ EXT_RAM_BSS_ATTR static vu_band_t s_rx_band;
 static lv_obj_t *s_rx_zone[RX_ZONES];
 static int16_t   s_rx_val[RX_ZONES];   /* last value written, to skip redraws */
 #endif
-static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint;
+static lv_obj_t *s_edit_panel, *s_edit_title, *s_edit_value, *s_edit_hint, *s_edit_stamp;
 
 /* Tap the meter arc to see where the knob actually is on the network. The one
  * question a headless box cannot answer for itself, and the display is the
@@ -959,7 +973,7 @@ static volatile uint32_t s_klock_nudge_at;
 #define KLOCK_BTN_W  204              /* the S-meter's row whole: AGC, S-units, gain */
 #define KLOCK_BTN_H  44
 #define KLOCK_BTN_Y  62               /* under the knob's battery, over the card */
-#define KLOCK_BADGE_Y 35              /* the knob's battery's row, its ink level with it */
+#define KLOCK_BADGE_Y (KNOB_BATT_Y - 2) /* the knob's battery's row, its ink level with it */
 #define KLOCK_ARM_MS 700
 #define KLOCK_NUDGE_MS 800
 #endif
@@ -1032,6 +1046,7 @@ static int menu_build(const ui_state_t *st)
 /* The client's question (ED_CHOICE), and its answer until taken. The texts
  * in PSRAM, beside s_last. */
 EXT_RAM_BSS_ATTR static char s_ch_title[UI_CHOICES][12], s_ch_name[UI_CHOICES][24];
+EXT_RAM_BSS_ATTR static bool s_ch_beta[UI_CHOICES];
 static volatile int s_ch_answer = -1;
 /* The last state ui_update() saw, so the editors can open on the current
  * value. The touch callback runs on the LVGL task and cannot ask the client.
@@ -1389,9 +1404,15 @@ static lv_display_t *s_disp;
 /* The panel is mounted upside down relative to the USB-C port: with the cable
  * at the top, the image needs 180 degrees. Software rotation, because this
  * panel honours MADCTL MX but not MY so the controller cannot do a full turn.
- * Applied through esp_lvgl_port, which rotates TOUCH with it. */
+ * Applied through esp_lvgl_port, which rotates TOUCH with it. A mount with
+ * the cable at the bottom (ui_set_turned, GitHub #15) needs none, and the
+ * port then copies no flush to turn it. */
 #define UI_ROT_DEFAULT 2               /* 2 = 180 degrees */
 static uint8_t s_rot = UI_ROT_DEFAULT;
+static const lv_display_rotation_t ROT[4] = {
+    LV_DISPLAY_ROTATION_0,   LV_DISPLAY_ROTATION_90,
+    LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270,
+};
 
 /* Green below S7, amber approaching S9, red at S9 and above.
  *
@@ -1829,6 +1850,8 @@ static void edit_render(void)
     default: return;
     }
     lv_label_set_text(s_edit_title, title);
+    if (s_edit == ED_CHOICE && s_ch_beta[s_edit_idx]) lv_obj_remove_flag(s_edit_stamp, LV_OBJ_FLAG_HIDDEN);
+    else                                              lv_obj_add_flag(s_edit_stamp, LV_OBJ_FLAG_HIDDEN);
     /* A station's name wants more room than a mode or a width: a wider panel
      * for the lists of names, the same one all through a list, and a smaller
      * font -- and a name too long even so steps down again, or is cut with
@@ -2297,6 +2320,10 @@ void ui_volume_turn(int32_t detents)
     if (detents) atomic_fetch_add(&s_vol_detents, (int)detents);
 }
 
+#if EPI_FACE
+static void beam_tick(void);
+#endif
+
 static void detents_cb(lv_timer_t *t)
 {
     (void)t;
@@ -2304,6 +2331,9 @@ static void detents_cb(lv_timer_t *t)
     if (v) volume_turn_now(v);
     const int e = atomic_exchange(&s_edit_detents, 0);
     if (e) edit_rotate_now(e);
+#if EPI_FACE
+    beam_tick();                        /* the beam's detents, and its settling */
+#endif
 }
 
 static void edit_rotate_now(int32_t detents)
@@ -2437,6 +2467,11 @@ static void edit_rotate_now(int32_t detents)
 
 void ui_ask_choice(const char titles[][12], const char names[][24], uint8_t n, uint8_t def)
 {
+    ui_ask_choice_beta(titles, names, NULL, n, def);
+}
+
+void ui_ask_choice_beta(const char titles[][12], const char names[][24], const bool beta[], uint8_t n, uint8_t def)
+{
     if (!lvgl_port_lock(50)) return;
     if (!n || !titles || !names) {
         if (s_edit == ED_CHOICE) edit_close();
@@ -2445,6 +2480,7 @@ void ui_ask_choice(const char titles[][12], const char names[][24], uint8_t n, u
         for (uint8_t i = 0; i < n; i++) {
             strlcpy(s_ch_title[i], titles[i], sizeof s_ch_title[i]);
             strlcpy(s_ch_name[i], names[i], sizeof s_ch_name[i]);
+            s_ch_beta[i] = beta && beta[i];
         }
         /* The question comes first: over any editor, and over a warning
          * that would otherwise sit on top of it. */
@@ -2913,6 +2949,196 @@ static void spot_lines(const ui_spot_t *sp, char *l1, size_t n1, char *l2, size_
 }
 
 /* A tap at p, the finger down for `held` ms. */
+#if EPI_FACE
+/* --- EpiBeam: an array's beam, on a compass --------------------------------
+ * The whole glass is the compass: the array's directions round its edge, 4
+ * or 8 of them (the page's Array), the one the beam is on in gold, and that
+ * one again in the middle, big, with its heading. The knob steps the beam a
+ * direction a detent, round and round; a tap on one goes straight to it.
+ * Once it has rested BEAM_SETTLE_MS that is the direction taken
+ * (ui_take_beam): the motor counts it out, N one, on round clockwise, for a
+ * hand that is not looking (app_main.c), and it goes to EpiCenter, the
+ * station's brain, once the knob has a link to it -- not yet: the line under
+ * the heading says so. Under that the gear: a tap, the address card, for the
+ * page; held PICKER_HOLD_MS, the firmware picker.
+ *
+ * Built over the radio's face, which goes on under it unseen: the card, the
+ * warnings, the questions and the lock are that face's, and come up over
+ * this. Not clickable, so every touch is the screen's own, as on any face
+ * (touch_cb, tap). */
+#define BEAM_SETTLE_MS 400
+#define BEAM_R_OUT     178                 /* the ring of directions, at the glass's edge */
+#define BEAM_RING_W    46
+#define BEAM_R_LABEL   (BEAM_R_OUT - BEAM_RING_W / 2)
+#define BEAM_R_TAP     (BEAM_R_OUT - BEAM_RING_W - 8)  /* a tap nearer the middle: no direction */
+#define BEAM_GAP       2                   /* degrees left dark either side of one */
+#define BEAM_GEAR_Y    (CY + 84)
+#define BEAM_GEAR_R    32                  /* px from the gear's middle a tap may land */
+
+static lv_obj_t   *s_beam, *s_beam_arc[BEAM_MAX], *s_beam_lbl[BEAM_MAX];
+static lv_obj_t   *s_beam_cap, *s_beam_big, *s_beam_deg, *s_beam_link, *s_beam_gear;
+static uint8_t     s_beam_n = 4, s_beam_dir;
+static uint32_t    s_beam_moved;           /* the last move, by a turn or a tap: 0, settled */
+static atomic_int  s_beam_detents;         /* from the knob's task, applied in detents_cb */
+static atomic_int  s_beam_taken = -1;      /* settled on, for app_main: -1, nothing new */
+static atomic_bool s_beam_stirred;         /* moved since app_main last looked */
+
+static void set_text(lv_obj_t *o, const char *s);
+static void set_text_color(lv_obj_t *o, lv_color_t c);
+static void vis(lv_obj_t *o, bool on);
+
+static void beam_draw(void)
+{
+    const uint8_t n = s_beam_n;
+    const int span = 360 / n;
+    for (uint8_t i = 0; i < BEAM_MAX; i++) {
+        vis(s_beam_arc[i], i < n);
+        vis(s_beam_lbl[i], i < n);
+        if (i >= n) continue;
+        const bool on = i == s_beam_dir;
+        const int deg = beam_deg(n, i);
+        /* The arcs turned to start at north (rotation 270): each spans its
+         * half-step either side, a sliver dark between two. */
+        lv_arc_set_bg_angles(s_beam_arc[i], (deg - span / 2 + BEAM_GAP + 360) % 360,
+                             (deg + span / 2 - BEAM_GAP) % 360);
+        lv_obj_set_style_arc_color(s_beam_arc[i], on ? C_ACCENT : C_SUBTLE, LV_PART_MAIN);
+        set_text(s_beam_lbl[i], beam_name(n, i));
+        set_text_color(s_beam_lbl[i], on ? C_BG : C_LABEL);
+        const float a = (float)deg * (3.14159265f / 180.0f);
+        lv_obj_align(s_beam_lbl[i], LV_ALIGN_CENTER, (int32_t)lroundf(BEAM_R_LABEL * sinf(a)),
+                     (int32_t)lroundf(-BEAM_R_LABEL * cosf(a)));
+    }
+    set_text(s_beam_cap, n == 8 ? "8 DIRECTIONS" : "4-SQUARE");
+    set_text(s_beam_big, beam_name(n, s_beam_dir));
+    char d[8];
+    snprintf(d, sizeof d, "%u\xC2\xB0", (unsigned)beam_deg(n, s_beam_dir));
+    set_text(s_beam_deg, d);
+}
+
+static lv_obj_t *beam_label(const lv_font_t *f, lv_color_t c, int y)
+{
+    lv_obj_t *l = lv_label_create(s_beam);
+    lv_obj_set_style_text_font(l, f, 0);
+    lv_obj_set_style_text_color(l, c, 0);
+    lv_label_set_text(l, "");
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, y - CY);
+    return l;
+}
+
+static void beam_build(void)
+{
+    s_beam = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_beam);
+    lv_obj_set_size(s_beam, 360, 360);
+    lv_obj_set_pos(s_beam, 0, 0);
+    lv_obj_set_style_bg_color(s_beam, C_BG, 0);
+    lv_obj_set_style_bg_opa(s_beam, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_beam, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_beam, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (int i = 0; i < BEAM_MAX; i++) {
+        lv_obj_t *a = lv_arc_create(s_beam);
+        lv_obj_set_size(a, 2 * BEAM_R_OUT, 2 * BEAM_R_OUT);
+        lv_obj_center(a);
+        lv_arc_set_rotation(a, 270);
+        lv_obj_remove_style(a, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(a, BEAM_RING_W, LV_PART_MAIN);
+        lv_obj_set_style_arc_rounded(a, false, LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(a, LV_OPA_TRANSP, LV_PART_INDICATOR);
+        s_beam_arc[i] = a;
+        s_beam_lbl[i] = beam_label(&lv_font_montserrat_20, C_LABEL, CY);
+    }
+
+    s_beam_cap  = beam_label(&lv_font_montserrat_14, C_LABEL, CY - 76);
+    s_beam_big  = beam_label(&lv_font_montserrat_48, C_TEXT, CY - 30);
+    s_beam_deg  = beam_label(&lv_font_montserrat_20, C_TEXT2, CY + 14);
+    s_beam_link = beam_label(&lv_font_montserrat_14, C_LABEL, CY + 44);
+
+    lv_obj_t *g = lv_obj_create(s_beam);
+    lv_obj_remove_style_all(g);
+    lv_obj_set_size(g, 52, 52);
+    lv_obj_align(g, LV_ALIGN_CENTER, 0, BEAM_GEAR_Y - CY);
+    lv_obj_set_style_radius(g, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g, C_BG1, 0);
+    lv_obj_set_style_bg_opa(g, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(g, C_SUBTLE, 0);
+    lv_obj_set_style_border_width(g, 2, 0);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_SCROLLABLE);
+    s_beam_gear = lv_label_create(g);
+    lv_obj_set_style_text_font(s_beam_gear, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_beam_gear, C_TEXT2, 0);
+    lv_label_set_text(s_beam_gear, LV_SYMBOL_SETTINGS);
+    lv_obj_center(s_beam_gear);
+
+    beam_draw();
+}
+
+static void beam_update(const ui_state_t *st)
+{
+    set_text(s_beam_link, st->link_ok ? "EpiCenter" : "EpiCenter: not connected");
+    set_text_color(s_beam_link, st->link_ok ? C_GREEN : C_LABEL);
+}
+
+/* A direction, chosen: drawn at once, taken once the knob has rested. */
+static void beam_go(uint8_t dir)
+{
+    s_beam_dir   = dir;
+    s_beam_moved = lv_tick_get() | 1;
+    atomic_store(&s_beam_stirred, true);
+    beam_draw();
+}
+
+static void beam_turn_now(int32_t detents) { beam_go(beam_step(s_beam_n, s_beam_dir, detents)); }
+
+/* Every 15 ms, on the LVGL task (detents_cb): the knob's detents, and a
+ * beam rested long enough taken. */
+static void beam_tick(void)
+{
+    const int d = atomic_exchange(&s_beam_detents, 0);
+    if (d) beam_turn_now(d);
+    if (!s_beam_moved || lv_tick_elaps(s_beam_moved) < BEAM_SETTLE_MS) return;
+    s_beam_moved = 0;
+    atomic_store(&s_beam_taken, s_beam_dir);
+}
+
+static bool beam_gear_at(lv_point_t p)
+{
+    const int32_t dx = p.x - CX, dy = p.y - BEAM_GEAR_Y;
+    return dx * dx + dy * dy <= BEAM_GEAR_R * BEAM_GEAR_R;
+}
+
+/* A tap out on the ring: that direction. Nearer the middle, nothing. */
+static void beam_tap(lv_point_t p)
+{
+    const int32_t dx = p.x - CX, dy = p.y - CY;
+    if (dx * dx + dy * dy < BEAM_R_TAP * BEAM_R_TAP) return;
+    beam_go(beam_at(s_beam_n, dx, dy));
+}
+
+void ui_beam_set(uint8_t n_dirs, uint8_t dir)
+{
+    s_beam_n   = n_dirs == 8 ? 8 : 4;
+    s_beam_dir = dir < s_beam_n ? dir : 0;
+    if (!s_beam || !lvgl_port_lock(200)) return;
+    s_beam_moved = 0;
+    beam_draw();
+    lvgl_port_unlock();
+}
+
+void ui_beam_turn(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_beam_detents, (int)detents);
+}
+
+int  ui_take_beam(void)       { return atomic_exchange(&s_beam_taken, -1); }
+bool ui_take_beam_moved(void) { return atomic_exchange(&s_beam_stirred, false); }
+#else
+/* No gear; unused where the face has no lock either (setup). */
+__attribute__((unused)) static bool beam_gear_at(lv_point_t p) { (void)p; return false; }
+#endif /* EPI_FACE */
+
 static void tap(lv_point_t p, uint32_t held)
 {
     (void)held;
@@ -2947,6 +3173,19 @@ static void tap(lv_point_t p, uint32_t held)
         edit_close();
         return;
     }
+#if EPI_FACE
+    /* The gear: the address card, for the page -- locked too, as the card
+     * carries UNLOCK -- or, up already, away. */
+    if (beam_gear_at(p)) {
+        if (addresses_up()) {
+            netinfo_show(false);
+        } else {
+            netinfo_show(true);
+            s_card_shown = true;                 /* the click, as a held S-meter's */
+        }
+        return;
+    }
+#endif
 #if HAS_LOCK
     /* Locked: a client's question still takes its answer, nothing else. */
     if (s_knob_locked) { klock_nudge(); return; }
@@ -3047,6 +3286,10 @@ static void tap(lv_point_t p, uint32_t held)
         }
     }
 
+#if EPI_FACE
+    beam_tap(p);                                 /* a direction; elsewhere nothing */
+    return;
+#endif
 #if REFLECTOR_FACE
     /* The lock left of the talkgroup, the mute right of it: toggles, with or
      * without a link. */
@@ -3292,6 +3535,11 @@ static void gesture_cb(lv_event_t *e)
 #if HAS_LOCK
     if (s_knob_locked) { klock_nudge(); return; }
 #endif
+#if EPI_FACE
+    /* The compass has nothing a swipe away: the knob and a tap steer it. */
+    (void)dir;
+    return;
+#endif
     if (s_edit != ED_NONE || s_asking || s_last.tx || s_sv_open) return;
 #if PHONE_FACE
     /* The keypad: down brings it, up puts it away. From the left, the
@@ -3382,11 +3630,20 @@ static void touch_cb(lv_event_t *e)
     s_gestured   = false;
     s_ptt_armed  = false;
     s_press_ant  = false;
+#if EPI_FACE
+    /* The compass has no S-meter: its gear brings the card with a tap
+     * (tap), and held PICKER_HOLD_MS the firmware picker -- or the card
+     * itself, or the warning, held, as on any face. */
+    s_press_picker = beam_gear_at(p) ||
+                     (addresses_up() && (shown_at(s_netinfo, p) || shown_at(s_warn_panel, p)));
+    s_press_card   = false;
+#else
     /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS. */
     s_press_picker = addresses_up() &&
                      (p.y < 104 || shown_at(s_netinfo, p) || shown_at(s_warn_panel, p));
     /* Or, with them not up yet, on the S-meter: see NETINFO_HOLD_MS. */
     s_press_card = p.y < 104 && !s_press_picker && !aux_spot(p);
+#endif
 
     /* A question is up: this tap answers it and goes nowhere else. On the
      * panel is yes; anywhere else is no -- the operator was reaching for
@@ -3444,11 +3701,11 @@ static void touch_cb(lv_event_t *e)
             return;
         }
 #endif
-        if (shown_at(s_klock_btn, p) || s_edit == ED_CHOICE) {
+        if (shown_at(s_klock_btn, p) || s_edit == ED_CHOICE || (EPI_FACE && beam_gear_at(p))) {
             s_press_tap = true;                  /* see release_cb, tap() */
             return;
         }
-        s_press_card = p.y < 104 && !s_press_picker;
+        s_press_card = !EPI_FACE && p.y < 104 && !s_press_picker;
         if (!s_press_card && !s_press_picker) klock_nudge();
         return;
     }
@@ -3495,7 +3752,7 @@ static void touch_cb(lv_event_t *e)
     /* PTT keeps acting on the press: the whole slab, with a link, and not
      * while an editor is open, when a tap there accepts the edit. With no
      * link the slab would arm a transmitter we cannot reach. */
-    if (!RX_FACE && p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
+    if (!RX_FACE && !EPI_FACE && p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
         /* One tap, one toggle. A light touch can flicker -- press, release,
          * press within a single tap -- and on a toggle each extra press
          * undoes the one before: keyed and unkeyed in one tap, which reads as
@@ -4187,6 +4444,14 @@ static void build(void)
 #if PHONE_FACE
     phone_build();
 #endif
+#if EPI_FACE
+    /* The compass, over everything so far; under the card, the warning, the
+     * questions and the lock, made after it. The knob's own battery stays
+     * over it, at the top of the glass, as over any face. */
+    beam_build();
+    lv_obj_move_foreground(s_knob_batt);
+#endif
+
     /* Editor overlay: hidden until a field is tapped. */
     /* Network address card. Same treatment as the editor panel, and equally
      * not clickable -- the tap that dismisses it lands on the screen. Its
@@ -4271,6 +4536,21 @@ static void build(void)
     lv_obj_set_style_text_color(s_edit_hint, C_LABEL, 0);
     lv_obj_align(s_edit_hint, LV_ALIGN_BOTTOM_MID, 0, -2);
     lv_label_set_text(s_edit_hint, "turn to choose  -  tap to accept");
+
+    /* A firmware published as a beta, on the setup firmware's list
+     * (tools/release.sh): stamped so in the panel's corner, clear of the
+     * title. */
+    s_edit_stamp = lv_label_create(s_edit_panel);
+    lv_obj_set_style_text_font(s_edit_stamp, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_edit_stamp, C_DANGER, 0);
+    lv_obj_set_style_border_color(s_edit_stamp, C_DANGER, 0);
+    lv_obj_set_style_border_width(s_edit_stamp, 2, 0);
+    lv_obj_set_style_radius(s_edit_stamp, 4, 0);
+    lv_obj_set_style_pad_hor(s_edit_stamp, 6, 0);
+    lv_obj_set_style_pad_ver(s_edit_stamp, 1, 0);
+    lv_obj_align(s_edit_stamp, LV_ALIGN_TOP_RIGHT, -10, 2);
+    lv_label_set_text(s_edit_stamp, "BETA");
+    lv_obj_add_flag(s_edit_stamp, LV_OBJ_FLAG_HIDDEN);
 
     /* AetherSDR owns the band plan. When it refuses a key -- out of band, a
      * locked slice, TX disabled -- the protocol gives no reason, only a
@@ -4588,7 +4868,7 @@ esp_err_t ui_init(void)
      * watchdog reboots the device before the UI is ever drawn. It was benign
      * for a long time purely because the timing happened not to collide. */
     lvgl_port_lock(0);
-    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
+    lv_display_set_rotation(disp, ROT[s_rot]);
     lvgl_port_unlock();
     /* A face without touch, if touch did not come up. lvgl_port_add_touch()
      * asserts on a NULL handle rather than failing, and that abort during
@@ -5331,6 +5611,9 @@ void ui_update(const ui_state_t *st)
      * Not behind the SSTV viewer, which covers it. */
     if (!s_sv_open) knob_batt_show(st);
     klock_update(st);
+#if EPI_FACE
+    beam_update(st);
+#endif
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter -- nor,
      * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter.
@@ -6067,19 +6350,28 @@ void ui_update(const ui_state_t *st)
     lvgl_port_unlock();
 }
 
-void ui_cycle_rotation(void)
+static void rotate(void)
 {
-    static const lv_display_rotation_t R[4] = {
-        LV_DISPLAY_ROTATION_0,   LV_DISPLAY_ROTATION_90,
-        LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270,
-    };
-    if (!s_disp) return;
-    s_rot = (uint8_t)((s_rot + 1) & 3);
     if (lvgl_port_lock(200)) {
-        lv_display_set_rotation(s_disp, R[s_rot]);
+        lv_display_set_rotation(s_disp, ROT[s_rot]);
         lv_obj_invalidate(lv_screen_active());
         lvgl_port_unlock();
     }
+}
+
+void ui_cycle_rotation(void)
+{
+    if (!s_disp) return;
+    s_rot = (uint8_t)((s_rot + 1) & 3);
+    rotate();
+}
+
+void ui_set_turned(bool turned)
+{
+    s_rot = turned ? 0 : UI_ROT_DEFAULT;
+    /* From the configuration page too (its task at priority 3, under the
+     * LVGL lock's limit): turned at once, for its owner to see. */
+    if (s_disp) rotate();
 }
 
 uint8_t ui_rotation(void) { return s_rot; }

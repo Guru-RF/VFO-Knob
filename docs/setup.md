@@ -72,6 +72,12 @@ A name too long for the panel is shown in smaller type, so it fits.
 | **OpenWebRX** | OpenWebRX and OpenWebRX+ web receivers, receive only: up to four, by their addresses |
 | **WebSDR** | PA3FWM's WebSDR receivers (websdr.org: Twente and the others), receive only: up to four |
 | **Telephone** | a SIP telephone account: the knob is the handset |
+| **EpiBeam** | a phased array's beam switch, a 4-square or 8 directions, for EpiCenter: a beta |
+
+A firmware still in beta is stamped **BETA** in the panel's corner: it is
+published for those who want to try it, before it has been tried widely.
+
+![A firmware still in beta, stamped BETA](setup/20-beta.svg)
 
 The list comes from the update server each time, so a knob set up long after
 it was made still offers every firmware there is by then. The last entry is

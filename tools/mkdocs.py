@@ -192,7 +192,7 @@ def setup_screen(title, text, panel=""):
             + panel)
 
 
-def edit_panel(title, value, size, hint, colour, wide):
+def edit_panel(title, value, size, hint, colour, wide, beta=False):
     """The editor panel (ui.c, fit_text.h): EDIT_W x EDIT_H for a value, or
     EDIT_W_NAME wide for a list of names (`wide`), centred 6 px above the
     middle; inside its border and the theme's padding, the title at
@@ -200,7 +200,10 @@ def edit_panel(title, value, size, hint, colour, wide):
     the foot, and between them the value as fit_text() sets it -- in `size`,
     or a smaller step where that is too wide -- centred 4 px below the middle.
     Each line's baseline is where LVGL puts it, and in a browser the value is
-    as wide as Montserrat is on the knob, whatever font stands in for it."""
+    as wide as Montserrat is on the knob, whatever font stands in for it.
+    `beta`: the BETA stamp (ui.c s_edit_stamp), 14 px in the danger colour
+    in a 2 px box of it, 6 px and 1 px of padding, 10 px in from the content's
+    right and 2 px down."""
     pw = EDIT_W_NAME if wide else EDIT_W
     size, shown, w = fit(value, size, pw - 10)
     f, t, k = montserrat(size), montserrat(20), montserrat(14)
@@ -210,18 +213,26 @@ def edit_panel(title, value, size, hint, colour, wide):
     t_base = top + 2 + t.line_height - t.base_line                       # TOP_MID 0,2
     v_base = top + high // 2 - f.line_height // 2 + 4 + f.line_height - f.base_line   # CENTER 0,4
     h_base = top + high - 2 - k.base_line                                # BOTTOM_MID 0,-2
+    stamp = ""
+    if beta:
+        sw, sh = k.width("BETA") + 2 * 6 + 2 * 2, k.line_height + 2 * 1 + 2 * 2
+        x2 = 180 + pw // 2 - EDIT_PAD - 10                                  # TOP_RIGHT -10,2
+        x1, y1 = x2 - sw, top + 2
+        stamp = (f'<rect x="{x1 + 1}" y="{y1 + 1}" width="{sw - 2}" height="{sh - 2}" rx="4" '
+                 f'fill="none" stroke="{md.DANGER}" stroke-width="2"/>'
+                 + md.text((x1 + x2) / 2, y1 + 3 + k.line_height - k.base_line, "BETA", 14, md.DANGER))
     return (f'<rect x="{180 - pw // 2}" y="{174 - EDIT_H // 2}" width="{pw}" '
             f'height="{EDIT_H}" rx="18" fill="{md.BG1}" stroke="{md.ACCENT}" stroke-width="2"/>'
             + md.text(180, t_base, esc(title), 20, md.LABEL)
             + md.text(180, v_base, esc(shown), size, colour, 600,
                       extra=f' textLength="{w}" lengthAdjust="spacingAndGlyphs"')
-            + md.text(180, h_base, esc(hint), 14, md.LABEL))
+            + md.text(180, h_base, esc(hint), 14, md.LABEL) + stamp)
 
 
-def chooser(title, value, hint="turn to choose  -  tap to accept"):
+def chooser(title, value, hint="turn to choose  -  tap to accept", beta=False):
     """The editor panel as a chooser (ED_CHOICE): the value a name, at 28 px
-    where it fits, in the wider panel (edit_panel)."""
-    return edit_panel(title, value, 28, hint, md.ACCENT_HI, True)
+    where it fits, in the wider panel (edit_panel); a beta's stamped so."""
+    return edit_panel(title, value, 28, hint, md.ACCENT_HI, True, beta)
 
 
 def question(title, hint):
@@ -698,6 +709,12 @@ def setup_pictures():
     out["19-setup-safe-mode"] = knob("setup-19", "SAFE MODE on the setup firmware: restart it",
                                      setup_screen("SAFE MODE", "Three starts in a row\nended within 20 s.\n"
                                                   "Restart the knob:\nit starts as usual."))
+    # A firmware published as a beta (tools/release.sh BETA), stamped so.
+    out["20-beta"] = knob(
+        "setup-20", "A firmware still in beta, stamped BETA",
+        setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",
+                     chooser("INSTALL", f"EpiBeam {VERSION}", beta=True)),
+        turn(), "a beta: stamped BETA in the panel's corner")
     return out
 
 
@@ -1579,11 +1596,109 @@ def kiwi_pictures():
     return out
 
 
+# --- the EpiBeam firmware ------------------------------------------------------------
+
+BEAM_NAMES = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+BEAM_GEAR_Y = 180 + 84                    # ui.c BEAM_GEAR_Y
+BEAM_BATT_Y = 63                          # ui.c KNOB_BATT_Y on EpiBeam: inside the ring
+
+
+def centred(cx, cy, s, size, colour, weight=400):
+    """An LVGL label of one line aligned CENTER on (cx, cy): its box the
+    font's line high, the baseline where Montserrat's base_line puts it."""
+    f = montserrat(size)
+    top = cy - f.line_height // 2
+    return md.text(cx, top + f.line_height - f.base_line, esc(s), size, colour, weight)
+
+
+def gear(cx, cy, colour):
+    """LV_SYMBOL_SETTINGS at 28 px, centred on (cx, cy): eight teeth round a
+    hole of the button's colour."""
+    pts = []
+    for k in range(8):
+        for d, r in ((-15, 9.5), (-9, 13.5), (9, 13.5), (15, 9.5)):
+            a = math.radians(k * 45 + d)
+            pts.append(f"{cx + r * math.sin(a):.1f},{cy - r * math.cos(a):.1f}")
+    return (f'<polygon points="{" ".join(pts)}" fill="{colour}"/>'
+            f'<circle cx="{cx}" cy="{cy}" r="4.5" fill="{md.BG1}"/>')
+
+
+def beam_face(n=4, beam=0, linked=False):
+    """EpiBeam's compass (ui.c beam_build, beam_draw): the array's directions
+    round a ring at the glass's edge, 178 px out and 46 wide, each its
+    half-step either side less 2 degrees, the beam's in the accent with its
+    name in the ground's colour; in the middle the array, the beam's name at
+    48 px and its heading, EpiCenter's link; under them the gear's button."""
+    names = BEAM_NAMES if n == 8 else BEAM_NAMES[::2]
+    span = 360 // n
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>']
+    for i, name in enumerate(names):
+        deg, on = i * span, i == beam
+        s.append(md.block(270 + deg - span / 2 + 2, 270 + deg + span / 2 - 2,
+                          md.ACCENT if on else md.SUBTLE, r=178 - 23, band=46))
+        a = math.radians(deg)
+        s.append(centred(180 + round(155 * math.sin(a)), 180 - round(155 * math.cos(a)), name, 20,
+                         md.BG if on else md.LABEL))
+    s.append(centred(180, 180 - 76, "8 DIRECTIONS" if n == 8 else "4-SQUARE", 14, md.LABEL))
+    s.append(centred(180, 180 - 30, names[beam], 48, md.TEXT, 600))
+    s.append(centred(180, 180 + 14, f"{beam * span}\u00b0", 20, md.TEXT2))
+    s.append(centred(180, 180 + 44, "EpiCenter" if linked else "EpiCenter: not connected", 14,
+                     md.GREEN if linked else md.LABEL))
+    s.append(f'<circle cx="180" cy="{BEAM_GEAR_Y}" r="25" fill="{md.BG1}" stroke="{md.SUBTLE}" '
+             f'stroke-width="2"/>' + gear(180, BEAM_GEAR_Y, md.TEXT2))
+    return "".join(s)
+
+
+def ring_at(deg, r=155):
+    """A point on the ring at `deg` clockwise from north, on the screen."""
+    a = math.radians(deg)
+    return 180 + r * math.sin(a), 180 - r * math.cos(a)
+
+
+def epibeam_pictures():
+    md.use_palette("svxconnect")         # EpiBeam wears the setup firmware's ink and gold
+    f = beam_face()
+    left = [(60, 82, "the array's directions \u00b7 tap one"), (140, 104, "4-SQUARE or 8 DIRECTIONS"),
+            (80, 224, "EpiCenter's link"), (160, BEAM_GEAR_Y, "the gear")]
+    right = [(256, 46, "the beam, lit"), (196, 150, "its direction"), (194, 194, "its heading"),
+             (200, BEAM_GEAR_Y, "tap: card \u00b7 hold 3 s: picker")]
+    out = {}
+    out["01-face"] = callouts("epi-01", "The EpiBeam firmware's face", f, left, right)
+    out["02-turn"] = knob("epi-02", "Turn: the next direction",
+                          beam_face(beam=1), turn(),
+                          "a direction a detent  \u00b7  at rest, E counted out: two clicks")
+    out["03-tap"] = knob("epi-03", "Tap the ring: that direction",
+                         beam_face(beam=2), tap(*ring_at(180)), "tap the ring: that direction, S")
+    out["04-eight"] = knob("epi-04", "An array of 8 directions: the corners between",
+                           beam_face(8, 5), turn(), "8 directions: NE two clicks, on round to NW eight")
+    card = address_card(f"EpiBeam {VERSION}\n{POWER}\n{ADDRESSES}")
+    out["05-card"] = knob("epi-05", "The gear: the address card, for the configuration page",
+                          f + card + lock_pill(False), tap(180, BEAM_GEAR_Y),
+                          "tap the gear: the address card  \u00b7  again: away")
+    out["06-picker"] = knob("epi-06", "The gear held three seconds: back to the setup firmware?",
+                            dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
+                                                              "tap to cancel; WiFi is kept"),
+                            tap(180, BEAM_GEAR_Y, ring=24), "hold the gear 3 s until it buzzes, then turn")
+    # The knob's own battery, while it runs on it (ui.c knob_batt_show):
+    # inside the ring, over the array -- on the ring it sat on N.
+    out["07-battery"] = knob("epi-07", "On its own battery: the knob's charge inside the ring",
+                             f + md.battery_glyph(md.KNOB_BATT_X, BEAM_BATT_Y + 18, 85, md.battery_colour(85)),
+                             "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    out["08-lock"] = knob("epi-08", "The address card's LOCK", f + card + lock_pill(False), tap(252, 84),
+                          "tap the gear for the card  \u00b7  tap LOCK")
+    # The padlock level with the battery's row (ui.c KLOCK_BADGE_Y), 26 px
+    # lower than on the radios' faces.
+    out["09-locked"] = knob("epi-09", "Locked: the padlock inside the ring",
+                            beam_face(beam=1) + lock_closed(180, 47.5 + 26, md.WARN), "",
+                            "turns and taps refused  \u00b7  the gear still brings the card, UNLOCK on it")
+    return out
+
+
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
              "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
-             "headset": headset_pictures}
+             "epibeam": epibeam_pictures, "headset": headset_pictures}
 
 
 def main():

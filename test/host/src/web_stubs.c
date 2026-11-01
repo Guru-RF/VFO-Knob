@@ -56,6 +56,10 @@ uint8_t net_prov_brightness(void) { return s_bright; }
 void net_prov_save_brightness(uint8_t percent) { s_bright = percent; }
 uint8_t net_prov_jack_db(void) { return s_jack_db; }
 void net_prov_save_jack_db(uint8_t db) { if (db <= 12 && db % 3 == 0) s_jack_db = db; }
+static bool s_turned;
+bool net_prov_turned(void) { return s_turned; }
+void net_prov_save_turned(bool turned) { s_turned = turned; }
+uint8_t net_prov_beam_dirs(void) { return 4; }
 /* The page's login as a knob keeps it: shipped admin/admin, so the page asks
  * for a password of the owner's own first, as on the WiFi. */
 static char s_web_user[24] = "admin", s_web_pass[33] = "admin";
@@ -141,6 +145,7 @@ void bt_link_update_status(bt_link_upd_t *out) { memset(out, 0, sizeof *out); }
 
 void ui_dim_set_minutes(uint16_t dim, uint16_t blank) { (void)dim; (void)blank; }
 void ui_set_brightness(uint8_t percent) { (void)percent; }
+void ui_set_turned(bool turned) { (void)turned; }
 void ui_set_levels(uint8_t volume, uint8_t mic) { (void)volume; (void)mic; }
 void ui_updating_show(void) {}
 void ui_updating_hide(void) {}

@@ -197,6 +197,22 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      without one. Changes here apply on the knob's next boot.</p>
 </section>
 
+<section id="episec" hidden>
+  <h2>Array</h2>
+  <label for="beamn">Directions</label>
+  <select id="beamn"><option value="4">4: N, E, S, W (a 4-square)</option>
+    <option value="8">8: N, NE, E, SE, S, SW, W, NW</option></select>
+  <p class="note">The knob steps the beam a direction a detent, round and
+     round, and a tap on one goes straight to it. Once the knob rests, its
+     motor counts the direction out: N one click, E two, on round clockwise
+     &mdash; with 8, NE two. Changed here, the beam stays on its heading
+     where the other has it, else goes to the one before it. Seen on the
+     knob at once, on <b>Save</b>.</p>
+  <p class="note">EpiCenter, the station's brain, is what will switch the
+     array, over its WebSocket: the knob has no link to it yet, so for now it
+     shows the direction and keeps it.</p>
+</section>
+
 <section id="slsec" hidden>
   <h2>SmartLink</h2>
   <div id="slout">
@@ -540,8 +556,8 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
 </section>
 
 <section>
-  <h2>Audio</h2>
-  <div class="grid">
+  <h2 id="audioh">Audio</h2>
+  <div class="grid" id="audiogrid">
     <div><label>Volume (0&ndash;100)</label><input id="vol" inputmode="numeric"></div>
     <div id="microw"><label>Mic gain, the knob's (0&ndash;200)</label><input id="mic" inputmode="numeric"></div>
     <div id="michrow"><label>Mic gain, a headset's (0&ndash;200)</label><input id="mich" inputmode="numeric"></div>
@@ -550,7 +566,7 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
            <option value="6">+6 dB</option><option value="9">+9 dB</option>
            <option value="12">+12 dB</option></select></div>
   </div>
-  <p class="note">The jack's level is for wired earphones or a headset too quiet
+  <p class="note" id="jacknote">The jack's level is for wired earphones or a headset too quiet
      with the volume at 100: the jack is a line output. Above 0 dB a loud
      passage is turned down rather than clipped, and the jack plays 10 ms later
      for it, 15 on SVXConnect and the Telephone. A Bluetooth headset or speaker
@@ -567,6 +583,9 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
          <input id="blank" inputmode="numeric"></div>
     <div><label>Brightness (10&ndash;100 %)</label>
          <input id="bright" inputmode="numeric"></div>
+    <div><label for="turn">The USB cable</label>
+         <select id="turn"><option value="0">At the top</option>
+           <option value="1">At the bottom</option></select></div>
   </div>
   <p class="note" id="dimnote">Turning the knob, touching the screen or
      transmitting all count as use. Dimming leaves the frequency readable;
@@ -577,6 +596,9 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      leaves the screen readable; going dark turns the backlight off.</p>
   <p class="note">The brightness is the screen's while it is lit, 80 % until
      it is set, and is seen at once on <b>Save</b>. Dimmed, it stays dimmer.</p>
+  <p class="note">The knob comes with its USB cable at the top. In a stand or
+     a mount that has the cable at the bottom, choose <b>At the bottom</b>: on
+     <b>Save</b> the screen turns the other way up, and the touch with it.</p>
 </section>
 
 <section>
@@ -811,7 +833,7 @@ async function load(){
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('mich').value=c.mich??100;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
   $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||''; OTAH=+c.otah||0;
-  $('jack').value=String(c.jack??0); $('bright').value=c.bright??80;
+  $('jack').value=String(c.jack??0); $('bright').value=c.bright??80; $('turn').value=String(c.turn??0);
   FWROOT=c.fwroot||''; RADIO=c.radio||'aethersdr'; radios();
   /* The address this browser reaches the knob from. Over the cable that is the
      USB link's own 10.55.42.2 -- found automatically there, and unreachable
@@ -829,8 +851,13 @@ async function load(){
   WSDR = c.radio === 'websdr';            /* ...WebSDRs, the same way */
   WEBRX = OWRX || WSDR;
   PHONE = c.radio === 'phone';            /* a telephone: its SIP account is its own */
+  EPI = c.radio === 'epibeam';            /* an array's beam: no radio, no audio */
   /* The setup firmware has no radio: it installs one of the others. */
-  $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI;
+  $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || EPI;
+  $('episec').hidden = !EPI; $('beamn').value = String(c.beamn ?? 4);
+  /* EpiBeam plays nothing: of Audio, only the screen's settings. */
+  $('audioh').textContent = EPI ? 'Screen' : 'Audio';
+  for (const id of ['audiogrid','jacknote']) $(id).hidden = EPI;
   for (const id of ['phonesec','phonecall','phonefav','phonegoogle']) $(id).hidden = !PHONE;
   /* A telephone never transmits; its calls are what keep the screen lit. */
   $('dimnote').hidden = PHONE; $('dimphonenote').hidden = !PHONE;
@@ -866,9 +893,9 @@ async function load(){
   $('myip').textContent = 'my IP ' + myIp;
   $('hostusb').hidden = lan || SVX || flex || uber || WEBRX || ox || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
-  LIST = !SVX && c.radio !== 'setup' && !KIWI; LAN = lan; UBER = uber; RXONLY = uber || KIWI || WEBRX;
+  LIST = !SVX && c.radio !== 'setup' && !KIWI && !EPI; LAN = lan; UBER = uber; RXONLY = uber || KIWI || WEBRX;
   /* A receiver's firmware has no microphone: no gain to set for one. */
-  $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY; $('volnote').hidden = !RXONLY;
+  $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY || EPI; $('volnote').hidden = !RXONLY || EPI;
   HOSTLBL = flex || xiegu ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
           : WEBRX ? 'Address (http://\u2026, or https://\u2026)' : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
@@ -889,7 +916,7 @@ async function btLoad(){
      it restarting it, a word on where to get it. */
   const busy0 = s.upd && !['idle','waiting'].includes(s.upd.phase);
   const none = !s.companion && UPTIME>=30 && !busy0;
-  $('btsec').hidden=!s.companion && !none; $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
+  $('btsec').hidden=EPI || (!s.companion && !none); $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
   if(s.companion){ btShow(s); chipPush(s) }
   const busy = s.upd && !['idle','waiting'].includes(s.upd.phase);
   clearTimeout(btTimer); btTimer=setTimeout(btLoad, s.scanning||busy?1000:3000);
@@ -1647,6 +1674,7 @@ function pwHint(d,x){
 
 /* ---- the phone firmware: its SIP account, a call, the favourites ---- */
 let PHONE=false, phoneLoaded=false, FAVS=[];
+let EPI=false;                          /* the EpiBeam firmware's page */
 async function phoneLoad(){
   phoneLoaded=true;
   try{
@@ -1862,7 +1890,7 @@ $('save').onclick=async()=>{
   const b=new URLSearchParams();
   /* With a list of radios the one in use is saved with the list, below; the
      kiwi firmware's receivers are the web SDRs' list. */
-  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','jack','user','otah','dim','blank','bright'])
+  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','jack','user','otah','dim','blank','bright','turn',...(EPI?['beamn']:[])])
     b.append(k,$(k).value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);
@@ -2024,15 +2052,17 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'kiwi',      name:'Kiwi888 (KiwiSDR and Web-888 receivers)'},
               {id:'owrx',      name:'OpenWebRX (OpenWebRX and OpenWebRX+ receivers)'},
               {id:'websdr',    name:'WebSDR (the receivers on websdr.org)'},
+              {id:'epibeam',   name:'EpiBeam (an array\'s beam, through EpiCenter)', beta:true},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
 function radios(){
   const list=RADIOS.some(r=>r.id===RADIO) ? RADIOS : [{id:RADIO,name:RADIO},...RADIOS];
-  /* Not published yet: shown, not offered -- unless it is the one running. */
+  /* Not published yet: shown, not offered -- unless it is the one running.
+   * A beta is offered, and says so, as on the setup firmware's dial. */
   const soon=r=>r.soon&&r.id!==RADIO;
   $('radio').innerHTML=list.map(r=>`<option value="${esc(r.id)}"${soon(r)?' disabled':''}>`
-    +esc(r.name)+(soon(r)?' — coming':'')+'</option>').join('');
+    +esc(r.name)+(soon(r)?' — coming':r.beta?' — beta':'')+'</option>').join('');
   $('radio').value=RADIO; $('switch').hidden=true;
 }
 $('radio').onchange=()=>{ $('switch').hidden=$('radio').value===RADIO };

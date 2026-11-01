@@ -47,7 +47,7 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
 SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup slab_kiwi slab_owrx \
-         slab_websdr
+         slab_websdr slab_epibeam
 all: vu_compare chooser kiwi_face readout $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
@@ -99,9 +99,10 @@ readout-check: readout
 # slab: ui.c on the host, its ESP-IDF names from stub/ -- the display, the
 # touch and the lock the harness's (slab.c) -- once per face.
 UI_SRCS := $(UI)/ui.c $(UI)/fit_text.c $(UI)/vu_band.c $(UI)/font_mic_14.c $(UI)/font_btmic_28.c $(UI)/font_hack_46.c \
-           $(UI)/font_svx_icons_24.c
+           $(UI)/font_svx_icons_24.c $(ROOT)/components/vfo_core/src/beam.c
 SLAB_FLAGS := -O1 -g -DLV_CONF_INCLUDE_SIMPLE -Istub -I. -isystem $(LVGL) -I$(UI) -I$(UI)/include \
-              -I$(ROOT)/components/net_prov/include $(FONTS) -Wall -Wextra -Wno-unused-parameter
+              -I$(ROOT)/components/net_prov/include -I$(ROOT)/components/vfo_core/include $(FONTS) -Wall -Wextra \
+              -Wno-unused-parameter
 slab_flex: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_MULTIFLEX=1 -DVFO_HAS_SDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_icom: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
@@ -124,6 +125,8 @@ slab_owrx: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_OWRX=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_websdr: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_WEBSDR=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_epibeam: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_EPIBEAM=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab-check: $(SLABS)
 	mkdir -p $(OUT)
 	for s in $(SLABS); do ./$$s $(OUT) || exit 1; done

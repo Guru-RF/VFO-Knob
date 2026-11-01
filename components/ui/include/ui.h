@@ -388,6 +388,9 @@ uint8_t ui_take_call_req(void);
  * is room for 99 firmwares to come, and WIFI (the texts are in PSRAM). */
 #define UI_CHOICES 100
 void ui_ask_choice(const char titles[][12], const char names[][24], uint8_t n, uint8_t def);
+/* ...with a BETA stamp on the options beta[] marks (a firmware published as a
+ * beta, on the setup firmware's list); beta may be NULL. */
+void ui_ask_choice_beta(const char titles[][12], const char names[][24], const bool beta[], uint8_t n, uint8_t def);
 bool ui_choice_active(void);
 /* The answer, once: the option's index, or -1 while there is none. */
 int  ui_take_choice(void);
@@ -419,6 +422,24 @@ void ui_dim_tick(bool transmitting);
 /* The backlight while lit, percent of full (GitHub #14): lit at once at it.
  * Dimmed stays at its own level, or at this if this is lower. */
 void ui_set_brightness(uint8_t percent);
+/* The knob mounted with its USB cable at the bottom (GitHub #15): the face,
+ * and its touch with it, the other way up from the way it comes. Before
+ * ui_init, kept for it; after, turned at once. */
+void ui_set_turned(bool turned);
+
+/* The EpiBeam firmware's compass (VFO_RADIO=epibeam; components/vfo_core
+ * beam.h). The array's directions, 4 or 8, and the one the beam is on:
+ * before ui_init, kept for it; after, drawn at once -- nothing counted out,
+ * nothing taken. */
+void ui_beam_set(uint8_t n_dirs, uint8_t dir);
+/* From the knob's task: detents, a direction each, applied in the LVGL
+ * task. */
+void ui_beam_turn(int32_t detents);
+/* The direction the beam settled on, once -- the knob rested, or one
+ * tapped -- for the motor to count out and EpiCenter to take: -1, none. */
+int  ui_take_beam(void);
+/* Moved since last asked: a count under way is out of date. */
+bool ui_take_beam_moved(void);
 
 void ui_updating_show(void);
 /* The same screen for the moment before a restart that installs at boot:

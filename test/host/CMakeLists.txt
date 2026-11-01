@@ -71,9 +71,11 @@ add_library(vfo_core STATIC
     ${CORE}/src/antiecho.c
     ${CORE}/src/vfo_tune.c
     ${CORE}/src/ptt_fsm.c
+    ${CORE}/src/beam.c
 )
 target_include_directories(vfo_core PUBLIC ${CORE}/include)
 target_compile_options(vfo_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_link_libraries(vfo_core PUBLIC m)
 
 enable_testing()
 foreach(t test_tci_parse test_echo_ring test_tune test_ptt_fsm fuzz_tci)
@@ -168,6 +170,14 @@ add_executable(test_jack_level src/test_jack_level.c)
 target_link_libraries(test_jack_level PRIVATE jack_level m)
 target_compile_options(test_jack_level PRIVATE -Wall -Wextra)
 add_test(NAME test_jack_level COMMAND test_jack_level)
+
+# EpiBeam's directions (components/vfo_core/src/beam.c): their names and
+# headings, the dial's steps round and round, a touch's direction, and a
+# beam carried from one array to the other.
+add_executable(test_beam src/test_beam.c)
+target_link_libraries(test_beam PRIVATE vfo_core)
+target_compile_options(test_beam PRIVATE -Wall -Wextra)
+add_test(NAME test_beam COMMAND test_beam)
 
 # KiwiSDR's protocol, the plain-C part (components/kiwi_proto/kiwi_proto.c).
 set(KIWI ${CMAKE_CURRENT_SOURCE_DIR}/../../components/kiwi_proto)

@@ -52,6 +52,19 @@
 #define DEFAULT_PORT 5060
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_EPIBEAM
+/* EpiCenter's address, for its WebSocket when it comes (components/
+ * epi_client). Keys of its own, so it never writes another firmware's. */
+#define KEY_HOST     "ephost"
+#define KEY_RLIST    "eplist"
+#define KEY_RSEL     "epsel"
+#define KEY_PORT     "epport"
+#define KEY_USER     "epuser"
+#define KEY_PASS     "eppass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 80
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_MULTIFLEX
 #define KEY_HOST     "fxhost"
 #define KEY_RLIST    "fxlist"     /* the radios, one in use: see below */
@@ -189,6 +202,9 @@ static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
 static uint16_t s_dim_min = 5;      /* idle before the screen dims;  0 = never */
 static uint16_t s_blank_min = 10;   /* idle before it goes dark;     0 = never */
 static uint8_t  s_bright = 80;      /* the screen lit, percent: 80 is the 200 of 255 it always was */
+static bool     s_turned;           /* the USB cable at the bottom: the screen turned 180 degrees */
+static uint8_t  s_beam_n = 4;       /* EpiBeam: the array's directions, 4 or 8 */
+static uint8_t  s_beam_dir;         /* ...and the one the beam was left on, 0 = N */
 static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
 
 /* Credentials for the configuration page. Shipped as admin/admin so a new
@@ -607,6 +623,9 @@ void net_prov_load_settings(void)
     kv_get_u16(h, "dim", &s_dim_min);
     kv_get_u16(h, "blank", &s_blank_min);
     if (kv_get_u8(h, "bright", &v) == ESP_OK && v >= NET_PROV_BRIGHT_MIN && v <= 100) s_bright = v;
+    if (kv_get_u8(h, "turn", &v) == ESP_OK && v <= 1) s_turned = v;
+    if (kv_get_u8(h, "beamn", &v) == ESP_OK && (v == 4 || v == 8)) s_beam_n = v;
+    if (kv_get_u8(h, "beamd", &v) == ESP_OK && v < s_beam_n) s_beam_dir = v;
     if (kv_get_u8(h, "jackdb", &v) == ESP_OK && v <= NET_PROV_JACK_DB_MAX && v % 3 == 0) s_jack_db = v;
     len = sizeof s_web_user; kv_get_str(h, "wuser", s_web_user, &len);
     len = sizeof s_web_pass; kv_get_str(h, "wpass", s_web_pass, &len);
@@ -945,6 +964,36 @@ void net_prov_save_brightness(uint8_t percent)
     if (percent == s_bright) return;
     s_bright = percent;
     kv_set_u8(kv(), "bright", percent);
+    kv_commit_now(kv());
+}
+
+bool net_prov_turned(void) { return s_turned; }
+
+void net_prov_save_turned(bool turned)
+{
+    if (turned == s_turned) return;
+    s_turned = turned;
+    kv_set_u8(kv(), "turn", turned);
+    kv_commit_now(kv());
+}
+
+uint8_t net_prov_beam_dirs(void) { return s_beam_n; }
+uint8_t net_prov_beam_dir(void)  { return s_beam_dir; }
+
+void net_prov_save_beam_dirs(uint8_t n)
+{
+    if ((n != 4 && n != 8) || n == s_beam_n) return;
+    s_beam_n = n;
+    if (s_beam_dir >= n) s_beam_dir = 0;
+    kv_set_u8(kv(), "beamn", n);
+    kv_commit_now(kv());
+}
+
+void net_prov_save_beam_dir(uint8_t dir)
+{
+    if (dir >= s_beam_n || dir == s_beam_dir) return;
+    s_beam_dir = dir;
+    kv_set_u8(kv(), "beamd", dir);
     kv_commit_now(kv());
 }
 

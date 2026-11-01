@@ -70,6 +70,11 @@ in SVXConnect's colours: favourites on the dial, a keypad for any number, your
 starred Google contacts as the favourites, the caller's name in a call, and
 both voices on the split arc. See [Telephone](#telephone).
 
+With the **EpiBeam** firmware, a beta, the knob is the beam switch for a
+phased array — a 4-square or an array of 8 directions — on its way to
+EpiCenter, the station's master: a direction a detent, counted out in clicks
+once the dial rests. See [EpiBeam](#epibeam).
+
 ---
 
 ## Reporting a problem
@@ -157,7 +162,7 @@ feature per issue lets each be answered, built and closed on its own.
 | **Web SDR** | On the Icom and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). On the Kiwi888 firmware a second of its own receivers plays in the right ear: **RIGHT EAR**, **OFF** or a receiver, and **BALANCE** from **LEFT** to **RIGHT** — see [Kiwi888](#kiwi888). |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.19.0`, or `… dev` for a build that is not a release), the knob's power — **battery 85 %**, or **on USB power** — and its addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
 | **Lock** | With the address card up, tap **LOCK** over the S-meter: a padlock shows at the top of the arc, and the knob ignores turns, taps and swipes and keys nothing — not the slab, a headset's button or its boom arm. Unkeying is never locked, and the telephone's slab still hangs up. A question the knob asks still takes its answer. **UNLOCK** on the card again, or a restart, frees it. On every firmware but the setup one. |
-| **Screen** | Its brightness on the configuration page, 10 to 100 % (80 % until it is set). Unused, it dims after 5 minutes and goes dark after 10, both set there too; a turn, a touch or transmitting lights it again. |
+| **Screen** | Its brightness on the configuration page, 10 to 100 % (80 % until it is set). Unused, it dims after 5 minutes and goes dark after 10, both set there too; a turn, a touch or transmitting lights it again. The knob comes with its USB cable at the top; for a stand or a mount with the cable at the bottom, **The USB cable: At the bottom** there turns the screen the other way up, and the touch with it. |
 | **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
@@ -630,7 +635,22 @@ For other programs, `GET /api/phone` says what the telephone is doing, and
 `GET /api/phone/history` lists the recent calls, and `/api/phone/dial?number=…`,
 `/answer`, `/hangup` and `/dtmf?digits=…` act, behind the page's login.
 
-## A Bluetooth headset
+## EpiBeam
+
+The EpiBeam firmware (`vfo-knob-epibeam`, a beta) turns the knob into the beam
+switch for a phased array, in the setup firmware's colours. The beam goes to
+EpiCenter, the station's master, which switches the array; this first beta
+has no link to it yet, and says **EpiCenter: not connected**. Step by step:
+[the EpiBeam guide](docs/epibeam.md).
+
+| | |
+|---|---|
+| **The array** | **Array** on the configuration page: 4 directions (N, E, S, W, a 4-square) or 8 (N, NE, E, SE, S, SW, W, NW). Changing it keeps the beam's heading; from 8 to 4 a corner goes to the direction before it. |
+| **The dial** | A direction a detent, round and round. Once it has rested 0.4 s the direction is taken, and the knob counts it out in strong clicks a quarter of a second apart: N one, on round clockwise, so W is four on a 4-square and NW eight on 8. Turning again stops the count. |
+| **The ring** | The directions round the glass's edge, the beam's lit in gold; a tap on one goes straight to it. In the middle the array, the beam's direction and its heading, and the link to EpiCenter. |
+| **The gear** | A tap: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
+| **Kept** | The direction, across a restart. No PTT, no swipes, no audio and no Bluetooth: the glass is the beam's. |
+
 
 The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
 S3 lacks, and a UART between the two. The companion firmware (`companion/`)
@@ -666,8 +686,8 @@ it. More: [A Bluetooth speaker](docs/headset.md#a-bluetooth-speaker).
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
 the WiFi networks (up to four), audio levels and the jack's level, the
-screen's brightness and dimming, access credentials, firmware updates, and a
-problem report.
+screen's brightness, dimming and which way up it is, access credentials,
+firmware updates, and a problem report.
 
 Opened over WiFi, the host field offers a green **my IP** — the address of the
 computer you are browsing from, one tap to fill in when that is where
@@ -806,7 +826,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr` and `vfo-knob-phone` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone` and `vfo-knob-epibeam` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -817,7 +837,9 @@ Publishing a release: `tools/release.sh 1.2.3 --push` (another radio's:
 `RADIO=<radio> tools/release.sh …`). Each release also rewrites
 `firmware/index.json`, the list the setup firmware shows, from the channels'
 manifests — only the channels `tools/release.sh` names, and a radio is
-released only once it is named there; the second chip's sits under a key of
+released only once it is named there; one it also lists under `BETA` gets
+`"beta": true` in its entry, and the setup firmware stamps it **BETA** on the
+dial (the configuration page's list says "beta" too); the second chip's sits under a key of
 its own, never in that list. The second chip's firmware is released only
 when it changed, in two steps with a bench between them:
 `RADIO=companion tools/release.sh 1.2.3` builds and stages it and says what

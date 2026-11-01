@@ -25,6 +25,9 @@
 #if VFO_RADIO_PHONE
 #include "phone_client.h"
 #endif
+#if VFO_RADIO_EPIBEAM
+#include "epi_client.h"
+#endif
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "sd_cache.h"
@@ -161,6 +164,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "WebSDR";
 #elif VFO_RADIO_SETUP
     const char *name = "Setup";
+#elif VFO_RADIO_EPIBEAM
+    const char *name = "EpiBeam";
 #else
     const char *name = "AetherSDR";
 #endif
@@ -413,6 +418,11 @@ static void encoder_task(void *arg)
             ui_edit_rotate(detents);
             continue;
         }
+#if VFO_RADIO_EPIBEAM
+        /* The dial steers the beam, a direction a detent (ui.c's compass). */
+        ui_beam_turn(detents);
+        continue;
+#endif
 #if VFO_RADIO_PHONE
         /* In a call the dial is the volume; the favourites wait for it to end. */
         if (s_in_call) {
@@ -1651,6 +1661,33 @@ static void ui_task(void *arg)
         /* The address card, up under a finger held on the S-meter: a click
          * says it can let go. */
         if (ui_take_card_shown()) haptic(1);   /* strong click */
+
+#if VFO_RADIO_EPIBEAM
+        /* The beam settled on a direction: counted out on the motor, a
+         * strong click every BEAM_CLICK_TICKS -- N one, on round clockwise --
+         * for a hand that is not looking; kept for the next start, and
+         * EpiCenter's (epi_client). Turned again meanwhile, the count stops:
+         * the next settling counts again. */
+        {
+            enum { BEAM_CLICK_TICKS = 5 };      /* 250 ms apart: easy to count */
+            static uint8_t left, wait;
+            if (ui_take_beam_moved()) left = 0;
+            const int d = ui_take_beam();
+            if (d >= 0) {
+                net_prov_save_beam_dir((uint8_t)d);
+                epi_beam_point((uint8_t)d, net_prov_beam_dirs());
+                left = (uint8_t)d + 1;
+                wait = 0;
+            }
+            if (left && wait) {
+                wait--;
+            } else if (left) {
+                haptic(1);
+                left--;
+                wait = BEAM_CLICK_TICKS - 1;
+            }
+        }
+#endif
         /* The antennas, up under a finger held on the slab: a buzz says the
          * slab has not keyed, and the editor is there. (Never on the air:
          * haptic() keeps the motor still then, and no hold opens it.) */
@@ -1808,6 +1845,11 @@ static void ui_task(void *arg)
         else if (kv_where() == KV_CARD_TROUBLE || kv_where() == KV_CARD_FAILED)
                                                      warn = "SD CARD FAULT";
         else if (kv_where() == KV_CARD_FOREIGN)      warn = "OTHER SD CARD";
+#if VFO_RADIO_EPIBEAM
+        /* No EpiCenter link yet: the compass says so, under the heading, and
+         * nothing goes over it. */
+        else if (!link_ok) { }
+#endif
 #if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
         /* A receiver on its way, with nothing said against it: no warning
          * over the face -- its slab says "connecting...". */
@@ -2553,18 +2595,20 @@ static void boot_update_check(void)
 #define SETUP_AP_NAME "VFOKnob"
 
 /* Only for when the release server's index cannot be had: the radios this
- * build knew of. The index is what counts -- see setup_pick(). */
-static const struct { const char *radio, *name; } FIRMWARES[] = {
-    { "aethersdr",  "AetherSDR" },
-    { "icom",       "Icom"      },
-    { "multiflex",  "FlexRadio" },
-    { "ubersdr",    "UberSDR"   },
-    { "kiwi",       "Kiwi888"   },
-    { "owrx",       "OpenWebRX" },
-    { "websdr",     "WebSDR"    },
-    { "openx6x00",  "OpenX6X00" },
-    { "svxconnect", "SVXConnect" },
-    { "phone",      "Telephone" },
+ * build knew of, and which were betas. The index is what counts -- see
+ * setup_pick(). */
+static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
+    { "aethersdr",  "AetherSDR",  false },
+    { "icom",       "Icom",       false },
+    { "multiflex",  "FlexRadio",  false },
+    { "ubersdr",    "UberSDR",    false },
+    { "kiwi",       "Kiwi888",    false },
+    { "owrx",       "OpenWebRX",  false },
+    { "websdr",     "WebSDR",     false },
+    { "openx6x00",  "OpenX6X00",  false },
+    { "svxconnect", "SVXConnect", false },
+    { "phone",      "Telephone",  false },
+    { "epibeam",    "EpiBeam",    true  },
 };
 
 static void setup_wifi_page(void)
@@ -2630,6 +2674,7 @@ static void card_fill_task(void *arg)
 static void setup_pick(void)
 {
     EXT_RAM_BSS_ATTR static char titles[UI_CHOICES][12], names[UI_CHOICES][24], radios[UI_CHOICES][16];
+    EXT_RAM_BSS_ATTR static bool betas[UI_CHOICES];
     static bool filling;
     for (;;) {
         ui_setup_show("FIRMWARE", "Looking up\nthe firmwares...");
@@ -2663,6 +2708,8 @@ static void setup_pick(void)
                 strlcpy(titles[n], "INSTALL", sizeof titles[n]);
                 snprintf(names[n], sizeof names[n], "%s %s", nm && *nm ? nm : r, card ? cv : v);
                 strlcpy(radios[n], r, sizeof radios[n]);
+                /* Stamped BETA on the dial (tools/release.sh's BETA). */
+                betas[n] = cJSON_IsTrue(cJSON_GetObjectItem(f, "beta"));
                 n++;
             }
             /* The second chip's firmware onto the card too, under its own
@@ -2692,6 +2739,7 @@ static void setup_pick(void)
                 strlcpy(titles[n], "INSTALL", sizeof titles[n]);
                 snprintf(names[n], sizeof names[n], "%s %s", FIRMWARES[i].name, ver);
                 strlcpy(radios[n], FIRMWARES[i].radio, sizeof radios[n]);
+                betas[n] = FIRMWARES[i].beta;
                 n++;
             }
         }
@@ -2702,9 +2750,10 @@ static void setup_pick(void)
         }
         strlcpy(titles[n], "WIFI", sizeof titles[n]);
         strlcpy(names[n], "Set up again", sizeof names[n]);
+        betas[n] = false;
         radios[n++][0] = 0;
         /* The chooser first: the text then goes under its panel. */
-        ui_ask_choice(titles, names, n, 0);
+        ui_ask_choice_beta(titles, names, betas, n, 0);
         ui_setup_show("FIRMWARE", card ? "From the SD card:\nturn to your radio,\nthen tap to install."
                                        : "Turn to your radio,\nthen tap to install.");
         int a;
@@ -3945,6 +3994,12 @@ void app_main(void)
     bool have_touch = bring_up("touch", hal_touch_init);
 
     ui_set_levels(net_prov_volume(), net_prov_mic_gain());
+    /* Before ui_init, which takes it: the face's first frame is the right
+     * way up already. */
+    ui_set_turned(net_prov_turned());
+#if VFO_RADIO_EPIBEAM
+    ui_beam_set(net_prov_beam_dirs(), net_prov_beam_dir());
+#endif
     bool have_ui = have_panel && bring_up("ui", ui_init);
     /* Building the face is the deepest thing the main task does. */
     ESP_LOGI(TAG, "main stack after ui: %u of %u bytes never used",

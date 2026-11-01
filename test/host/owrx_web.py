@@ -437,22 +437,25 @@ def access(k, b):
 
 
 def screen_and_jack(k, b):
-    """Audio's jack level and the screen's brightness (GitHub #12, #14):
-    shown as the knob has them, saved with Save, and a level that is not one
-    of the steps not taken."""
-    jack, bright = b.js("$('jack').value"), b.js("$('bright').value")
+    """Audio's jack level, the screen's brightness and which way up it is
+    (GitHub #12, #14, #15): shown as the knob has them, saved with Save, and
+    a value that is not one of the choices not taken."""
+    jack, bright, turn = b.js("$('jack').value"), b.js("$('bright').value"), b.js("$('turn').value")
     check(jack == "0" and bright == "80", f"the jack at 0 dB and the screen at 80 % until set: {jack!r}, {bright!r}")
+    check(turn == "0", f"the USB cable at the top until set: {turn!r}")
     check(b.js("[...$('jack').options].map(o=>o.value).join(' ')") == "0 3 6 9 12", "the jack's steps: 0 to +12 dB, in threes")
-    b.js("$('jack').value='6';$('bright').value='40'")
+    b.js("$('jack').value='6';$('bright').value='40';$('turn').value='1'")
     msg = save(b)
     st, c = k.api("/api/config")
     check(msg and msg.startswith("Saved") and c.get("jack") == 6 and c.get("bright") == 40,
           f"saved: the jack at +6 dB, the screen at 40 % ({msg!r}, {c.get('jack')!r}, {c.get('bright')!r})")
-    st, _ = k.api("/api/config", {"jack": "7", "bright": "3"})
+    check(c.get("turn") == 1, f"saved: the USB cable at the bottom ({c.get('turn')!r})")
+    st, _ = k.api("/api/config", {"jack": "7", "bright": "3", "turn": "2"})
     st, c = k.api("/api/config")
     check(c.get("jack") == 6 and c.get("bright") == 10,
           f"+7 dB not a step, so the jack stays; 3 % up to the least, 10 ({c.get('jack')!r}, {c.get('bright')!r})")
-    k.api("/api/config", {"jack": "0", "bright": "80"})
+    check(c.get("turn") == 1, f"2 neither way up, so it stays at the bottom ({c.get('turn')!r})")
+    k.api("/api/config", {"jack": "0", "bright": "80", "turn": "0"})
 
 
 def case_config():

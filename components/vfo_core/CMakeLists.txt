@@ -8,5 +8,6 @@ idf_component_register(
         "src/antiecho.c"
         "src/vfo_tune.c"
         "src/ptt_fsm.c"
+        "src/beam.c"
     INCLUDE_DIRS "include"
 )

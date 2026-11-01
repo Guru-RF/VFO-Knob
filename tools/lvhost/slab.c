@@ -518,8 +518,13 @@ SOME static void batt_radio(const char *dir, const char *face)
 
 /* ---- the knob's own battery, top centre (ui.c knob_batt_show) ---- */
 
+#if VFO_RADIO_EPIBEAM
+#define KNOB_INK_TOP  56                   /* inside the ring of directions, 48 at the top */
+#define KNOB_INK_FOOT 92                   /* ...and over the caption's 99 */
+#else
 #define KNOB_INK_TOP  38                   /* its ink's rows within these: under the arc */
 #define KNOB_INK_FOOT 58                   /* ...and over the S-units */
+#endif
 #if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE
 #define ARC_STAYS 1                        /* the reflector's arc: the audio's on the air too */
 #else
@@ -2130,6 +2135,34 @@ static void runs(const char *dir)
         knob_check(dir, NULL);
         ui_ask_choice(NULL, NULL, 0, 0); run(60);
     }
+    where = "...a beta stamped BETA in the panel's corner, and only it";
+    {
+        static const char T[3][12] = { "INSTALL", "INSTALL", "WIFI" };
+        static const char N[3][24] = { "Telephone 1.22.0", "EpiBeam 1.22.0", "Set up again" };
+        static const bool B[3] = { false, true, false };
+        ui_ask_choice_beta(T, N, B, 3, 0); run(60);
+        CHECK(shown("Telephone 1.22.0") && !shown("BETA"));
+        ui_edit_rotate(1); run(30);
+        CHECK(shown("EpiBeam 1.22.0") && shown("BETA"));
+        lv_obj_t *stamp = label_from(lv_screen_active(), "BETA"), *title = label_from(lv_screen_active(), "INSTALL");
+        CHECK(stamp && title);
+        if (stamp && title) {
+            lv_area_t s, t;
+            lv_obj_get_coords(stamp, &s);
+            lv_obj_get_coords(title, &t);
+            /* Clear of the title, and on the glass: its far corner inside the circle. */
+            CHECK(s.x1 > t.x2 + 8);
+            const int dx = s.x2 - 180, dy = s.y1 - 180;
+            CHECK(dx * dx + dy * dy < 172 * 172);
+        }
+        picture(dir, "setup-beta");
+        ui_edit_rotate(1); run(30);
+        CHECK(shown("Set up again") && !shown("BETA"));
+        where = "...and none on any other chooser";
+        ui_ask_choice(T, N, 3, 1); run(60);
+        CHECK(shown("EpiBeam 1.22.0") && !shown("BETA"));
+        ui_ask_choice(NULL, NULL, 0, 0); run(60);
+    }
     ui_setup_hide(); run(60);
     st.knob_batt = false; run(60);
 }
@@ -2681,6 +2714,158 @@ static void runs(const char *dir)
     batt_check(dir, "websdr-batt", false);
     st.headset = false; st.have_batt = false; run(60);
 }
+#elif VFO_RADIO_EPIBEAM
+/* EpiBeam's compass (ui.c EPI_FACE): an array's directions round the ring, 4
+ * or 8, the beam's in the middle with its heading. A detent a direction, round
+ * and round, taken once the knob has rested -- once, and where it stopped; a
+ * tap on the ring that direction, nearer the middle nothing, nor any PTT or
+ * swipe. The gear: a tap the card, again away; held three seconds the
+ * firmware picker. Locked, the ring steers nothing and the gear still brings
+ * the card, UNLOCK on it. Pictures: 4 directions and 8. */
+#define DEG "\xC2\xB0"
+#define GEAR_X 180                       /* ui.c BEAM_GEAR_Y: CY + 84 */
+#define GEAR_Y 264
+#define RING_R 155                       /* the middle of the ring of directions */
+
+/* A tap on the ring at `deg` clockwise from north. */
+static void ring_tap(int deg)
+{
+    const double a = deg * 3.14159265358979 / 180.0;
+    tap_at(W / 2 + (int)lround(RING_R * sin(a)), H / 2 - (int)lround(RING_R * cos(a)), 80);
+}
+static int taken(void) { run(450); return ui_take_beam(); }
+
+static void runs(const char *dir)
+{
+    base();
+    st.link_ok = false;
+    ui_set_netinfo("EpiBeam 1.21.8\nUSB power\nUSB   -\nWiFi  192.168.254.248\nsetup  http://192.168.254.248");
+    run(120);
+    (void)ui_take_beam(); (void)ui_take_beam_moved(); quiet();
+
+    where = "4: N lit, in the middle with its heading, the four round the ring";
+    CHECK(shown("4-SQUARE") && shown("N") && shown("0" DEG) && shown("EpiCenter: not connected"));
+    CHECK(shown("E") && shown("S") && shown("W") && !shown("NE") && !shown("NW"));
+    picture(dir, "epibeam-4");
+
+    where = "...a detent: E at once, taken once the knob has rested -- once";
+    ui_beam_turn(1); run(30);
+    CHECK(ui_take_beam_moved() && shown("90" DEG));
+    CHECK(ui_take_beam() == -1);
+    CHECK(taken() == 1);
+    CHECK(ui_take_beam() == -1 && !ui_take_beam_moved());
+    where = "...three back, past N: S";
+    ui_beam_turn(-3);
+    CHECK(taken() == 2 && shown("S") && shown("180" DEG));
+    where = "...turned on before it rests: taken once, where it stopped";
+    ui_beam_turn(1); run(200);
+    ui_beam_turn(1); run(200);
+    CHECK(ui_take_beam() == -1);
+    run(250);
+    CHECK(ui_take_beam() == 0 && shown("0" DEG));
+
+    where = "...a tap on the ring: W; on E: E";
+    ring_tap(270);
+    CHECK(taken() == 3 && shown("270" DEG));
+    ring_tap(85);
+    CHECK(taken() == 1);
+    where = "...nearer the middle, or where the slab would be: nothing, and no PTT";
+    tap_at(W / 2 - 60, H / 2 - 20, 80);
+    CHECK(taken() == -1);
+    tap_at(W / 2 + 70, 270, 80);
+    CHECK(taken() == -1 && !ptt());
+    where = "...swipes: nothing";
+    swipe(340, 180, 140, 180); run(60);
+    swipe(180, 20, 180, 220); run(60);
+    CHECK(taken() == -1 && !ui_edit_active());
+
+    where = "the gear: a tap, the card and its click; again, away";
+    tap_at(GEAR_X, GEAR_Y, 80); run(30);
+    CHECK(label_from(lv_screen_active(), "EpiBeam 1.21.8") && ui_take_card_shown());
+    picture(dir, "epibeam-card");
+    tap_at(GEAR_X, GEAR_Y, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), "EpiBeam 1.21.8"));
+    CHECK(taken() == -1);
+    where = "...held three seconds: the firmware picker asked for, and no card";
+    down(GEAR_X, GEAR_Y); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+    CHECK(!label_from(lv_screen_active(), "EpiBeam 1.21.8") && taken() == -1);
+
+    where = "locked, from the card's LOCK: the ring steers nothing";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    CHECK(shown("LOCK"));
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(ui_locked());
+    run(10500);
+    where = "...the padlock inside the ring, under N, clear of the caption";
+    {
+        lv_obj_t *lk = NULL, *scr = lv_screen_active();
+        for (uint32_t i = 0; i < lv_obj_get_child_count(scr); i++) {
+            lv_obj_t *o = lv_obj_get_child(scr, (int32_t)i);
+            if (lv_obj_check_type(o, &lv_label_class) && visible(o) &&
+                !strcmp(lv_label_get_text(o), "\xEF\x80\xA3"))
+                lk = o;
+        }
+        box_t k;
+        int room = 0;
+        CHECK(lk && ink_of(lk, &k, &room));
+        if (lk && ink_of(lk, &k, &room)) {
+            CHECK(k.y1 >= KNOB_INK_TOP && k.y2 <= KNOB_INK_FOOT && room >= ROOM);
+            printf("  %-62s ink %d-%d, %d-%d  %2d px clear\n", where, k.x1, k.x2, k.y1, k.y2, room);
+        }
+    }
+    picture(dir, "epibeam-locked");
+    ring_tap(180);
+    CHECK(taken() == -1 && shown("90" DEG));
+    where = "...the gear still brings the card, and UNLOCK on it";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    CHECK(shown("UNLOCK"));
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(!ui_locked());
+    run(10500);
+    ring_tap(180);
+    CHECK(taken() == 2);
+
+    where = "8: the corners too; a detent from N is NE, a tap on SW is SW";
+    ui_beam_set(8, 0); run(60);
+    CHECK(shown("8 DIRECTIONS") && shown("NE") && shown("SE") && shown("SW") && shown("NW") && shown("0" DEG));
+    ui_beam_turn(1);
+    CHECK(taken() == 1 && shown("45" DEG));
+    ring_tap(225);
+    CHECK(taken() == 5 && shown("225" DEG));
+    picture(dir, "epibeam-8");
+    where = "...set from the page while it turns: nothing owed, nothing taken";
+    ui_beam_turn(1); run(30);
+    ui_beam_set(4, 1);
+    CHECK(taken() == -1 && shown("4-SQUARE") && shown("90" DEG));
+
+    where = "EpiCenter linked: said so, in green";
+    st.link_ok = true; run(120);
+    CHECK(shown("EpiCenter") && !shown("EpiCenter: not connected"));
+    st.link_ok = false; run(120);
+
+    where = "the knob's battery, on its own power: inside the ring, clear of N lit";
+    ui_beam_set(4, 0);
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    knob_check(dir, "epibeam-batt");
+    where = "...at 15 %, red";
+    st.knob_pct = 15; run(60);
+    knob_check(dir, NULL);
+    st.knob_pct = 85;
+    where = "...and the padlock beside it, locked";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(ui_locked());
+    run(10500);
+    knob_check(dir, "epibeam-batt-locked");
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(!ui_locked());
+    run(10500);
+    st.knob_batt = false; run(60);
+    (void)ui_take_beam_moved(); quiet();
+}
 #endif
 
 /* The backlight (GitHub #14): the page's brightness, lit at once; dimmed
@@ -2719,17 +2904,49 @@ static void brightness(void)
     ui_set_brightness(80);
 }
 
+/* Which way up (GitHub #15): with the USB cable at the top, as the knob
+ * comes, the glass turned 180 degrees and a finger with it; at the bottom,
+ * neither -- as the harness draws. Every face shares it. */
+static void turned(void)
+{
+    lv_indev_t *t = lv_indev_get_next(NULL);
+    lv_point_t  p = { -1, -1 };
+    where = "the cable at the bottom from the start: the glass as it comes, a finger where it lands";
+    CHECK(lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_0);
+    down(20, 180);
+    run(30);
+    lv_indev_get_point(t, &p);
+    CHECK(p.x == 20 && p.y == 180);
+    up();
+    run(SEEN);
+    where = "...turned to the top: the glass turned 180 degrees, and the finger with it";
+    ui_set_turned(false);
+    CHECK(lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_180);
+    down(20, 180);
+    run(30);
+    lv_indev_get_point(t, &p);
+    CHECK(p.x == W - 1 - 20 && p.y == H - 1 - 180);
+    up();
+    run(SEEN);
+    where = "...and back to the bottom";
+    ui_set_turned(true);
+    CHECK(lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_0);
+    ui_take_ptt_tap();
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : ".";
     lv_init();
     lv_tick_set_cb(tick_cb);
+    /* As a knob with its USB cable at the bottom: the glass the way it
+     * comes, the face drawn as the harness compares it. */
+    ui_set_turned(true);
     if (ui_init() != ESP_OK) { printf("ui_init failed\n"); return 2; }
-    /* ui_init turns the glass round for the knob's mounting: not here. */
-    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_0);
     run(100);
     runs(dir);
     brightness();
+    turned();
     if (least_room < 99) printf("%s: the battery, %d px clear of anything else at the least\n", argv[0], least_room);
     if (knob_least_room < 99)
         printf("%s: the knob's own battery, %d px clear of anything else at the least\n", argv[0], knob_least_room);
