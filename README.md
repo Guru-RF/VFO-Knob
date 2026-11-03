@@ -75,8 +75,8 @@ phased array — a 4-square or an array of 8 directions — on its way to
 EpiCenter, the station's master: a direction a detent, counted out in clicks
 once the dial rests. See [EpiBeam](#epibeam).
 
-With the **ADS-B Radar** firmware, a beta, the knob is a radar of the
-aircraft round you, from adsb.fi, adsb.lol, airplanes.live or your own
+With the **ADS-B Radar** firmware the knob is a radar of the aircraft
+round you, from adsb.fi, adsb.lol, airplanes.live or your own
 receiver: the range on the dial, each aircraft coloured by its altitude,
 an emergency or a type you watch for called out, and a tap for an
 aircraft's route. See [ADS-B Radar](#ads-b-radar).
@@ -659,7 +659,7 @@ has no link to it yet, and says **EpiCenter: not connected**. Step by step:
 
 ## ADS-B Radar
 
-The ADS-B Radar firmware (`vfo-knob-adsb`, a beta) turns the knob into a radar
+The ADS-B Radar firmware (`vfo-knob-adsb`) turns the knob into a radar
 of the aircraft round you, north up, in the setup firmware's colours. It is
 after Alex-developer's [ADSB-Radar](https://github.com/Alex-developer/ADSB-Radar)
 (MIT): the same feeds, fields and colours, on the knob's round glass. Step by

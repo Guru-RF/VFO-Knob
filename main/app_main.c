@@ -2679,7 +2679,7 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "svxconnect", "SVXConnect", false },
     { "phone",      "Telephone",  false },
     { "epibeam",    "EpiBeam",    true  },
-    { "adsb",       "ADS-B Radar", true },
+    { "adsb",       "ADS-B Radar", false },
 };
 
 static void setup_wifi_page(void)

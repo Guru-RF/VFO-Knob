@@ -73,7 +73,7 @@ A name too long for the panel is shown in smaller type, so it fits.
 | **WebSDR** | PA3FWM's WebSDR receivers (websdr.org: Twente and the others), receive only: up to four |
 | **Telephone** | a SIP telephone account: the knob is the handset |
 | **EpiBeam** | a phased array's beam switch, a 4-square or 8 directions, for EpiCenter: a beta |
-| **ADS-B Radar** | a radar of the aircraft round you, from an ADS-B feed or your own receiver: a beta |
+| **ADS-B Radar** | a radar of the aircraft round you, from an ADS-B feed or your own receiver |
 
 A firmware still in beta is stamped **BETA** in the panel's corner: it is
 published for those who want to try it, before it has been tried widely.

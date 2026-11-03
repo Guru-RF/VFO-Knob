@@ -7,8 +7,7 @@ own. Each is an arrow along its track, coloured by its altitude and labelled
 with its callsign and level. An emergency is called out in red, and a type
 you watch for in gold. Tap an aircraft for its card, with its route.
 
-**ADS-B Radar is a beta.** The setup firmware's list and the configuration
-page say so. It is after Alex-developer's
+It is after Alex-developer's
 [ADSB-Radar](https://github.com/Alex-developer/ADSB-Radar): the same feeds,
 fields and colours, drawn on the knob's round glass.
 
@@ -17,8 +16,8 @@ layout (`tools/mkdocs.py`); the orange marks are what your hand does.
 
 ## First run
 
-Install it from the setup firmware's list (**ADS-B Radar**, stamped
-**BETA**), or under **Firmware** on any firmware's configuration page — see
+Install it from the setup firmware's list (**ADS-B Radar**), or under
+**Firmware** on any firmware's configuration page — see
 [the setup guide](setup.md). The knob needs WiFi with a way to the internet,
 or to your own receiver.
 

@@ -16,7 +16,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [UberSDR](ubersdr.md) | `vfo-knob-ubersdr` — a dial for an UberSDR web receiver: its spots and voices, SSTV pictures, and a KiwiSDR beside it |
 | [Kiwi888](kiwi.md) | `vfo-knob-kiwi` — a dial for KiwiSDR and Web-888 web receivers: up to four, another a swipe away, a second in the right ear, no radio needed |
 | [EpiBeam](epibeam.md) | `vfo-knob-epibeam`, a beta — a phased array's beam switch: a 4-square or 8 directions, a direction a detent, counted out in clicks, for EpiCenter |
-| [ADS-B Radar](adsb.md) | `vfo-knob-adsb`, a beta — a radar of the aircraft round you, from adsb.fi, adsb.lol, airplanes.live or your own receiver: the range on the dial, alerts, a tap for an aircraft's route |
+| [ADS-B Radar](adsb.md) | `vfo-knob-adsb` — a radar of the aircraft round you, from adsb.fi, adsb.lol, airplanes.live or your own receiver: the range on the dial, alerts, a tap for an aircraft's route |
 | [A Bluetooth headset or speaker](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, or a speaker as its ear, on every firmware with sound — all but setup, EpiBeam and ADS-B Radar |
 
 ## The pictures
