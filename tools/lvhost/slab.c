@@ -521,6 +521,9 @@ SOME static void batt_radio(const char *dir, const char *face)
 #if VFO_RADIO_EPIBEAM
 #define KNOB_INK_TOP  56                   /* inside the ring of directions, 48 at the top */
 #define KNOB_INK_FOOT 92                   /* ...and over the caption's 99 */
+#elif VFO_RADIO_ADSB
+#define KNOB_INK_TOP  34                   /* under the range's label, the padlock's from 35 */
+#define KNOB_INK_FOOT 61                   /* ...within the plate the map leaves clear */
 #else
 #define KNOB_INK_TOP  38                   /* its ink's rows within these: under the arc */
 #define KNOB_INK_FOOT 58                   /* ...and over the S-units */
@@ -2865,6 +2868,373 @@ static void runs(const char *dir)
     run(10500);
     st.knob_batt = false; run(60);
     (void)ui_take_beam_moved(); quiet();
+}
+#elif VFO_RADIO_ADSB
+/* ADS-B Radar's radar (ui.c ADSB_FACE): a sky round Brussels airport, the
+ * aircraft nearest first as the client hands them over. The map under them
+ * from the image's own tables; the range on the dial, a detent a range, held
+ * at either end, taken once the knob has rested; an emergency and a type on
+ * the page's list called out at the top and buzzed once; a tap on an
+ * aircraft its card with the route, on the card away; the sweep, still under
+ * a card; the filter; the gear, its card and the picker; locked, no card of
+ * an aircraft; the knob's battery and the padlock clear of the map.
+ * Pictures of each. */
+#define GEAR_X 180                       /* ui.c AD_GEAR_Y: CY + 146 */
+#define GEAR_Y 326
+#define AD_R   172                       /* ui.c: the radar's edge */
+#define LAT0   50.9014                   /* EBBR */
+#define LON0   4.4844
+
+typedef struct {
+    const char *flight, *reg, *type, *squawk, *emerg;
+    float nm, brg;                       /* where, from the middle */
+    int32_t alt;                         /* ft; ADSB_ALT_NONE; -1 on the ground */
+    int16_t gs, track, vrate;
+    uint8_t flags;
+    float seen;
+} sky_t;
+
+static const sky_t SKY[] = {
+    { "BEL3PM",  "OO-SSC", "A320", "",     "",        0.6f, 200, -1,     12,  250, ADSB_VR_NONE, 0, 1 },
+    { "UAE183",  "A6-EGO", "B77W", "",     "",        8,   150, 3200,  180,  250, -900, 0, 1 },
+    { "BEL7JK",  "OO-SNA", "A320", "",     "",        12,  300, 12000, 310,  290, 2200, 0, 1 },
+    { "",        "OO-ABC", "C172", "",     "",        15,  80,  1500,  95,   120, 0, 0, 2 },
+    { "",        "",       "",     "",     "",        18,  170, 6000,  -1,   -1,  ADSB_VR_NONE, 0, 3 },
+    { "WZZ1RS",  "HA-LVA", "A21N", "",     "",        20,  260, 35000, 450,  80,  0, 0, 1 },
+    { "KLM1724", "PH-EZA", "E190", "",     "",        22,  20,  8500,  280,  200, -1500, 0, 1 },
+    { "BAF589",  "CT-01",  "A400", "",     "",        25,  330, 18000, 330,  150, 0, ADSB_DB_MILITARY, 1 },
+    { "EZY82QK", "G-EZOA", "A320", "7700", "general", 28,  240, 15000, 290,  60,  -2500, 0, 1 },
+    { "RYR4TF",  "EI-DCL", "B738", "",     "",        30,  210, 37000, 455,  30,  0, 0, 1 },
+    { "SWR781",  "HB-JCA", "BCS3", "",     "",        33,  130, 34000, 440,  310, 0, 0, 1 },
+    { "TUI3TH",  "OO-TMA", "B38M", "",     "",        35,  60,  33000, 430,  240, 0, 0, 1 },
+    { "AUA372",  "OE-LBM", "A320", "",     "",        37,  75,  30000, 420,  265, 0, 0, 1 },
+    { "DLH9AB",  "D-AINA", "A20N", "",     "",        40,  100, 39000, 460,  270, 0, 0, 1 },
+    { "AFR1234", "F-GRHA", "A319", "",     "",        42,  180, 28000, 400,  350, 0, 0, 40 },
+    { "SAS1594", "SE-ROA", "A20N", "",     "",        44,  40,  32000, 450,  220, 0, 0, 1 },
+    { "BAW412",  "G-EUXC", "A321", "",     "",        45,  290, 25000, 410,  110, 0, 0, 1 },
+    { "TAP641",  "CS-TVA", "A20N", "",     "",        46,  220, 36000, 445,  40,  0, 0, 1 },
+    { "EJA412",  "N412QS", "GLF6", "",     "",        47,  305, 45000, 480,  95,  0, ADSB_DB_INTERESTING, 1 },
+};
+#define N_SKY (int)(sizeof SKY / sizeof SKY[0])
+static adsb_ac_t sky[N_SKY];
+
+static void sky_make(void)
+{
+    for (int i = 0; i < N_SKY; i++) {
+        const sky_t *s = &SKY[i];
+        adsb_ac_t   *a = &sky[i];
+        memset(a, 0, sizeof *a);
+        snprintf(a->hex, sizeof a->hex, "4%05x", 0x4a10 + i * 37);
+        strlcpy(a->flight, s->flight, sizeof a->flight);
+        strlcpy(a->reg, s->reg, sizeof a->reg);
+        strlcpy(a->type, s->type, sizeof a->type);
+        strlcpy(a->squawk, s->squawk, sizeof a->squawk);
+        strlcpy(a->emerg, s->emerg, sizeof a->emerg);
+        a->ground = s->alt == -1;
+        a->alt_ft = a->ground ? ADSB_ALT_NONE : s->alt;
+        a->gs_kt = s->gs;
+        a->track = s->track;
+        a->vrate_fpm = s->vrate;
+        a->db_flags = s->flags;
+        a->seen_s = s->seen;
+        const double b = s->brg * M_PI / 180.0;
+        a->lat = LAT0 + s->nm * cos(b) / 60.0;
+        a->lon = LON0 + s->nm * sin(b) / (60.0 * cos(LAT0 * M_PI / 180.0));
+        adsb_dist_brg(LAT0, LON0, a->lat, a->lon, &a->dist_nm, &a->brg);
+    }
+}
+
+/* A table of the image's, from the disk. */
+static uint8_t *table(const char *name, size_t *n)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", ADSB_TABLES, name);
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    *n = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *p = malloc(*n);
+    if (p && fread(p, 1, *n, f) != *n) { free(p); p = NULL; }
+    fclose(f);
+    return p;
+}
+
+static net_adsb_t cfg;
+static void set(void) { ui_adsb_set(&cfg); run(120); }
+
+/* Where an aircraft of the sky is on the glass, at the range set now. */
+static void sky_xy(int i, int *x, int *y)
+{
+    adsb_view_t v;
+    adsb_view_set(&v, LAT0, LON0, adsb_range_nm(cfg.units, cfg.range), AD_R);
+    float px, py;
+    adsb_project(&v, sky[i].lat, sky[i].lon, &px, &py);
+    *x = W / 2 + (int)lroundf(px);
+    *y = H / 2 + (int)lroundf(py);
+}
+static int sky_find(const char *flight)
+{
+    for (int i = 0; i < N_SKY; i++)
+        if (!strcmp(SKY[i].flight, flight)) return i;
+    return -1;
+}
+static void sky_tap(const char *flight)
+{
+    int x, y;
+    sky_xy(sky_find(flight), &x, &y);
+    tap_at(x, y, 80);
+    run(120);
+}
+
+/* Whether the face moves on its own: drawn, a while on, drawn again. */
+static bool moving(void)
+{
+    render(with_b);
+    run(200);
+    render(without_b);
+    return memcmp(with_b, without_b, sizeof with_b) != 0;
+}
+
+static void runs(const char *dir)
+{
+    base();
+    size_t mn = 0, an = 0;
+    const uint8_t *map = table("map.bin", &mn), *apt = table("airports.bin", &an);
+    CHECK(map && apt);
+    ui_adsb_tables(map, mn, apt, an);
+    ui_set_netinfo("ADS-B Radar 1.22.0\nUSB power\nUSB   -\nWiFi  192.168.254.248\nsetup  http://192.168.254.248");
+    sky_make();
+
+    where = "no middle yet: an empty radar, the feed asking";
+    memset(&cfg, 0, sizeof cfg);
+    cfg.lat_e6 = cfg.lon_e6 = NET_ADSB_NO_POS;
+    cfg.range = 4;
+    cfg.opts = NET_ADSB_OPTS_DEFAULT;
+    cfg.refresh_s = 10;
+    strlcpy(cfg.types, "A400, C17", sizeof cfg.types);
+    set();
+    CHECK(shown("50 NM") && shown("asking"));
+    CHECK(!moving());
+    picture(dir, "adsb-nopos");
+
+    where = "the middle on Brussels airport: the map round it, the sweep going round";
+    cfg.lat_e6 = (int32_t)lround(LAT0 * 1e6);
+    cfg.lon_e6 = (int32_t)lround(LON0 * 1e6);
+    strlcpy(cfg.centre, "EBBR", sizeof cfg.centre);
+    set();
+    CHECK(moving());
+    picture(dir, "adsb-map");
+
+    where = "the sky: on the radar, the feed's name and how many at the foot";
+    ui_adsb_feed("adsb.fi", true);
+    ui_adsb_aircraft(sky, N_SKY);
+    run(120);
+    /* On the ground hidden: one fewer than the feed's. */
+    char foot[48];
+    snprintf(foot, sizeof foot, "adsb.fi  " LV_SYMBOL_BULLET "  %d", N_SKY - 1);
+    CHECK(shown(foot));
+    where = "...the emergency called out at the top, buzzed once";
+    CHECK(label_from(lv_screen_active(), "EMERGENCY  EZY82QK"));
+    CHECK(ui_take_adsb_alert() == ADSB_AL_EMERGENCY);
+    ui_adsb_aircraft(sky, N_SKY); run(120);
+    CHECK(ui_take_adsb_alert() == ADSB_AL_NONE);
+    picture(dir, "adsb-radar");
+
+    /* The sweep is painted by the face itself, only its box invalidated:
+     * at eight places round a turn -- one with the trail across north --
+     * what the display was sent step by step is the whole glass drawn
+     * again, and stopped, it leaves not a pixel behind. */
+    for (int k = 0; k < 8; k++) {
+        where = "the sweep round a turn: each step's change sent, nothing of it left when stopped";
+        run(450);
+        memcpy(with_b, fb, sizeof fb);
+        render(without_b);
+        CHECK(!memcmp(with_b, without_b, sizeof fb));
+        tap_at(GEAR_X, GEAR_Y, 80); run(120);                 /* the card stops it */
+        render(with_b);
+        ui_adsb_aircraft(sky, N_SKY); run(120);              /* the scene drawn again, from nothing */
+        render(without_b);
+        CHECK(!memcmp(with_b, without_b, sizeof fb));
+        tap_at(GEAR_X, GEAR_Y, 80); run(120);
+    }
+
+    where = "a detent: 75 NM at once, a click, taken once the knob has rested";
+    (void)ui_take_adsb_steps(); (void)ui_take_adsb_range();
+    ui_adsb_turn(1); run(60);
+    CHECK(shown("75 NM") && ui_take_adsb_steps() == 1);
+    CHECK(ui_take_adsb_range() == -1);
+    run(650);
+    CHECK(ui_take_adsb_range() == 5 && ui_take_adsb_range() == -1);
+    where = "...turned on before it rests: taken once, where it stopped";
+    ui_adsb_turn(-1); run(300);
+    ui_adsb_turn(-1); run(300);
+    CHECK(ui_take_adsb_range() == -1 && shown("30 NM") && ui_take_adsb_steps() == 2);
+    run(400);
+    CHECK(ui_take_adsb_range() == 3);
+    where = "...held at either end: 250 NM, and no click past it";
+    ui_adsb_turn(20); run(60);
+    CHECK(shown("250 NM") && ui_take_adsb_steps() == 1);
+    ui_adsb_turn(1); run(60);
+    CHECK(ui_take_adsb_steps() == 0);
+    run(650);
+    CHECK(ui_take_adsb_range() == 9);
+    cfg.range = 9;
+    picture(dir, "adsb-250");
+    ui_adsb_turn(-20); run(700);
+    CHECK(shown("5 NM") && ui_take_adsb_range() == 0);
+    cfg.range = 0;
+    picture(dir, "adsb-5");
+    ui_adsb_turn(4); run(700);
+    CHECK(shown("50 NM") && ui_take_adsb_range() == 4);
+    cfg.range = 4;
+    (void)ui_take_adsb_steps();
+
+    where = "a tap on an aircraft: its card, its route asked for; the sweep still";
+    sky_tap("UAE183");
+    char cs[12] = "";
+    CHECK(ui_adsb_card_callsign(cs, sizeof cs) && !strcmp(cs, "UAE183"));
+    CHECK(shown("UAE183") && shown("B77W  " LV_SYMBOL_BULLET "  A6-EGO"));
+    CHECK(shown("3200 ft " LV_SYMBOL_DOWN "  -900 ft/min"));
+    CHECK(shown("180 kt  " LV_SYMBOL_BULLET "  250\xC2\xB0"));
+    ui_adsb_route("UAE183", "", "", true); run(60);
+    CHECK(shown("route ..."));
+    ui_adsb_route("UAE183", "Dubai", "Brussels", false); run(60);
+    CHECK(shown("Dubai  " LV_SYMBOL_RIGHT "  Brussels"));
+    CHECK(!moving());
+    picture(dir, "adsb-card");
+    where = "...a tap on the card: away, the sweep on again";
+    tap_at(W / 2, H / 2, 80); run(60);
+    CHECK(!ui_adsb_card_callsign(cs, sizeof cs) && !shown("Dubai  " LV_SYMBOL_RIGHT "  Brussels"));
+    CHECK(moving());
+    where = "...the emergency's card: its squawk and what it is, in red";
+    sky_tap("EZY82QK");
+    CHECK(shown("EZY82QK") && shown("7700  EMERGENCY"));
+    picture(dir, "adsb-card-emergency");
+    where = "...a tap where no aircraft is: away";
+    tap_at(W / 2 + 120, H / 2 - 40, 80); run(60);
+    CHECK(!shown("7700  EMERGENCY"));
+    where = "...left open: gone on its own after 20 s";
+    sky_tap("BEL7JK");
+    CHECK(shown("BEL7JK"));
+    run(20500);
+    CHECK(!ui_adsb_card_callsign(cs, sizeof cs));
+    where = "...one without a callsign: its registration, no route to ask";
+    sky_tap("");
+    CHECK(shown("OO-ABC") && !ui_adsb_card_callsign(cs, sizeof cs));
+    tap_at(W / 2, H / 2, 80); run(60);
+
+    where = "the type on the page's list: gold, called out when no emergency is";
+    sky[sky_find("EZY82QK")].squawk[0] = 0;
+    sky[sky_find("EZY82QK")].emerg[0] = 0;
+    ui_adsb_aircraft(sky, N_SKY); run(120);
+    CHECK(label_from(lv_screen_active(), "A400  BAF589"));
+    CHECK(ui_take_adsb_alert() == ADSB_AL_NONE);   /* seen before, as an alert */
+    picture(dir, "adsb-type");
+    strlcpy(sky[sky_find("EZY82QK")].squawk, "7700", 5);
+    strlcpy(sky[sky_find("EZY82QK")].emerg, "general", 12);
+
+    where = "military only: the A400, and the emergency, which always shows";
+    cfg.show = ADSB_SHOW_MILITARY; set();
+    ui_adsb_aircraft(sky, N_SKY); run(120);
+    CHECK(shown("50 NM  " LV_SYMBOL_BULLET "  MIL"));
+    CHECK(shown("adsb.fi  " LV_SYMBOL_BULLET "  2"));
+    picture(dir, "adsb-mil");
+    cfg.show = ADSB_SHOW_ALL;
+    where = "...no airports, no countries, no sweep: the rings and the sky";
+    cfg.opts = 0; set();
+    ui_adsb_aircraft(sky, N_SKY); run(120);
+    CHECK(!moving());
+    picture(dir, "adsb-plain");
+    cfg.opts = NET_ADSB_OPTS_DEFAULT;
+    where = "...in kilometres: 100 km";
+    cfg.units = ADSB_KM; set();
+    CHECK(shown("100 km"));
+    cfg.units = ADSB_NM; set();
+    where = "...the feed failing: said so at the foot, in the warning's colour";
+    ui_adsb_feed("HTTP 429", false); run(60);
+    CHECK(shown("HTTP 429"));
+    picture(dir, "adsb-down");
+    ui_adsb_feed("adsb.fi", true);
+    ui_adsb_aircraft(sky, N_SKY); run(120);
+    (void)ui_take_adsb_alert();
+
+    where = "a new middle from the page: the aircraft round the old one gone, and their card";
+    sky_tap("UAE183");
+    cfg.lat_e6 += 1000000; set();
+    CHECK(shown("adsb.fi") && !label_from(lv_screen_active(), "EMERGENCY"));
+    CHECK(!ui_adsb_card_callsign(cs, sizeof cs));
+    where = "...the same middle again: the aircraft stay";
+    cfg.lat_e6 -= 1000000; set();
+    ui_adsb_aircraft(sky, N_SKY); run(120);
+    set();
+    CHECK(shown(foot) && label_from(lv_screen_active(), "EMERGENCY"));
+    (void)ui_take_adsb_alert();
+
+    where = "the gear: a tap, the card and its click; again, away";
+    tap_at(GEAR_X, GEAR_Y, 80); run(30);
+    CHECK(label_from(lv_screen_active(), "ADS-B Radar 1.22.0") && ui_take_card_shown());
+    picture(dir, "adsb-gear");
+    tap_at(GEAR_X, GEAR_Y, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), "ADS-B Radar 1.22.0"));
+    where = "...held three seconds: the firmware picker asked for, and no card";
+    down(GEAR_X, GEAR_Y); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+    CHECK(!label_from(lv_screen_active(), "ADS-B Radar 1.22.0"));
+    where = "...no PTT, nor a swipe that does anything";
+    tap_at(W / 2, 290, 80);
+    swipe(340, 180, 140, 180); run(60);
+    swipe(180, 20, 180, 220); run(60);
+    CHECK(!ptt() && !ui_edit_active());
+
+    where = "locked, from the card's LOCK: a tap on an aircraft no card";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    CHECK(shown("LOCK"));
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(ui_locked());
+    run(10500);
+    sky_tap("UAE183");
+    CHECK(!ui_adsb_card_callsign(cs, sizeof cs));
+    where = "...the padlock under the range, clear of the map";
+    {
+        lv_obj_t *lk = padlock();
+        box_t k;
+        int room = 0;
+        CHECK(lk && ink_of(lk, &k, &room));
+        if (lk && ink_of(lk, &k, &room)) {
+            CHECK(k.y1 >= KNOB_INK_TOP && k.y2 <= KNOB_INK_FOOT && room >= ROOM);
+            printf("  %-62s ink %d-%d, %d-%d  %2d px clear\n", where, k.x1, k.x2, k.y1, k.y2, room);
+        }
+    }
+    picture(dir, "adsb-locked");
+    where = "...the gear still brings the card, and UNLOCK on it";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    CHECK(shown("UNLOCK"));
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(!ui_locked());
+    run(10500);
+    sky_tap("UAE183");
+    CHECK(ui_adsb_card_callsign(cs, sizeof cs));
+    tap_at(W / 2, H / 2, 80); run(60);
+
+    where = "the knob's battery, on its own power: under the range, clear of the map";
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    knob_check(dir, "adsb-batt");
+    where = "...at every charge";
+    knob_levels(dir);
+    where = "...and the padlock beside it, locked";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(ui_locked());
+    run(10500);
+    knob_check(dir, "adsb-batt-locked");
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(!ui_locked());
+    run(10500);
+    st.knob_batt = false; run(60);
+    quiet();
 }
 #endif
 

@@ -145,6 +145,38 @@ void     net_prov_save_beam_dirs(uint8_t n);
 uint8_t  net_prov_beam_dir(void);
 void     net_prov_save_beam_dir(uint8_t dir);
 
+/* The ADS-B Radar firmware's radar (components/adsb_client): its middle,
+ * the feed, the units, the range on the dial, what it shows, and the types
+ * it calls out. Copied out and in whole, under a lock: the page writes it
+ * while the feed's task and the face read it. Only that firmware has it. */
+#if VFO_RADIO_ADSB
+#define NET_ADSB_NO_POS INT32_MIN
+/* The middle until one is set, and when the page empties it: Brussels
+ * Airport, so a new knob shows aircraft as soon as it is on WiFi. */
+#define NET_ADSB_HOME        "EBBR"
+#define NET_ADSB_HOME_LAT_E6 50901400
+#define NET_ADSB_HOME_LON_E6 4484400
+enum { NET_ADSB_AIRPORTS = 1, NET_ADSB_COUNTRIES = 2, NET_ADSB_SWEEP = 4, NET_ADSB_GROUND = 8 };
+#define NET_ADSB_OPTS_DEFAULT (NET_ADSB_AIRPORTS | NET_ADSB_COUNTRIES | NET_ADSB_SWEEP)
+#define NET_ADSB_REFRESH_MIN  5
+#define NET_ADSB_REFRESH_MAX  60
+typedef struct {
+    int32_t lat_e6, lon_e6;     /* the middle; NET_ADSB_HOME's until set */
+    char    centre[5];          /* the airport it was set from, "" for a position */
+    uint8_t source;             /* ADSB_SRC_* (components/vfo_core adsb.h) */
+    char    url[128];           /* a receiver of one's own: its aircraft.json */
+    uint8_t units;              /* ADSB_NM, ADSB_KM, ADSB_MI */
+    uint8_t range;              /* the dial's, 0 to ADSB_RANGES - 1 */
+    uint8_t show;               /* ADSB_SHOW_* */
+    uint8_t opts;               /* NET_ADSB_* */
+    uint8_t refresh_s;          /* the feed asked every so many seconds */
+    char    types[64];          /* the types called out: "C17, A400, B74*" */
+} net_adsb_t;
+void     net_prov_adsb(net_adsb_t *out);
+/* What differs from what is kept is written; anything out of bounds is not. */
+void     net_prov_save_adsb(const net_adsb_t *a);
+#endif
+
 /* The jack's level above the VOLUME, dB: 0 to NET_PROV_JACK_DB_MAX in steps
  * of 3 (audio_out_set_jack_level); anything else is not saved. */
 #define NET_PROV_JACK_DB_MAX 12

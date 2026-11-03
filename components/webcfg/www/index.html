@@ -213,6 +213,62 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      shows the direction and keeps it.</p>
 </section>
 
+<section id="adsbsec" hidden>
+  <h2>Radar</h2>
+  <label for="adctr">Middle: an airport (its ICAO code)</label>
+  <input id="adctr" maxlength="4" placeholder="EBBR" autocapitalize="characters"
+         autocorrect="off" spellcheck="false">
+  <div class="grid">
+    <div><label for="adlat">&hellip;or a place: latitude</label>
+      <input id="adlat" inputmode="decimal" placeholder="50.9014"></div>
+    <div><label for="adlon">longitude</label>
+      <input id="adlon" inputmode="decimal" placeholder="4.4844"></div>
+  </div>
+  <p class="note">The radar's middle: an airport by its four letters, from the
+     knob's own list of the large and medium ones; or a place in degrees, north
+     and east positive &mdash; your station's, say. Left empty, it is Brussels
+     Airport, EBBR. North is up.</p>
+  <label for="adsrc">Aircraft from</label>
+  <select id="adsrc"><option value="2">adsb.fi</option><option value="1">adsb.lol</option>
+    <option value="0">airplanes.live</option><option value="3">Your own receiver (readsb, dump1090, tar1090)</option></select>
+  <div id="adurlrow" hidden><label for="adurl">Your receiver's address</label>
+    <input id="adurl" maxlength="127" placeholder="http://192.168.1.20/tar1090" autocapitalize="none"
+           autocorrect="off" spellcheck="false"></div>
+  <p class="note" id="adsrcnote">Three sites that gather what receivers all over the world hear,
+     free and without a key; each asked for the aircraft within the radar's range of its middle.
+     airplanes.live answers <b>HTTP 403</b> until its people have been written to, at
+     contact@airplanes.live. Your own receiver is asked for its <b>aircraft.json</b>: its address, and
+     <b>/data/aircraft.json</b> is added when no path is given.</p>
+  <div class="grid">
+    <div><label for="adunit">Distances in</label>
+      <select id="adunit"><option value="0">nautical miles</option><option value="1">kilometres</option>
+        <option value="2">miles</option></select></div>
+    <div><label for="adshow">Show</label>
+      <select id="adshow"><option value="0">every aircraft</option><option value="1">military aircraft</option>
+        <option value="2">interesting aircraft</option></select></div>
+    <div><label for="adrefr">Asked every (seconds)</label>
+      <input id="adrefr" type="number" min="5" max="60"></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="adapt"> Airports</label>
+  <label class="chk"><input type="checkbox" id="adcty"> Coasts and borders</label>
+  <label class="chk"><input type="checkbox" id="adswp"> The sweep</label>
+  <label class="chk"><input type="checkbox" id="adgnd"> Aircraft on the ground</label>
+  <label for="adtypes">Call out these types</label>
+  <input id="adtypes" maxlength="63" placeholder="A400, C17, B74*" autocapitalize="characters"
+         autocorrect="off" spellcheck="false">
+  <p class="note">ICAO type codes, by comma or space; a <b>*</b> at the end for every type
+     starting so. One coming into range is called out at the top in gold, and the knob
+     clicks; an emergency &mdash; a squawk of 7500, 7600 or 7700 &mdash; is always called
+     out, in red, and the knob buzzes. The range is the dial's: a detent a range, from 5 to
+     250 NM (10 to 450 km). A tap on an aircraft shows its card, with its route from adsbdb.</p>
+  <p class="note" id="adfeed"></p>
+  <p class="note">The aircraft and their data: <a href="https://airplanes.live">airplanes.live</a>,
+     <a href="https://adsb.lol">adsb.lol</a>, <a href="https://adsb.fi">adsb.fi</a>; routes from
+     <a href="https://www.adsbdb.com">adsbdb</a>. After Alex-developer's
+     <a href="https://github.com/Alex-developer/ADSB-Radar">ADSB-Radar</a>. The map: Natural Earth
+     and OurAirports, both public domain.</p>
+</section>
+
 <section id="slsec" hidden>
   <h2>SmartLink</h2>
   <div id="slout">
@@ -852,12 +908,16 @@ async function load(){
   WEBRX = OWRX || WSDR;
   PHONE = c.radio === 'phone';            /* a telephone: its SIP account is its own */
   EPI = c.radio === 'epibeam';            /* an array's beam: no radio, no audio */
+  ADSB = c.radio === 'adsb';              /* a radar of the aircraft: no radio, no audio */
+  SCREEN = EPI || ADSB;
   /* The setup firmware has no radio: it installs one of the others. */
-  $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || EPI;
+  $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || SCREEN;
   $('episec').hidden = !EPI; $('beamn').value = String(c.beamn ?? 4);
-  /* EpiBeam plays nothing: of Audio, only the screen's settings. */
-  $('audioh').textContent = EPI ? 'Screen' : 'Audio';
-  for (const id of ['audiogrid','jacknote']) $(id).hidden = EPI;
+  $('adsbsec').hidden = !ADSB;
+  if (ADSB) adsbLoad();
+  /* EpiBeam and the radar play nothing: of Audio, only the screen's settings. */
+  $('audioh').textContent = SCREEN ? 'Screen' : 'Audio';
+  for (const id of ['audiogrid','jacknote']) $(id).hidden = SCREEN;
   for (const id of ['phonesec','phonecall','phonefav','phonegoogle']) $(id).hidden = !PHONE;
   /* A telephone never transmits; its calls are what keep the screen lit. */
   $('dimnote').hidden = PHONE; $('dimphonenote').hidden = !PHONE;
@@ -893,9 +953,9 @@ async function load(){
   $('myip').textContent = 'my IP ' + myIp;
   $('hostusb').hidden = lan || SVX || flex || uber || WEBRX || ox || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
-  LIST = !SVX && c.radio !== 'setup' && !KIWI && !EPI; LAN = lan; UBER = uber; RXONLY = uber || KIWI || WEBRX;
+  LIST = !SVX && c.radio !== 'setup' && !KIWI && !SCREEN; LAN = lan; UBER = uber; RXONLY = uber || KIWI || WEBRX;
   /* A receiver's firmware has no microphone: no gain to set for one. */
-  $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY || EPI; $('volnote').hidden = !RXONLY || EPI;
+  $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY || SCREEN; $('volnote').hidden = !RXONLY || SCREEN;
   HOSTLBL = flex || xiegu ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
           : WEBRX ? 'Address (http://\u2026, or https://\u2026)' : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
@@ -916,7 +976,7 @@ async function btLoad(){
      it restarting it, a word on where to get it. */
   const busy0 = s.upd && !['idle','waiting'].includes(s.upd.phase);
   const none = !s.companion && UPTIME>=30 && !busy0;
-  $('btsec').hidden=EPI || (!s.companion && !none); $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
+  $('btsec').hidden=SCREEN || (!s.companion && !none); $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
   if(s.companion){ btShow(s); chipPush(s) }
   const busy = s.upd && !['idle','waiting'].includes(s.upd.phase);
   clearTimeout(btTimer); btTimer=setTimeout(btLoad, s.scanning||busy?1000:3000);
@@ -1675,6 +1735,39 @@ function pwHint(d,x){
 /* ---- the phone firmware: its SIP account, a call, the favourites ---- */
 let PHONE=false, phoneLoaded=false, FAVS=[];
 let EPI=false;                          /* the EpiBeam firmware's page */
+let ADSB=false, SCREEN=false;           /* ADS-B Radar's; either, a face with no radio */
+
+/* ---- ADS-B Radar: the radar's middle, its feed, what it shows ---- */
+const ADOPT={adapt:1, adcty:2, adswp:4, adgnd:8};    /* net_prov.h NET_ADSB_* */
+function adsbSrc(){ const own=$('adsrc').value==='3'; $('adurlrow').hidden=!own; }
+$('adsrc').onchange=adsbSrc;
+/* A place typed: the airport's code is no longer the middle. */
+$('adlat').oninput=$('adlon').oninput=()=>{ $('adctr').value='' };
+async function adsbLoad(){
+  let a; try{ a=await (await fetch('/api/adsb',{cache:'no-store'})).json() }catch(e){ return }
+  $('adctr').value=a.centre||'';
+  $('adlat').value=a.lat!==undefined?a.lat.toFixed(4):''; $('adlon').value=a.lon!==undefined?a.lon.toFixed(4):'';
+  $('adsrc').value=String(a.src??2); $('adurl').value=a.url||''; adsbSrc();
+  $('adunit').value=String(a.units??0); $('adshow').value=String(a.show??0); $('adrefr').value=a.refresh??10;
+  for(const [id,bit] of Object.entries(ADOPT)) $(id).checked=!!((a.opts??7)&bit);
+  $('adtypes').value=a.types||'';
+  $('adfeed').textContent=a.lat===undefined?'No middle yet: the radar is empty until one is set.'
+                         :a.ok?`${a.feed} answers.`:`The feed: ${a.feed}.`;
+  $('adfeed').style.color=a.lat!==undefined&&a.ok?'var(--ok)':'var(--accent)';
+}
+/* Saved after the rest, as the reflector's station is: '' or why not. */
+async function adsbSave(){
+  const b=new URLSearchParams(), c=$('adctr').value.trim();
+  if(c) b.append('centre',c);
+  else { b.append('lat',$('adlat').value.trim().replace(',','.')); b.append('lon',$('adlon').value.trim().replace(',','.')); }
+  b.append('src',$('adsrc').value); b.append('url',$('adurl').value.trim());
+  b.append('units',$('adunit').value); b.append('show',$('adshow').value);
+  b.append('refresh',$('adrefr').value||'10'); b.append('types',$('adtypes').value.trim());
+  let o=0; for(const [id,bit] of Object.entries(ADOPT)) if($(id).checked) o|=bit;
+  b.append('opts',String(o));
+  let r; try{ r=await fetch('/api/adsb',{method:'POST',body:b}) }catch(e){ return 'the knob did not answer' }
+  return r.ok?'':await r.text();
+}
 async function phoneLoad(){
   phoneLoaded=true;
   try{
@@ -1902,6 +1995,11 @@ $('save').onclick=async()=>{
   $('msg').textContent = r.ok ? 'Saved. Network changes apply on reboot.'
                               : 'Save failed: '+await r.text();
   $('msg').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  if(r.ok && ADSB){
+    const e=await adsbSave();
+    if(e) say('Radar not saved: '+e,false);
+    else  $('msg').textContent='Saved. The radar shows it at once.';
+  }
   if(r.ok && SVX){
     const e=await svxSave();
     if(e) say('Station not saved: '+e,false);
@@ -2053,6 +2151,7 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'owrx',      name:'OpenWebRX (OpenWebRX and OpenWebRX+ receivers)'},
               {id:'websdr',    name:'WebSDR (the receivers on websdr.org)'},
               {id:'epibeam',   name:'EpiBeam (an array\'s beam, through EpiCenter)', beta:true},
+              {id:'adsb',      name:'ADS-B Radar (the aircraft round you)', beta:true},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

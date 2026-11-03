@@ -28,6 +28,9 @@
 #if VFO_RADIO_EPIBEAM
 #include "epi_client.h"
 #endif
+#if VFO_RADIO_ADSB
+#include "adsb_client.h"
+#endif
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "sd_cache.h"
@@ -166,6 +169,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "Setup";
 #elif VFO_RADIO_EPIBEAM
     const char *name = "EpiBeam";
+#elif VFO_RADIO_ADSB
+    const char *name = "ADS-B Radar";
 #else
     const char *name = "AetherSDR";
 #endif
@@ -421,6 +426,11 @@ static void encoder_task(void *arg)
 #if VFO_RADIO_EPIBEAM
         /* The dial steers the beam, a direction a detent (ui.c's compass). */
         ui_beam_turn(detents);
+        continue;
+#endif
+#if VFO_RADIO_ADSB
+        /* The dial is the radar's range, a range a detent (ui.c's radar). */
+        ui_adsb_turn(detents);
         continue;
 #endif
 #if VFO_RADIO_PHONE
@@ -1688,6 +1698,60 @@ static void ui_task(void *arg)
             }
         }
 #endif
+#if VFO_RADIO_ADSB
+        /* The radar: a click a range stepped; the range it settled on kept,
+         * and the feed asked at it at once; the feed's aircraft and its
+         * state to the face, the card's route looked up, and a new alert
+         * felt -- a buzz for an emergency, a click for a type on the list.
+         * Settings saved on the page drawn at once. */
+        {
+            if (adsb_client_take_settings()) {
+                net_adsb_t a;
+                net_prov_adsb(&a);
+                ui_adsb_set(&a);
+            }
+            if (ui_take_adsb_steps()) haptic(1);
+            const int r = ui_take_adsb_range();
+            if (r >= 0) {
+                net_adsb_t a;
+                net_prov_adsb(&a);
+                a.range = (uint8_t)r;
+                net_prov_save_adsb(&a);
+                adsb_client_poke();
+            }
+            EXT_RAM_BSS_ATTR static adsb_ac_t ac[ADSB_KEEP];
+            static uint32_t gen;
+            adsb_snap_t sn;
+            if (adsb_client_take(ac, ADSB_KEEP, &sn, gen)) {
+                gen = sn.gen;
+                ui_adsb_aircraft(ac, sn.n);
+            }
+            char f[24];
+            bool ok;
+            adsb_client_feed(f, sizeof f, &ok);
+            ui_adsb_feed(f, ok);
+            char cs[9];
+            if (ui_adsb_card_callsign(cs, sizeof cs)) {
+                char from[24], to[24];
+                bool pending;
+                const bool known = adsb_client_route(cs, from, sizeof from, to, sizeof to, &pending);
+                ui_adsb_route(cs, known ? from : "", known ? to : "", pending);
+            }
+            const int al = ui_take_adsb_alert();
+            if (al == ADSB_AL_EMERGENCY) haptic(14);    /* strong buzz */
+            else if (al)                 haptic(1);     /* strong click */
+            static int64_t drawn_said;
+            const int64_t t = esp_timer_get_time();
+            if (t - drawn_said > 60LL * 1000 * 1000) {
+                drawn_said = t;
+                int map_ms, scene_ms, sweep_ms;
+                ui_take_adsb_draw_ms(&map_ms, &scene_ms, &sweep_ms);
+                if (map_ms || scene_ms || sweep_ms)
+                    ESP_LOGI(TAG, "radar: the longest draw this minute, map %d ms, scene %d ms, sweep step %d ms",
+                             map_ms, scene_ms, sweep_ms);
+            }
+        }
+#endif
         /* The antennas, up under a finger held on the slab: a buzz says the
          * slab has not keyed, and the editor is there. (Never on the air:
          * haptic() keeps the motor still then, and no hold opens it.) */
@@ -1850,9 +1914,10 @@ static void ui_task(void *arg)
          * nothing goes over it. */
         else if (!link_ok) { }
 #endif
-#if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR
+#if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR || VFO_RADIO_ADSB
         /* A receiver on its way, with nothing said against it: no warning
-         * over the face -- its slab says "connecting...". */
+         * over the face -- its slab says "connecting...", the radar's foot
+         * "asking". */
         else if ((st.link == RADIO_LINK_CONNECTING || st.link == RADIO_LINK_GREETING) &&
                  !st.link_why[0]) { }
 #endif
@@ -2392,6 +2457,11 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     /* The same: the radios' list, each WebSDR by its address whole. */
     strlcpy(ip, "WSDR", iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (WebSDR) ---");
+#elif VFO_RADIO_ADSB
+    /* The feed is the radar's own (the page's Radar): the client asks it
+     * itself, and says NO LOCATION until the radar has a middle. */
+    strlcpy(ip, "ADSB", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (ADS-B) ---");
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -2609,6 +2679,7 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "svxconnect", "SVXConnect", false },
     { "phone",      "Telephone",  false },
     { "epibeam",    "EpiBeam",    true  },
+    { "adsb",       "ADS-B Radar", true },
 };
 
 static void setup_wifi_page(void)
@@ -3999,6 +4070,17 @@ void app_main(void)
     ui_set_turned(net_prov_turned());
 #if VFO_RADIO_EPIBEAM
     ui_beam_set(net_prov_beam_dirs(), net_prov_beam_dir());
+#endif
+#if VFO_RADIO_ADSB
+    {
+        const uint8_t *map, *apt;
+        size_t mn, an;
+        adsb_client_tables(&map, &mn, &apt, &an);
+        ui_adsb_tables(map, mn, apt, an);
+        net_adsb_t a;
+        net_prov_adsb(&a);
+        ui_adsb_set(&a);
+    }
 #endif
     bool have_ui = have_panel && bring_up("ui", ui_init);
     /* Building the face is the deepest thing the main task does. */

@@ -75,6 +75,12 @@ phased array — a 4-square or an array of 8 directions — on its way to
 EpiCenter, the station's master: a direction a detent, counted out in clicks
 once the dial rests. See [EpiBeam](#epibeam).
 
+With the **ADS-B Radar** firmware, a beta, the knob is a radar of the
+aircraft round you, from adsb.fi, adsb.lol, airplanes.live or your own
+receiver: the range on the dial, each aircraft coloured by its altitude,
+an emergency or a type you watch for called out, and a tap for an
+aircraft's route. See [ADS-B Radar](#ads-b-radar).
+
 ---
 
 ## Reporting a problem
@@ -161,9 +167,9 @@ feature per issue lets each be answered, built and closed on its own.
 | **Gain, power, tuner** | On the Icom firmware, swipe from the left for RF GAIN, and tap it for POWER, in watts; both apply as the knob turns (with a web SDR chosen, BALANCE comes first). Swipe from the right to put the IC-7610's antenna tuner in the line or out of it — only that: no tune cycle, nothing transmitted. |
 | **Web SDR** | On the Icom and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). On the Kiwi888 firmware a second of its own receivers plays in the right ear: **RIGHT EAR**, **OFF** or a receiver, and **BALANCE** from **LEFT** to **RIGHT** — see [Kiwi888](#kiwi888). |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.19.0`, or `… dev` for a build that is not a release), the knob's power — **battery 85 %**, or **on USB power** — and its addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
-| **Lock** | With the address card up, tap **LOCK** over the S-meter: a padlock shows at the top of the arc (on EpiBeam, which has the gear for the card, inside the ring), and the knob ignores turns, taps and swipes and keys nothing — not the slab, a headset's button or its boom arm. Unkeying is never locked, and the telephone's slab still hangs up. A question the knob asks still takes its answer. **UNLOCK** on the card again, or a restart, frees it. On every firmware but the setup one. |
+| **Lock** | With the address card up, tap **LOCK** over the S-meter: a padlock shows at the top of the arc (on EpiBeam, which has the gear for the card, inside the ring; on ADS-B Radar, which has one too, under the range), and the knob ignores turns, taps and swipes and keys nothing — not the slab, a headset's button or its boom arm. Unkeying is never locked, and the telephone's slab still hangs up. A question the knob asks still takes its answer. **UNLOCK** on the card again, or a restart, frees it. On every firmware but the setup one. |
 | **Screen** | Its brightness on the configuration page, 10 to 100 % (80 % until it is set). Unused, it dims after 5 minutes and goes dark after 10, both set there too; a turn, a touch or transmitting lights it again. The knob comes with its USB cable at the top; for a stand or a mount with the cable at the bottom, **The USB cable: At the bottom** there turns the screen the other way up, and the touch with it. |
-| **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face — on EpiBeam inside the ring, over the array: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
+| **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face — on EpiBeam inside the ring, over the array, on ADS-B Radar under the range: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
@@ -651,6 +657,24 @@ has no link to it yet, and says **EpiCenter: not connected**. Step by step:
 | **The gear** | A tap: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
 | **Kept** | The direction, across a restart. No PTT, no swipes, no audio and no Bluetooth: the glass is the beam's. |
 
+## ADS-B Radar
+
+The ADS-B Radar firmware (`vfo-knob-adsb`, a beta) turns the knob into a radar
+of the aircraft round you, north up, in the setup firmware's colours. It is
+after Alex-developer's [ADSB-Radar](https://github.com/Alex-developer/ADSB-Radar)
+(MIT): the same feeds, fields and colours, on the knob's round glass. Step by
+step: [the ADS-B Radar guide](docs/adsb.md).
+
+| | |
+|---|---|
+| **Radar** | On the configuration page: the middle, an airport by its ICAO code or a place in degrees, Brussels Airport until set; the feed — adsb.fi until set, adsb.lol, airplanes.live, or your own readsb, dump1090 or tar1090; the units; every aircraft, military ones or interesting ones; airports, coasts and borders, the sweep, aircraft on the ground; the types to call out; how often to ask. |
+| **The dial** | The range, a detent a range with a click: 5 to 250 NM or miles, 10 to 450 km. Kept, and the feed asked at it, once the dial has rested 0.6 s. |
+| **The aircraft** | Arrows along their track, coloured by altitude, the twelve nearest labelled with their callsign and level where there is room. A tap on one: its card — type, registration, level and rate, speed, track, where it is, its squawk — and its route, from adsbdb. |
+| **Alerts** | An emergency squawk always shows, ringed in red, called out at the top, with a buzz; a type on the list in gold, with a click. |
+| **The map** | Coasts and borders from Natural Earth, airports from OurAirports, both public domain and in the firmware; rings at a quarter, half and three quarters of the range; the sweep. |
+| **The gear** | A tap: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
+| **Kept** | The settings and the range, across a restart. No PTT, no swipes, no audio and no Bluetooth: the glass is the radar's. |
+
 
 The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
 S3 lacks, and a UART between the two. The companion firmware (`companion/`)
@@ -826,7 +850,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone` and `vfo-knob-epibeam` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam` and `vfo-knob-adsb` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice

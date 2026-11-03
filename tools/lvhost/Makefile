@@ -47,7 +47,7 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
 SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup slab_kiwi slab_owrx \
-         slab_websdr slab_epibeam
+         slab_websdr slab_epibeam slab_adsb
 all: vu_compare chooser kiwi_face readout $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
@@ -127,6 +127,17 @@ slab_websdr: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_WEBSDR=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_epibeam: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_EPIBEAM=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
+# ADS-B Radar's: its arithmetic and its map's tables beside the face, and
+# Montserrat 12 for the aircraft's labels, on in its sdkconfig alone.
+ADSB_FLAGS := -DVFO_RADIO_ADSB=1 -DLV_FONT_MONTSERRAT_12=1 \
+              -DADSB_TABLES='"$(ROOT)/components/adsb_client/tables"'
+obj/fonts/lv_font_montserrat_12.o: $(LVGL)/src/font/lv_font_montserrat_12.c lv_conf.h
+	@mkdir -p obj/fonts
+	@$(CC) $(CFLAGS) $(FONTS) -DLV_FONT_MONTSERRAT_12=1 -c $< -o $@
+slab_adsb: slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/adsb.c $(wildcard stub/*.h) $(FONT_OBJS) \
+           obj/fonts/lv_font_montserrat_12.o $(OBJS)
+	$(CC) $(SLAB_FLAGS) $(ADSB_FLAGS) slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/adsb.c $(FONT_OBJS) \
+	    obj/fonts/lv_font_montserrat_12.o $(OBJS) -lm -o $@
 slab-check: $(SLABS)
 	mkdir -p $(OUT)
 	for s in $(SLABS); do ./$$s $(OUT) || exit 1; done

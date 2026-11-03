@@ -441,6 +441,41 @@ int  ui_take_beam(void);
 /* Moved since last asked: a count under way is out of date. */
 bool ui_take_beam_moved(void);
 
+/* The ADS-B Radar firmware's radar (VFO_RADIO=adsb; components/vfo_core
+ * adsb.h, components/adsb_client). */
+#if VFO_RADIO_ADSB
+#include "adsb.h"
+#include "net_prov.h"
+#define ADSB_UI_MAX 300            /* aircraft the face holds: adsb_client's ADSB_KEEP */
+/* The map's tables (adsb_client_tables), before ui_init. */
+void ui_adsb_tables(const uint8_t *map, size_t mn, const uint8_t *apt, size_t an);
+/* The radar's settings: its middle, the units, the range, what it shows.
+ * Before ui_init, kept for it; after, drawn again at once. */
+void ui_adsb_set(const net_adsb_t *a);
+/* The feed's newest aircraft, nearest first. */
+void ui_adsb_aircraft(const adsb_ac_t *ac, int n);
+/* The feed's state for the radar's foot (adsb_client_feed). */
+void ui_adsb_feed(const char *what, bool ok);
+/* The card's aircraft's callsign, while a card is up and it has one: its
+ * route to look up. */
+bool ui_adsb_card_callsign(char *cs, size_t n);
+/* That route, once known, or pending: "Dublin > Brussels" on the card. */
+void ui_adsb_route(const char *cs, const char *from, const char *to, bool pending);
+/* From the knob's task: detents, a range each, applied in the LVGL task. */
+void ui_adsb_turn(int32_t detents);
+/* The range the dial settled on, once, to keep and to ask the feed at: -1,
+ * none. */
+int  ui_take_adsb_range(void);
+/* Ranges stepped since last asked: a click for them. */
+int  ui_take_adsb_steps(void);
+/* An alert new since last asked, its ADSB_AL_*: an emergency, or a type on
+ * the page's list -- the motor's buzz. */
+int  ui_take_adsb_alert(void);
+/* The longest map, scene and sweep step the face drew since last asked, in
+ * ms: for the log. */
+void ui_take_adsb_draw_ms(int *map, int *scene, int *sweep);
+#endif
+
 void ui_updating_show(void);
 /* The same screen for the moment before a restart that installs at boot:
  * REBOOTING, into update mode -- no percentage yet, which read as a download

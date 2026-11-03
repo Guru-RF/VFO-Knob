@@ -72,6 +72,7 @@ add_library(vfo_core STATIC
     ${CORE}/src/vfo_tune.c
     ${CORE}/src/ptt_fsm.c
     ${CORE}/src/beam.c
+    ${CORE}/src/adsb.c
 )
 target_include_directories(vfo_core PUBLIC ${CORE}/include)
 target_compile_options(vfo_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -178,6 +179,17 @@ add_executable(test_beam src/test_beam.c)
 target_link_libraries(test_beam PRIVATE vfo_core)
 target_compile_options(test_beam PRIVATE -Wall -Wextra)
 add_test(NAME test_beam COMMAND test_beam)
+
+# ADS-B Radar's arithmetic (components/vfo_core/src/adsb.c): a feed's
+# aircraft read without a tree, distance and bearing, the ranges and the
+# dial, the bands, the filter and the alerts, adsbdb's route, and the map's
+# committed tables (components/adsb_client/tables).
+add_executable(test_adsb src/test_adsb.c)
+target_link_libraries(test_adsb PRIVATE vfo_core)
+target_compile_options(test_adsb PRIVATE -Wall -Wextra)
+target_compile_definitions(test_adsb PRIVATE
+    ADSB_TABLES="${CMAKE_CURRENT_SOURCE_DIR}/../../components/adsb_client/tables")
+add_test(NAME test_adsb COMMAND test_adsb)
 
 # KiwiSDR's protocol, the plain-C part (components/kiwi_proto/kiwi_proto.c).
 set(KIWI ${CMAKE_CURRENT_SOURCE_DIR}/../../components/kiwi_proto)

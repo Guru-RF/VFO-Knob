@@ -17,6 +17,9 @@
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "kvstore.h"
+#if VFO_RADIO_ADSB
+#include "adsb.h"
+#endif
 #include "lwip/netdb.h"
 #include "mdns.h"
 #include "nvs.h"
@@ -61,6 +64,19 @@
 #define KEY_PORT     "epport"
 #define KEY_USER     "epuser"
 #define KEY_PASS     "eppass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 80
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
+#elif VFO_RADIO_ADSB
+/* No radio: the feed is the radar's own (net_prov_adsb). Keys of its own all
+ * the same, so it never writes another firmware's. */
+#define KEY_HOST     "abhost"
+#define KEY_RLIST    "ablist"
+#define KEY_RSEL     "absel"
+#define KEY_PORT     "abport"
+#define KEY_USER     "abuser"
+#define KEY_PASS     "abpass"
 #define DEFAULT_HOST ""
 #define DEFAULT_PORT 80
 #define DEFAULT_USER ""
@@ -206,6 +222,12 @@ static bool     s_turned;           /* the USB cable at the bottom: the screen t
 static uint8_t  s_beam_n = 4;       /* EpiBeam: the array's directions, 4 or 8 */
 static uint8_t  s_beam_dir;         /* ...and the one the beam was left on, 0 = N */
 static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
+#if VFO_RADIO_ADSB
+/* ADS-B Radar's radar: in PSRAM, as large as it is beside the rest. */
+EXT_RAM_BSS_ATTR static net_adsb_t s_adsb;
+static portMUX_TYPE s_adsb_lock = portMUX_INITIALIZER_UNLOCKED;
+static void adsb_load(kv_handle_t h);
+#endif
 
 /* Credentials for the configuration page. Shipped as admin/admin so a new
  * owner can get in; over the network the knob then does nothing more until
@@ -627,6 +649,9 @@ void net_prov_load_settings(void)
     if (kv_get_u8(h, "beamn", &v) == ESP_OK && (v == 4 || v == 8)) s_beam_n = v;
     if (kv_get_u8(h, "beamd", &v) == ESP_OK && v < s_beam_n) s_beam_dir = v;
     if (kv_get_u8(h, "jackdb", &v) == ESP_OK && v <= NET_PROV_JACK_DB_MAX && v % 3 == 0) s_jack_db = v;
+#if VFO_RADIO_ADSB
+    adsb_load(h);
+#endif
     len = sizeof s_web_user; kv_get_str(h, "wuser", s_web_user, &len);
     len = sizeof s_web_pass; kv_get_str(h, "wpass", s_web_pass, &len);
 
@@ -996,6 +1021,82 @@ void net_prov_save_beam_dir(uint8_t dir)
     kv_set_u8(kv(), "beamd", dir);
     kv_commit_now(kv());
 }
+
+#if VFO_RADIO_ADSB
+/* Each its own key, so a page that changes one writes one. */
+static void adsb_load(kv_handle_t h)
+{
+    net_adsb_t a = {
+        .lat_e6 = NET_ADSB_HOME_LAT_E6, .lon_e6 = NET_ADSB_HOME_LON_E6, .centre = NET_ADSB_HOME,
+        .source = ADSB_SRC_ADSB_FI, .range = 4, .opts = NET_ADSB_OPTS_DEFAULT, .refresh_s = 10,
+    };
+    int32_t la, lo;
+    if (kv_get_i32(h, "adlat", &la) == ESP_OK && kv_get_i32(h, "adlon", &lo) == ESP_OK &&
+        la >= -90000000 && la <= 90000000 && lo >= -180000000 && lo <= 180000000) {
+        a.lat_e6 = la;
+        a.lon_e6 = lo;
+    }
+    size_t len = sizeof a.centre;  kv_get_str(h, "adctr", a.centre, &len);
+    len = sizeof a.url;            kv_get_str(h, "adurl", a.url, &len);
+    len = sizeof a.types;          kv_get_str(h, "adtypes", a.types, &len);
+    uint8_t v;
+    if (kv_get_u8(h, "adsrc", &v) == ESP_OK && adsb_src_ok(v))      a.source = v;
+    if (kv_get_u8(h, "adunit", &v) == ESP_OK && adsb_units_ok(v))   a.units = v;
+    if (kv_get_u8(h, "adrng", &v) == ESP_OK && v < ADSB_RANGES)     a.range = v;
+    if (kv_get_u8(h, "adshow", &v) == ESP_OK && adsb_show_ok(v))    a.show = v;
+    if (kv_get_u8(h, "adopt", &v) == ESP_OK && v < 16)              a.opts = v;
+    if (kv_get_u8(h, "adrefr", &v) == ESP_OK && v >= NET_ADSB_REFRESH_MIN && v <= NET_ADSB_REFRESH_MAX)
+        a.refresh_s = v;
+    portENTER_CRITICAL(&s_adsb_lock);
+    s_adsb = a;
+    portEXIT_CRITICAL(&s_adsb_lock);
+}
+
+void net_prov_adsb(net_adsb_t *out)
+{
+    portENTER_CRITICAL(&s_adsb_lock);
+    *out = s_adsb;
+    portEXIT_CRITICAL(&s_adsb_lock);
+}
+
+void net_prov_save_adsb(const net_adsb_t *in)
+{
+    net_adsb_t was, a = *in;
+    net_prov_adsb(&was);
+    const bool pos = a.lat_e6 >= -90000000 && a.lat_e6 <= 90000000 &&
+                     a.lon_e6 >= -180000000 && a.lon_e6 <= 180000000;
+    if (!pos) { a.lat_e6 = was.lat_e6; a.lon_e6 = was.lon_e6; memcpy(a.centre, was.centre, sizeof a.centre); }
+    if (!adsb_src_ok(a.source))   a.source = was.source;
+    if (!adsb_units_ok(a.units))  a.units = was.units;
+    if (a.range >= ADSB_RANGES)   a.range = was.range;
+    if (!adsb_show_ok(a.show))    a.show = was.show;
+    if (a.opts >= 16)             a.opts = was.opts;
+    if (a.refresh_s < NET_ADSB_REFRESH_MIN || a.refresh_s > NET_ADSB_REFRESH_MAX) a.refresh_s = was.refresh_s;
+    a.centre[sizeof a.centre - 1] = 0;
+    a.url[sizeof a.url - 1] = 0;
+    a.types[sizeof a.types - 1] = 0;
+    if (!memcmp(&a, &was, sizeof a)) return;
+    portENTER_CRITICAL(&s_adsb_lock);
+    s_adsb = a;
+    portEXIT_CRITICAL(&s_adsb_lock);
+
+    kv_handle_t h = kv();
+    if (a.lat_e6 != was.lat_e6 || a.lon_e6 != was.lon_e6) {
+        kv_set_i32(h, "adlat", a.lat_e6);
+        kv_set_i32(h, "adlon", a.lon_e6);
+    }
+    if (strcmp(a.centre, was.centre)) kv_set_str(h, "adctr", a.centre);
+    if (strcmp(a.url, was.url))       kv_set_str(h, "adurl", a.url);
+    if (strcmp(a.types, was.types))   kv_set_str(h, "adtypes", a.types);
+    if (a.source != was.source)       kv_set_u8(h, "adsrc", a.source);
+    if (a.units != was.units)         kv_set_u8(h, "adunit", a.units);
+    if (a.range != was.range)         kv_set_u8(h, "adrng", a.range);
+    if (a.show != was.show)           kv_set_u8(h, "adshow", a.show);
+    if (a.opts != was.opts)           kv_set_u8(h, "adopt", a.opts);
+    if (a.refresh_s != was.refresh_s) kv_set_u8(h, "adrefr", a.refresh_s);
+    kv_commit_now(h);
+}
+#endif
 
 uint8_t net_prov_jack_db(void) { return s_jack_db; }
 

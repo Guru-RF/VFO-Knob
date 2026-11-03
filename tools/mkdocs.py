@@ -1694,11 +1694,340 @@ def epibeam_pictures():
     return out
 
 
+# --- the ADS-B Radar firmware --------------------------------------------------------
+
+AD_R = 172                                # ui.c AD_R: the radar's edge
+AD_GEAR_Y = 180 + 146                     # ui.c AD_GEAR_Y
+AD_FOOT_Y = 180 + 106                     # ui.c AD_FOOT_Y: the feed's state
+AD_BANNER_Y = 62                          # ui.c AD_BANNER_Y
+AD_BG, AD_RING, AD_RING_HALF, AD_AXIS = "#030806", "#0E3A1C", "#16582C", "#0A2614"
+AD_TICK, AD_COAST, AD_BORDER, AD_APT = "#2E8C4A", "#2A7088", "#1D4A58", "#5FA36A"
+AD_TEXT, AD_SWEEP, AD_EMERGENCY, AD_TYPE = "#8CFF9E", "#35DB5F", "#FF3030", "#E5A823"
+AD_BAND = ("#9CA3AF", "#FF6EC7", "#FFA22D", "#FFE15C", "#4ADE80", "#38BDF8", "#A78BFA")
+AD_RANGES = (5, 10, 20, 30, 50, 75, 100, 150, 200, 250)
+AD_MIDDLE = (50.9014, 4.4844)             # EBBR, as the page's airport puts it
+# A sky round Brussels: callsign, type, registration, NM and degrees from the
+# middle, ft (None on the ground), knots, track, ft/min, squawk.
+AD_SKY = (
+    ("UAE183", "B77W", "A6-EGO", 8, 150, 3200, 180, 250, -900, ""),
+    ("BEL7JK", "A320", "OO-SNA", 12, 300, 12000, 310, 290, 2200, ""),
+    ("", "C172", "OO-ABC", 15, 80, 1500, 95, 120, 0, ""),
+    ("WZZ1RS", "A21N", "HA-LVA", 20, 255, 35000, 450, 80, 0, ""),
+    ("KLM1724", "E190", "PH-EZA", 22, 20, 8500, 280, 200, -1500, ""),
+    ("BAF589", "A400", "CT-01", 26, 335, 18000, 330, 150, 0, ""),
+    ("EZY82QK", "A320", "G-EZOA", 28, 235, 15000, 290, 60, -2500, "7700"),
+    ("RYR4TF", "B738", "EI-DCL", 32, 205, 37000, 455, 30, 0, ""),
+    ("SWR781", "BCS3", "HB-JCA", 33, 125, 34000, 440, 310, 0, ""),
+    ("TUI3TH", "B38M", "OO-TMA", 36, 62, 33000, 430, 240, 0, ""),
+    ("DLH9AB", "A20N", "D-AINA", 41, 98, 39000, 460, 270, 0, ""),
+    ("BAW412", "A321", "G-EUXC", 44, 288, 25000, 410, 110, 0, ""),
+    ("SAS1594", "A20N", "SE-ROA", 46, 38, 32000, 450, 220, 0, ""),
+)
+
+
+@functools.lru_cache(maxsize=None)
+def adsb_tables():
+    """components/adsb_client/tables (tools/adsb_tables.py): the map's runs,
+    each its kind and points in 1e-4 degree, and the airports."""
+    import struct
+    d = os.path.join(ROOT, "components", "adsb_client", "tables")
+    m = open(os.path.join(d, "map.bin"), "rb").read()
+    nruns, _ = struct.unpack_from("<II", m, 4)
+    steps_at = 12 + nruns * 24
+    runs = []
+    for i in range(nruns):
+        lat, lon, la0, la1, lo0, lo1, first, n, kind = struct.unpack_from("<iihhhhIHB", m, 12 + i * 24)
+        pts = [(lat, lon)]
+        for k in range(n):
+            dla, dlo = struct.unpack_from("<hh", m, steps_at + (first + k) * 4)
+            lat, lon = lat + dla, lon + dlo
+            pts.append((lat, lon))
+        runs.append((kind, (la0, la1, lo0, lo1), pts))
+    a = open(os.path.join(d, "airports.bin"), "rb").read()
+    (napt,) = struct.unpack_from("<I", a, 4)
+    apts = []
+    for i in range(napt):
+        lat, lon, code, large = struct.unpack_from("<ii4sB", a, 8 + i * 16)
+        apts.append((lat, lon, code.rstrip(b"\0").decode(), bool(large)))
+    return runs, apts
+
+
+def ad_project(lat, lon, nm, mid=AD_MIDDLE):
+    """adsb_project(): pixels from the middle, x east, y down."""
+    px = AD_R / nm
+    dl = (lon - mid[1] + 540.0) % 360.0 - 180.0
+    return dl * 60 * math.cos(math.radians(mid[0])) * px, -(lat - mid[0]) * 60 * px
+
+
+def ad_at(dist, brg, mid=AD_MIDDLE):
+    """The place `dist` NM from the middle at `brg` degrees, flat."""
+    b = math.radians(brg)
+    return (mid[0] + dist * math.cos(b) / 60, mid[1] + dist * math.sin(b) / (60 * math.cos(math.radians(mid[0]))))
+
+
+def ad_band(alt):
+    """adsb_band(): ADSB-Radar's altitude bands."""
+    if alt is None:
+        return 0
+    return 1 + sum(alt >= t for t in (2000, 10000, 20000, 30000, 40000))
+
+
+def ad_level(alt, vrate):
+    """ad_level(): FL above 10000 ft, else feet; an arrow climbing or
+    descending more than 300 ft/min."""
+    arrow = " \u2191" if vrate > 300 else " \u2193" if vrate < -300 else ""
+    if alt is None:
+        return "GND"
+    return f"FL{(alt + 50) // 100:03d}{arrow}" if alt >= 10000 else f"{alt} ft{arrow}"
+
+
+def ad_plate(rng):
+    """ad_set_plate(): the top the map leaves clear, as wide as the range's
+    label or the battery's row with the padlock."""
+    half = max(montserrat(20).width(rng) // 2 + 6, 25 // 2 + 30)
+    return (180 - half, 0, 180 + half, 37 + 24)
+
+
+def ad_in_glass(b):
+    return all((x - 180) ** 2 + (y - 180) ** 2 <= (AD_R - 2) ** 2 for x in (b[0], b[2]) for y in (b[1], b[3]))
+
+
+def ad_free(boxes, b):
+    return all(b[0] > o[2] or o[0] > b[2] or b[1] > o[3] or o[1] > b[3] for o in boxes)
+
+
+def radar_face(range_i=4, sky=AD_SKY, show="", types=("A400",), emergency=True, sweep=40, sel=None,
+               feed="adsb.fi", ok=True, nopos=False, airports=True, countries=True, banner=True):
+    """ADS-B Radar's face (ui.c ADSB_FACE): the map -- the coasts and borders,
+    the rings at a quarter, half and three quarters, the compass's ticks,
+    the airports -- the aircraft over it as arrows along their track,
+    labelled nearest first where there is room; the sweep; the range at the
+    top, the feed's state and the gear at the foot; an alert's banner."""
+    nm = AD_RANGES[range_i]
+    rng = f"{nm} NM" + (f"  \u2022  {show}" if show else "")
+    plate = ad_plate(rng)
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="{AD_BG}"/>',
+         f'<clipPath id="adglass"><circle cx="180" cy="180" r="{AD_R}"/></clipPath>']
+    lines_ = []
+    if not nopos:
+        lines_.append(f'<path d="M180,{180 - AD_R}V{180 + AD_R}M{180 - AD_R},180H{180 + AD_R}" '
+                      f'stroke="{AD_AXIS}" stroke-width="1"/>')
+        if countries:
+            runs, _ = adsb_tables()
+            half = nm * 1.05
+            dlat, dlon = half / 60, half / (60 * math.cos(math.radians(AD_MIDDLE[0])))
+            paths = {0: [], 1: []}
+            for kind, (la0, la1, lo0, lo1), pts in runs:
+                if la1 / 100 < AD_MIDDLE[0] - dlat or la0 / 100 > AD_MIDDLE[0] + dlat:
+                    continue
+                if lo1 / 100 < AD_MIDDLE[1] - dlon or lo0 / 100 > AD_MIDDLE[1] + dlon:
+                    continue
+                xy = [ad_project(la / 1e4, lo / 1e4, nm) for la, lo in pts]
+                paths[kind].append("M" + "L".join(f"{180 + x:.1f},{180 + y:.1f}" for x, y in xy))
+            for kind, col in ((0, AD_COAST), (1, AD_BORDER)):
+                if paths[kind]:
+                    lines_.append(f'<path d="{"".join(paths[kind])}" fill="none" stroke="{col}" '
+                                  f'stroke-width="1" stroke-linejoin="round"/>')
+        for r, col in ((AD_R // 4, AD_RING), (AD_R // 2, AD_RING_HALF), (AD_R * 3 // 4, AD_RING), (AD_R, AD_RING_HALF)):
+            lines_.append(f'<circle cx="180" cy="180" r="{r}" fill="none" stroke="{col}" stroke-width="1"/>')
+        for deg in range(0, 360, 10):
+            ln = 12 if deg % 90 == 0 else 8 if deg % 30 == 0 else 4
+            a = math.radians(deg)
+            lines_.append(f'<line x1="{180 + math.sin(a) * (AD_R - ln):.1f}" y1="{180 - math.cos(a) * (AD_R - ln):.1f}" '
+                          f'x2="{180 + math.sin(a) * AD_R:.1f}" y2="{180 - math.cos(a) * AD_R:.1f}" '
+                          f'stroke="{AD_TICK}" stroke-width="1"/>')
+        lines_.append(f'<path d="M177,180H184M180,177V184" stroke="{AD_TICK}" stroke-width="1"/>')
+    s.append(f'<g clip-path="url(#adglass)">{"".join(lines_)}</g>')
+    # The plate: the map's lines stop short of it.
+    s.append(f'<rect x="{plate[0]}" y="0" width="{plate[2] - plate[0] + 1}" height="{plate[3] + 1}" fill="{AD_BG}"/>')
+
+    # The airports near, and the aircraft where the filter and the edge leave them.
+    apt_lab = []
+    if not nopos and airports:
+        _, apts = adsb_tables()
+        for la, lo, code, large in apts:
+            if not large and nm > 100:
+                continue
+            x, y = ad_project(la / 1e4, lo / 1e4, nm)
+            if x * x + y * y > (AD_R - 6) ** 2:
+                continue
+            ix, iy = 180 + round(x), 180 + round(y)
+            if plate[0] - 44 <= ix <= plate[2] and iy <= plate[3] + 8:
+                continue
+            s.append(f'<rect x="{ix - 1}" y="{iy - 1}" width="3" height="3" fill="{AD_APT}"/>')
+            if large or nm <= 50:
+                apt_lab.append(((ix - 180) ** 2 + (iy - 180) ** 2, ix, iy, code))
+        apt_lab = sorted(apt_lab)[:16]
+    planes = []
+    for cs, typ, reg, dist, brg, alt, gs, trk, vr, sq in ([] if nopos else sky):
+        if show == "MIL" and typ != "A400" and sq != "7700":
+            continue
+        la, lo = ad_at(dist, brg)
+        x, y = ad_project(la, lo, nm)
+        if x * x + y * y > (AD_R - 3) ** 2:
+            continue
+        em = sq == "7700" and emergency
+        col = AD_EMERGENCY if em else AD_TYPE if typ in types else AD_BAND[ad_band(alt)]
+        planes.append((180 + round(x), 180 + round(y), cs or reg, typ, alt, vr, trk, col, em))
+
+    # The banner: an emergency first, else a type on the list; how many more.
+    alerts = [p for p in planes if p[8]] + [p for p in planes if not p[8] and p[3] in types]
+    boxes = [plate, (100, AD_FOOT_Y - 10, 260, 359)]
+    over = ""
+    if banner and alerts and sel is None:
+        b = alerts[0]
+        what = ("EMERGENCY" if b[8] else b[3]) + "  " + b[2] + (f"  +{len(alerts) - 1}" if len(alerts) > 1 else "")
+        w = montserrat(14).width(what) + 20
+        bg, fg = (AD_EMERGENCY, md.TEXT) if b[8] else ("#3A2C08", md.ACCENT)
+        over += (f'<rect x="{180 - w / 2:.1f}" y="{AD_BANNER_Y}" width="{w}" height="22" rx="10" fill="{bg}"/>'
+                 + md.text(180, AD_BANNER_Y + 16, esc(what), 14, fg))
+        boxes.append((55, AD_BANNER_Y - 2, 305, AD_BANNER_Y + 26))
+    texts = []
+    if not nopos:
+        half = nm / 2
+        t = f"{half:g}" if half != int(half) else f"{int(half)}"
+        hx, hy = 180 + int(AD_R / 2 * 0.707) + 3, 180 - int(AD_R / 2 * 0.707) - 14
+        texts.append(md.text(hx, hy + 11, t, 12, "#36784C", anchor="start"))
+        boxes.append((hx, hy, hx + 30, hy + 14))
+        texts.append(md.text(180 + AD_R - 22, 180 + 3, "E", 12, AD_TICK, anchor="start"))
+        texts.append(md.text(180 - AD_R + 10, 180 + 3, "W", 12, AD_TICK, anchor="start"))
+        boxes += [(180 + AD_R - 24, 171, 180 + AD_R, 188), (180 - AD_R, 171, 180 - AD_R + 26, 188)]
+    f12 = montserrat(12)
+    labelled = 0
+    for x, y, name, typ, alt, vr, trk, col, em in planes:
+        a = math.radians(trk)
+        pts = " ".join(f"{x + r * math.sin(a + o):.1f},{y - r * math.cos(a + o):.1f}"
+                       for r, o in ((8, 0), (6, 2.44), (6, -2.44)))
+        s.append(f'<polygon points="{pts}" fill="{col}"/>')
+        if name == sel:
+            s.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" stroke="{md.TEXT}" stroke-width="2"/>')
+        elif em:
+            s.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" stroke="{AD_EMERGENCY}" stroke-width="2"/>')
+        if labelled >= 12:
+            continue
+        lv = ad_level(alt, vr)
+        w = max(f12.width(name), f12.width(lv)) + 2
+        box = (x + 8, y - 15, x + 8 + w, y + 14)
+        left = False
+        if not ad_in_glass(box) or not ad_free(boxes, box):
+            box, left = (x - 8 - w, y - 15, x - 8, y + 14), True
+            if not ad_in_glass(box) or not ad_free(boxes, box):
+                continue
+        boxes.append(box)
+        labelled += 1
+        tx, anchor = (box[2], "end") if left else (box[0], "start")
+        texts.append(md.text(tx, box[1] + 12, esc(name), 12, col, anchor=anchor)
+                     + md.text(tx, box[1] + 27, esc(lv), 12, col, anchor=anchor))
+    for _, ix, iy, code in apt_lab:
+        w = f12.width(code)
+        box = (ix + 4, iy - 7, ix + 4 + w, iy + 7)
+        if not ad_in_glass(box) or not ad_free(boxes, box):
+            continue
+        if any(box[0] - 6 <= p[0] <= box[2] + 6 and box[1] - 6 <= p[1] <= box[3] + 6 for p in planes):
+            continue
+        boxes.append(box)
+        texts.append(md.text(ix + 4, iy + 5, code, 12, "#305638", anchor="start"))
+    s += texts
+    if sweep is not None and not nopos and sel is None:
+        # ad_sweep_cb: the line and a trail behind it, fainter each step; not
+        # over the plate.
+        wedges = []
+        for i, opa in enumerate((64, 50, 38, 28, 20, 13, 8, 4)):
+            a1 = math.radians(sweep - i * 5)
+            a0 = math.radians(sweep - i * 5 - 5)
+            wedges.append(f'<path d="M180,180L{180 + AD_R * math.sin(a0):.1f},{180 - AD_R * math.cos(a0):.1f}'
+                          f'A{AD_R},{AD_R} 0 0 1 {180 + AD_R * math.sin(a1):.1f},{180 - AD_R * math.cos(a1):.1f}Z" '
+                          f'fill="{AD_SWEEP}" fill-opacity="{opa / 255:.3f}"/>')
+        a = math.radians(sweep)
+        wedges.append(f'<line x1="180" y1="180" x2="{180 + AD_R * math.sin(a):.1f}" '
+                      f'y2="{180 - AD_R * math.cos(a):.1f}" stroke="{AD_SWEEP}" stroke-opacity="0.59" '
+                      f'stroke-width="2"/>')
+        s.append(f'<g clip-path="url(#adglass)">{"".join(wedges)}'
+                 f'<rect x="{plate[0]}" y="0" width="{plate[2] - plate[0] + 1}" height="{plate[3] + 1}" '
+                 f'fill="{AD_BG}"/></g>')
+    s.append(md.text(180, 12 + 17, esc(rng), 20, AD_TEXT))
+    foot = feed if (nopos or not ok) else f"{feed}  \u2022  {len(planes)}"
+    s.append(centred(180, AD_FOOT_Y, foot, 14, md.LABEL if ok and not nopos else md.WARN))
+    if nopos:
+        s.append(centred(180, 180 - 24, "NO LOCATION", 20, md.WARN))
+        s.append(lines(180, 180 + 14, "Set the radar's middle\non the configuration page", 14, md.TEXT2, 17))
+    s.append(f'<circle cx="180" cy="{AD_GEAR_Y}" r="20" fill="{md.BG1}" stroke="{md.SUBTLE}" '
+             f'stroke-width="2"/>' + gear(180, AD_GEAR_Y, md.TEXT2))
+    s.append(over)
+    return "".join(s)
+
+
+def adsb_card(cs, typ, reg, route, level, speed, where, squawk="", em=False):
+    """ad_card_fill(): an aircraft's card, 250 x 196 over the radar, its
+    callsign at 28 px, its type and registration, the route in gold, the
+    level at 20 px, speed and track, where it is, the squawk."""
+    s = (f'<rect x="55" y="78" width="250" height="196" rx="18" fill="{md.BG1}" '
+         f'stroke="{md.ACCENT}" stroke-width="2"/>'
+         + centred(180, 78 + 10 + 16, cs, 28, md.TEXT))
+    rows = ((46, f"{typ}  \u2022  {reg}", 14, md.LABEL), (68, route, 14, md.ACCENT), (91, level, 20, md.TEXT),
+            (120, speed, 14, md.TEXT2), (142, where, 14, md.TEXT2),
+            (164, squawk, 14, md.DANGER if em else md.LABEL))
+    for y, t, size, col in rows:
+        if t:
+            s += centred(180, 78 + y + montserrat(size).line_height // 2, t, size, col)
+    return s
+
+
+def adsb_pictures():
+    md.use_palette("svxconnect")         # ADS-B Radar wears the setup firmware's ink and gold
+    f = radar_face()
+    left = [(144, 22, "the range  \u00b7  turn the dial"), (104, 73, "an alert, called out"),
+            (101, 235, "an emergency, ringed"), (116, 286, "the feed  \u00b7  aircraft shown"),
+            (160, AD_GEAR_Y, "the gear")]
+    right = [(257, 88, "the sweep"), (240, 114, "half the range, on its ring"),
+             (231, 171, "an aircraft: callsign, level"), (333, 176, "the compass"),
+             (200, AD_GEAR_Y, "tap: card \u00b7 hold 3 s: picker")]
+    out = {}
+    out["01-face"] = callouts("adsb-01", "The ADS-B Radar firmware's face", f, left, right)
+    out["02-turn"] = knob("adsb-02", "Turn: the next range",
+                          radar_face(range_i=5), turn(), "a range a detent, 5 to 250 NM  \u00b7  a click each")
+    la, lo = ad_at(8, 150)
+    x, y = ad_project(la, lo, 50)
+    card = adsb_card("UAE183", "B77W", "A6-EGO", "Dubai  \u203a  Brussels", "3200 ft \u2193  -900 ft/min",
+                     "180 kt  \u2022  250\u00b0", "8.0 NM at 150\u00b0")
+    out["03-card"] = knob("adsb-03", "Tap an aircraft: its card",
+                          radar_face(sel="UAE183", sweep=None) + card, tap(180 + x, 180 + y),
+                          "tap an aircraft: its card, its route  \u00b7  tap again: away")
+    out["04-emergency"] = knob("adsb-04", "An emergency: its card",
+                               radar_face(sel="EZY82QK", sweep=None)
+                               + adsb_card("EZY82QK", "A320", "G-EZOA", "", "FL150 \u2193  -2500 ft/min",
+                                           "290 kt  \u2022  060\u00b0", "28 NM at 235\u00b0", "7700  EMERGENCY", True),
+                               "", "a squawk of 7700: called out in red, and the knob buzzes")
+    out["05-mil"] = knob("adsb-05", "Military aircraft only",
+                         radar_face(show="MIL"), "", "Show: military aircraft  \u2022  an emergency always shows")
+    out["06-range"] = knob("adsb-06", "250 NM: the coasts and the large airports",
+                           radar_face(range_i=9, sweep=300), turn(), "the widest range: the large airports only")
+    acard = address_card(f"ADS-B Radar {VERSION}\n{POWER}\n{ADDRESSES}")
+    out["07-card"] = knob("adsb-07", "The gear: the address card, for the configuration page",
+                          f + acard + lock_pill(False), tap(180, AD_GEAR_Y),
+                          "tap the gear: the address card  \u00b7  again: away")
+    out["08-picker"] = knob("adsb-08", "The gear held three seconds: back to the setup firmware?",
+                            dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
+                                                              "tap to cancel; WiFi is kept"),
+                            tap(180, AD_GEAR_Y, ring=24), "hold the gear 3 s until it buzzes, then turn")
+    # The knob's own battery and the padlock under the range, on the plate.
+    out["09-battery"] = knob("adsb-09", "On its own battery: the knob's charge under the range",
+                             f + md.battery_glyph(md.KNOB_BATT_X, 37 + 18, 85, md.battery_colour(85)),
+                             "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+    out["10-lock"] = knob("adsb-10", "The address card's LOCK", f + acard + lock_pill(False), tap(252, 84),
+                          "tap the gear for the card  \u00b7  tap LOCK")
+    out["11-locked"] = knob("adsb-11", "Locked: the padlock under the range",
+                            f + lock_closed(180, 47.5, md.WARN), "",
+                            "taps on the aircraft refused  \u00b7  the gear still brings the card, UNLOCK on it")
+    # The radar's clip, its id each picture's own: a page may show several.
+    return {k: v.replace("adglass", f"adsb-{k[:2]}-glass") for k, v in out.items()}
+
+
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
              "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
-             "epibeam": epibeam_pictures, "headset": headset_pictures}
+             "epibeam": epibeam_pictures, "adsb": adsb_pictures, "headset": headset_pictures}
 
 
 def main():

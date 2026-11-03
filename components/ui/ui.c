@@ -7,6 +7,10 @@
 #include "panel.h"
 #include "net_prov.h"
 #include "beam.h"
+#if VFO_RADIO_ADSB
+#include "adsb.h"
+#include "src/core/lv_obj_event_private.h"   /* the radar canvas's cover check */
+#endif
 
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -258,11 +262,11 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define C_GREEN     lv_color_hex(0x22FF2F)   /* its meter's green          */
 #define PWR_HEX     0x22FF2F
 #define SDR_HEX     0x5CA8FF                 /* its links' blue            */
-#elif SVX_LOOK || VFO_RADIO_SETUP || VFO_RADIO_EPIBEAM
+#elif SVX_LOOK || VFO_RADIO_SETUP || VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
  * clients use: green connected, amber (re)connecting, red transmitting.
- * The setup firmware and EpiBeam wear it too: the same ink and gold are the RF.Guru
+ * The setup firmware, EpiBeam and ADS-B Radar wear it too: the same ink and gold are the RF.Guru
  * site's, and its own WiFi page's (webcfg/www/portal.html). */
 #define C_BG        lv_color_hex(0x08090C)   /* ink-950                 */
 #define C_BG1       lv_color_hex(0x13161D)   /* ink-800: the PTT slab   */
@@ -348,6 +352,13 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define EPI_FACE 1
 #else
 #define EPI_FACE 0
+#endif
+/* The adsb firmware's: a radar of the aircraft round the knob, over a face it
+ * leaves unseen too (see "ADS-B Radar" below). */
+#if VFO_RADIO_ADSB
+#define ADSB_FACE 1
+#else
+#define ADSB_FACE 0
 #endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
@@ -2323,6 +2334,9 @@ void ui_volume_turn(int32_t detents)
 #if EPI_FACE
 static void beam_tick(void);
 #endif
+#if ADSB_FACE
+static void adsb_tick(void);
+#endif
 
 static void detents_cb(lv_timer_t *t)
 {
@@ -2333,6 +2347,9 @@ static void detents_cb(lv_timer_t *t)
     if (e) edit_rotate_now(e);
 #if EPI_FACE
     beam_tick();                        /* the beam's detents, and its settling */
+#endif
+#if ADSB_FACE
+    adsb_tick();                        /* the range's detents, and its settling */
 #endif
 }
 
@@ -3134,10 +3151,1194 @@ void ui_beam_turn(int32_t detents)
 
 int  ui_take_beam(void)       { return atomic_exchange(&s_beam_taken, -1); }
 bool ui_take_beam_moved(void) { return atomic_exchange(&s_beam_stirred, false); }
-#else
-/* No gear; unused where the face has no lock either (setup). */
-__attribute__((unused)) static bool beam_gear_at(lv_point_t p) { (void)p; return false; }
 #endif /* EPI_FACE */
+
+#if ADSB_FACE
+/* --- ADS-B Radar: the aircraft round the knob, on a radar ------------------
+ * The whole glass is the radar: north up, the page's middle in the middle,
+ * the range on the dial at its edge -- a detent a range, ten of them
+ * (components/vfo_core adsb.h), held at either end. Under the aircraft the
+ * map: coasts and borders, the airports, rings at a quarter, half and three
+ * quarters of the range, the compass round the edge. The aircraft are
+ * arrows along their track, coloured by altitude as ADSB-Radar colours them,
+ * the nearest labelled with their callsign and level; an emergency red, a
+ * type on the page's list gold, and either called out at the top. A tap on
+ * one: its card, with its route from adsbdb. The sweep goes round over it
+ * all, as on a radar's screen, unless the page turns it off. At the foot
+ * the feed's state, and the gear: a tap, the address card; held
+ * PICKER_HOLD_MS, the firmware picker -- as on EpiBeam.
+ *
+ * Three pictures, RGB565 in PSRAM: the map's, drawn again only when the range
+ * or the page changes it; the scene's, a hidden canvas -- the map copied, and
+ * the aircraft and every label drawn over it each time they come; and the
+ * one shown, the scene with the sweep on it. The map's lines and the sweep
+ * are drawn here pixel by pixel; the text and the aircraft by LVGL, a few
+ * dozen at a time, as its draw tasks come from its 64 kB pool. The sweep is
+ * not LVGL's: eight arcs, each a mask over all it covers, kept the LVGL task
+ * near 80 % busy, and a whole redraw under them took long enough for a TLS
+ * handshake beside it to starve the idle task into the watchdog. A tap's
+ * ring is an object over the picture, so a card comes and goes without the
+ * scene drawn again.
+ *
+ * Built over the radio's face, which goes on under it unseen: the card, the
+ * warnings, the questions and the lock are that face's, and come up over
+ * this, as over EpiBeam's compass. Not clickable: every touch is the
+ * screen's own (touch_cb, tap). */
+#define AD_W          360
+#define AD_R          172                 /* the radar's edge, from the middle */
+#define AD_LABELS     12                  /* aircraft labelled, nearest first */
+#define AD_APT_LABELS 16
+#define AD_FIXED      6                   /* the boxes every label keeps out of */
+#define AD_SETTLE_MS  600                 /* the dial at rest so long: the range taken */
+#define AD_TAP_R      24                  /* px from an aircraft a tap may land */
+#define AD_GEAR_Y     (CY + 146)
+#define AD_GEAR_R     26                  /* px from the gear's middle a tap may land */
+#define AD_FOOT_Y     (CY + 106)          /* the feed's state */
+#define AD_BANNER_Y   62                  /* an alert, under the battery's row */
+#define AD_SWEEP_MS   50
+#define AD_SWEEP_STEP 5                   /* degrees a tick: 3.6 s a turn */
+#define AD_TRAIL      8                   /* the sweep's trail, a step each */
+#define AD_SLICES     (360 / AD_SWEEP_STEP)
+#define AD_HUB        24                  /* px round the middle redone each step: the slices narrower than the line */
+#define AD_BATCH      40                  /* LVGL draws to a layer at most */
+#define AD_STALE_S    20.0f               /* a position this old drawn dim */
+#define AD_SEEN       16                  /* alerts remembered, so each buzzes once */
+
+/* The radar's colours, ADSB-Radar's where it has them; under 2000 ft pink
+ * where it has red, red here an emergency's alone. */
+#define AD_BG         0x030806
+#define AD_RING       0x0E3A1C
+#define AD_RING_HALF  0x16582C
+#define AD_AXIS       0x0A2614
+#define AD_TICK       0x2E8C4A
+#define AD_COAST      0x2A7088
+#define AD_BORDER     0x1D4A58
+#define AD_APT        0x5FA36A
+#define AD_TEXT       0x8CFF9E
+#define AD_SWEEP      0x35DB5F
+#define AD_EMERGENCY  0xFF3030
+static const uint32_t AD_BAND[ADSB_BANDS] = {
+    0x9CA3AF, 0xFF6EC7, 0xFFA22D, 0xFFE15C, 0x4ADE80, 0x38BDF8, 0xA78BFA,
+};
+
+typedef struct { int16_t x, y; bool on; } ad_xy_t;
+
+static lv_obj_t   *s_ad, *s_ad_scene, *s_ad_cleanc, *s_ad_selring, *s_ad_range, *s_ad_foot, *s_ad_gear;
+static lv_obj_t   *s_ad_banner, *s_ad_card, *s_ad_cs, *s_ad_c[6], *s_ad_hint, *s_ad_hint2;
+/* AD_W x AD_W, s_ad_stride pixels a row: the map, the scene (s_ad_cleanc's),
+ * and the picture shown (s_ad_scene's). */
+static uint16_t   *s_ad_map, *s_ad_clean, *s_ad_buf;
+static uint32_t    s_ad_stride = AD_W;
+/* AD_W x AD_W: each pixel's slice of the glass for the sweep, AD_SWEEP_STEP
+ * degrees clockwise from north; 0xFF off it. */
+static uint8_t    *s_ad_slice;
+static bool        s_ad_swept;               /* the trail is on the picture shown */
+static bool        s_ad_alert_up;            /* an alert to call out, card or not */
+static lv_timer_t *s_ad_timer;
+EXT_RAM_BSS_ATTR static net_adsb_t s_ad_cfg;
+EXT_RAM_BSS_ATTR static adsb_ac_t  s_ad_ac[ADSB_UI_MAX];
+EXT_RAM_BSS_ATTR static ad_xy_t    s_ad_xy[ADSB_UI_MAX];
+static int         s_ad_n = -1;              /* -1: nothing from the feed yet */
+static adsb_view_t s_ad_view;
+static const uint8_t *s_ad_tmap, *s_ad_tapt; /* the image's tables, checked */
+static bool        s_ad_map_dirty = true, s_ad_scene_dirty = true, s_ad_have_cfg;
+static int         s_ad_sweep_deg;
+static uint32_t    s_ad_moved;               /* the last range change: 0, settled */
+static atomic_int  s_ad_detents;             /* from the knob's task, applied in detents_cb */
+static atomic_int  s_ad_taken = -1;          /* the range settled on, for app_main: -1, none */
+static atomic_int  s_ad_steps;               /* ranges stepped, a click each for app_main */
+static atomic_int  s_ad_alert_new;           /* ADSB_AL_* of an alert new since asked */
+static char        s_ad_sel[7];              /* the card's aircraft, by its hex: "" none */
+static uint32_t    s_ad_sel_at;
+static char        s_ad_feed[24] = "asking";
+static bool        s_ad_feed_ok;
+EXT_RAM_BSS_ATTR static char s_ad_seen[AD_SEEN][7];
+static char        s_ad_route_cs[9], s_ad_route[56];
+static bool        s_ad_route_pending;
+/* The top of the glass the map leaves clear: the range's label, and the row
+ * under it where the knob's battery and the padlock come. */
+static lv_area_t   s_ad_plate;
+static atomic_int  s_ad_map_ms, s_ad_scene_ms, s_ad_sweep_ms;   /* the longest draws since app_main asked */
+/* The airports the map named, to label in the scene where no aircraft's
+ * label is. */
+typedef struct { int16_t x, y; int32_t d2; char code[5]; } ad_apt_lab_t;
+EXT_RAM_BSS_ATTR static ad_apt_lab_t s_ad_apt_lab[AD_APT_LABELS];
+static int         s_ad_apt_n;
+
+static void set_text(lv_obj_t *o, const char *s);
+static void set_text_color(lv_obj_t *o, lv_color_t c);
+static void vis(lv_obj_t *o, bool on);
+static bool screen_dark(void);
+
+static uint16_t ad_565(uint32_t hex)
+{
+    return (uint16_t)((((hex >> 19) & 0x1F) << 11) | (((hex >> 10) & 0x3F) << 5) | ((hex >> 3) & 0x1F));
+}
+
+/* Halfway to the radar's ground: a position gone stale. */
+static uint32_t ad_dim(uint32_t hex)
+{
+    uint32_t o = 0;
+    for (int s = 0; s <= 16; s += 8)
+        o |= ((((hex >> s) & 0xFF) + ((AD_BG >> s) & 0xFF)) / 2) << s;
+    return o;
+}
+
+static void ad_px(uint16_t *b, int x, int y, uint16_t c)
+{
+    if ((unsigned)x >= AD_W || (unsigned)y >= AD_W) return;
+    const int dx = x - CX, dy = y - CY;
+    if (dx * dx + dy * dy > AD_R * AD_R) return;
+    if (x >= s_ad_plate.x1 && x <= s_ad_plate.x2 && y >= s_ad_plate.y1 && y <= s_ad_plate.y2) return;
+    b[(uint32_t)y * s_ad_stride + (uint32_t)x] = c;
+}
+
+/* Cohen-Sutherland to the glass's square, then Bresenham: a coast far off
+ * the glass is a long line, but only the part on it is walked. */
+static int ad_code(float x, float y)
+{
+    return (x < 0) | (x > AD_W - 1) << 1 | (y < 0) << 2 | (y > AD_W - 1) << 3;
+}
+
+static void ad_line(uint16_t *b, float x0, float y0, float x1, float y1, uint16_t c)
+{
+    int c0 = ad_code(x0, y0), c1 = ad_code(x1, y1);
+    while (c0 | c1) {
+        if (c0 & c1) return;
+        const int out = c0 ? c0 : c1;
+        float x, y;
+        if (out & 8)      { x = x0 + (x1 - x0) * (AD_W - 1 - y0) / (y1 - y0); y = AD_W - 1; }
+        else if (out & 4) { x = x0 + (x1 - x0) * (0 - y0) / (y1 - y0);        y = 0; }
+        else if (out & 2) { y = y0 + (y1 - y0) * (AD_W - 1 - x0) / (x1 - x0); x = AD_W - 1; }
+        else              { y = y0 + (y1 - y0) * (0 - x0) / (x1 - x0);        x = 0; }
+        if (out == c0) { x0 = x; y0 = y; c0 = ad_code(x0, y0); }
+        else           { x1 = x; y1 = y; c1 = ad_code(x1, y1); }
+    }
+    int xa = (int)lroundf(x0), ya = (int)lroundf(y0);
+    const int xb = (int)lroundf(x1), yb = (int)lroundf(y1);
+    const int dx = abs(xb - xa), sx = xa < xb ? 1 : -1;
+    const int dy = -abs(yb - ya), sy = ya < yb ? 1 : -1;
+    int err = dx + dy;
+    for (;;) {
+        ad_px(b, xa, ya, c);
+        if (xa == xb && ya == yb) break;
+        const int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; xa += sx; }
+        if (e2 <= dx) { err += dx; ya += sy; }
+    }
+}
+
+static void ad_circle(uint16_t *b, int r, uint16_t c)
+{
+    int x = r, y = 0, err = 1 - r;
+    while (x >= y) {
+        const int p[8][2] = { { x, y }, { y, x }, { -y, x }, { -x, y },
+                              { -x, -y }, { -y, -x }, { y, -x }, { x, -y } };
+        for (int i = 0; i < 8; i++) ad_px(b, CX + p[i][0], CY + p[i][1], c);
+        y++;
+        if (err < 0) err += 2 * y + 1;
+        else { x--; err += 2 * (y - x) + 1; }
+    }
+}
+
+static float ad_range_nm(void) { return adsb_range_nm(s_ad_cfg.units, s_ad_cfg.range); }
+
+static bool ad_have_pos(void) { return s_ad_have_cfg && s_ad_cfg.lat_e6 != NET_ADSB_NO_POS; }
+
+static void ad_set_view(void)
+{
+    adsb_view_set(&s_ad_view, s_ad_cfg.lat_e6 / 1e6, s_ad_cfg.lon_e6 / 1e6, ad_range_nm(), AD_R);
+}
+
+/* LVGL's draws to a canvas, a batch at a time: finished, and begun again. */
+typedef struct { lv_obj_t *canvas; lv_layer_t layer; int n; } ad_layer_t;
+
+static void ad_layer_begin(ad_layer_t *l, lv_obj_t *canvas)
+{
+    l->canvas = canvas;
+    l->n = 0;
+    lv_canvas_init_layer(canvas, &l->layer);
+}
+
+static void ad_layer_count(ad_layer_t *l)
+{
+    if (++l->n < AD_BATCH) return;
+    lv_canvas_finish_layer(l->canvas, &l->layer);
+    lv_canvas_init_layer(l->canvas, &l->layer);
+    l->n = 0;
+}
+
+static void ad_layer_end(ad_layer_t *l) { lv_canvas_finish_layer(l->canvas, &l->layer); }
+
+static void ad_text(ad_layer_t *l, const lv_font_t *f, uint32_t hex, int x, int y, int w,
+                    lv_text_align_t align, const char *s)
+{
+    lv_draw_label_dsc_t d;
+    lv_draw_label_dsc_init(&d);
+    d.font = f;
+    d.color = lv_color_hex(hex);
+    d.align = align;
+    d.text = s;
+    d.text_local = 1;               /* copied: the caller's buffer goes */
+    const lv_area_t a = { x, y, x + w - 1, y + lv_font_get_line_height(f) * 2 };
+    lv_draw_label(&l->layer, &d, &a);
+    ad_layer_count(l);
+}
+
+#if LV_FONT_MONTSERRAT_12
+#define AD_FONT_S (&lv_font_montserrat_12)
+#else
+#define AD_FONT_S (&lv_font_montserrat_14)
+#endif
+
+/* The range's label: "50 NM", and the filter if one is on. */
+static void ad_range_text(char *t, size_t n)
+{
+    static const char *const SHOW[] = { "", "  " LV_SYMBOL_BULLET "  MIL", "  " LV_SYMBOL_BULLET "  INT" };
+    snprintf(t, n, "%u %s%s", (unsigned)adsb_range_val(s_ad_cfg.units, s_ad_cfg.range),
+             adsb_unit_name(s_ad_cfg.units), SHOW[s_ad_cfg.show < ADSB_SHOWS ? s_ad_cfg.show : 0]);
+}
+
+/* The plate as wide as the range's label is now, or the battery's row with
+ * the padlock beside it, whichever is wider. */
+static void ad_set_plate(void)
+{
+    char t[32];
+    lv_point_t sz;
+    ad_range_text(t, sizeof t);
+    lv_text_get_size(&sz, t, &lv_font_montserrat_20, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int half = sz.x / 2 + 6;
+    if (half < BATT_W / 2 + 30) half = BATT_W / 2 + 30;
+    s_ad_plate = (lv_area_t){ CX - half, 0, CX + half, KNOB_BATT_Y + 24 };
+}
+
+static void ad_draw_map(void)
+{
+    uint16_t *b = s_ad_map;
+    const uint16_t bg = ad_565(AD_BG);
+    for (uint32_t i = 0; i < s_ad_stride * AD_W; i++) b[i] = bg;
+    ad_set_plate();
+    if (!ad_have_pos()) return;
+    ad_set_view();
+    const float nm = ad_range_nm();
+
+    /* Faint axes, north-south and east-west. */
+    const uint16_t axis = ad_565(AD_AXIS);
+    ad_line(b, CX, CY - AD_R, CX, CY + AD_R, axis);
+    ad_line(b, CX - AD_R, CY, CX + AD_R, CY, axis);
+
+    /* The coasts and borders near: a run's box round the middle first. */
+    if (s_ad_tmap && (s_ad_cfg.opts & NET_ADSB_COUNTRIES)) {
+        const uint16_t coast = ad_565(AD_COAST), border = ad_565(AD_BORDER);
+        const size_t runs = adsb_map_runs(s_ad_tmap);
+        for (size_t r = 0; r < runs; r++) {
+            adsb_run_t run;
+            if (!adsb_map_run(s_ad_tmap, r, &s_ad_view, nm * 1.05f, &run)) continue;
+            const uint16_t c = run.kind == ADSB_RUN_COAST ? coast : border;
+            int32_t la = run.lat, lo = run.lon;
+            float px, py;
+            adsb_project(&s_ad_view, la / 1e4, lo / 1e4, &px, &py);
+            for (uint16_t k = 0; k < run.steps; k++) {
+                int32_t dla, dlo;
+                adsb_run_step(&run, k, &dla, &dlo);
+                la += dla;
+                lo += dlo;
+                float qx, qy;
+                adsb_project(&s_ad_view, la / 1e4, lo / 1e4, &qx, &qy);
+                ad_line(b, CX + px, CY + py, CX + qx, CY + qy, c);
+                px = qx;
+                py = qy;
+            }
+        }
+    }
+
+    /* The rings, the half brighter, and the compass round the edge. */
+    ad_circle(b, AD_R / 4, ad_565(AD_RING));
+    ad_circle(b, AD_R / 2, ad_565(AD_RING_HALF));
+    ad_circle(b, AD_R * 3 / 4, ad_565(AD_RING));
+    ad_circle(b, AD_R, ad_565(AD_RING_HALF));
+    const uint16_t tick = ad_565(AD_TICK);
+    for (int deg = 0; deg < 360; deg += 10) {
+        const float a = (float)deg * (3.14159265f / 180.0f), s = sinf(a), c = cosf(a);
+        const int len = deg % 90 == 0 ? 12 : deg % 30 == 0 ? 8 : 4;
+        ad_line(b, CX + s * (AD_R - len), CY - c * (AD_R - len), CX + s * AD_R, CY - c * AD_R, tick);
+    }
+    for (int d = -3; d <= 3; d++) {                 /* the middle: the knob's place */
+        ad_px(b, CX + d, CY, tick);
+        ad_px(b, CX, CY + d, tick);
+    }
+
+    /* The airports: every one near, from close in; only the large far out,
+     * and the nearest named -- in the scene, where nothing else is. */
+    s_ad_apt_n = 0;
+    if (s_ad_tapt && (s_ad_cfg.opts & NET_ADSB_AIRPORTS)) {
+        const uint16_t dot = ad_565(AD_APT);
+        const int32_t dlat = (int32_t)(nm / 60.0f * 1e4f);
+        const size_t n = adsb_apt_count(s_ad_tapt);
+        for (size_t i = adsb_apt_from(s_ad_tapt, (int32_t)(s_ad_view.lat0 * 1e4) - dlat); i < n; i++) {
+            adsb_apt_t a;
+            adsb_apt_get(s_ad_tapt, i, &a);
+            if (a.lat > (int32_t)(s_ad_view.lat0 * 1e4) + dlat) break;
+            if (!a.large && nm > 100) continue;
+            float x, y;
+            adsb_project(&s_ad_view, a.lat / 1e4, a.lon / 1e4, &x, &y);
+            if (x * x + y * y > (AD_R - 6) * (AD_R - 6)) continue;
+            const int ix = CX + (int)lroundf(x), iy = CY + (int)lroundf(y);
+            if (ix >= s_ad_plate.x1 - 44 && ix <= s_ad_plate.x2 && iy <= s_ad_plate.y2 + 8) continue;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) ad_px(b, ix + dx, iy + dy, dot);
+            if (!a.large && nm > 50) continue;
+            /* The nearest AD_APT_LABELS kept: a nearer one in the farthest's place. */
+            const int32_t d2 = (ix - CX) * (ix - CX) + (iy - CY) * (iy - CY);
+            int at = s_ad_apt_n;
+            if (at == AD_APT_LABELS) {
+                at = 0;
+                for (int j = 1; j < AD_APT_LABELS; j++)
+                    if (s_ad_apt_lab[j].d2 > s_ad_apt_lab[at].d2) at = j;
+                if (s_ad_apt_lab[at].d2 <= d2) continue;
+            } else {
+                s_ad_apt_n++;
+            }
+            ad_apt_lab_t *k = &s_ad_apt_lab[at];
+            k->x = (int16_t)ix;
+            k->y = (int16_t)iy;
+            k->d2 = d2;
+            memcpy(k->code, a.code, sizeof k->code);
+        }
+    }
+}
+
+static bool ad_box_free(const lv_area_t *boxes, int n, const lv_area_t *a)
+{
+    for (int i = 0; i < n; i++)
+        if (a->x1 <= boxes[i].x2 && boxes[i].x1 <= a->x2 && a->y1 <= boxes[i].y2 && boxes[i].y1 <= a->y2)
+            return false;
+    return true;
+}
+
+static void ad_level(const adsb_ac_t *a, char *t, size_t n)
+{
+    const char *arrow = a->vrate_fpm == ADSB_VR_NONE ? "" : a->vrate_fpm > 300 ? " " LV_SYMBOL_UP
+                      : a->vrate_fpm < -300 ? " " LV_SYMBOL_DOWN : "";
+    if (a->ground)                         snprintf(t, n, "GND");
+    else if (a->alt_ft == ADSB_ALT_NONE)   snprintf(t, n, "---");
+    else if (a->alt_ft >= 10000)           snprintf(t, n, "FL%03d%s", (int)((a->alt_ft + 50) / 100) % 1000, arrow);
+    else                                   snprintf(t, n, "%d ft%s", (int)a->alt_ft % 10000, arrow);
+}
+
+static const char *ad_name(const adsb_ac_t *a)
+{
+    return a->flight[0] ? a->flight : a->reg[0] ? a->reg : a->hex;
+}
+
+static uint32_t ad_colour(const adsb_ac_t *a)
+{
+    const uint8_t al = adsb_alert(a, s_ad_cfg.types);
+    const uint32_t c = al == ADSB_AL_EMERGENCY ? AD_EMERGENCY : al == ADSB_AL_TYPE ? 0xE5A823 : AD_BAND[adsb_band(a)];
+    return a->seen_s > AD_STALE_S && al != ADSB_AL_EMERGENCY ? ad_dim(c) : c;
+}
+
+/* A label's box inside the radar, every corner of it. */
+static bool ad_in_glass(const lv_area_t *a)
+{
+    const int32_t xs[2] = { a->x1 - CX, a->x2 - CX }, ys[2] = { a->y1 - CY, a->y2 - CY };
+    for (int i = 0; i < 4; i++)
+        if (xs[i & 1] * xs[i & 1] + ys[i >> 1] * ys[i >> 1] > (AD_R - 2) * (AD_R - 2)) return false;
+    return true;
+}
+
+/* Where each aircraft is drawn, at the range now: off when the filter or
+ * the radar's edge leaves it out. */
+static void ad_place(void)
+{
+    for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) {
+        const adsb_ac_t *a = &s_ad_ac[i];
+        ad_xy_t *p = &s_ad_xy[i];
+        float x, y;
+        adsb_project(&s_ad_view, a->lat, a->lon, &x, &y);
+        p->on = adsb_shown(a, s_ad_cfg.show, s_ad_cfg.opts & NET_ADSB_GROUND, s_ad_cfg.types) &&
+                x * x + y * y <= (AD_R - 3) * (AD_R - 3);
+        p->x = (int16_t)(CX + lroundf(x));
+        p->y = (int16_t)(CY + lroundf(y));
+    }
+}
+
+static void ad_ring(ad_layer_t *l, int x, int y, lv_color_t c)
+{
+    lv_draw_arc_dsc_t d;
+    lv_draw_arc_dsc_init(&d);
+    d.color = c;
+    d.center.x = x;
+    d.center.y = y;
+    d.radius = 12;
+    d.width = 2;
+    d.start_angle = 0;
+    d.end_angle = 360;
+    lv_draw_arc(&l->layer, &d);
+    ad_layer_count(l);
+}
+
+static void ad_banner(void);
+static void ad_show_all(void);
+
+/* The scene: the map, the aircraft over it, and the labels -- the radar's
+ * own first, then the aircraft's nearest first, then the airports' --
+ * each where none before it is. The banner's room kept while a card hides
+ * it, so that it comes back over nothing when the card goes. */
+static void ad_draw_scene(void)
+{
+    static lv_area_t boxes[AD_FIXED + AD_LABELS + AD_APT_LABELS];
+    memcpy(s_ad_clean, s_ad_map, (size_t)s_ad_stride * AD_W * sizeof s_ad_clean[0]);
+    ad_place();
+    ad_banner();
+    int nb = 0, labelled = 0;
+    boxes[nb++] = s_ad_plate;
+    boxes[nb++] = (lv_area_t){ CX - 80, AD_FOOT_Y - 10, CX + 80, AD_W - 1 };   /* the feed's state, the gear */
+    if (s_ad_alert_up)
+        boxes[nb++] = (lv_area_t){ CX - 125, AD_BANNER_Y - 2, CX + 125, AD_BANNER_Y + 26 };
+    ad_layer_t l;
+    ad_layer_begin(&l, s_ad_cleanc);
+    if (ad_have_pos()) {
+        /* The half ring's distance, on it to the north-east of the middle;
+         * east and west at the edge (north is the range's, south the gear's). */
+        char t[12];
+        const uint16_t half = adsb_range_val(s_ad_cfg.units, s_ad_cfg.range);
+        if (half % 2) snprintf(t, sizeof t, "%u.5", (unsigned)(half / 2));
+        else          snprintf(t, sizeof t, "%u", (unsigned)(half / 2));
+        const int hx = CX + (int)(AD_R / 2 * 0.707f) + 3, hy = CY - (int)(AD_R / 2 * 0.707f) - 14;
+        ad_text(&l, AD_FONT_S, AD_RING_HALF + 0x204020, hx, hy, 40, LV_TEXT_ALIGN_LEFT, t);
+        boxes[nb++] = (lv_area_t){ hx, hy, hx + 30, hy + 14 };
+        ad_text(&l, AD_FONT_S, AD_TICK, CX + AD_R - 22, CY - 8, 14, LV_TEXT_ALIGN_LEFT, "E");
+        boxes[nb++] = (lv_area_t){ CX + AD_R - 24, CY - 9, CX + AD_R, CY + 8 };
+        ad_text(&l, AD_FONT_S, AD_TICK, CX - AD_R + 10, CY - 8, 14, LV_TEXT_ALIGN_LEFT, "W");
+        boxes[nb++] = (lv_area_t){ CX - AD_R, CY - 9, CX - AD_R + 26, CY + 8 };
+    }
+    for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) {
+        const adsb_ac_t *a = &s_ad_ac[i];
+        const ad_xy_t *p = &s_ad_xy[i];
+        if (!p->on) continue;
+        const lv_color_t col = lv_color_hex(ad_colour(a));
+        if (a->track >= 0) {
+            /* An arrow along its track: the tip ahead, the tail's corners
+             * either side behind. */
+            const float t = (float)a->track * (3.14159265f / 180.0f);
+            lv_draw_triangle_dsc_t d;
+            lv_draw_triangle_dsc_init(&d);
+            d.color = col;
+            d.opa = LV_OPA_COVER;
+            const float r[3] = { 8, 6, 6 }, off[3] = { 0, 2.44f, -2.44f };
+            for (int k = 0; k < 3; k++) {
+                d.p[k].x = p->x + (int32_t)lroundf(r[k] * sinf(t + off[k]));
+                d.p[k].y = p->y - (int32_t)lroundf(r[k] * cosf(t + off[k]));
+            }
+            lv_draw_triangle(&l.layer, &d);
+        } else {
+            lv_draw_rect_dsc_t d;
+            lv_draw_rect_dsc_init(&d);
+            d.bg_color = col;
+            d.radius = 2;
+            const lv_area_t sq = { p->x - 3, p->y - 3, p->x + 3, p->y + 3 };
+            lv_draw_rect(&l.layer, &d, &sq);
+        }
+        ad_layer_count(&l);
+        /* An emergency ringed red; the card's aircraft white, by s_ad_selring. */
+        if (adsb_alert(a, s_ad_cfg.types) == ADSB_AL_EMERGENCY) ad_ring(&l, p->x, p->y, lv_color_hex(AD_EMERGENCY));
+        if (labelled >= AD_LABELS) continue;
+        /* Its label right of it, else left; none where it would leave the
+         * radar or cover another. As wide as its longer line. */
+        char t[48], lv[24];
+        ad_level(a, lv, sizeof lv);
+        snprintf(t, sizeof t, "%.9s\n%s", ad_name(a), lv);
+        const char *nl = strchr(t, '\n');
+        const int32_t w = LV_MAX(lv_text_get_width(t, (uint32_t)(nl - t), AD_FONT_S, 0),
+                                 lv_text_get_width(nl + 1, (uint32_t)strlen(nl + 1), AD_FONT_S, 0)) + 2;
+        lv_area_t box = { p->x + 8, p->y - 15, p->x + 8 + w, p->y + 14 };
+        bool left = false;
+        if (!ad_in_glass(&box) || !ad_box_free(boxes, nb, &box)) {
+            box.x1 = p->x - 8 - w;
+            box.x2 = p->x - 8;
+            left = true;
+            if (!ad_in_glass(&box) || !ad_box_free(boxes, nb, &box)) continue;
+        }
+        boxes[nb++] = box;
+        labelled++;
+        ad_text(&l, AD_FONT_S, ad_colour(a), box.x1, box.y1, w + 1, left ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, t);
+    }
+    /* The airports' codes, clear of every label and every aircraft. */
+    for (int i = 0; i < s_ad_apt_n; i++) {
+        const ad_apt_lab_t *k = &s_ad_apt_lab[i];
+        const int32_t w = lv_text_get_width(k->code, strlen(k->code), AD_FONT_S, 0);
+        const lv_area_t box = { k->x + 4, k->y - 7, k->x + 4 + w, k->y + 7 };
+        if (!ad_in_glass(&box) || !ad_box_free(boxes, nb, &box)) continue;
+        bool clear = true;
+        for (int j = 0; j < (s_ad_n > 0 ? s_ad_n : 0) && clear; j++)
+            clear = !s_ad_xy[j].on || s_ad_xy[j].x < box.x1 - 6 || s_ad_xy[j].x > box.x2 + 6 ||
+                    s_ad_xy[j].y < box.y1 - 6 || s_ad_xy[j].y > box.y2 + 6;
+        if (!clear) continue;
+        boxes[nb++] = box;
+        ad_text(&l, AD_FONT_S, ad_dim(AD_APT), box.x1, box.y1, w + 2, LV_TEXT_ALIGN_LEFT, k->code);
+    }
+    ad_layer_end(&l);
+    ad_show_all();
+}
+
+/* The wedge the sweep covers, as an area of the glass: the middle and its
+ * edge from `from` to `to`, degrees clockwise from north. */
+static void ad_wedge(int from, int to, lv_area_t *a)
+{
+    a->x1 = a->x2 = CX;
+    a->y1 = a->y2 = CY;
+    for (int d = from; ; d += AD_SWEEP_STEP) {
+        if (d > to) d = to;
+        const float r = (float)d * (3.14159265f / 180.0f);
+        const int x = CX + (int)lroundf(AD_R * sinf(r)), y = CY - (int)lroundf(AD_R * cosf(r));
+        if (x < a->x1) a->x1 = x;
+        if (x > a->x2) a->x2 = x;
+        if (y < a->y1) a->y1 = y;
+        if (y > a->y2) a->y2 = y;
+        if (d == to) break;
+    }
+    a->x1 -= 2; a->y1 -= 2; a->x2 += 2; a->y2 += 2;
+}
+
+/* Each pixel's slice of the glass, once: AD_SWEEP_STEP degrees clockwise
+ * from north. */
+static void ad_slices(void)
+{
+    for (int y = 0; y < AD_W; y++)
+        for (int x = 0; x < AD_W; x++) {
+            const int dx = x - CX, dy = y - CY;
+            uint8_t s = 0xFF;
+            if (dx * dx + dy * dy <= AD_R * AD_R) {
+                float deg = atan2f((float)dx, (float)-dy) * (180.0f / 3.14159265f);
+                if (deg < 0) deg += 360.0f;
+                s = (uint8_t)((int)(deg / AD_SWEEP_STEP) % AD_SLICES);
+            }
+            s_ad_slice[y * AD_W + x] = s;
+        }
+}
+
+static bool ad_on_plate(int x, int y)
+{
+    return x >= s_ad_plate.x1 && x <= s_ad_plate.x2 && y >= s_ad_plate.y1 && y <= s_ad_plate.y2;
+}
+
+/* A pixel with k/256 of the sweep's colour over it. */
+static inline uint16_t ad_mix(uint16_t p, int k)
+{
+    enum { SR = (AD_SWEEP >> 19) & 0x1F, SG = (AD_SWEEP >> 10) & 0x3F, SB = (AD_SWEEP >> 3) & 0x1F };
+    const int q = 256 - k;
+    return (uint16_t)(((((p >> 11) * q + SR * k) >> 8) << 11) |
+                      (((((p >> 5) & 0x3F) * q + SG * k) >> 8) << 5) |
+                      (((p & 0x1F) * q + SB * k) >> 8));
+}
+
+/* The box round what the sweep changed: one area. Strips of rows round the
+ * wedge alone are fewer pixels, but LVGL's cost is mostly per area and per
+ * draw-buffer chunk, and on the knob they took more. x1 > x2: none. */
+static lv_area_t s_ad_dirty = { AD_W, AD_W, -1, -1 };
+
+static void ad_mark(int y, int x1, int x2)
+{
+    if (x1 < s_ad_dirty.x1) s_ad_dirty.x1 = x1;
+    if (x2 > s_ad_dirty.x2) s_ad_dirty.x2 = x2;
+    if (y < s_ad_dirty.y1) s_ad_dirty.y1 = y;
+    if (y > s_ad_dirty.y2) s_ad_dirty.y2 = y;
+}
+
+/* The box invalidated (or forgotten), from an even column to an odd one: the
+ * rows of the draw buffer and of the canvas then start on the same word, and
+ * LVGL copies them a word at a time, not a byte. */
+static void ad_dirty_done(bool invalidate)
+{
+    if (invalidate && s_ad_dirty.x1 <= s_ad_dirty.x2) {
+        lv_area_t a = s_ad_dirty;
+        a.x1 &= ~1;
+        a.x2 = LV_MIN(a.x2 | 1, AD_W - 1);
+        lv_obj_invalidate_area(s_ad_scene, &a);
+    }
+    s_ad_dirty = (lv_area_t){ AD_W, AD_W, -1, -1 };
+}
+
+/* The sweep's trail on the picture shown, within `a`: each slice behind the
+ * line fainter than the one before it, and the one it leaves the scene's
+ * again; round the middle every pixel, where a slice is narrower than the
+ * line. `clear`: the scene's alone there, the trail and the line gone. */
+static void ad_trail(const lv_area_t *a, bool clear)
+{
+    static const uint8_t OPA[AD_TRAIL] = { 64, 50, 38, 28, 20, 13, 8, 4 };
+    enum { KEEP = 0xFF, SCENE = 0xFE };
+    /* What each slice gets this step: its fade, the scene again, or nothing. */
+    uint8_t act[256];
+    memset(act, KEEP, sizeof act);
+    const int ahead = s_ad_sweep_deg / AD_SWEEP_STEP;      /* the slice the line starts */
+    for (int s = 0; s < AD_SLICES; s++) {
+        const int age = (ahead - 1 - s + 2 * AD_SLICES) % AD_SLICES;
+        act[s] = age < AD_TRAIL ? OPA[age] : age == AD_TRAIL ? SCENE : KEEP;
+    }
+    const int x1 = LV_MAX(a->x1, 0), x2 = LV_MIN(a->x2, AD_W - 1);
+    const int y1 = LV_MAX(a->y1, 0), y2 = LV_MIN(a->y2, AD_W - 1);
+    if (x1 > x2 || y1 > y2) return;
+    for (int y = y1; y <= y2; y++) {
+        const uint16_t *c = s_ad_clean + (uint32_t)y * s_ad_stride;
+        uint16_t *o = s_ad_buf + (uint32_t)y * s_ad_stride;
+        if (clear) {
+            memcpy(o + x1, c + x1, (size_t)(x2 - x1 + 1) * sizeof *o);
+            continue;
+        }
+        /* The middle's columns on this row: every pixel there done. */
+        const int dy = y - CY, r2 = AD_HUB * AD_HUB - dy * dy;
+        int hx1 = AD_W, hx2 = -1;
+        if (r2 >= 0) {
+            int h = (int)sqrtf((float)r2);
+            while ((h + 1) * (h + 1) <= r2) h++;
+            while (h * h > r2) h--;
+            hx1 = CX - h;
+            hx2 = CX + h;
+        }
+        const uint8_t *sl = s_ad_slice + (uint32_t)y * AD_W;
+        for (int x = x1; x <= x2; x++) {
+            const uint8_t g = act[sl[x]];
+            if (g == KEEP) {
+                if (x >= hx1 && x <= hx2) o[x] = c[x];
+            } else {
+                o[x] = g == SCENE ? c[x] : ad_mix(c[x], g);
+            }
+        }
+        /* Nothing of it on the plate: the scene's there, as it was. */
+        if (y >= s_ad_plate.y1 && y <= s_ad_plate.y2) {
+            const int p1 = LV_MAX(x1, s_ad_plate.x1), p2 = LV_MIN(x2, s_ad_plate.x2);
+            if (p1 <= p2) memcpy(o + p1, c + p1, (size_t)(p2 - p1 + 1) * sizeof *o);
+        }
+    }
+    ad_mark(y1, x1, x2);
+    ad_mark(y2, x1, x2);
+}
+
+/* The sweep's line over the trail, from the middle to the edge, two pixels
+ * wide; next step its pixels are the trail's, done again. */
+static void ad_sweep_line(void)
+{
+    const float r = (float)s_ad_sweep_deg * (3.14159265f / 180.0f);
+    const int xb = CX + (int)lroundf(AD_R * sinf(r)), yb = CY - (int)lroundf(AD_R * cosf(r));
+    int xa = CX, ya = CY;
+    const int dx = abs(xb - xa), sx = xa < xb ? 1 : -1;
+    const int dy = -abs(yb - ya), sy = ya < yb ? 1 : -1;
+    const bool steep = -dy > dx;
+    int err = dx + dy;
+    for (;;) {
+        for (int k = 0; k < 2; k++) {
+            const int x = xa + (steep ? k : 0), y = ya + (steep ? 0 : k), ex = x - CX, ey = y - CY;
+            if ((unsigned)x >= AD_W || (unsigned)y >= AD_W || ex * ex + ey * ey > AD_R * AD_R || ad_on_plate(x, y))
+                continue;
+            uint16_t *o = s_ad_buf + (uint32_t)y * s_ad_stride + (uint32_t)x;
+            *o = ad_mix(*o, 150);
+            ad_mark(y, x, x);
+        }
+        if (xa == xb && ya == yb) break;
+        const int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; xa += sx; }
+        if (e2 <= dx) { err += dx; ya += sy; }
+    }
+}
+
+/* The trail from `from` to `to`, degrees that may run past north either
+ * way: painted, or cleared -- in two pieces across north. */
+static void ad_trail_wedge(int from, int to, bool clear)
+{
+    while (from < 0) { from += 360; to += 360; }
+    const int span[2][2] = { { from, LV_MIN(to, 360) }, { 0, to - 360 } };
+    for (int i = 0; i < (to > 360 ? 2 : 1); i++) {
+        lv_area_t a;
+        ad_wedge(span[i][0], span[i][1], &a);
+        ad_trail(&a, clear);
+    }
+}
+
+/* The picture shown, the scene drawn again: the scene, with the trail and
+ * the line on it while the sweep goes. */
+static void ad_show_all(void)
+{
+    memcpy(s_ad_buf, s_ad_clean, (size_t)s_ad_stride * AD_W * sizeof s_ad_buf[0]);
+    if (s_ad_swept) {
+        ad_trail_wedge(s_ad_sweep_deg - (AD_TRAIL + 1) * AD_SWEEP_STEP, s_ad_sweep_deg, false);
+        ad_sweep_line();
+    }
+    ad_dirty_done(false);
+    lv_obj_invalidate(s_ad_scene);
+}
+
+static void ad_sweep_step(void)
+{
+    const bool on = s_ad_slice && (s_ad_cfg.opts & NET_ADSB_SWEEP) && ad_have_pos() && !screen_dark() &&
+                    s_edit == ED_NONE && !s_asking && !addresses_up() && !s_ad_sel[0];
+    if (!on) {
+        /* Stopped: its trail and line taken off, once. */
+        if (s_ad_swept) {
+            s_ad_swept = false;
+            ad_trail_wedge(s_ad_sweep_deg - (AD_TRAIL + 1) * AD_SWEEP_STEP, s_ad_sweep_deg + AD_SWEEP_STEP, true);
+            ad_dirty_done(true);
+        }
+        return;
+    }
+    /* A step on: the old trail and the slice it leaves done again, to the
+     * new line. */
+    const uint32_t t0 = lv_tick_get();
+    s_ad_swept = true;
+    s_ad_sweep_deg = (s_ad_sweep_deg + AD_SWEEP_STEP) % 360;
+    ad_trail_wedge(s_ad_sweep_deg - (AD_TRAIL + 1) * AD_SWEEP_STEP, s_ad_sweep_deg, false);
+    ad_sweep_line();
+    ad_dirty_done(true);
+    const int ms = (int)lv_tick_elaps(t0);
+    if (ms > atomic_load(&s_ad_sweep_ms)) atomic_store(&s_ad_sweep_ms, ms);
+}
+
+static const adsb_ac_t *ad_find(const char *hex)
+{
+    for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++)
+        if (!strcmp(s_ad_ac[i].hex, hex)) return &s_ad_ac[i];
+    return NULL;
+}
+
+static void ad_card_close(void);
+
+static void ad_card_fill(void)
+{
+    const adsb_ac_t *a = s_ad_sel[0] ? ad_find(s_ad_sel) : NULL;
+    if (!a) {                                         /* gone from the feed */
+        ad_card_close();
+        return;
+    }
+    /* Its ring where it is now, over the picture. */
+    const ad_xy_t *p = &s_ad_xy[a - s_ad_ac];
+    if (p->on) lv_obj_set_pos(s_ad_selring, p->x - 12, p->y - 12);
+    vis(s_ad_selring, p->on);
+    char t[64], lv[24];
+    set_text(s_ad_cs, ad_name(a));
+    if (a->type[0] && a->reg[0])  snprintf(t, sizeof t, "%s  " LV_SYMBOL_BULLET "  %s", a->type, a->reg);
+    else                          snprintf(t, sizeof t, "%s", a->type[0] ? a->type : a->reg[0] ? a->reg : a->hex);
+    set_text(s_ad_c[0], t);
+    set_text(s_ad_c[1], s_ad_route_cs[0] && !strcmp(s_ad_route_cs, a->flight) ? s_ad_route : "");
+    ad_level(a, lv, sizeof lv);
+    if (a->vrate_fpm != ADSB_VR_NONE && abs(a->vrate_fpm) > 300)
+        snprintf(t, sizeof t, "%s  %+d ft/min", lv, (int)a->vrate_fpm);
+    else
+        snprintf(t, sizeof t, "%s", lv);
+    set_text(s_ad_c[2], t);
+    char gs[12] = "--- kt", tr[8] = "";
+    if (a->gs_kt >= 0) snprintf(gs, sizeof gs, "%d kt", (int)a->gs_kt);
+    if (a->track >= 0) snprintf(tr, sizeof tr, "%03d\xC2\xB0", (int)a->track);
+    snprintf(t, sizeof t, "%s%s%s", gs, tr[0] ? "  " LV_SYMBOL_BULLET "  " : "", tr);
+    set_text(s_ad_c[3], t);
+    const float d = adsb_nm_in(s_ad_cfg.units, a->dist_nm);
+    const int brg = (int)lroundf(a->brg) % 360;
+    if (d < 10) snprintf(t, sizeof t, "%.1f %s at %03d\xC2\xB0", (double)d, adsb_unit_name(s_ad_cfg.units), brg);
+    else        snprintf(t, sizeof t, "%.0f %s at %03d\xC2\xB0", (double)d, adsb_unit_name(s_ad_cfg.units), brg);
+    set_text(s_ad_c[4], t);
+    const char *em = adsb_emergency_name(a);
+    if (em[0])               snprintf(t, sizeof t, "%s  %s", a->squawk[0] ? a->squawk : "", em);
+    else if (a->squawk[0])   snprintf(t, sizeof t, "squawk %s", a->squawk);
+    else                     t[0] = 0;
+    set_text(s_ad_c[5], t);
+    set_text_color(s_ad_c[5], em[0] ? C_DANGER : C_LABEL);
+    vis(s_ad_card, true);
+}
+
+/* A card comes and goes over the picture as it is: its ring an object, the
+ * banner hidden and back, the scene not drawn again. */
+static void ad_card_open(const char *hex)
+{
+    strlcpy(s_ad_sel, hex, sizeof s_ad_sel);
+    s_ad_sel_at = lv_tick_get();
+    s_ad_route[0] = 0;
+    s_ad_route_cs[0] = 0;
+    s_ad_route_pending = false;
+    vis(s_ad_banner, false);
+    ad_card_fill();
+}
+
+static void ad_card_close(void)
+{
+    if (!s_ad_sel[0]) return;
+    s_ad_sel[0] = 0;
+    vis(s_ad_card, false);
+    vis(s_ad_selring, false);
+    vis(s_ad_banner, s_ad_alert_up);
+}
+
+static void ad_banner(void)
+{
+    const adsb_ac_t *best = NULL;
+    uint8_t best_al = ADSB_AL_NONE;
+    int more = 0;
+    for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) {
+        const uint8_t al = adsb_alert(&s_ad_ac[i], s_ad_cfg.types);
+        if (al == ADSB_AL_NONE || !s_ad_xy[i].on) continue;
+        if (al > best_al) { best = &s_ad_ac[i]; best_al = al; }  /* nearest first: the first of its kind */
+        more++;
+    }
+    s_ad_alert_up = best != NULL;
+    vis(s_ad_banner, best && !s_ad_sel[0]);          /* not over an aircraft's card */
+    if (!best) return;
+    char t[48];
+    const char *what = best_al == ADSB_AL_EMERGENCY ? adsb_emergency_name(best) : best->type;
+    if (more > 1) snprintf(t, sizeof t, "%s  %s  +%d", what, ad_name(best), more - 1);
+    else          snprintf(t, sizeof t, "%s  %s", what, ad_name(best));
+    set_text(s_ad_banner, t);
+    lv_obj_set_style_bg_color(s_ad_banner, best_al == ADSB_AL_EMERGENCY ? lv_color_hex(AD_EMERGENCY)
+                                                                         : lv_color_hex(0x3A2C08), 0);
+    set_text_color(s_ad_banner, best_al == ADSB_AL_EMERGENCY ? C_TEXT : C_ACCENT);
+}
+
+/* The alerts in this snapshot: one not in the last is new, and buzzes. */
+static void ad_alerts(void)
+{
+    static char now[AD_SEEN][7];
+    int k = 0, fresh = ADSB_AL_NONE;
+    for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0) && k < AD_SEEN; i++) {
+        const adsb_ac_t *a = &s_ad_ac[i];
+        const uint8_t al = adsb_alert(a, s_ad_cfg.types);
+        if (al == ADSB_AL_NONE || !adsb_shown(a, s_ad_cfg.show, s_ad_cfg.opts & NET_ADSB_GROUND, s_ad_cfg.types) ||
+            a->dist_nm > ad_range_nm())
+            continue;
+        bool seen = false;
+        for (int j = 0; j < AD_SEEN && !seen; j++) seen = !strcmp(s_ad_seen[j], a->hex);
+        if (!seen && al > fresh) fresh = al;
+        strlcpy(now[k++], a->hex, sizeof now[0]);
+    }
+    for (int j = 0; j < AD_SEEN; j++) {
+        if (j < k) memcpy(s_ad_seen[j], now[j], sizeof s_ad_seen[j]);
+        else       s_ad_seen[j][0] = 0;
+    }
+    if (fresh > atomic_load(&s_ad_alert_new)) atomic_store(&s_ad_alert_new, fresh);
+}
+
+static void ad_labels(void)
+{
+    char t[32];
+    ad_range_text(t, sizeof t);
+    set_text(s_ad_range, t);
+    int shown = 0;
+    for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) shown += s_ad_xy[i].on;
+    if (s_ad_feed_ok && s_ad_n >= 0) snprintf(t, sizeof t, "%s  " LV_SYMBOL_BULLET "  %d", s_ad_feed, shown);
+    else                             snprintf(t, sizeof t, "%s", s_ad_feed);
+    set_text(s_ad_foot, t);
+    set_text_color(s_ad_foot, s_ad_feed_ok ? C_LABEL : C_WARN);
+    vis(s_ad_hint, !ad_have_pos());
+    vis(s_ad_hint2, !ad_have_pos());
+}
+
+static void ad_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_ad_map_dirty) {
+        s_ad_map_dirty = false;
+        const uint32_t t = lv_tick_get();
+        ad_draw_map();
+        const int ms = (int)lv_tick_elaps(t);
+        if (ms > atomic_load(&s_ad_map_ms)) atomic_store(&s_ad_map_ms, ms);
+        s_ad_scene_dirty = true;
+    }
+    if (s_ad_scene_dirty) {
+        s_ad_scene_dirty = false;
+        const uint32_t t = lv_tick_get();
+        ad_draw_scene();
+        const int ms = (int)lv_tick_elaps(t);
+        if (ms > atomic_load(&s_ad_scene_ms)) atomic_store(&s_ad_scene_ms, ms);
+        ad_labels();
+        if (s_ad_sel[0]) ad_card_fill();
+    }
+    ad_sweep_step();
+}
+
+static lv_obj_t *ad_canvas(uint16_t **buf)
+{
+    s_ad_stride = lv_draw_buf_width_to_stride(AD_W, LV_COLOR_FORMAT_RGB565) / 2;
+    *buf = heap_caps_malloc((size_t)s_ad_stride * AD_W * 2, MALLOC_CAP_SPIRAM);
+    lv_obj_t *c = lv_canvas_create(s_ad);
+    if (*buf) lv_canvas_set_buffer(c, *buf, AD_W, AD_W, LV_COLOR_FORMAT_RGB565);
+    lv_obj_set_pos(c, 0, 0);
+    lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    return c;
+}
+
+/* The shown canvas hides all under it, its pixels opaque. LVGL 9.3 asks an
+ * image's background first, transparent, and so drew the face's under it on
+ * every chunk of every refresh. */
+static void ad_cover_cb(lv_event_t *e)
+{
+    lv_cover_check_info_t *info = lv_event_get_param(e);
+    const lv_area_t *a = info->area;
+    lv_area_t c;
+    lv_obj_get_coords(lv_event_get_target(e), &c);
+    if (info->res != LV_COVER_RES_MASKED && a->x1 >= c.x1 && a->y1 >= c.y1 && a->x2 <= c.x2 && a->y2 <= c.y2)
+        info->res = LV_COVER_RES_COVER;
+}
+
+static lv_obj_t *ad_label(lv_obj_t *parent, const lv_font_t *f, lv_color_t c)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_obj_set_style_text_font(l, f, 0);
+    lv_obj_set_style_text_color(l, c, 0);
+    lv_label_set_text(l, "");
+    return l;
+}
+
+static void adsb_build(void)
+{
+    s_ad = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_ad);
+    lv_obj_set_size(s_ad, AD_W, AD_W);
+    lv_obj_set_pos(s_ad, 0, 0);
+    lv_obj_set_style_bg_color(s_ad, C_BG, 0);
+    lv_obj_set_style_bg_opa(s_ad, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_ad, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_ad, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* The scene drawn on a canvas never shown; the one shown its copy with
+     * the sweep on it. */
+    s_ad_cleanc = ad_canvas(&s_ad_clean);
+    lv_obj_add_flag(s_ad_cleanc, LV_OBJ_FLAG_HIDDEN);
+    s_ad_scene = ad_canvas(&s_ad_buf);
+    lv_obj_add_event_cb(s_ad_scene, ad_cover_cb, LV_EVENT_COVER_CHECK, NULL);
+    s_ad_map = heap_caps_malloc((size_t)s_ad_stride * AD_W * 2, MALLOC_CAP_SPIRAM);
+    if (!s_ad_map || !s_ad_buf || !s_ad_clean) return;   /* no PSRAM: an empty face */
+    s_ad_slice = heap_caps_malloc((size_t)AD_W * AD_W, MALLOC_CAP_SPIRAM);
+    if (s_ad_slice) ad_slices();                      /* else no sweep */
+    ad_dirty_done(false);
+
+    /* The card's aircraft ringed white, over the picture. */
+    s_ad_selring = lv_obj_create(s_ad);
+    lv_obj_remove_style_all(s_ad_selring);
+    lv_obj_set_size(s_ad_selring, 25, 25);
+    lv_obj_set_style_radius(s_ad_selring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(s_ad_selring, C_TEXT, 0);
+    lv_obj_set_style_border_width(s_ad_selring, 2, 0);
+    lv_obj_remove_flag(s_ad_selring, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_ad_selring, LV_OBJ_FLAG_HIDDEN);
+
+    s_ad_range = ad_label(s_ad, &lv_font_montserrat_20, lv_color_hex(AD_TEXT));
+    lv_obj_align(s_ad_range, LV_ALIGN_TOP_MID, 0, 12);
+    s_ad_foot = ad_label(s_ad, &lv_font_montserrat_14, C_LABEL);
+    lv_obj_align(s_ad_foot, LV_ALIGN_CENTER, 0, AD_FOOT_Y - CY);
+
+    /* No middle set yet: what to do about it, in the middle. */
+    s_ad_hint = ad_label(s_ad, &lv_font_montserrat_20, C_WARN);
+    lv_label_set_text(s_ad_hint, "NO LOCATION");
+    lv_obj_align(s_ad_hint, LV_ALIGN_CENTER, 0, -24);
+    s_ad_hint2 = ad_label(s_ad, &lv_font_montserrat_14, C_TEXT2);
+    lv_label_set_text(s_ad_hint2, "Set the radar's middle\non the configuration page");
+    lv_obj_set_style_text_align(s_ad_hint2, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_ad_hint2, LV_ALIGN_CENTER, 0, 14);
+
+    s_ad_banner = ad_label(s_ad, &lv_font_montserrat_14, C_TEXT);
+    lv_obj_set_style_bg_opa(s_ad_banner, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_ad_banner, 10, 0);
+    lv_obj_set_style_pad_hor(s_ad_banner, 10, 0);
+    lv_obj_set_style_pad_ver(s_ad_banner, 3, 0);
+    lv_obj_align(s_ad_banner, LV_ALIGN_TOP_MID, 0, AD_BANNER_Y);
+    lv_obj_add_flag(s_ad_banner, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *g = lv_obj_create(s_ad);
+    lv_obj_remove_style_all(g);
+    lv_obj_set_size(g, 40, 40);
+    lv_obj_align(g, LV_ALIGN_CENTER, 0, AD_GEAR_Y - CY);
+    lv_obj_set_style_radius(g, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g, C_BG1, 0);
+    lv_obj_set_style_bg_opa(g, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(g, C_SUBTLE, 0);
+    lv_obj_set_style_border_width(g, 2, 0);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_SCROLLABLE);
+    s_ad_gear = ad_label(g, &lv_font_montserrat_20, C_TEXT2);
+    lv_label_set_text(s_ad_gear, LV_SYMBOL_SETTINGS);
+    lv_obj_center(s_ad_gear);
+
+    /* An aircraft's card: over the radar, under the address card. */
+    s_ad_card = lv_obj_create(s_ad);
+    lv_obj_set_size(s_ad_card, 250, 196);
+    lv_obj_align(s_ad_card, LV_ALIGN_CENTER, 0, -4);
+    lv_obj_set_style_radius(s_ad_card, 18, 0);
+    lv_obj_set_style_bg_color(s_ad_card, C_BG1, 0);
+    lv_obj_set_style_bg_opa(s_ad_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_ad_card, C_ACCENT, 0);
+    lv_obj_set_style_border_width(s_ad_card, 2, 0);
+    lv_obj_set_style_pad_all(s_ad_card, 0, 0);
+    lv_obj_remove_flag(s_ad_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_ad_card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_ad_card, LV_OBJ_FLAG_HIDDEN);
+    s_ad_cs = ad_label(s_ad_card, &lv_font_montserrat_28, C_TEXT);
+    lv_obj_align(s_ad_cs, LV_ALIGN_TOP_MID, 0, 10);
+    static const int16_t Y[6] = { 46, 68, 94, 120, 142, 164 };
+    for (int i = 0; i < 6; i++) {
+        s_ad_c[i] = ad_label(s_ad_card, i == 2 ? &lv_font_montserrat_20 : &lv_font_montserrat_14,
+                             i == 1 ? C_ACCENT : i == 2 ? C_TEXT : i == 0 ? C_LABEL : C_TEXT2);
+        lv_label_set_long_mode(s_ad_c[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_ad_c[i], 226);
+        lv_obj_set_style_text_align(s_ad_c[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_ad_c[i], LV_ALIGN_TOP_MID, 0, Y[i] - (i == 2 ? 3 : 0));
+    }
+
+    if (s_ad_have_cfg) ad_set_view();
+    ad_labels();
+    s_ad_timer = lv_timer_create(ad_timer_cb, AD_SWEEP_MS, NULL);
+}
+
+static void adsb_update(const ui_state_t *st)
+{
+    (void)st;
+    if (!s_ad_card) return;
+    /* A card left open goes on its own, as the address card does. */
+    if (s_ad_sel[0] && lv_tick_elaps(s_ad_sel_at) >= 20000) ad_card_close();
+}
+
+/* Every 15 ms, on the LVGL task (detents_cb): the knob's detents, a range
+ * each, and a range at rest long enough taken. */
+static void adsb_tick(void)
+{
+    const int d = atomic_exchange(&s_ad_detents, 0);
+    if (d && s_ad_card) {
+        const uint8_t r = adsb_range_step(s_ad_cfg.range, d);
+        if (r != s_ad_cfg.range) {
+            s_ad_cfg.range = r;
+            atomic_fetch_add(&s_ad_steps, 1);
+            s_ad_moved = lv_tick_get();
+            s_ad_map_dirty = true;
+            ad_labels();
+        }
+    }
+    if (!s_ad_moved || lv_tick_elaps(s_ad_moved) < AD_SETTLE_MS) return;
+    s_ad_moved = 0;
+    atomic_store(&s_ad_taken, s_ad_cfg.range);
+}
+
+static bool adsb_gear_at(lv_point_t p)
+{
+    const int32_t dx = p.x - CX, dy = p.y - AD_GEAR_Y;
+    return dx * dx + dy * dy <= AD_GEAR_R * AD_GEAR_R;
+}
+
+/* A tap: the aircraft under it, its card; the card itself, or nothing near,
+ * puts a card away. */
+static void adsb_tap(lv_point_t p)
+{
+    if (!s_ad_card) return;
+    if (s_ad_sel[0] && shown_at(s_ad_card, p)) { ad_card_close(); return; }
+    int best = -1, best_d2 = AD_TAP_R * AD_TAP_R;
+    for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) {
+        if (!s_ad_xy[i].on) continue;
+        const int dx = p.x - s_ad_xy[i].x, dy = p.y - s_ad_xy[i].y, d2 = dx * dx + dy * dy;
+        if (d2 < best_d2) { best = i; best_d2 = d2; }
+    }
+    if (best >= 0) ad_card_open(s_ad_ac[best].hex);
+    else           ad_card_close();
+}
+
+void ui_adsb_tables(const uint8_t *map, size_t mn, const uint8_t *apt, size_t an)
+{
+    s_ad_tmap = adsb_map_ok(map, mn) ? map : NULL;
+    s_ad_tapt = adsb_apt_ok(apt, an) ? apt : NULL;
+}
+
+void ui_adsb_set(const net_adsb_t *a)
+{
+    const bool lock = s_ad_card != NULL;
+    if (lock && !lvgl_port_lock(200)) return;
+    /* A new middle: the aircraft round the old one gone until the feed's
+     * next answer. */
+    const bool moved = s_ad_have_cfg && (a->lat_e6 != s_ad_cfg.lat_e6 || a->lon_e6 != s_ad_cfg.lon_e6);
+    s_ad_cfg = *a;
+    s_ad_have_cfg = true;
+    s_ad_moved = 0;
+    if (moved && s_ad_card) {
+        s_ad_n = -1;
+        ad_card_close();
+    }
+    if (lock) {
+        ad_set_view();
+        s_ad_map_dirty = true;
+        ad_labels();
+        lvgl_port_unlock();
+    }
+}
+
+void ui_adsb_aircraft(const adsb_ac_t *ac, int n)
+{
+    if (!s_ad_card || !lvgl_port_lock(200)) return;
+    if (n > ADSB_UI_MAX) n = ADSB_UI_MAX;
+    memcpy(s_ad_ac, ac, (size_t)n * sizeof ac[0]);
+    s_ad_n = n;
+    ad_place();                 /* the taps need it before the scene is drawn again */
+    ad_alerts();
+    s_ad_scene_dirty = true;
+    lvgl_port_unlock();
+}
+
+void ui_adsb_feed(const char *what, bool ok)
+{
+    if (!s_ad_card || !lvgl_port_lock(200)) return;
+    if (strcmp(s_ad_feed, what) || ok != s_ad_feed_ok) {
+        strlcpy(s_ad_feed, what, sizeof s_ad_feed);
+        s_ad_feed_ok = ok;
+        ad_labels();
+    }
+    lvgl_port_unlock();
+}
+
+bool ui_adsb_card_callsign(char *cs, size_t n)
+{
+    if (!s_ad_card || !lvgl_port_lock(20)) return false;
+    const adsb_ac_t *a = s_ad_sel[0] ? ad_find(s_ad_sel) : NULL;
+    const bool got = a && a->flight[0];
+    if (got) strlcpy(cs, a->flight, n);
+    lvgl_port_unlock();
+    return got;
+}
+
+void ui_adsb_route(const char *cs, const char *from, const char *to, bool pending)
+{
+    char r[sizeof s_ad_route];
+    if (from[0] && to[0]) snprintf(r, sizeof r, "%s  " LV_SYMBOL_RIGHT "  %s", from, to);
+    else                  snprintf(r, sizeof r, "%s", pending ? "route ..." : "");
+    if (!strcmp(cs, s_ad_route_cs) && !strcmp(r, s_ad_route) && pending == s_ad_route_pending) return;
+    if (!s_ad_card || !lvgl_port_lock(20)) return;
+    strlcpy(s_ad_route_cs, cs, sizeof s_ad_route_cs);
+    strlcpy(s_ad_route, r, sizeof s_ad_route);
+    s_ad_route_pending = pending;
+    if (s_ad_sel[0]) ad_card_fill();
+    lvgl_port_unlock();
+}
+
+void ui_adsb_turn(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_ad_detents, (int)detents);
+}
+
+int  ui_take_adsb_range(void) { return atomic_exchange(&s_ad_taken, -1); }
+int  ui_take_adsb_steps(void) { return atomic_exchange(&s_ad_steps, 0); }
+int  ui_take_adsb_alert(void) { return atomic_exchange(&s_ad_alert_new, ADSB_AL_NONE); }
+void ui_take_adsb_draw_ms(int *map, int *scene, int *sweep)
+{
+    *map = atomic_exchange(&s_ad_map_ms, 0);
+    *scene = atomic_exchange(&s_ad_scene_ms, 0);
+    *sweep = atomic_exchange(&s_ad_sweep_ms, 0);
+}
+#endif /* ADSB_FACE */
+
+/* The faces that own the glass whole, with a gear at their foot for the
+ * card and the picker: EpiBeam's compass, ADS-B Radar's radar. */
+#define GEAR_FACE (EPI_FACE || ADSB_FACE)
+__attribute__((unused)) static bool gear_at(lv_point_t p)
+{
+#if EPI_FACE
+    return beam_gear_at(p);
+#elif ADSB_FACE
+    return adsb_gear_at(p);
+#else
+    (void)p;
+    return false;
+#endif
+}
 
 static void tap(lv_point_t p, uint32_t held)
 {
@@ -3173,10 +4374,10 @@ static void tap(lv_point_t p, uint32_t held)
         edit_close();
         return;
     }
-#if EPI_FACE
+#if GEAR_FACE
     /* The gear: the address card, for the page -- locked too, as the card
      * carries UNLOCK -- or, up already, away. */
-    if (beam_gear_at(p)) {
+    if (gear_at(p)) {
         if (addresses_up()) {
             netinfo_show(false);
         } else {
@@ -3288,6 +4489,10 @@ static void tap(lv_point_t p, uint32_t held)
 
 #if EPI_FACE
     beam_tap(p);                                 /* a direction; elsewhere nothing */
+    return;
+#endif
+#if ADSB_FACE
+    adsb_tap(p);                                 /* an aircraft's card; elsewhere it goes */
     return;
 #endif
 #if REFLECTOR_FACE
@@ -3535,8 +4740,9 @@ static void gesture_cb(lv_event_t *e)
 #if HAS_LOCK
     if (s_knob_locked) { klock_nudge(); return; }
 #endif
-#if EPI_FACE
-    /* The compass has nothing a swipe away: the knob and a tap steer it. */
+#if GEAR_FACE
+    /* The compass and the radar have nothing a swipe away: the knob and a
+     * tap steer them. */
     (void)dir;
     return;
 #endif
@@ -3630,11 +4836,11 @@ static void touch_cb(lv_event_t *e)
     s_gestured   = false;
     s_ptt_armed  = false;
     s_press_ant  = false;
-#if EPI_FACE
-    /* The compass has no S-meter: its gear brings the card with a tap
-     * (tap), and held PICKER_HOLD_MS the firmware picker -- or the card
-     * itself, or the warning, held, as on any face. */
-    s_press_picker = beam_gear_at(p) ||
+#if GEAR_FACE
+    /* The compass and the radar have no S-meter: the gear brings the card
+     * with a tap (tap), and held PICKER_HOLD_MS the firmware picker -- or
+     * the card itself, or the warning, held, as on any face. */
+    s_press_picker = gear_at(p) ||
                      (addresses_up() && (shown_at(s_netinfo, p) || shown_at(s_warn_panel, p)));
     s_press_card   = false;
 #else
@@ -3701,11 +4907,11 @@ static void touch_cb(lv_event_t *e)
             return;
         }
 #endif
-        if (shown_at(s_klock_btn, p) || s_edit == ED_CHOICE || (EPI_FACE && beam_gear_at(p))) {
+        if (shown_at(s_klock_btn, p) || s_edit == ED_CHOICE || (GEAR_FACE && gear_at(p))) {
             s_press_tap = true;                  /* see release_cb, tap() */
             return;
         }
-        s_press_card = !EPI_FACE && p.y < 104 && !s_press_picker;
+        s_press_card = !GEAR_FACE && p.y < 104 && !s_press_picker;
         if (!s_press_card && !s_press_picker) klock_nudge();
         return;
     }
@@ -3752,7 +4958,7 @@ static void touch_cb(lv_event_t *e)
     /* PTT keeps acting on the press: the whole slab, with a link, and not
      * while an editor is open, when a tap there accepts the edit. With no
      * link the slab would arm a transmitter we cannot reach. */
-    if (!RX_FACE && !EPI_FACE && p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
+    if (!RX_FACE && !GEAR_FACE && p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
         /* One tap, one toggle. A light touch can flicker -- press, release,
          * press within a single tap -- and on a toggle each extra press
          * undoes the one before: keyed and unkeyed in one tap, which reads as
@@ -4449,6 +5655,12 @@ static void build(void)
      * questions and the lock, made after it. The knob's own battery stays
      * over it, at the top of the glass, as over any face. */
     beam_build();
+    lv_obj_move_foreground(s_knob_batt);
+#endif
+#if ADSB_FACE
+    /* The radar, the same way: under the card, the warning, the questions
+     * and the lock; the knob's battery over it, under the range. */
+    adsb_build();
     lv_obj_move_foreground(s_knob_batt);
 #endif
 
@@ -5614,6 +6826,9 @@ void ui_update(const ui_state_t *st)
 #if EPI_FACE
     beam_update(st);
 #endif
+#if ADSB_FACE
+    adsb_update(st);
+#endif
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter -- nor,
      * behind the SSTV viewer, redraw a picture from PSRAM for a moving meter.
@@ -6559,6 +7774,11 @@ void ui_set_brightness(uint8_t percent)
 }
 
 uint32_t ui_last_use(void) { return s_last_use_ms; }
+
+#if ADSB_FACE
+/* Gone dark: the radar's sweep rests. */
+static bool screen_dark(void) { return s_level == LVL_BLANK; }
+#endif
 
 /* Kept apart from s_last_use_ms, which questions, setup screens, page saves
  * and calls move too: a receiver's owner limits idle listening, and the

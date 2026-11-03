@@ -69,10 +69,10 @@ fi
 # update, and no new knob could ever choose it.
 NAMES='{"aethersdr": "AetherSDR", "icom": "Icom", "openx6x00": "OpenX6X00", "multiflex": "FlexRadio", "ubersdr": "UberSDR",
         "kiwi": "Kiwi888", "owrx": "OpenWebRX", "websdr": "WebSDR", "svxconnect": "SVXConnect",
-        "phone": "Telephone", "epibeam": "EpiBeam", "setup": "Setup"}'
+        "phone": "Telephone", "epibeam": "EpiBeam", "adsb": "ADS-B Radar", "setup": "Setup"}'
 # ...and those of them stamped BETA on the setup firmware's dial (its
 # index.json entry's "beta": true), until they have been tried enough.
-BETA='["epibeam"]'
+BETA='["epibeam", "adsb"]'
 if [ "$RADIO" != companion ] &&
    ! python3 -c 'import json, sys; sys.exit(sys.argv[2] not in json.loads(sys.argv[1]))' "$NAMES" "$RADIO"; then
     echo "$RADIO has no name in NAMES (tools/release.sh): the setup firmware would never offer it" >&2

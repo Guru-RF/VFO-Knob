@@ -9,5 +9,6 @@ idf_component_register(
         "src/vfo_tune.c"
         "src/ptt_fsm.c"
         "src/beam.c"
+        "src/adsb.c"
     INCLUDE_DIRS "include"
 )

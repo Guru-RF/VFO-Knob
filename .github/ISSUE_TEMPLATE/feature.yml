@@ -32,6 +32,7 @@ body:
         - OpenWebRX
         - WebSDR
         - EpiBeam
+        - ADS-B Radar
         - Setup
         - A Bluetooth headset or speaker (the second chip)
         - Every firmware
