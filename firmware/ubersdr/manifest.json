@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-ubersdr",
-  "version": "1.22.0",
-  "file": "vfo-knob-ubersdr-1.22.0.bin",
-  "sha256": "79fbfc156c72d1209c3b804289b5a313d555fbf00de9111828970f3a34cdc970",
-  "size": 2297856
+  "version": "1.23.0",
+  "file": "vfo-knob-ubersdr-1.23.0.bin",
+  "sha256": "ae69187548acb57a46fe267e6ad60c118f0e10c78630a6d1233f828ad286e091",
+  "size": 2363392
 }
