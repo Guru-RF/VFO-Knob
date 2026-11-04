@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-epibeam",
-  "version": "1.23.1",
-  "file": "vfo-knob-epibeam-1.23.1.bin",
-  "sha256": "07b3578ac7a5a20638d45f8f1e83aaac49980dea169e19e3ef0ca34ca2041fb2",
-  "size": 2101248
+  "version": "1.24.0",
+  "file": "vfo-knob-epibeam-1.24.0.bin",
+  "sha256": "47639fe0dbe121ac0e4d5fecfca64d6f3ab893bd702c3765c1e1b69e27da1aed",
+  "size": 2166784
 }
