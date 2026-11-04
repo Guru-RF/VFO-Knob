@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "net_prov.h"
 
 esp_err_t ui_init(void);
 
@@ -412,13 +413,19 @@ void ui_set_netinfo(const char *text);
 /* Firmware-update screen. Takes over the display for the duration of an
  * upload: it frees the device for the transfer, tells the operator not to
  * unplug, and -- being a separate screen -- puts PTT out of reach. */
-/* Idle blanking, in two stages. Any knob movement, touch or transmit is
- * "use": after dim_minutes the backlight drops but the dial stays readable,
- * after blank_minutes it goes dark, and the next use restores it. Either
- * value at 0 disables that stage. */
+/* The screen while nobody uses the knob (net_screen_t): the screensaver,
+ * then dimmed, then dark. Any knob movement, touch or transmit is "use" and
+ * brings the dial back. */
 void ui_note_activity(void);
-void ui_dim_set_minutes(uint16_t dim_minutes, uint16_t blank_minutes);
+void ui_screen_set(const net_screen_t *s);
 void ui_dim_tick(bool transmitting);
+/* From the knob's task, before it acts on a turn: true when the screensaver
+ * showed or the screen was dark. The dial is then brought back and the turn
+ * is spent on that alone, as the first touch is (touch_read). */
+bool ui_wake(void);
+/* The time zone, the 12/24 hours or the clock's face changed (the page's):
+ * the clocks drawn again. From any task. */
+void ui_clock_changed(void);
 /* The backlight while lit, percent of full (GitHub #14): lit at once at it.
  * Dimmed stays at its own level, or at this if this is lower. */
 void ui_set_brightness(uint8_t percent);
@@ -440,6 +447,39 @@ void ui_beam_turn(int32_t detents);
 int  ui_take_beam(void);
 /* Moved since last asked: a count under way is out of date. */
 bool ui_take_beam_moved(void);
+
+/* The Clock firmware's face (VFO_RADIO=clock; components/ui clockface.h):
+ * from the knob's task, detents, a face each, applied in the LVGL task; and
+ * the face the knob rested on, once, to keep: -1, none. */
+void ui_clock_turn(int32_t detents);
+int  ui_take_clock_face(void);
+/* Its alarms (components/vfo_core alarm.h): the page's, before ui_init kept
+ * for it, after shown at once; the knob's own, set with the dial or one rung
+ * once and so off, to keep -- once, false while none changed; and whether
+ * one rings, for the motor and the beeps. From any task. */
+#if VFO_RADIO_CLOCK
+void ui_alarms_set(const net_alarms_t *a);
+bool ui_take_alarms(net_alarms_t *out);
+bool ui_alarm_ringing(void);
+#endif
+
+/* The Weather firmware's faces (VFO_RADIO=weather; components/vfo_core
+ * weather.h, components/weather_client). From any task: copied, and drawn
+ * on the LVGL task. */
+#if VFO_RADIO_WEATHER
+#include "weather.h"
+/* The place, the units and the face the dial was left on: before ui_init,
+ * kept for it; after, drawn again at once. */
+void ui_weather_set(const net_weather_t *w);
+/* A forecast, each time one comes. */
+void ui_weather_data(const wx_t *wx);
+/* What went wrong asking for it, "" while it answers. */
+void ui_weather_state(const char *state);
+/* From the knob's task: detents, a face each, applied in the LVGL task; and
+ * the face the knob rested on, once, to keep: -1, none. */
+void ui_weather_turn(int32_t detents);
+int  ui_take_weather_face(void);
+#endif
 
 /* The ADS-B Radar firmware's radar (VFO_RADIO=adsb; components/vfo_core
  * adsb.h, components/adsb_client). */

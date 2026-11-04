@@ -1,0 +1,14 @@
+# The Clock firmware: the knob as a clock, its faces drawn on the knob, the
+# time from SNTP (VFO_RADIO=clock).
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the time servers
+# are on the internet, and the USB link has no route there. Leaving TinyUSB
+# out also keeps the serial console on the cable.
+
+# AES in software, as every firmware: the engine's DMA takes its bounce buffers
+# from internal RAM.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# The web page's sessions and the log's beside the time's: at 10, a few slow
+# requests over weak WiFi held every socket for minutes (2026-11-04).
+CONFIG_LWIP_MAX_SOCKETS=16

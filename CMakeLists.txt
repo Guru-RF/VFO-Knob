@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom xiegu openx6x00 svxconnect multiflex ubersdr kiwi owrx websdr setup phone epibeam adsb)
+set(_vfo_radios aethersdr icom xiegu openx6x00 svxconnect multiflex ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -58,7 +58,8 @@ endif()
 # -- a 4-square, or 8 directions -- through EpiCenter, the station's brain,
 # its client the link to it. adsb is no radio either: a radar of the aircraft
 # round the knob, from an ADS-B feed on the internet or a receiver of one's
-# own, after Alex-developer's ADSB-Radar.
+# own, after Alex-developer's ADSB-Radar. clock is a clock: its faces, the
+# time from SNTP. weather is the weather: Open-Meteo's forecast for a place.
 if(VFO_RADIO STREQUAL "aethersdr" OR VFO_RADIO STREQUAL "openx6x00")
     set(_vfo_client tci_client)
 elseif(VFO_RADIO STREQUAL "svxconnect")
@@ -81,11 +82,15 @@ elseif(VFO_RADIO STREQUAL "epibeam")
     set(_vfo_client epi_client)
 elseif(VFO_RADIO STREQUAL "adsb")
     set(_vfo_client adsb_client)
+elseif(VFO_RADIO STREQUAL "clock")
+    set(_vfo_client clock_client)
+elseif(VFO_RADIO STREQUAL "weather")
+    set(_vfo_client weather_client)
 else()
     set(_vfo_client icom_client)
 endif()
 foreach(_c tci_client icom_client svx_client flex_client uber_client kiwi_client owrx_client wsdr_client
-           setup_client phone_client epi_client adsb_client)
+           setup_client phone_client epi_client adsb_client clock_client weather_client)
     if(NOT _c STREQUAL _vfo_client)
         list(APPEND EXCLUDE_COMPONENTS ${_c})
     endif()
@@ -104,7 +109,8 @@ endif()
 # different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_XIEGU,
 # VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_UBERSDR, VFO_RADIO_KIWI,
 # VFO_RADIO_OWRX, VFO_RADIO_WEBSDR, VFO_RADIO_SETUP, VFO_RADIO_PHONE,
-# VFO_RADIO_EPIBEAM or VFO_RADIO_ADSB is defined as 1.
+# VFO_RADIO_EPIBEAM, VFO_RADIO_ADSB, VFO_RADIO_CLOCK or VFO_RADIO_WEATHER is
+# defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
 idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND)

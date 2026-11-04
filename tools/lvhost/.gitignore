@@ -19,3 +19,6 @@ slab_owrx
 slab_websdr
 slab_epibeam
 slab_adsb
+slab_clock
+slab_weather
+clockfaces

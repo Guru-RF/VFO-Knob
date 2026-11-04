@@ -2023,11 +2023,658 @@ def adsb_pictures():
     return {k: v.replace("adglass", f"adsb-{k[:2]}-glass") for k, v in out.items()}
 
 
+# --- the Clock firmware --------------------------------------------------------------
+
+# Wednesday 4 November 2026, 14:52:08 in Brussels: 13:52 UTC.
+CK_NOW = dict(h=14, m=52, s=8, uh=13, um=52, wday="WED", mday=4, mon="NOV")
+CK_LUME, CK_LUME_RIM, CK_STALE = "#E4EDD3", "#8E9686", "#707884"   # clockface.c
+
+
+def ck_at(deg, r):
+    """clockface.c polar(): `deg` clockwise from 12, `r` out from the middle."""
+    a = math.radians(deg)
+    return 180 + r * math.sin(a), 180 - r * math.cos(a)
+
+
+def ck_line(x0, y0, x1, y1, w, colour, rnd):
+    return (f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{colour}" '
+            f'stroke-width="{w}" stroke-linecap="{"round" if rnd else "butt"}"/>')
+
+
+def ck_ray(deg, r0, r1, w, colour, rnd=False):
+    """clockface.c ray(): a line out from the middle at `deg`, r0 to r1."""
+    return ck_line(*ck_at(deg, r0), *ck_at(deg, r1), w, colour, rnd)
+
+
+def ck_disc(x, y, r, colour):
+    """A disc LVGL draws from x - r to x + r, both inclusive."""
+    return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r + 0.5:.1f}" fill="{colour}"/>'
+
+
+def ck_ring(r, w, colour):
+    """lv_draw_arc all round: `r` its outer edge, `w` of it inwards."""
+    return (f'<circle cx="180" cy="180" r="{r - w / 2:.1f}" fill="none" stroke="{colour}" '
+            f'stroke-width="{w}"/>')
+
+
+def ck_bell(x, y, h, colour):
+    """LV_SYMBOL_BELL, as Montserrat's symbols draw it: a bell `h` high,
+    its top at y, centred on x, its clapper under the rim."""
+    u = h / 14.0
+    def p(a, b):
+        return f"{x + (a - 7) * u:.1f},{y + b * u:.1f}"
+    return (f'<path d="M{p(7, 0)} C{p(3.6, 0.6)} {p(3, 4)} {p(3, 7)} L{p(3, 9)} L{p(1, 11)} '
+            f'L{p(13, 11)} L{p(11, 9)} L{p(11, 7)} C{p(11, 4)} {p(10.4, 0.6)} {p(7, 0)} Z" fill="{colour}"/>'
+            f'<circle cx="{x:.1f}" cy="{y + 12.6 * u:.1f}" r="{1.6 * u:.1f}" fill="{colour}"/>')
+
+
+def ck_mark(cy, mark, size, colour):
+    """clockface.c's mark: the next alarm -- LV_SYMBOL_BELL, a space and its
+    time -- or the snooze's time, centred on cy as one label."""
+    f = montserrat(size)
+    if not mark.startswith("BELL "):
+        return centred(180, cy, mark, size, colour)
+    t = " " + mark[5:]
+    bw = round(size * 0.86)                  # the bell's advance, Montserrat's symbols
+    w = bw + f.width(t)
+    x0 = 180 - w / 2
+    top = cy - f.line_height // 2
+    return (ck_bell(x0 + bw / 2, top + (f.line_height - size) / 2, size, colour)
+            + md.text(x0 + bw, top + f.line_height - f.base_line, esc(t), size, colour, anchor="start",
+                      extra=' xml:space="preserve"'))
+
+
+def ck_dial(face, have=True, t=CK_NOW, mark=""):
+    """clockface.c dial_shack, dial_diver, dial_classic: the dial without
+    its hands, and NO TIME YET where the date goes until there is a time;
+    the Clock's next alarm, `mark`, where each dial has room ("BELL 07:30"
+    is the bell and the time)."""
+    s = ['<rect x="0" y="0" width="360" height="360" fill="#000000"/>']
+    date = f"{t['wday']} {t['mday']}"
+    if face == 0:
+        s += [ck_disc(180, 180, 179, "#0B1424"), ck_ring(179, 2, "#2A3A55")]
+        for i in range(60):
+            s.append(ck_ray(i * 6, 161, 171, 2, "#8A9BB5") if i % 5 else ck_ray(i * 6, 150, 171, 4, "#FFFFFF"))
+        for h in range(1, 13):
+            s.append(centred(*ck_at(h * 30, 131), str(h), 28, "#FFFFFF"))
+        s.append(ck_ring(112, 1, "#2E4A73"))
+        for h in range(24):
+            s.append(ck_ray(h * 15, 107, 113, 2, "#5A9BFF"))
+            s.append(centred(*ck_at(h * 15, 97), str(h), 14, "#7FA9E8"))
+        s.append(ck_mark(132, mark, 14, "#FFB000") if mark else centred(180, 132, "VFO KNOB", 14, "#8A9BB5"))
+        if have:
+            s.append(centred(180, 226, f"{date} {t['mon']}", 14, "#FFFFFF"))
+            s.append(centred(180, 244, "UTC", 14, "#FF5A36"))
+    elif face == 1:
+        s += [ck_disc(180, 180, 179, "#060708"), ck_ring(179, 29, "#1B1E23")]
+        for i in range(1, 60):
+            if i % 10 == 0:
+                s.append(centred(*ck_at(i * 6, 165), str(i), 14, "#E8ECF0"))
+            elif i % 5 == 0:
+                s.append(ck_ray(i * 6, 158, 172, 4, "#E8ECF0"))
+            else:
+                s.append(ck_ray(i * 6, 163, 171, 2, "#A8ADB4"))
+        x, y = ck_at(0, 152)
+        s.append(f'<polygon points="{x:.1f},{y:.1f} 170,4 190,4" fill="#E8ECF0"/>')
+        s += [ck_disc(180, 12, 3, CK_LUME), ck_ring(150, 2, "#30343A")]
+        for h in range(1, 13):
+            if h == 3:
+                continue
+            if h == 12:
+                for d in (-3.2, 3.2):
+                    s += [ck_ray(d, 112, 142, 9, CK_LUME_RIM), ck_ray(d, 113, 141, 6, CK_LUME)]
+            elif h in (6, 9):
+                s += [ck_ray(h * 30, 110, 143, 13, CK_LUME_RIM), ck_ray(h * 30, 111, 142, 10, CK_LUME)]
+            else:
+                x, y = ck_at(h * 30, 128)
+                s += [ck_disc(x, y, 10, CK_LUME_RIM), ck_disc(x, y, 8, CK_LUME)]
+        # The day-date window at 3: x 262..322, y 167..193, its border inside.
+        s.append('<rect x="263" y="168" width="59" height="25" rx="3" fill="#F4F4F0" '
+                 'stroke="#8C9096" stroke-width="2"/>')
+        if have:
+            s.append(centred(292, 180, date, 14, "#101214"))
+        s.append(centred(180, 118, "VFO KNOB", 14, "#E8ECF0"))
+        s.append(centred(180, 236, "AUTOMATIC", 14, "#FF5A36"))
+        if mark:
+            s.append(ck_mark(262, mark, 14, "#E8ECF0"))
+    else:
+        s += [ck_disc(180, 180, 179, "#F2F2EE"), ck_ring(179, 4, "#303030")]
+        for i in range(60):
+            s.append(ck_ray(i * 6, 161, 171, 3, "#1A1A1A") if i % 5 else ck_ray(i * 6, 128, 171, 10, "#1A1A1A"))
+        if have:
+            s.append(centred(180, 254, date, 14, "#6A6A6A"))
+        if mark:
+            s.append(ck_mark(280, mark, 14, "#6A6A6A"))
+    if not have:
+        s.append(centred(180, 230 if face == 0 else 270, "NO TIME YET", 20,
+                         "#6A6A6A" if face == 2 else "#C0C8D4"))
+    return "".join(s)
+
+
+def ck_hand(deg, tail, length, w, colour, rim=None, rnd=True, dot=None):
+    """clockface.c hand(), hand_draw(): from `tail` behind the middle to
+    `length` before it; a rim 3 px wider under it; the diver's lume dot."""
+    (x0, y0), (x1, y1) = ck_at(deg + 180, tail), ck_at(deg, length)
+    s = ck_line(x0, y0, x1, y1, w + 3, rim, rnd) if rim else ""
+    s += ck_line(x0, y0, x1, y1, w, colour, rnd)
+    if dot:
+        r, at = dot
+        x, y = x0 + (x1 - x0) * at, y0 + (y1 - y0) * at
+        s += ck_disc(x, y, r + 2, colour) + ck_disc(x, y, r, CK_LUME)
+    return s
+
+
+def ck_hands(face, t=CK_NOW, seconds=True, fresh=True):
+    """clockface.c hands_for() and cap(): grey once the time is a day old."""
+    hr = (t["h"] % 12) * 30 + t["m"] * 0.5
+    mn = t["m"] * 6 + t["s"] // 10
+    sc = t["s"] * 6
+    g = lambda c: c if fresh else CK_STALE          # noqa: E731
+    if face == 0:
+        s = (ck_hand(hr, 14, 80, 8, g("#FFFFFF")) + ck_hand(mn, 18, 138, 5, g("#FFFFFF"))
+             + ck_hand((t["uh"] + t["um"] / 60) * 15, 0, 114, 2, g("#FF5A36")))
+        if seconds:
+            s += ck_hand(sc, 30, 152, 2, g("#FFB000"))
+        return s + ck_disc(180, 180, 6, "#FFFFFF") + ck_disc(180, 180, 2, "#0B1424")
+    if face == 1:
+        s = (ck_hand(hr, 0, 84, 12, g(CK_LUME), "#2A2E33")
+             + ck_hand(mn, 0, 128, 8, g(CK_LUME), "#2A2E33"))
+        if seconds:
+            s += ck_hand(sc, 34, 142, 3, g("#E03A2E"), dot=(5, (34 + 98) / (34 + 142)))
+        return s + ck_disc(180, 180, 7, "#C0C4C8")
+    s = (ck_hand(hr, 24, 96, 14, g("#1A1A1A"), rnd=False)
+         + ck_hand(mn, 30, 150, 10, g("#1A1A1A"), rnd=False))
+    if seconds:
+        s += ck_hand(sc, 42, 142, 3, g("#D7261E"))
+    return s + ck_disc(180, 180, 5, "#D7261E")
+
+
+@functools.lru_cache(maxsize=None)
+def hack96():
+    return md.LvglFont(os.path.join(ROOT, "components", "ui", "font_hack_96.c"))
+
+
+def hack_text(cx, cy, s, colour, f=None):
+    """A Hack label centred on (cx, cy), as wide as Hack draws it whatever
+    monospace face stands in."""
+    f = f or hack96()
+    base = cy - f.line_height // 2 + f.line_height - f.base_line
+    return md.text(cx, base, esc(s), f.size, colour, family=md.READOUT_FONT,
+                   extra=f' xml:space="preserve" textLength="{f.width(s)}" lengthAdjust="spacingAndGlyphs"')
+
+
+def ck_digital_lines(t=CK_NOW, h24=True, have=True):
+    """The digital face's three lines (clockface.c digital, saver.c
+    digital_frame): HH:MM, its colon off on odd seconds; the date; UTC."""
+    if not have:
+        return "--:--", "NO TIME YET", ""
+    hh = t["h"] if h24 else t["h"] % 12 or 12
+    colon = " " if t["s"] % 2 else ":"
+    big = f"{hh:02d}{colon}{t['m']:02d}" if h24 else f"{hh}{colon}{t['m']:02d}"
+    ampm = "" if h24 else "  AM" if t["h"] < 12 else "  PM"
+    return big, f"{t['wday']} {t['mday']} {t['mon']}{ampm}", f"{t['uh']:02d}:{t['um']:02d} UTC"
+
+
+def ck_digital(t=CK_NOW, h24=True, have=True, mark=""):
+    big, line, utc = ck_digital_lines(t, h24, have)
+    s = '<rect x="0" y="0" width="360" height="360" fill="#000000"/>' + hack_text(180, 158, big, "#FFFFFF")
+    s += centred(180, 214, line, 20, "#C0C8D4").replace("<text ", '<text xml:space="preserve" ', 1)
+    s += centred(180, 238, utc, 20, "#5A9BFF") if utc else ""
+    return s + (ck_mark(268, mark, 20, "#707884") if mark else "")
+
+
+def clock_face(face=0, seconds=True, have=True, fresh=True, mark=""):
+    if face == 3:
+        return ck_digital(have=have, mark=mark)
+    return ck_dial(face, have, mark=mark) + (ck_hands(face, seconds=seconds, fresh=fresh) if have else "")
+
+
+# ui.c's alarms: the list, one being set, one ringing (AL_*).
+AL_ON, AL_SET, AL_RING = "#3FD46C", "#FFB000", "#FF3030"
+AL_TIME_Y, AL_DOTS_R = 160, 162
+
+
+def al_list(n, hh, mm, days, on, mode=None, lit=(), pill=None):
+    """ui.c al_show(): alarm `n` (1-10), or the one being set with the part
+    the dial sets -- mode "HOURS", "MINUTES", "DAYS" -- in amber; the ten
+    dots, those in `lit` on; the pill ON, OFF or STOP."""
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="#000000"/>']
+    for i in range(10):
+        here = i == n - 1
+        d = 22 if here else 14
+        x = 180 + round(AL_DOTS_R * math.sin(math.radians(i * 36))) - d // 2
+        y = 180 - round(AL_DOTS_R * math.cos(math.radians(i * 36))) - d // 2
+        fill = AL_ON if (i + 1 in lit or (here and (on or mode))) else md.DISABLED
+        s.append(f'<circle cx="{x + d / 2:.1f}" cy="{y + d / 2:.1f}" r="{d / 2 - (1.5 if here else 0):.1f}" '
+                 f'fill="{fill}"' + (f' stroke="{md.TEXT}" stroke-width="3"' if here else "") + '/>')
+    t20 = montserrat(20)
+    s.append(centred(180, 46 + t20.line_height // 2, mode or f"ALARM {n}", 20, AL_SET if mode else md.TEXT2))
+    base = md.TEXT if (on or mode) else md.LABEL
+    w = hack96().width("0")
+    x0 = 180 - w // 2
+    s.append(hack_text(x0 - w, AL_TIME_Y, hh, AL_SET if mode == "HOURS" else base))
+    s.append(hack_text(x0 + w / 2, AL_TIME_Y, ":", base))
+    s.append(hack_text(x0 + 2 * w, AL_TIME_Y, mm, AL_SET if mode == "MINUTES" else base))
+    s.append(centred(180, AL_TIME_Y + 56 + t20.line_height // 2, days, 20,
+                     AL_SET if mode == "DAYS" else md.TEXT2 if (on or mode) else md.LABEL))
+    if not mode:
+        word = pill or ("ON" if on else "OFF")
+        bg = AL_RING if word == "STOP" else AL_ON if word == "ON" else md.SUBTLE
+        s.append(f'<rect x="116" y="262" width="128" height="50" rx="25" fill="{bg}"'
+                 + ("" if word in ("ON", "STOP") else f' stroke="{md.DISABLED}" stroke-width="2"') + '/>')
+        s.append(centred(180, 287, word, 28, "#000000" if word in ("ON", "STOP") else md.LABEL))
+    return "".join(s)
+
+
+def al_ringing(hh_mm, days):
+    """ui.c al_build()'s ringing screen: the red ring round the glass (on, as
+    it flashes), the bell and ALARM, its time, its days, the hint."""
+    t28, t20, t14 = montserrat(28), montserrat(20), montserrat(14)
+    head = "  ALARM"
+    bw = round(28 * 0.86)
+    w = bw + t28.width(head)
+    x0 = 180 - w / 2
+    top = 58
+    return ('<rect x="0" y="0" width="360" height="360" fill="#000000"/>'
+            f'<circle cx="180" cy="180" r="172" fill="none" stroke="{AL_RING}" stroke-width="16"/>'
+            + ck_bell(x0 + bw / 2, top + (t28.line_height - 28) / 2, 28, AL_RING)
+            + md.text(x0 + bw, top + t28.line_height - t28.base_line, esc(head), 28, AL_RING, anchor="start",
+                      extra=' xml:space="preserve"')
+            + hack_text(180, AL_TIME_Y, hh_mm, md.TEXT)
+            + centred(180, AL_TIME_Y + 56 + t20.line_height // 2, days, 20, md.TEXT2)
+            + centred(180, 270 + t14.line_height // 2, "TAP TO STOP", 14, md.LABEL)
+            + centred(180, 270 + t14.line_height * 3 // 2, "TURN TO SNOOZE", 14, md.LABEL))
+
+
+def clock_pictures():
+    md.use_palette("aethersdr")          # the card, the question and the lock wear AetherSDR's
+    f = clock_face()
+    left = [(*ck_at(312, 100), "local time: the hands"), (*ck_at(255, 97), "UTC, 24 hours round"),
+            (150, 226, "the date"), (*ck_at(208, 90), "UTC's own hand, red")]
+    right = [(*ck_at(48, 120), "the second hand"), (300, 180, "a tap anywhere: the card"),
+             (190, 244, "UTC")]
+    out = {}
+    out["01-face"] = callouts("ck-01", "The Clock firmware's face: the shack clock", f, left, right)
+    out["02-diver"] = knob("ck-02", "Turn: the next face, the Diver", clock_face(1), turn(),
+                           "a face a detent  ·  the one it rests on is kept")
+    out["03-classic"] = knob("ck-03", "The Classic white face", clock_face(2), turn(),
+                             "Classic white: a station clock, the red second hand ticking")
+    out["04-digital"] = knob("ck-04", "The Digital face", clock_face(3), turn(),
+                             "Digital: the time large, the date, UTC")
+    out["05-notime"] = knob("ck-05", "Before the time has come from the internet", clock_face(0, have=False),
+                            "", "no time yet: no hands, until the WiFi brings it")
+    card = address_card(f"Clock {VERSION}\n{POWER}\n{ADDRESSES}")
+    out["06-card"] = knob("ck-06", "A tap: the address card, for the configuration page",
+                          f + card + lock_pill(False), tap(180, 300),
+                          "tap anywhere: the address card  ·  again: away")
+    out["07-picker"] = knob("ck-07", "Held three seconds: back to the setup firmware?",
+                            dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
+                                                              "tap to cancel; WiFi is kept"),
+                            tap(180, 300, ring=24), "hold anywhere 3 s until it buzzes, then turn")
+    out["08-battery"] = knob("ck-08", "Its own battery low: the charge at the top",
+                             f + md.battery_glyph(md.KNOB_BATT_X, md.KNOB_BATT_Y + 18, 15, md.battery_colour(15)),
+                             "", "unplugged: the charge only once it is low, a fifth or less")
+    out["09-lock"] = knob("ck-09", "The address card's LOCK", f + card + lock_pill(False), tap(252, 84),
+                          "tap for the card  ·  tap LOCK")
+    out["10-locked"] = knob("ck-10", "Locked: the padlock at the top",
+                            f + lock_closed(180, 47.5, md.WARN), "",
+                            "the knob turns no face  ·  a tap still brings the card, UNLOCK on it")
+    out["11-alarm-mark"] = knob("ck-11", "The next alarm on the dial; a tap on the middle: the alarms",
+                                clock_face(mark="BELL 07:30"), tap(180, 180),
+                                "the next alarm on the dial  ·  tap the middle: the alarms")
+    out["12-alarms"] = knob("ck-12", "The alarms: one at a time, the dial from one to the next",
+                            al_list(1, "07", "30", "MON-FRI", True, lit=(1, 4)), turn() + tap(180, 287),
+                            "turn: the next alarm  ·  tap ON / OFF  ·  tap the time to set it")
+    out["13-alarm-set"] = knob("ck-13", "Setting an alarm: the hours, the minutes, the days",
+                               al_list(2, "06", "45", "ONCE", False, mode="HOURS", lit=(1, 4)), turn() + tap(180, 160),
+                               "turn: the hours  ·  tap: the minutes, the days, then kept")
+    out["14-ringing"] = knob("ck-14", "An alarm ringing", al_ringing("07:30", "MON-FRI"), "",
+                             "tap: it stops  ·  turn: it snoozes")
+    out["15-snoozed"] = knob("ck-15", "Snoozed: when it rings again, on the dial",
+                             clock_face(mark="SNOOZE 07:39"), "",
+                             "snoozed: when it rings again  ·  STOP on the list ends it")
+    return out
+
+
+# --- the Weather firmware --------------------------------------------------------
+
+WX_SUN, WX_MOON, WX_CLOUD, WX_CLOUD_DK = "#FFC83C", "#E8E2C0", "#DCE3EC", "#8C96A4"   # ui.c WX_*
+WX_RAIN, WX_SNOW, WX_BOLT, WX_FOG, WX_LINE = "#4AA8FF", "#FFFFFF", "#FFD23C", "#A8B0BC", "#FFA040"
+WX_PLACE, WX_TIME, WX_ASKED = "Brussels, Belgium", "14:52", "14:55"
+# The slab's sky over Brussels (tools/lvhost/slab.c make_sky): the next 24
+# hours from 15:00 -- temperature, chance of rain, WMO code -- and 5 days.
+WX_HOURS = [(9.6 - 0.4 * (i if i < 15 else 30 - i),
+             (0, 5, 0, 10, 20, 35, 60, 80, 75, 40, 10)[i] if i < 11 else 0,
+             (3, 0, 0, 2, 3, 61, 63, 65, 80, 51, 3)[i] if i < 11 else 0,
+             i < 1 or i > 16) for i in range(24)]
+WX_DAYS = [(("TODAY", "THU", "FRI", "SAT", "SUN")[i], (3, 0, 3, 51, 95)[i],
+            9.9 + i * 0.3, 4.7 - i, i * 15) for i in range(5)]
+
+
+def wx_round(v):
+    """lroundf: halves away from nought."""
+    return int(math.floor(v + 0.5)) if v >= 0 else -int(math.floor(-v + 0.5))
+
+
+def wx_icon_kind(code):
+    """weather.c wx_icon()."""
+    for kind, codes in (("clear", (0, 1)), ("partly", (2,)), ("fog", (45, 48)), ("drizzle", (51, 53, 55)),
+                        ("sleet", (56, 57, 66, 67)), ("rain", (61, 63, 65)),
+                        ("snow", (71, 73, 75, 77, 85, 86)), ("showers", (80, 81, 82)),
+                        ("thunder", (95, 96, 99))):
+        if code in codes:
+            return kind
+    return "cloudy"
+
+
+def wx_disc(x, y, r, c):
+    return f'<circle cx="{wx_round(x)}" cy="{wx_round(y)}" r="{r + 0.5:.1f}" fill="{c}"/>'
+
+
+def wx_line(x1, y1, x2, y2, w, c):
+    return ck_line(x1, y1, x2, y2, max(1, wx_round(w)), c, True)
+
+
+def wx_cloud(x, y, w, c):
+    """ui.c wx_cloud(): a flat foot and three domes."""
+    x0, x1, y0, y1 = wx_round(x - 0.46 * w), wx_round(x + 0.46 * w), wx_round(y), wx_round(y + 0.24 * w)
+    return (wx_disc(x - 0.24 * w, y + 0.04 * w, 0.2 * w, c) + wx_disc(x + 0.02 * w, y - 0.08 * w, 0.27 * w, c)
+            + wx_disc(x + 0.27 * w, y + 0.07 * w, 0.17 * w, c)
+            + f'<rect x="{x0}" y="{y0}" width="{x1 - x0 + 1}" height="{y1 - y0 + 1}" '
+              f'rx="{wx_round(0.12 * w)}" fill="{c}"/>')
+
+
+def wx_drops(x, y, s, n, length, c):
+    return "".join(wx_line(x + (i - (n - 1) / 2) * 0.22 * s, y, x + (i - (n - 1) / 2) * 0.22 * s - 0.35 * length,
+                           y + length, 0.07 * s, c) for i in range(n))
+
+
+def wx_flake(x, y, r):
+    out = []
+    for i in range(3):
+        a = i * 1.0472
+        s, c = math.sin(a) * r, math.cos(a) * r
+        out.append(wx_line(x - s, y - c, x + s, y + c, r * 0.45, WX_SNOW))
+    return "".join(out)
+
+
+def wx_sun(x, y, r):
+    rays = "".join(wx_line(x + 1.4 * r * math.sin(i * 0.785398), y - 1.4 * r * math.cos(i * 0.785398),
+                           x + 1.85 * r * math.sin(i * 0.785398), y - 1.85 * r * math.cos(i * 0.785398),
+                           r * 0.28, WX_SUN) for i in range(8))
+    return rays + wx_disc(x, y, r, WX_SUN)
+
+
+def wx_moon(x, y, r):
+    return wx_disc(x, y, r, WX_MOON) + wx_disc(x + 0.5 * r, y - 0.35 * r, 0.82 * r, "#000000")
+
+
+def wx_tri(*p, c=WX_BOLT):
+    return f'<polygon points="{" ".join(f"{p[i]:.1f},{p[i + 1]:.1f}" for i in (0, 2, 4))}" fill="{c}"/>'
+
+
+def wx_icon(code, day, x, y, s):
+    """ui.c wx_icon_draw(): the icon for a WMO code in a box `s` wide."""
+    k, cy = wx_icon_kind(code), y - 0.08 * s
+    if k == "clear":
+        return wx_sun(x, y, 0.24 * s) if day else wx_moon(x, y, 0.32 * s)
+    if k in ("partly", "showers"):
+        o = wx_sun(x - 0.16 * s, y - 0.17 * s, 0.15 * s) if day else wx_moon(x - 0.14 * s, y - 0.16 * s, 0.2 * s)
+        if k == "partly":
+            return o + wx_cloud(x + 0.07 * s, y + 0.06 * s, 0.74 * s, WX_CLOUD)
+        return (o + wx_cloud(x + 0.06 * s, cy + 0.02 * s, 0.72 * s, WX_CLOUD)
+                + wx_drops(x + 0.08 * s, y + 0.27 * s, s, 3, 0.16 * s, WX_RAIN))
+    if k == "fog":
+        return wx_cloud(x, y - 0.18 * s, 0.7 * s, WX_CLOUD_DK) + "".join(
+            wx_line(x - (0.36 - 0.06 * (i % 2)) * s, y + (0.12 + 0.12 * i) * s,
+                    x + (0.36 - 0.06 * ((i + 1) % 2)) * s, y + (0.12 + 0.12 * i) * s, 0.06 * s, WX_FOG)
+            for i in range(3))
+    if k == "drizzle":
+        return wx_cloud(x, cy, 0.8 * s, WX_CLOUD) + wx_drops(x, y + 0.28 * s, s, 3, 0.07 * s, WX_RAIN)
+    if k == "rain":
+        return wx_cloud(x, cy, 0.8 * s, WX_CLOUD_DK) + wx_drops(x, y + 0.26 * s, s, 3, 0.18 * s, WX_RAIN)
+    if k == "sleet":
+        return (wx_cloud(x, cy, 0.8 * s, WX_CLOUD_DK) + wx_drops(x - 0.11 * s, y + 0.26 * s, s, 2, 0.16 * s, WX_RAIN)
+                + wx_flake(x + 0.24 * s, y + 0.34 * s, 0.07 * s))
+    if k == "snow":
+        return wx_cloud(x, cy, 0.8 * s, WX_CLOUD) + "".join(
+            wx_flake(x + (i - 1) * 0.24 * s, y + (0.38 if i == 1 else 0.3) * s, 0.07 * s) for i in range(3))
+    if k == "thunder":
+        return (wx_cloud(x, cy, 0.8 * s, WX_CLOUD_DK)
+                + wx_tri(x + 0.1 * s, y + 0.08 * s, x - 0.15 * s, y + 0.32 * s, x + 0.05 * s, y + 0.3 * s)
+                + wx_tri(x + 0.13 * s, y + 0.24 * s, x - 0.09 * s, y + 0.27 * s, x - 0.06 * s, y + 0.5 * s))
+    return (wx_cloud(x + 0.14 * s, y - 0.1 * s, 0.6 * s, WX_CLOUD_DK)
+            + wx_cloud(x - 0.04 * s, y + 0.04 * s, 0.78 * s, WX_CLOUD))
+
+
+def wx_label(y, s, size, colour, dx=0):
+    """ui.c wx_label(): one line centred on y (and dx along)."""
+    return centred(180 + dx, y, s, size, colour).replace("<text ", '<text xml:space="preserve" ', 1)
+
+
+def wx_box_text(x1, x2, y, s, size, colour, align):
+    """ui.c wx_text_at(): a line in a box x1..x2, its middle at y."""
+    f = montserrat(size)
+    base = y - f.line_height // 2 + f.line_height - f.base_line
+    x, anchor = {"left": (x1, "start"), "right": (x2 + 1, "end"), "centre": ((x1 + x2 + 1) / 2, "middle")}[align]
+    return md.text(x, base, esc(s), size, colour, anchor=anchor)
+
+
+def wx_top(page, foot="Open-Meteo, " + WX_ASKED, foot_colour=None, place=WX_PLACE):
+    """What every page has: the time, the caption, the foot."""
+    cap = (place, "NEXT 24 HOURS", "5 DAYS")[page]
+    return ('<rect x="0" y="0" width="360" height="360" fill="#000000"/>'
+            + wx_label(22, WX_TIME, 20, md.TEXT2) + wx_label(74, cap, 14, md.LABEL)
+            + wx_label(318, foot, 14, foot_colour or md.LABEL))
+
+
+def wx_now(foot="Open-Meteo, " + WX_ASKED, foot_colour=None, have=True):
+    """The first page (ui.c wx_build, wx_fill): the icon 92 px at 52, 88; the
+    temperature at 48 px from 158, 94; then the condition, the wind with its
+    arrow, the humidity and pressure, the sun's hours."""
+    s = wx_top(0, foot, foot_colour)
+    f48, f14 = montserrat(48), montserrat(14)
+    if not have:
+        return s + md.text(158, 94 + f48.line_height - f48.base_line, "--", 48, md.TEXT, anchor="start")
+    s += wx_icon(2, True, 97.5, 133.5, 92)
+    s += md.text(158, 94 + f48.line_height - f48.base_line, "10°C", 48, md.TEXT, anchor="start")
+    s += md.text(161, 150 + f14.line_height - f14.base_line, "feels like 5°", 14, md.TEXT2, anchor="start")
+    s += wx_label(202, "Partly cloudy", 20, md.TEXT)
+    wind = "ENE  19 km/h, gusts 39"
+    s += wx_label(232, wind, 14, md.TEXT2, dx=12)
+    # The arrow, 24 px, left of the words: the wind from 58 degrees, so it points to 238.
+    ax, ay = 180 + 12 - f14.width(wind) / 2 - 4 - 12, 232
+    r = math.radians(58 + 180)
+    sn, cs = math.sin(r), -math.cos(r)
+    s += wx_line(ax - 8 * sn, ay - 8 * cs, ax + 3 * sn, ay + 3 * cs, 3, md.TEXT2)
+    s += wx_tri(ax + 10 * sn, ay + 10 * cs, ax + 2 * sn + 6 * cs, ay + 2 * cs - 6 * sn,
+                ax + 2 * sn - 6 * cs, ay + 2 * cs + 6 * sn, c=md.TEXT2)
+    s += wx_label(256, "humidity 63 %    1027 hPa", 14, md.TEXT2)
+    return s + wx_label(280, "sunrise 07:39    sunset 17:12", 14, md.TEXT2)
+
+
+def wx_hours():
+    """The second page (ui.c wx_chart_cb): the chance of rain as bars, the
+    temperature a line over them with its highest and lowest, an icon every
+    four hours, the hour every six."""
+    s = wx_top(1)
+    a_x1, a_y1, a_x2 = 24, 90, 24 + 312 - 1
+    x0, x1 = a_x1 + 14, a_x2 - 14
+    dx = (x1 - x0) / 23
+    top, bot = a_y1 + 40, a_y1 + 148
+    temps = [h[0] for h in WX_HOURS]
+    lo, hi = min(temps), max(temps)
+    ilo, ihi = temps.index(lo), temps.index(hi)
+    mid, span = (lo + hi) / 2, max(4, hi - lo)
+    ty0, ty1 = top + 14, bot - 22
+    ty = lambda c: ty1 - (c - (mid - span / 2)) / span * (ty1 - ty0)   # noqa: E731
+    for i, (_, rain, _, _) in enumerate(WX_HOURS):
+        if rain:
+            x, h = x0 + dx * i, (bot - top) * rain / 100
+            y0 = wx_round(bot - h)
+            s += (f'<rect x="{wx_round(x - 4)}" y="{y0}" width="9" height="{bot - y0 + 1}" rx="2" '
+                  f'fill="{WX_RAIN}" fill-opacity="0.6"/>')
+    s += wx_line(x0, bot + 1, x1, bot + 1, 1, "#30363F")
+    pts = " ".join(f"{x0 + dx * i:.1f},{ty(t):.1f}" for i, t in enumerate(temps))
+    s += (f'<polyline points="{pts}" fill="none" stroke="{WX_LINE}" stroke-width="3" '
+          f'stroke-linecap="round" stroke-linejoin="round"/>')
+    xh = x0 + dx * ihi
+    s += wx_box_text(int(xh) - 30, int(xh) + 30, int(ty(hi)) - 12, f"{wx_round(hi)}°", 14, WX_LINE, "centre")
+    xl = x0 + dx * ilo
+    s += wx_box_text(int(xl) - 30, int(xl) + 30, int(ty(lo)) + 13, f"{wx_round(lo)}°", 14, WX_LINE, "centre")
+    for i in range(0, 24, 4):
+        s += wx_icon(WX_HOURS[i][2], WX_HOURS[i][3], x0 + dx * i, a_y1 + 16, 28)
+    for i in range(0, 24, 6):
+        x = wx_round(x0 + dx * i)
+        hour = f"{(15 + i) % 24:02d}:00"
+        s += (wx_box_text(x - 30, x + 30, bot + 16, hour, 14, md.TEXT2, "centre") if i
+              else wx_box_text(a_x1, a_x1 + 60, bot + 16, hour, 14, md.TEXT2, "left"))
+    return s + wx_label(290, "rain likely at 21:00, 60 %", 14, md.TEXT2)
+
+
+def wx_days():
+    """The third page (ui.c wx_days_cb): a row a day, today first."""
+    s = wx_top(2)
+    ax1, ay1, ax2 = 40, 88, 40 + 280 - 1
+    for i, (name, code, mx, mn, rain) in enumerate(WX_DAYS):
+        y = ay1 + 20 + 40 * i
+        s += wx_box_text(ax1 + 8, ax1 + 92, y, name, 20, md.ACCENT_HI if not i else md.TEXT, "left")
+        s += wx_icon(code, True, ax1 + 114, y, 34)
+        s += wx_box_text(ax1 + 134, ax1 + 184, y, f"{wx_round(mx)}°", 20, md.TEXT, "right")
+        s += wx_box_text(ax1 + 188, ax1 + 234, y, f"{wx_round(mn)}°", 20, md.LABEL, "right")
+        if rain >= 10:
+            s += wx_box_text(ax1 + 236, ax2, y, f"{rain}%", 14, WX_RAIN, "right")
+    return s
+
+
+def weather_pictures():
+    md.use_palette("aethersdr")          # the weather wears AetherSDR's palette on black
+    f = wx_now()
+    left = [(98, 134, "now: the sky"), (110, 202, "in words"), (88, 232, "the wind, and its way"),
+            (120, 256, "humidity, pressure"), (110, 280, "the sun's hours")]
+    right = [(200, 22, "the time"), (230, 74, "the place"), (230, 120, "the temperature"),
+             (236, 156, "feels like"), (220, 318, "when Open-Meteo answered")]
+    out = {}
+    out["01-face"] = callouts("wx-01", "The Weather firmware's first page: now", f, left, right)
+    out["02-hours"] = knob("wx-02", "Turn: the next 24 hours", wx_hours(), turn(),
+                           "a page a detent  ·  rain as bars, the temperature a line")
+    out["03-days"] = knob("wx-03", "Turn again: the next 5 days", wx_days(), turn(),
+                          "5 days: highest, lowest, the chance of rain")
+    out["04-asking"] = knob("wx-04", "Before the first forecast", wx_now("asking Open-Meteo...", have=False), "",
+                            "asking: the place and the time, the forecast on its way")
+    out["05-failing"] = knob("wx-05", "Open-Meteo did not answer", wx_now("Open-Meteo: no answer", md.WARN), "",
+                             "what went wrong, at the foot  ·  the last forecast kept")
+    card = address_card(f"Weather {VERSION}\n{POWER}\n{ADDRESSES}")
+    out["06-card"] = knob("wx-06", "A tap: the address card, for the configuration page",
+                          f + card + lock_pill(False), tap(180, 300),
+                          "tap anywhere: the address card  ·  again: away")
+    out["07-picker"] = knob("wx-07", "Held three seconds: back to the setup firmware?",
+                            dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
+                                                              "tap to cancel; WiFi is kept"),
+                            tap(180, 300, ring=24), "hold anywhere 3 s until it buzzes, then turn")
+    out["08-battery"] = knob("wx-08", "On its own battery: the knob's charge under the time",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  ·  none on USB power")
+    out["09-lock"] = knob("wx-09", "The address card's LOCK", f + card + lock_pill(False), tap(252, 84),
+                          "tap for the card  ·  tap LOCK")
+    out["10-locked"] = knob("wx-10", "Locked: the padlock under the time",
+                            f + lock_closed(180, 47.5, md.WARN), "",
+                            "the knob turns no page  ·  a tap still brings the card, UNLOCK on it")
+    return out
+
+
+# --- the screensavers (every firmware) -----------------------------------------------
+
+MX_CW, MX_CH = 15, 20                     # saver.c MX_CW, MX_CH
+
+
+def matrix_rain():
+    """saver.c's Matrix rain, still: 24 columns of 15 px, each a head of pale
+    green and a trail fading to dark green, the half-width katakana, digits
+    and signs mirrored, as the film shows them; only what the round glass
+    shows of each column. Its own xorshift, so the same rain every run."""
+    rng = [0x2545F491]
+
+    def rnd(n):
+        v = rng[0]
+        v ^= (v << 13) & 0xFFFFFFFF
+        v ^= v >> 17
+        v ^= (v << 5) & 0xFFFFFFFF
+        rng[0] = v
+        return v % n if n else 0
+
+    glyphs = [chr(c) for c in range(0xFF66, 0xFF9E)] + list("0123456789") + list(":.=*+-<>|")
+    s = ['<rect x="0" y="0" width="360" height="360" fill="#000000"/>']
+    rows = 360 // MX_CH
+    for col in range(360 // MX_CW):
+        dx = col * MX_CW + MX_CW / 2 - 180
+        half = math.sqrt(max(0, 180 * 180 - dx * dx))
+        shown = [r for r in range(rows) if abs(r * MX_CH + MX_CH / 2 - 180) <= half + MX_CH / 2]
+        if not shown:
+            continue
+        length = 6 + rnd(11)
+        head = shown[0] + rnd(len(shown) + length // 2)
+        for r in shown:
+            d = head - r
+            if d < 0 or d > length:
+                continue
+            if d == 0:
+                c = "#C8FFC8"
+            else:
+                g = 255 - (d - 1) * 215 // length
+                c = f"#00{g:02X}{g // 4:02X}"
+            x, y = col * MX_CW + MX_CW / 2, r * MX_CH + 16
+            s.append(f'<text x="{-x:.1f}" y="{y}" transform="scale(-1,1)" font-size="17" fill="{c}" '
+                     f'font-family="Noto Sans CJK JP,Noto Sans Mono CJK JP,MS Gothic,Hiragino Sans,monospace" '
+                     f'text-anchor="middle">{esc(glyphs[rnd(len(glyphs))])}</text>')
+    return "".join(s)
+
+
+def drift_box(x, y, big, small, utc="", digits=True):
+    """saver.c digital_frame and freq_frame: a box of white, large, and its
+    lines under it, wherever the drift has it."""
+    if utc:
+        f, f20 = hack96(), montserrat(20)
+        bw, bh = f.width("00:00"), f.line_height
+        s = hack_text(x + 2 + bw / 2, y + 2 + bh / 2, big, "#FFFFFF")
+        s += centred(x + 2 + bw / 2, y + 2 + bh + 6 + f20.line_height / 2, small, 20, "#C0C8D4")
+        return s + centred(x + 2 + bw / 2, y + 2 + bh + 6 + f20.line_height + 2 + f20.line_height / 2, utc,
+                           20, "#5A9BFF")
+    f = md.hack() if digits else montserrat(48)
+    f20 = montserrat(20)
+    w = max(f.width(big), f20.width(small))
+    cx = x + 2 + w / 2
+    s = hack_text(cx, y + 2 + f.line_height / 2, big, "#FFFFFF", f) if digits else \
+        centred(cx, y + 2 + f.line_height / 2, big, 48, "#FFFFFF")
+    return s + centred(cx, y + 2 + f.line_height + 4 + f20.line_height / 2, small, 20, "#C0C8D4")
+
+
+def saver_pictures():
+    md.use_palette("aethersdr")
+    black = '<rect x="0" y="0" width="360" height="360" fill="#000000"/>'
+    big, line, utc = ck_digital_lines()
+    out = {}
+    out["01-matrix"] = knob("ss-01", "Matrix rain, every firmware's screensaver until set", matrix_rain(), "",
+                            "a minute untouched: the rain  ·  a turn or a tap: the dial again")
+    out["02-clock"] = knob("ss-02", "The Analog clock screensaver", clock_face(0), "",
+                           "Analog clock: the page's clock face, the shack clock until set")
+    out["03-digital"] = knob("ss-03", "The Digital clock screensaver, drifting",
+                             black + drift_box(46, 86, big, line, utc), "",
+                             "Digital clock: the time, the date, UTC, drifting a pixel a second")
+    out["04-frequency"] = knob("ss-04", "The Drifting frequency screensaver",
+                               black + drift_box(70, 200, "14.074.000", "USB"), "",
+                               "Drifting frequency: the dial's frequency and mode, drifting")
+    out["05-dark"] = knob("ss-05", "Dark", black, "",
+                          "a minute later dimmed, a minute after that dark: all three set on the page")
+    return out
+
+
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
              "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
-             "epibeam": epibeam_pictures, "adsb": adsb_pictures, "headset": headset_pictures}
+             "epibeam": epibeam_pictures, "adsb": adsb_pictures, "clock": clock_pictures,
+             "weather": weather_pictures, "screensaver": saver_pictures, "headset": headset_pictures}
 
 
 def main():

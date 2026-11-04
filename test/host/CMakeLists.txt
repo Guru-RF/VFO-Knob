@@ -73,6 +73,8 @@ add_library(vfo_core STATIC
     ${CORE}/src/ptt_fsm.c
     ${CORE}/src/beam.c
     ${CORE}/src/adsb.c
+    ${CORE}/src/weather.c
+    ${CORE}/src/alarm.c
 )
 target_include_directories(vfo_core PUBLIC ${CORE}/include)
 target_compile_options(vfo_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -190,6 +192,23 @@ target_compile_options(test_adsb PRIVATE -Wall -Wextra)
 target_compile_definitions(test_adsb PRIVATE
     ADSB_TABLES="${CMAKE_CURRENT_SOURCE_DIR}/../../components/adsb_client/tables")
 add_test(NAME test_adsb COMMAND test_adsb)
+
+# The Weather firmware's arithmetic (components/vfo_core/src/weather.c):
+# Open-Meteo's forecast read without a tree -- whole, cut short at every
+# byte, with nulls and a unit's key of the same name -- the WMO codes, and
+# the units.
+add_executable(test_weather src/test_weather.c)
+target_link_libraries(test_weather PRIVATE vfo_core)
+target_compile_options(test_weather PRIVATE -Wall -Wextra)
+add_test(NAME test_weather COMMAND test_weather)
+
+# The Clock firmware's alarms (components/vfo_core/src/alarm.c): due at
+# their minute on their days, the next one over midnight and the week's end,
+# the dial's days and the face's words.
+add_executable(test_alarm src/test_alarm.c)
+target_link_libraries(test_alarm PRIVATE vfo_core)
+target_compile_options(test_alarm PRIVATE -Wall -Wextra)
+add_test(NAME test_alarm COMMAND test_alarm)
 
 # KiwiSDR's protocol, the plain-C part (components/kiwi_proto/kiwi_proto.c).
 set(KIWI ${CMAKE_CURRENT_SOURCE_DIR}/../../components/kiwi_proto)
@@ -434,9 +453,11 @@ if(KIWI_TLS)
                               "_binary_${_p}_html_start:\n.incbin \"${_www}/${_p}.html\"\n.byte 0\n"
                               "_binary_${_p}_html_end:\n")
     endforeach()
+    file(APPEND ${_pages} ".section .rodata\n.global _binary_tz_txt_start\n.global _binary_tz_txt_end\n"
+                          "_binary_tz_txt_start:\n.incbin \"${_www}/tz.txt\"\n.byte 0\n_binary_tz_txt_end:\n")
     file(APPEND ${_pages} ".section .note.GNU-stack,\"\",%progbits\n")
     set_source_files_properties(${_pages} PROPERTIES OBJECT_DEPENDS
-                                "${_www}/index.html;${_www}/radio.html;${_www}/portal.html")
+                                "${_www}/index.html;${_www}/radio.html;${_www}/portal.html;${_www}/tz.txt")
     enable_language(ASM)
     set(CMP ${CMAKE_CURRENT_SOURCE_DIR}/../../components)
     add_executable(owrx_web_host
@@ -455,7 +476,8 @@ if(KIWI_TLS)
     target_include_directories(owrx_web_host PRIVATE shim ${OC}/include ${WSL}/include ${KIWI}
                                ${CMP}/net_prov/include ${CMP}/radio/include ${CMP}/webcfg/include
                                ${CMP}/ota/include ${CMP}/bt_link/include ${CMP}/ui/include ${CMP}/usb_net/include
-                               ${CMP}/audio/include ${CMP}/board/include ${CMP}/netlog/include)
+                               ${CMP}/audio/include ${CMP}/board/include ${CMP}/netlog/include
+                               ${CMP}/wallclock/include)
     target_compile_definitions(owrx_web_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM OWRX_WEB=1
                                VFO_RADIO_OWRX=1 VFO_RX_ONLY=1)
     target_link_libraries(owrx_web_host PRIVATE owrx_proto kiwi_proto vfo_core ${KIWI_TLS_LIBS} Threads::Threads)
@@ -479,7 +501,8 @@ if(KIWI_TLS)
     target_include_directories(wsdr_web_host PRIVATE shim ${WC}/include ${WSL}/include ${KIWI}
                                ${CMP}/net_prov/include ${CMP}/radio/include ${CMP}/webcfg/include
                                ${CMP}/ota/include ${CMP}/bt_link/include ${CMP}/ui/include ${CMP}/usb_net/include
-                               ${CMP}/audio/include ${CMP}/board/include ${CMP}/netlog/include)
+                               ${CMP}/audio/include ${CMP}/board/include ${CMP}/netlog/include
+                               ${CMP}/wallclock/include)
     target_compile_definitions(wsdr_web_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM WSDR_WEB=1
                                VFO_RADIO_WEBSDR=1 VFO_RX_ONLY=1)
     target_link_libraries(wsdr_web_host PRIVATE wsdr_proto owrx_proto kiwi_proto vfo_core ${KIWI_TLS_LIBS}

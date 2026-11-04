@@ -47,6 +47,13 @@ is over. While a headset is connected, the call itself is only in the headset:
 the jack stays silent. The headset's button answers a call that rings, and
 hangs up one that is up; the knob's slab then declines a call ringing in.
 
+The Clock firmware opens the headset's or the speaker's audio for its alarms
+only: an alarm rings in it while it is connected, and not on the jack — the
+jack plays the first second or so, while the audio opens — and the audio
+closes as the alarm stops. A speaker's volume is the alarms' own, set on the
+page: see [the Clock guide](clock.md#when-one-rings). Nothing there keys, and
+no logo shows on the clock's faces.
+
 The knob keeps two mic gains: one for its own microphone, one for a headset's.
 A headset's microphone comes levelled, while the knob's own is quiet, so one
 setting never suited both. The face's mic readout, and its editor, are for the

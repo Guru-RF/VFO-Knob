@@ -47,6 +47,11 @@ label.chk input{width:auto;margin:0}
 button.show,button.show:active{position:absolute;right:4px;top:50%;transform:translateY(-50%);
   margin:0;padding:3px 10px;background:transparent;color:var(--accent);font-size:12px}
 @media(max-width:520px){.grid{grid-template-columns:1fr}}
+.alrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)}
+.alrow .n{min-width:1.4em;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums}
+.alrow input{width:auto;margin:0}
+.alrow .days{display:flex;gap:8px;flex-wrap:wrap}
+.alrow .days label{display:flex;align-items:center;gap:3px;margin:0;color:var(--fg);font-size:12px}
 .sdr{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:4px}
 .sdrrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .sdrres{margin-top:14px}
@@ -269,6 +274,78 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      and OurAirports, both public domain.</p>
 </section>
 
+<section id="wxsec" hidden>
+  <h2>Weather</h2>
+  <label for="wxfind">Where: a town or a city</label>
+  <div class="grid">
+    <div><input id="wxfind" maxlength="60" placeholder="Mechelen" autocorrect="off" spellcheck="false"></div>
+    <div><button type="button" class="ghost" id="wxgo" style="margin-top:0">Find</button></div>
+  </div>
+  <div id="wxhits"></div>
+  <div class="grid">
+    <div><label for="wxlat">&hellip;or a place: latitude</label>
+      <input id="wxlat" inputmode="decimal" placeholder="50.8503"></div>
+    <div><label for="wxlon">longitude</label>
+      <input id="wxlon" inputmode="decimal" placeholder="4.3517"></div>
+  </div>
+  <label for="wxloc">&hellip;or a locator</label>
+  <input id="wxloc" maxlength="8" placeholder="JO20eu" autocapitalize="characters"
+         autocorrect="off" spellcheck="false">
+  <p class="note" id="wxwhere"></p>
+  <p class="note">A name is looked up by this page, at Open-Meteo, and the
+     knob keeps where it is; or a place in degrees, north and east positive;
+     or a Maidenhead locator of 4, 6 or 8 characters, its square's middle.
+     Left empty, it is Brussels.</p>
+  <div class="grid">
+    <div><label for="wxtemp">Temperatures in</label>
+      <select id="wxtemp"><option value="0">&deg;C</option><option value="1">&deg;F</option></select></div>
+    <div><label for="wxwind">Wind in</label>
+      <select id="wxwind"><option value="0">km/h</option><option value="1">m/s</option>
+        <option value="2">knots</option><option value="3">mph</option><option value="4">Beaufort</option></select></div>
+    <div><label for="wxrefr">Asked every (minutes)</label>
+      <input id="wxrefr" type="number" min="10" max="60"></div>
+    <div><label for="wxcycle">A page every (seconds, 0 never)</label>
+      <input id="wxcycle" type="number" min="0" max="60"></div>
+  </div>
+  <p class="note">The pages: now, the next 24 hours, the next days. They roll
+     on to the next by themselves, every 5 seconds until set here; the dial
+     turns them too, and the count then starts again. The page the dial
+     leaves is the one the knob starts on. The forecast is asked for again
+     when it is saved here.</p>
+  <p class="note" id="wxstate"></p>
+  <p class="note">Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a>,
+     under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>;
+     free for use that is not commercial.</p>
+</section>
+
+<section id="alsec" hidden>
+  <h2>Alarms</h2>
+  <div id="alrows"></div>
+  <div class="grid">
+    <div><label for="alsnooze">Snooze (minutes)</label>
+      <input id="alsnooze" type="number" min="1" max="30"></div>
+    <div><label for="alring">Rings for (minutes)</label>
+      <input id="alring" type="number" min="1" max="30"></div>
+    <div><label for="alby">Rings with</label>
+      <select id="alby"><option value="0">The motor and the sound</option>
+        <option value="1">The motor</option><option value="2">The sound</option></select></div>
+    <div><label for="alvol">The sound's volume (%)</label>
+      <input id="alvol" type="number" min="0" max="100"></div>
+  </div>
+  <p class="note">Each alarm: ticked to ring, its time, and its days. With no
+     day ticked it rings once, the next time that time comes, and is then off.
+     On the knob, a tap on the clock's middle shows the alarms: the dial goes
+     from one to the next, a tap on the time sets it with the dial, and a tap
+     on <b>ON</b> or <b>OFF</b> switches it. Ringing, a tap stops it and a turn
+     snoozes it. <b>Save</b> here keeps these as they are on this page: what
+     was set on the knob since the page opened is then lost.</p>
+  <p class="note">An alarm rings with the knob's motor, its sound, or both. The
+     sound is beeps that grow louder, from a third of its volume to all of it
+     over the first half minute: in a Bluetooth headset or speaker while one
+     is connected (see Bluetooth below), on the jack while none is.</p>
+  <p class="note" id="alstate"></p>
+</section>
+
 <section id="slsec" hidden>
   <h2>SmartLink</h2>
   <div id="slout">
@@ -447,6 +524,13 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      plays to it &mdash; most do &mdash; turns itself to the knob's VOLUME, and
      its own volume buttons turn the knob's; one that does not keeps its own,
      and the knob turns down what it sends.</span></p>
+  <p class="note" id="btclocknote" hidden>Put the headset<span class="btspk"> or speaker</span> in pairing mode,
+     <b class="btfind">Find headsets</b>, and tap it in the list. The knob remembers it, and
+     calls it whenever it is switched on, as a phone does. While it is
+     connected an alarm rings in it, not on the jack: its audio opens as the
+     alarm starts &mdash; the jack plays the first second or so meanwhile
+     &mdash; and closes as it stops.<span class="btspk"> A speaker that takes
+     its volume from what plays to it turns itself to the alarms' volume.</span></p>
   <p class="note" id="btphonenote" hidden>Put the headset<span class="btspk"> or speaker</span> in pairing mode,
      <b class="btfind">Find headsets</b>, and tap it in the list. The knob remembers it, and
      calls it whenever it is switched on, as a phone does. While a headset is
@@ -633,10 +717,18 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
   <p class="note" id="volnote" hidden>The volume takes effect immediately. A receiver's
      firmware has no microphone to set.</p>
   <div class="grid">
-    <div><label>Dim after (minutes, 0 = never)</label>
-         <input id="dim" inputmode="numeric"></div>
-    <div><label>Go dark after (minutes, 0 = never)</label>
-         <input id="blank" inputmode="numeric"></div>
+    <div><label for="ss">Screensaver</label>
+         <select id="ss"><option value="1">Matrix rain</option>
+           <option value="2">Analog clock</option>
+           <option value="4">Digital clock</option>
+           <option value="3">Drifting frequency</option>
+           <option value="0">None</option></select></div>
+    <div><label>Screensaver after (minutes, 0 = never)</label>
+         <input id="ssa" inputmode="numeric"></div>
+    <div><label>Dim after (minutes more, 0 = never)</label>
+         <input id="ssd" inputmode="numeric"></div>
+    <div><label>Go dark after (minutes more, 0 = never)</label>
+         <input id="ssb" inputmode="numeric"></div>
     <div><label>Brightness (10&ndash;100 %)</label>
          <input id="bright" inputmode="numeric"></div>
     <div><label for="turn">The USB cable</label>
@@ -644,17 +736,48 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
            <option value="1">At the bottom</option></select></div>
   </div>
   <p class="note" id="dimnote">Turning the knob, touching the screen or
-     transmitting all count as use. Dimming leaves the frequency readable;
-     going dark turns the backlight off.</p>
+     transmitting all count as use. Each time counts from the one before:
+     the screensaver after a minute, dimmed a minute later, dark a minute
+     after that, until set. With <b>None</b> the dial stays up and dims and
+     goes dark at the same moments. The first turn or touch on a screensaver
+     or a dark screen only brings the dial back.</p>
   <p class="note" id="dimphonenote" hidden>Turning the knob, touching the
      screen or a call, from its first ring to its end, all count as use: a
-     call ringing in lights a screen that had dimmed or gone dark. Dimming
-     leaves the screen readable; going dark turns the backlight off.</p>
+     call ringing in brings the dial back from a screensaver or a dark
+     screen. Each time counts from the one before: the screensaver after a
+     minute, dimmed a minute later, dark a minute after that, until set. The
+     first turn or touch on a screensaver or a dark screen only brings the
+     dial back.</p>
   <p class="note">The brightness is the screen's while it is lit, 80 % until
      it is set, and is seen at once on <b>Save</b>. Dimmed, it stays dimmer.</p>
   <p class="note">The knob comes with its USB cable at the top. In a stand or
      a mount that has the cable at the bottom, choose <b>At the bottom</b>: on
      <b>Save</b> the screen turns the other way up, and the touch with it.</p>
+  <div class="grid">
+    <div><label for="tz">Time zone</label>
+         <select id="tz"><option>Europe/Brussels</option></select></div>
+    <div><label for="h24">Hours</label>
+         <select id="h24"><option value="1">24-hour</option>
+           <option value="0">12-hour (AM/PM)</option></select></div>
+    <div><label for="ckface">Clock face</label>
+         <select id="ckface"><option value="0">Shack clock</option>
+           <option value="1">Diver</option>
+           <option value="2">Classic white</option>
+           <option value="3">Digital</option></select></div>
+    <div><label for="cksec">Second hand</label>
+         <select id="cksec"><option value="1">On</option>
+           <option value="0">Off</option></select></div>
+  </div>
+  <p class="note" id="tznote" hidden>The time zone is this browser's: <b>Save</b>
+     to keep it.</p>
+  <p class="note">The knob takes the time from the internet (pool.ntp.org),
+     in UTC; the zone is only how it is shown. The shack clock and the digital
+     clocks show UTC beside it.</p>
+  <p class="note" id="cknote">The clock face is the <b>Analog clock</b>
+     screensaver's, the shack clock's while the face is <b>Digital</b>.</p>
+  <p class="note" id="ckclocknote" hidden>The clock face is the one the knob
+     shows; turning the knob goes on to the next, and that one is kept. The
+     <b>Analog clock</b> screensaver has it too.</p>
 </section>
 
 <section>
@@ -882,13 +1005,31 @@ $('pfset').onclick=async()=>{
   setTimeout(()=>location.reload(),1500);
 };
 
+/* The zones the knob knows (/tz.txt, its own table): until one is chosen
+   the knob is on Brussels, and a browser elsewhere proposes its own. */
+async function tzLoad(cur){
+  let names=[];
+  try{ names=(await (await fetch('/tz.txt')).text()).split('\n').filter(Boolean).map(l=>l.split(' ')[0]); }
+  catch(e){}
+  if(!names.includes(cur)) names.push(cur);
+  let mine='';
+  try{ mine=Intl.DateTimeFormat().resolvedOptions().timeZone||''; }catch(e){}
+  const sel=$('tz'); sel.textContent='';
+  for(const n of names){ const o=document.createElement('option'); o.value=o.textContent=n; sel.append(o); }
+  const pick=(cur==='Europe/Brussels' && names.includes(mine)) ? mine : cur;
+  sel.value=pick; $('tznote').hidden = pick===cur;
+}
+
 async function load(){
   const c=await (await fetch('/api/config')).json();
   if(c.pwforce){ pwFirst(c); return; }
   $('host').value=c.host; $('port').value=c.port; wifiLoad();
   $('vol').value=c.vol;   $('mic').value=c.mic;   $('mich').value=c.mich??100;
   $('user').value=c.user; $('warn').hidden=!c.defaultpw;
-  $('otah').value=c.otah; $('dim').value=c.dim; $('blank').value=c.blank; FWBASE=c.fwbase||''; OTAH=+c.otah||0;
+  $('otah').value=c.otah; FWBASE=c.fwbase||''; OTAH=+c.otah||0;
+  $('ss').value=String(c.ss??1); $('ssa').value=c.ssa??1; $('ssd').value=c.ssd??1; $('ssb').value=c.ssb??1;
+  $('h24').value=c.h24===false?'0':'1'; tzLoad(c.tz||'Europe/Brussels');
+  $('ckface').value=String(c.ckface ?? 0); $('cksec').value=c.cksec===false?'0':'1';
   $('jack').value=String(c.jack??0); $('bright').value=c.bright??80; $('turn').value=String(c.turn??0);
   FWROOT=c.fwroot||''; RADIO=c.radio||'aethersdr'; radios();
   /* The address this browser reaches the knob from. Over the cable that is the
@@ -909,18 +1050,25 @@ async function load(){
   PHONE = c.radio === 'phone';            /* a telephone: its SIP account is its own */
   EPI = c.radio === 'epibeam';            /* an array's beam: no radio, no audio */
   ADSB = c.radio === 'adsb';              /* a radar of the aircraft: no radio, no audio */
-  SCREEN = EPI || ADSB;
+  CLOCK = c.radio === 'clock';            /* a clock: no radio; its alarms' sound alone */
+  WX = c.radio === 'weather';             /* Open-Meteo's forecast: no radio, no audio */
+  SCREEN = EPI || ADSB || CLOCK || WX;
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || SCREEN;
   $('episec').hidden = !EPI; $('beamn').value = String(c.beamn ?? 4);
   $('adsbsec').hidden = !ADSB;
   if (ADSB) adsbLoad();
-  /* EpiBeam and the radar play nothing: of Audio, only the screen's settings. */
+  $('wxsec').hidden = !WX;
+  if (WX) wxLoad();
+  $('alsec').hidden = !CLOCK;
+  if (CLOCK) alLoad();
+  /* EpiBeam, the radar, the clock and the weather play nothing: of Audio, only the screen's settings. */
   $('audioh').textContent = SCREEN ? 'Screen' : 'Audio';
   for (const id of ['audiogrid','jacknote']) $(id).hidden = SCREEN;
   for (const id of ['phonesec','phonecall','phonefav','phonegoogle']) $(id).hidden = !PHONE;
   /* A telephone never transmits; its calls are what keep the screen lit. */
   $('dimnote').hidden = PHONE; $('dimphonenote').hidden = !PHONE;
+  $('cknote').hidden = CLOCK; $('ckclocknote').hidden = !CLOCK;
   if (PHONE && !phoneLoaded) { document.documentElement.style.setProperty('--accent','#e5a823'); phoneLoad(); }
   LINKNAME = c.link || 'Radio';
   $('rtitle').textContent = icom ? 'Icom radios' : xiegu ? 'X6100 / X6200'
@@ -976,7 +1124,7 @@ async function btLoad(){
      it restarting it, a word on where to get it. */
   const busy0 = s.upd && !['idle','waiting'].includes(s.upd.phase);
   const none = !s.companion && UPTIME>=30 && !busy0;
-  $('btsec').hidden=SCREEN || (!s.companion && !none); $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
+  $('btsec').hidden=(SCREEN && !CLOCK) || (!s.companion && !none); $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
   if(s.companion){ btShow(s); chipPush(s) }
   const busy = s.upd && !['idle','waiting'].includes(s.upd.phase);
   clearTimeout(btTimer); btTimer=setTimeout(btLoad, s.scanning||busy?1000:3000);
@@ -1092,12 +1240,12 @@ function btShow(s){
   $('btrows').innerHTML = row(spk ? 'Speaker' : s.bda || !SPK ? 'Headset' : 'Headset or speaker',
                               (s.bda?esc(s.name||s.bda)+' ':'')+st+batt)
     + (s.link==='connected' ? row('Audio', s.audio ? esc(s.audio)+(spk && s.delay ? `, ${s.delay} ms behind the jack` : '')
-                                                   : 'opening…')
+                                                   : PHONE ? 'closed until a call' : CLOCK ? 'closed until an alarm rings' : 'opening…')
                              /* An old second chip sets no speaker's volume: its update brings it. */
                              + (spk && BT_VOL[s.volume] ? row('Volume', BT_VOL[s.volume]
                                  + (s.volume==='own' && !s.av_volume ? ` <span class="note">(this second chip's firmware`
                                     + ` sets no speaker's volume: its update does)</span>` : '')) : '')
-                             + (RXONLY || spk ? '' : row('Microphone', s.mic===0 ? '<span class="pill down">muted</span>'
+                             + (RXONLY || CLOCK || spk ? '' : row('Microphone', s.mic===0 ? '<span class="pill down">muted</span>'
                                                                               : '<span class="pill up">live</span>')
                                                  + row('Button presses', s.presses)) : '')
     + use
@@ -1117,10 +1265,11 @@ function btShow(s){
   for (const e of document.querySelectorAll('.btspk')) e.hidden = !SPK;
   for (const e of document.querySelectorAll('.btfind')) e.textContent = SPK ? 'Find headsets and speakers' : 'Find headsets';
   /* A receiver's knob: the headset is for listening, nothing more. A
-     telephone's: no PTT, so no boom arm either. */
-  for (const id of ['btboomrow','btboomnote','bttxnote']) $(id).hidden = RXONLY || PHONE;
+     telephone's: no PTT, so no boom arm either; nor a clock's. */
+  for (const id of ['btboomrow','btboomnote','bttxnote']) $(id).hidden = RXONLY || PHONE || CLOCK;
   $('btrxnote').hidden = !RXONLY;
   $('btphonenote').hidden = !PHONE;
+  $('btclocknote').hidden = !CLOCK;
   $('btboom').checked = !!s.boom;
   $('btoff').hidden = s.link==='idle';
   $('btforget').hidden = !s.bda;
@@ -1735,7 +1884,7 @@ function pwHint(d,x){
 /* ---- the phone firmware: its SIP account, a call, the favourites ---- */
 let PHONE=false, phoneLoaded=false, FAVS=[];
 let EPI=false;                          /* the EpiBeam firmware's page */
-let ADSB=false, SCREEN=false;           /* ADS-B Radar's; either, a face with no radio */
+let ADSB=false, CLOCK=false, WX=false, SCREEN=false; /* ADS-B Radar's, the Clock's, the Weather's; any, a face with no radio */
 
 /* ---- ADS-B Radar: the radar's middle, its feed, what it shows ---- */
 const ADOPT={adapt:1, adcty:2, adswp:4, adgnd:8};    /* net_prov.h NET_ADSB_* */
@@ -1766,6 +1915,109 @@ async function adsbSave(){
   let o=0; for(const [id,bit] of Object.entries(ADOPT)) if($(id).checked) o|=bit;
   b.append('opts',String(o));
   let r; try{ r=await fetch('/api/adsb',{method:'POST',body:b}) }catch(e){ return 'the knob did not answer' }
+  return r.ok?'':await r.text();
+}
+/* ---- Weather: where, in what units, how often ---- */
+let WXPLACE='';                         /* the name the place was found by; '' typed */
+/* The face's font has ASCII and the degree sign: accents folded, the rest dropped. */
+function wxAscii(t){
+  const m={'\u00df':'ss','\u00f8':'o','\u00d8':'O','\u00e6':'ae','\u00c6':'AE','\u0142':'l','\u0141':'L','\u0111':'d','\u0110':'D','\u0153':'oe','\u0152':'OE'};
+  t=t.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,c=>m[c]||'');
+  return t.replace(/\s+/g,' ').trim().slice(0,47);
+}
+/* A Maidenhead locator, 4, 6 or 8 characters: its square's middle, or null. */
+function wxLoc(t){
+  const s=t.trim().toUpperCase();
+  if(!/^[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2})?)?$/.test(s)) return null;
+  const A=i=>s.charCodeAt(i)-65;
+  let lon=A(0)*20-180+(+s[2])*2, lat=A(1)*10-90+(+s[3]), w=2, h=1;
+  if(s.length>=6){ w/=24; h/=24; lon+=A(4)*w; lat+=A(5)*h; }
+  if(s.length>=8){ w/=10; h/=10; lon+=(+s[6])*w; lat+=(+s[7])*h; }
+  return {lat:+(lat+h/2).toFixed(5), lon:+(lon+w/2).toFixed(5),
+          name:s.slice(0,4)+s.slice(4,6).toLowerCase()+s.slice(6)};
+}
+function wxWhere(){
+  const la=$('wxlat').value.trim(), lo=$('wxlon').value.trim();
+  $('wxwhere').textContent=!la&&!lo?'The forecast for Brussels.'
+                          :'The forecast for '+(WXPLACE||la+', '+lo)+'.';
+}
+/* A place typed: no longer the name found, nor the locator. */
+$('wxlat').oninput=$('wxlon').oninput=()=>{ WXPLACE=''; $('wxloc').value=''; wxWhere() };
+$('wxloc').oninput=()=>{
+  const l=wxLoc($('wxloc').value); if(!l) return;
+  $('wxlat').value=l.lat; $('wxlon').value=l.lon; WXPLACE=l.name; wxWhere();
+};
+/* The search: the browser asks Open-Meteo's geocoding, not the knob. */
+async function wxFind(){
+  const q=$('wxfind').value.trim(), out=$('wxhits'); if(q.length<2) return;
+  out.innerHTML=row('','looking\u2026');
+  let h; try{
+    h=(await (await fetch('https://geocoding-api.open-meteo.com/v1/search?count=6&language=en&format=json&name='
+                          +encodeURIComponent(q))).json()).results||[];
+  }catch(e){ out.innerHTML=row('','Open-Meteo did not answer: this browser needs the internet.'); return }
+  if(!h.length){ out.innerHTML=row('','no such place'); return }
+  out.innerHTML=h.map((p,i)=>row(esc([p.admin1,p.country].filter(Boolean).join(', ')),
+      esc(p.name)+' <button type="button" class="ghost" data-i="'+i+'" style="margin-top:0">Here</button>')).join('');
+  for(const b of out.querySelectorAll('button')) b.onclick=()=>{
+    const p=h[+b.dataset.i];
+    $('wxlat').value=+p.latitude.toFixed(5); $('wxlon').value=+p.longitude.toFixed(5); $('wxloc').value='';
+    /* Named as the face can write it; by its numbers if not at all. */
+    const n=wxAscii(p.name), c=wxAscii(p.country||'');
+    WXPLACE=n?wxAscii(c?n+', '+c:n):'';
+    out.innerHTML=''; wxWhere();
+  };
+}
+$('wxgo').onclick=wxFind;
+$('wxfind').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); wxFind() } };
+async function wxLoad(){
+  let a; try{ a=await (await fetch('/api/weather',{cache:'no-store'})).json() }catch(e){ return }
+  $('wxlat').value=String(+a.lat.toFixed(6)); $('wxlon').value=String(+a.lon.toFixed(6));
+  WXPLACE=a.place||''; $('wxloc').value=''; wxWhere();
+  $('wxtemp').value=String(a.temp??0); $('wxwind').value=String(a.wind??0); $('wxrefr').value=a.refresh??15; $('wxcycle').value=a.cycle??5;
+  const age=a.age??-1, ago=age<90?'just now':age<5400?Math.round(age/60)+' min ago':Math.round(age/3600)+' h ago';
+  $('wxstate').textContent=a.state?'Open-Meteo: '+a.state+(age>=0?'; the last forecast came '+ago:'')+'.'
+                          :age>=0?'The forecast came '+ago+'.':'Asking Open-Meteo\u2026';
+  $('wxstate').style.color=!a.state&&age>=0?'var(--ok)':'var(--accent)';
+}
+/* Saved after the rest, as the radar's: '' or why not. */
+async function wxSave(){
+  const b=new URLSearchParams();
+  b.append('lat',$('wxlat').value.trim().replace(',','.')); b.append('lon',$('wxlon').value.trim().replace(',','.'));
+  b.append('place',WXPLACE);
+  b.append('temp',$('wxtemp').value); b.append('wind',$('wxwind').value); b.append('refresh',$('wxrefr').value||'15');
+  b.append('cycle',$('wxcycle').value===''?'5':$('wxcycle').value);
+  let r; try{ r=await fetch('/api/weather',{method:'POST',body:b}) }catch(e){ return 'the knob did not answer' }
+  if(r.ok) setTimeout(wxLoad,4000);
+  return r.ok?'':await r.text();
+}
+/* The Clock's ten alarms: each its tick, its time and its days, Monday
+   first; none ticked, once. */
+const ALDAYS=['Mo','Tu','We','Th','Fr','Sa','Su'];
+async function alLoad(){
+  let a; try{ a=await (await fetch('/api/alarms',{cache:'no-store'})).json() }catch(e){ return }
+  const two=n=>String(n).padStart(2,'0');
+  $('alrows').innerHTML=(a.a||[]).map((x,i)=>'<div class="alrow"><span class="n">'+(i+1)+'</span>'+
+    '<input type="checkbox" id="alon'+i+'" aria-label="Alarm '+(i+1)+' on"'+(x.on?' checked':'')+'>'+
+    '<input type="time" id="alt'+i+'" value="'+two(x.h)+':'+two(x.m)+'" aria-label="Alarm '+(i+1)+' time">'+
+    '<span class="days">'+ALDAYS.map((d,k)=>'<label><input type="checkbox" id="ald'+i+'_'+k+'"'+
+      ((x.d>>k)&1?' checked':'')+'>'+d+'</label>').join('')+'</span></div>').join('');
+  $('alsnooze').value=a.snooze??9; $('alring').value=a.ring??10; $('alvol').value=a.vol??60;
+  $('alby').value=String(a.by??0);
+  $('alstate').textContent=a.time?'':'The knob does not have the time yet: no alarm rings until it has.';
+  $('alstate').style.color='var(--accent)';
+}
+/* Saved after the rest, as the weather's: '' or why not. */
+async function alSave(){
+  if(!$('alt0')) return 'the alarms were never read from the knob';
+  const b=new URLSearchParams();
+  for(let i=0;$('alt'+i);i++){
+    const [h,m]=($('alt'+i).value||'00:00').split(':').map(Number);
+    let d=0; ALDAYS.forEach((_,k)=>{ if($('ald'+i+'_'+k).checked) d|=1<<k });
+    b.append('t'+i,String(h*100+m)); b.append('d'+i,String(d)); b.append('o'+i,$('alon'+i).checked?'1':'0');
+  }
+  b.append('snooze',$('alsnooze').value||'9'); b.append('ring',$('alring').value||'10');
+  b.append('vol',$('alvol').value===''?'60':$('alvol').value); b.append('by',$('alby').value);
+  let r; try{ r=await fetch('/api/alarms',{method:'POST',body:b}) }catch(e){ return 'the knob did not answer' }
   return r.ok?'':await r.text();
 }
 async function phoneLoad(){
@@ -1983,7 +2235,7 @@ $('save').onclick=async()=>{
   const b=new URLSearchParams();
   /* With a list of radios the one in use is saved with the list, below; the
      kiwi firmware's receivers are the web SDRs' list. */
-  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','jack','user','otah','dim','blank','bright','turn',...(EPI?['beamn']:[])])
+  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','jack','user','otah','ss','ssa','ssd','ssb','tz','h24','ckface','cksec','bright','turn',...(EPI?['beamn']:[])])
     b.append(k,$(k).value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);
@@ -1999,6 +2251,16 @@ $('save').onclick=async()=>{
     const e=await adsbSave();
     if(e) say('Radar not saved: '+e,false);
     else  $('msg').textContent='Saved. The radar shows it at once.';
+  }
+  if(r.ok && CLOCK){
+    const e=await alSave();
+    if(e) say('Alarms not saved: '+e,false);
+    else  $('msg').textContent='Saved. The knob has the alarms at once.';
+  }
+  if(r.ok && WX){
+    const e=await wxSave();
+    if(e) say('Weather not saved: '+e,false);
+    else  $('msg').textContent='Saved. The knob asks Open-Meteo again.';
   }
   if(r.ok && SVX){
     const e=await svxSave();
@@ -2152,6 +2414,8 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'websdr',    name:'WebSDR (the receivers on websdr.org)'},
               {id:'epibeam',   name:'EpiBeam (an array\'s beam, through EpiCenter)', beta:true},
               {id:'adsb',      name:'ADS-B Radar (the aircraft round you)'},
+              {id:'clock',     name:'Clock (the knob as a clock)'},
+              {id:'weather',   name:'Weather (Open-Meteo\'s forecast)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

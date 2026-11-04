@@ -31,7 +31,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
-#include "esp_netif_sntp.h"
+#include "wallclock.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -1174,8 +1174,7 @@ static void load_all(void)
 static void svx_task(void *arg)
 {
     (void)arg;
-    esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    esp_netif_sntp_init(&sc);
+    wallclock_start();          /* the certificate's dates; app_main started it already */
     svx_portal_load_cache(C.host);
     load_all();
     C.codec = codec_open();

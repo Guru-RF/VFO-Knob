@@ -81,6 +81,14 @@ receiver: the range on the dial, each aircraft coloured by its altitude,
 an emergency or a type you watch for called out, and a tap for an
 aircraft's route. See [ADS-B Radar](#ads-b-radar).
 
+With the **Clock** firmware the knob is a clock for the shack: local
+time on the hands, UTC on a 24-hour ring, four faces on the dial, ten alarms. See
+[Clock](#clock).
+
+With the **Weather** firmware the knob is a weather station for one
+place, from Open-Meteo's forecast: now, the next 24 hours and the next 5
+days, the pages rolling on by themselves or a detent each. See [Weather](#weather).
+
 ---
 
 ## Reporting a problem
@@ -158,7 +166,7 @@ feature per issue lets each be answered, built and closed on its own.
 | **PTT** | Toggle — tap to key, tap anywhere along the bottom to unkey. It keys as the finger lifts from a tap, so a swipe that starts on the bottom of the face never keys; on the air, a touch there unkeys at once. On a radio with a choice of antennas — a FlexRadio's slice, the IC-7610, the IC-R8600 — a press held half a second opens them instead, with a buzz, and keys nothing; there a tap keys 0.15 s after the lift, so that the glass losing a held finger for a moment is never taken for a tap. Nothing vibrates while you transmit: the motor sits beside the microphone and would be heard on the air, so the red screen alone says you are keyed, and you feel the unkey once the radio is back on receive. A four-rung teardown ends in dropping the socket. The transmit time-out is the radio's own. |
 | **Meters** | S-meter in receive; SWR, auto-ranging forward power (to 2.5 kW) and mic level in transmit, each holding its peak for a second before it falls, so SSB reads as speech rather than flicker. The mic level uses AetherSDR's own scale: amber from −10 dB, red from 0. SWR above 2.5 turns its reading red. |
 | **Audio** | RX audio out of the 3.5 mm jack, TX audio from the onboard mic, both with adjustable level. The jack is a line output: for wired earphones or a headset still too quiet at a volume of 100, its level on the configuration page goes up to 12 dB above the volume, in steps of 3, a loud passage turned down rather than clipped. The built-in microphone is very good — clear, natural speech on the air, ideal for amateur radio — so the knob needs no headset or hand mic. |
-| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys, with its battery beside it — green, yellow or red — where the headset reports it; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the receivers' firmwares (UberSDR, Kiwi888, OpenWebRX and WebSDR), only for listening. A Bluetooth speaker plays the knob's audio as well as the jack, a fifth of a second or so behind it, and the knob's own microphone transmits: a speaker shows at the slab's end, and it falls silent while you do; one that takes its volume from what plays to it has the knob's VOLUME for its own, both ways. Each headset or speaker has its own level on the configuration page, 24 dB down to 12 dB up — a speaker 12 dB down until it is set. The second chip tells a speaker from a headset by itself; the configuration page can say otherwise. |
+| **Headset** | A Bluetooth headset through the board's second chip, with the [companion firmware](docs/headset.md) on it: the knob's audio in the headset, its microphone the one you transmit with — the knob's own is then off — and its call button a PTT beside the slab, which keys as always. The slab keeps its caption and shows the headset's logo at its right end, red while the headset's microphone is muted, when neither keys, with its battery beside it — green, yellow or red — where the headset reports it; optionally the boom arm is the PTT, down to talk. The knob's own microphone and a headset's each keep their own mic gain; the dial turns the one in use. On the receivers' firmwares (UberSDR, Kiwi888, OpenWebRX and WebSDR), only for listening. On the Clock, its alarms ring in it. A Bluetooth speaker plays the knob's audio as well as the jack, a fifth of a second or so behind it, and the knob's own microphone transmits: a speaker shows at the slab's end, and it falls silent while you do; one that takes its volume from what plays to it has the knob's VOLUME for its own, both ways. Each headset or speaker has its own level on the configuration page, 24 dB down to 12 dB up — a speaker 12 dB down until it is set. The second chip tells a speaker from a headset by itself; the configuration page can say otherwise. |
 | **Mode / filter / RIT** | Tap to open and turn to choose. Filter and RIT take effect as you turn, and a tap anywhere closes them; band and mode take a tap on their panel, and a tap anywhere else leaves them as they were. |
 | **DSP** | On the FlexRadio and AetherSDR firmwares, swipe from the right: **NB**, **NR**, **ANF**, and **APF** in CW — and **WNB** on a FlexRadio — each switched on and off with a tap, lit when on, as SmartSDR's buttons are. Their levels stay as the radio has them. |
 | **AGC / gain** | Either side of the S-meter's reading, edited like the filter: the AGC on the left, and on the right the front end's gain — P.AMP on the IC-705, RF.G on the FlexRadio, greyed out on AetherSDR until its TCI can carry it. |
@@ -168,8 +176,8 @@ feature per issue lets each be answered, built and closed on its own.
 | **Web SDR** | On the Icom and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). On the Kiwi888 firmware a second of its own receivers plays in the right ear: **RIGHT EAR**, **OFF** or a receiver, and **BALANCE** from **LEFT** to **RIGHT** — see [Kiwi888](#kiwi888). |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.19.0`, or `… dev` for a build that is not a release), the knob's power — **battery 85 %**, or **on USB power** — and its addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
 | **Lock** | With the address card up, tap **LOCK** over the S-meter: a padlock shows at the top of the arc (on EpiBeam, which has the gear for the card, inside the ring; on ADS-B Radar, which has one too, under the range), and the knob ignores turns, taps and swipes and keys nothing — not the slab, a headset's button or its boom arm. Unkeying is never locked, and the telephone's slab still hangs up. A question the knob asks still takes its answer. **UNLOCK** on the card again, or a restart, frees it. On every firmware but the setup one. |
-| **Screen** | Its brightness on the configuration page, 10 to 100 % (80 % until it is set). Unused, it dims after 5 minutes and goes dark after 10, both set there too; a turn, a touch or transmitting lights it again. The knob comes with its USB cable at the top; for a stand or a mount with the cable at the bottom, **The USB cable: At the bottom** there turns the screen the other way up, and the touch with it. |
-| **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face — on EpiBeam inside the ring, over the array, on ADS-B Radar under the range: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
+| **Screen** | Its brightness on the configuration page, 10 to 100 % (80 % until it is set). Left alone for a minute, the knob shows a screensaver — Matrix rain until set, or an analog clock, a digital clock, the frequency drifting round the glass, or none — dims it a minute later and goes dark a minute after that, all three times set there too; a turn, a touch or transmitting brings the dial back, and that first turn or touch does nothing else. The Clock and the Weather have none and stay lit until set. Step by step: [the screensaver guide](docs/screensaver.md). The knob comes with its USB cable at the top; for a stand or a mount with the cable at the bottom, **The USB cable: At the bottom** there turns the screen the other way up, and the touch with it. |
+| **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face — on EpiBeam inside the ring, over the array, on ADS-B Radar under the range, on the Weather under the time, on the Clock only once it is low: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
@@ -675,6 +683,44 @@ step: [the ADS-B Radar guide](docs/adsb.md).
 | **The gear** | A tap: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
 | **Kept** | The settings and the range, across a restart. No PTT, no swipes, no audio and no Bluetooth: the glass is the radar's. |
 
+## Clock
+
+The Clock firmware (`vfo-knob-clock`) turns the knob into a clock
+for the shack, the time from the internet over WiFi, with ten alarms. Its
+faces are drawn by the knob's own code, after ideas from MilovdZee's
+Analog_Clock-esp32 and Alan Wang's Saiko watch. Step by step:
+[the Clock guide](docs/clock.md).
+
+| | |
+|---|---|
+| **The faces** | The shack clock: local time on the hands, UTC on a 24-hour ring inside the minutes with its own red hand, the date. The Diver: a bezel, lume, a day-date window, a sweeping second hand. Classic white: a station clock. Digital: the time large, the date, UTC. |
+| **The dial** | A face a detent, round and round; the one it rests on 0.6 s is kept. |
+| **The page** | Under **Screen**: the time zone (the browser's offered), 24 or 12 hours, the face, the second hand on or off. Under **Alarms**: the ten alarms, the snooze, how long one rings, whether the motor rings, the sound or both, the sound's volume. Under **Bluetooth**: a headset or speaker for them. |
+| **The alarms** | Ten, each a time, its days (once, or any days) and on or off; the next on the dial with a bell. A tap on the clock's middle shows them, the dial going from one to the next: a tap on the time sets it with the dial, hours, minutes, days; a tap on ON / OFF switches it. Ringing: the screen lit in a flashing red ring, the motor buzzing, beeps growing louder over 30 s — in a Bluetooth headset or speaker while one is connected, on the jack while none is; the page picks the motor, the sound, or both. A tap stops it, a turn snoozes it, locked or not; left alone it stops. |
+| **The time** | From pool.ntp.org, in UTC; until the first answer no hands and **NO TIME YET**, and grey once it is a day without one. The face moves a pixel every three minutes, so nothing burns in. |
+| **A tap** | Anywhere but the middle: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
+| **Kept** | The face and the alarms, across a restart. No screensaver and never dark until set. No PTT, no swipes; nothing on the jack or in Bluetooth but the alarms' beeps. |
+
+## Weather
+
+The Weather firmware (`vfo-knob-weather`) turns the knob into a
+weather station for one place, from [Open-Meteo](https://open-meteo.com/)'s
+forecast (CC BY 4.0, free for use that is not commercial, no key). Step by
+step: [the Weather guide](docs/weather.md).
+
+| | |
+|---|---|
+| **The place** | On the configuration page: a town or a city found by its name, a latitude and longitude, or a Maidenhead locator; Brussels until set. The units: °C or °F; km/h, m/s, knots, mph or Beaufort. How often to ask, 10 to 60 minutes, 15 until set. How long a page stays, 5 seconds until set, 0 for only the dial. |
+| **Now** | An icon for the sky, the temperature and what it feels like, the weather in words, the wind with its direction and gusts, humidity and pressure, sunrise and sunset. |
+| **The next 24 hours** | The chance of rain as bars and the temperature as a line, its highest and lowest; when rain is likely. |
+| **The next 5 days** | Each day's sky, highest and lowest, and its chance of rain. |
+| **The pages** | They roll on by themselves, sliding out to the left as the next comes in, every 5 seconds until set; waiting under a screensaver. |
+| **The dial** | A page a detent, round and round, rolling the way it turns; the count starts again; the one it rests on 0.6 s is kept, the one the knob starts on. |
+| **When it fails** | The last forecast is kept, with what went wrong at the foot; after three hours without one, **NO FORECAST**. |
+| **A tap** | Anywhere: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
+| **Kept** | The place, the units and the page, across a restart. No screensaver and never dark until set. No PTT, no swipes, no audio and no Bluetooth. |
+
+## A Bluetooth headset
 
 The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
 S3 lacks, and a UART between the two. The companion firmware (`companion/`)
@@ -710,7 +756,8 @@ it. More: [A Bluetooth speaker](docs/headset.md#a-bluetooth-speaker).
 
 Served on port 80 over whichever interface is up. Status, AetherSDR endpoint,
 the WiFi networks (up to four), audio levels and the jack's level, the
-screen's brightness, dimming and which way up it is, access credentials,
+screen's brightness, the screensaver and dimming, which way up it is, the
+time zone and the clock face, access credentials,
 firmware updates, and a problem report.
 
 Opened over WiFi, the host field offers a green **my IP** — the address of the
@@ -850,7 +897,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam` and `vfo-knob-adsb` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock` and `vfo-knob-weather` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice

@@ -1,0 +1,14 @@
+# The Weather firmware: Open-Meteo's forecast for a place, on the knob's
+# faces (VFO_RADIO=weather).
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: Open-Meteo is on
+# the internet, and the USB link has no route there. Leaving TinyUSB out also
+# keeps the serial console on the cable.
+
+# AES in software, as every firmware: the engine's DMA takes its bounce buffers
+# from internal RAM.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# Open-Meteo's connection beside the web page's and the log's, as ADS-B
+# Radar's feed: at 10 the Clock's page ran out of sockets over weak WiFi.
+CONFIG_LWIP_MAX_SOCKETS=16

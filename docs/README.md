@@ -17,7 +17,10 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [Kiwi888](kiwi.md) | `vfo-knob-kiwi` — a dial for KiwiSDR and Web-888 web receivers: up to four, another a swipe away, a second in the right ear, no radio needed |
 | [EpiBeam](epibeam.md) | `vfo-knob-epibeam`, a beta — a phased array's beam switch: a 4-square or 8 directions, a direction a detent, counted out in clicks, for EpiCenter |
 | [ADS-B Radar](adsb.md) | `vfo-knob-adsb` — a radar of the aircraft round you, from adsb.fi, adsb.lol, airplanes.live or your own receiver: the range on the dial, alerts, a tap for an aircraft's route |
-| [A Bluetooth headset or speaker](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, or a speaker as its ear, on every firmware with sound — all but setup, EpiBeam and ADS-B Radar |
+| [Clock](clock.md) | `vfo-knob-clock` — a clock for the shack: local time on the hands, UTC on a 24-hour ring, four faces on the dial, ten alarms |
+| [Weather](weather.md) | `vfo-knob-weather` — a weather station for one place, from Open-Meteo: now, the next 24 hours, the next 5 days |
+| [The screensaver](screensaver.md) | every firmware's — Matrix rain, an analog or a digital clock, the frequency drifting — then dimmed, then dark, each after the minutes set |
+| [A Bluetooth headset or speaker](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, or a speaker as its ear, on every firmware with sound — all but setup, EpiBeam, ADS-B Radar and Weather; the Clock's alarms ring in it |
 
 ## The pictures
 

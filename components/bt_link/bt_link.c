@@ -49,8 +49,8 @@ static volatile bool     s_mic;         /* keyed: the companion sends the microp
 static volatile bool     s_boom;        /* the boom arm is the PTT */
 /* The headset's audio -- or the speaker's: open whenever it is connected, as
  * a radio's audio never stops, or, on the telephone, only while it says: its
- * calls. */
-#if VFO_RADIO_PHONE
+ * calls; on the clock, its alarms ringing. */
+#if VFO_RADIO_PHONE || VFO_RADIO_CLOCK
 static volatile bool     s_want_audio = false;
 #else
 static volatile bool     s_want_audio = true;

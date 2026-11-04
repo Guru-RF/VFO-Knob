@@ -118,11 +118,38 @@ void        net_prov_save_web(const char *user, const char *pass);
 uint16_t net_prov_ota_hours(void);
 void     net_prov_save_ota_hours(uint16_t hours);
 
-/* Minutes of no knob, no touch and no transmit before the screen dims, and
- * before it goes dark altogether. Either 0 disables that stage. */
-uint16_t net_prov_dim_min(void);
-uint16_t net_prov_blank_min(void);
-void     net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes);
+/* The screen while nobody uses the knob (no knob, no touch, no transmit):
+ * after `after` minutes the screensaver, `dim` minutes later it dims, `dark`
+ * minutes after that the screen goes dark. Each counts from the stage before
+ * it, 0 = that stage never comes. NET_SAVER_NONE keeps the dial up, dimmed
+ * and darkened at the same moments. */
+enum { NET_SAVER_NONE, NET_SAVER_MATRIX, NET_SAVER_CLOCK, NET_SAVER_DRIFT, NET_SAVER_DIGITAL,
+       NET_SAVER_N };
+typedef struct {
+    uint8_t  saver;
+    uint16_t after, dim, dark;
+} net_screen_t;
+#define NET_SCREEN_MAX_MIN 1440
+void net_prov_screen(net_screen_t *out);
+void net_prov_save_screen(const net_screen_t *s);
+
+/* The owner's time zone: the IANA name the page shows and the POSIX rule the
+ * clock runs on (wallclock_set_zone), Europe/Brussels until set; and the
+ * hours as 24 (true until set) or 12. */
+#define NET_TZ_NAME_LEN 40
+#define NET_TZ_RULE_LEN 64
+const char *net_prov_tz_name(void);
+const char *net_prov_tz_rule(void);
+bool        net_prov_clock24(void);
+void        net_prov_save_time(const char *tz_name, const char *tz_rule, bool h24);
+
+/* The clock's face -- the Clock firmware's, and the clock screensaver's on
+ * every firmware: one of components/ui clockface.h's CF_* (0, the shack
+ * clock, until set), and its second hand (on until set). */
+#define NET_CLOCK_FACES 4
+uint8_t     net_prov_clock_face(void);
+bool        net_prov_clock_seconds(void);
+void        net_prov_save_clock(uint8_t face, bool seconds);
 
 /* The screen's brightness while it is lit, percent: NET_PROV_BRIGHT_MIN to
  * 100, 80 until one is set (ui_set_brightness). Kept on every firmware. */
@@ -175,6 +202,57 @@ typedef struct {
 void     net_prov_adsb(net_adsb_t *out);
 /* What differs from what is kept is written; anything out of bounds is not. */
 void     net_prov_save_adsb(const net_adsb_t *a);
+#endif
+
+/* The Weather firmware's place and units (components/weather_client):
+ * the forecast's place, as the page found it; the units shown; how often
+ * Open-Meteo is asked; how often the faces go on to the next by themselves;
+ * and the face the dial was left on. Copied out and in
+ * whole, under a lock: the page writes it while the client's task and the
+ * face read it. Only that firmware has it. */
+#if VFO_RADIO_WEATHER
+#define NET_WX_HOME          "Brussels, Belgium"
+#define NET_WX_HOME_LAT_E6   50850300
+#define NET_WX_HOME_LON_E6   4351700
+#define NET_WX_REFRESH_MIN   10
+#define NET_WX_REFRESH_MAX   60
+#define NET_WX_FACES         3          /* now, the next hours, the days */
+#define NET_WX_CYCLE_MAX     60         /* seconds a face, at the most */
+typedef struct {
+    int32_t lat_e6, lon_e6;
+    char    place[48];          /* "Brussels, Belgium" */
+    uint8_t temp_unit;          /* WX_C, WX_F (components/vfo_core weather.h) */
+    uint8_t wind_unit;          /* WX_KMH, WX_MS, WX_KN, WX_MPH, WX_BFT */
+    uint8_t refresh_min;        /* NET_WX_REFRESH_MIN to _MAX, 15 until set */
+    uint8_t cycle_s;            /* 0 never, 1 to NET_WX_CYCLE_MAX seconds, 5 until set */
+    uint8_t face;               /* the dial's, 0 to NET_WX_FACES - 1 */
+} net_weather_t;
+void     net_prov_weather(net_weather_t *out);
+/* What differs from what is kept is written; anything out of bounds is not. */
+void     net_prov_save_weather(const net_weather_t *w);
+#endif
+
+/* The Clock firmware's alarms (components/vfo_core alarm.h): ten, all off
+ * at 07:00 until set; how long a snooze is, and how long one rings before it
+ * stops by itself, minutes; what rings -- the motor, the sound, or both --
+ * and how loud the sound is: on a Bluetooth headset or speaker while one is
+ * connected, on the jack while none is.
+ * Copied out and in whole, under a lock: the page and the dial both set
+ * them. Only that firmware has them. */
+#if VFO_RADIO_CLOCK
+#include "alarm.h"
+#define NET_ALARM_MIN_MAX 30            /* the longest snooze, the longest ring */
+enum { NET_ALARM_BOTH, NET_ALARM_MOTOR, NET_ALARM_SOUND, NET_ALARM_BYS };
+typedef struct {
+    alarm_t a[ALARM_N];
+    uint8_t snooze_min;         /* 1 to NET_ALARM_MIN_MAX, 9 until set */
+    uint8_t ring_min;           /* 1 to NET_ALARM_MIN_MAX, 10 until set */
+    uint8_t volume;             /* 0 to 100, 60 until set */
+    uint8_t by;                 /* NET_ALARM_*: what rings, both until set */
+} net_alarms_t;
+void     net_prov_alarms(net_alarms_t *out);
+/* Kept as it is, when every alarm is in bounds and the minutes are too. */
+void     net_prov_save_alarms(const net_alarms_t *a);
 #endif
 
 /* The jack's level above the VOLUME, dB: 0 to NET_PROV_JACK_DB_MAX in steps

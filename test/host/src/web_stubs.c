@@ -40,8 +40,25 @@ static uint8_t   s_vol = 60;
 const vfo_cfg_t *net_prov_cfg(void) { return &s_cfg; }
 esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg) { s_cfg = *cfg; return ESP_OK; }
 bool net_prov_ap_active(void) { return false; }
-uint16_t net_prov_blank_min(void) { return 0; }
-uint16_t net_prov_dim_min(void) { return 5; }
+static net_screen_t s_screen = { NET_SAVER_MATRIX, 1, 1, 1 };
+void net_prov_screen(net_screen_t *out) { *out = s_screen; }
+void net_prov_save_screen(const net_screen_t *s) { s_screen = *s; }
+static char s_tz[NET_TZ_NAME_LEN] = "Europe/Brussels";
+static bool s_h24 = true;
+const char *net_prov_tz_name(void) { return s_tz; }
+const char *net_prov_tz_rule(void) { return "CET-1CEST,M3.5.0,M10.5.0/3"; }
+bool net_prov_clock24(void) { return s_h24; }
+void net_prov_save_time(const char *name, const char *rule, bool h24)
+{
+    if (name && rule) snprintf(s_tz, sizeof s_tz, "%s", name);
+    s_h24 = h24;
+}
+static uint8_t s_ck_face;
+static bool s_ck_sec = true;
+uint8_t net_prov_clock_face(void) { return s_ck_face; }
+bool net_prov_clock_seconds(void) { return s_ck_sec; }
+void net_prov_save_clock(uint8_t face, bool seconds) { s_ck_face = face; s_ck_sec = seconds; }
+void wallclock_set_zone(const char *rule) { (void)rule; }
 uint8_t net_prov_boot_count(void) { return 0; }
 void net_prov_boot_ok(void) {}
 uint8_t net_prov_volume(void) { return s_vol; }
@@ -49,7 +66,6 @@ uint8_t net_prov_mic_gain(void) { return 100; }
 uint8_t net_prov_mic_gain_headset(void) { return 100; }
 uint16_t net_prov_ota_hours(void) { return 0; }
 void net_prov_save_audio(uint8_t volume, uint8_t mic, uint8_t mic_hs) { s_vol = volume; (void)mic; (void)mic_hs; }
-void net_prov_save_dim(uint16_t dim, uint16_t blank) { (void)dim; (void)blank; }
 void net_prov_save_ota_hours(uint16_t hours) { (void)hours; }
 static uint8_t s_bright = 80, s_jack_db;
 uint8_t net_prov_brightness(void) { return s_bright; }
@@ -143,7 +159,8 @@ void bt_link_update_status(bt_link_upd_t *out) { memset(out, 0, sizeof *out); }
 
 /* ------------------------------------------------- the face, the board */
 
-void ui_dim_set_minutes(uint16_t dim, uint16_t blank) { (void)dim; (void)blank; }
+void ui_screen_set(const net_screen_t *s) { (void)s; }
+void ui_clock_changed(void) {}
 void ui_set_brightness(uint8_t percent) { (void)percent; }
 void ui_set_turned(bool turned) { (void)turned; }
 void ui_set_levels(uint8_t volume, uint8_t mic) { (void)volume; (void)mic; }

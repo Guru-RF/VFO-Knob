@@ -55,6 +55,7 @@
 #include "wsdr.h"
 #endif
 #include "ui.h"
+#include "wallclock.h"
 #include "usb_net.h"
 
 static const char *TAG = "webcfg";
@@ -63,6 +64,8 @@ extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[]   asm("_binary_index_html_end");
 extern const char radio_html_start[] asm("_binary_radio_html_start");
 extern const char radio_html_end[]   asm("_binary_radio_html_end");
+extern const char tz_txt_start[]     asm("_binary_tz_txt_start");
+extern const char tz_txt_end[]       asm("_binary_tz_txt_end");
 
 static httpd_handle_t s_srv;
 
@@ -325,8 +328,11 @@ static esp_err_t config_get(httpd_req_t *r)
 
     /* Every string as JSON: an SSID may hold a quote or a backslash, and one
      * unescaped made the page unable to read its own settings. */
-    static EXT_RAM_BSS_ATTR char buf[1536], host[130], ssid[68], user[50], ruser[68],
-                                 base[258], root[258];  /* one handler at a time */
+    static EXT_RAM_BSS_ATTR char buf[1700], host[130], ssid[68], user[50], ruser[68],
+                                 base[258], root[258], tz[NET_TZ_NAME_LEN];  /* one handler at a time */
+    net_screen_t scr;
+    net_prov_screen(&scr);
+    json_esc(net_prov_tz_name(), tz, sizeof tz);
     json_esc(c->radio_host, host, sizeof host);
     json_esc(c->ssid, ssid, sizeof ssid);
     json_esc(net_prov_web_user(), user, sizeof user);
@@ -339,7 +345,9 @@ static esp_err_t config_get(httpd_req_t *r)
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"mich\":%u,"
              "\"jack\":%u,\"bright\":%u,\"turn\":%u,\"beamn\":%u,"
-             "\"user\":\"%s\",\"defaultpw\":%s,\"pwforce\":%s,\"otah\":%u,\"dim\":%u,\"blank\":%u,"
+             "\"user\":\"%s\",\"defaultpw\":%s,\"pwforce\":%s,\"otah\":%u,"
+             "\"ss\":%u,\"ssa\":%u,\"ssd\":%u,\"ssb\":%u,\"tz\":\"%s\",\"h24\":%s,"
+             "\"ckface\":%u,\"cksec\":%s,"
              "\"radio\":\"%s\",\"fwbase\":\"%s\",\"fwroot\":\"%s\","
              "\"ruser\":\"%s\",\"rpass\":%s,\"link\":\"%s\","
              "\"client\":\"%s\",\"client_usb\":%s}",
@@ -351,8 +359,10 @@ static esp_err_t config_get(httpd_req_t *r)
              user,
              net_prov_web_is_default() ? "true" : "false",
              pw_forced(r) ? "true" : "false",
-             (unsigned)net_prov_ota_hours(), (unsigned)net_prov_dim_min(),
-             (unsigned)net_prov_blank_min(), ota_radio(), base,
+             (unsigned)net_prov_ota_hours(),
+             (unsigned)scr.saver, (unsigned)scr.after, (unsigned)scr.dim, (unsigned)scr.dark,
+             tz, net_prov_clock24() ? "true" : "false",
+             (unsigned)net_prov_clock_face(), net_prov_clock_seconds() ? "true" : "false", ota_radio(), base,
              root, ruser, c->radio_pass[0] ? "true" : "false",
              radio_link_name(), client, client_usb ? "true" : "false");
     if (n < 0 || n >= (int)sizeof buf) return httpd_resp_send_500(r);
@@ -397,6 +407,26 @@ static bool field_num(const char *body, const char *key, long *out)
     if (end == v) return false;
     *out = n;
     return true;
+}
+
+/* The POSIX rule of a zone the page offers, from the same table (tz.txt). */
+static bool tz_rule_of(const char *name, char *rule, size_t cap)
+{
+    const size_t n = strlen(name);
+    if (!n) return false;
+    for (const char *l = tz_txt_start; l < tz_txt_end && *l; ) {
+        const char *eol = memchr(l, '\n', (size_t)(tz_txt_end - l));
+        if (!eol) eol = tz_txt_end;
+        if ((size_t)(eol - l) > n + 1 && !memcmp(l, name, n) && l[n] == ' ') {
+            const size_t len = (size_t)(eol - (l + n + 1));
+            if (len >= cap) return false;
+            memcpy(rule, l + n + 1, len);
+            rule[len] = 0;
+            return true;
+        }
+        l = eol + 1;
+    }
+    return false;
 }
 
 static long clampl(long v, long lo, long hi)
@@ -463,15 +493,43 @@ static esp_err_t config_post(httpd_req_t *r)
         return ESP_FAIL;
     }
 
-    {   /* Both stages are written together so one cannot be validated against
-         * a stale copy of the other. */
-        long dim = net_prov_dim_min(), blank = net_prov_blank_min();
-        bool touched = field_num(body, "dim", &dim);
-        touched |= field_num(body, "blank", &blank);
+    {   /* The screensaver and its three stages, written together. */
+        net_screen_t scr;
+        net_prov_screen(&scr);
+        long kind = scr.saver, after = scr.after, dim = scr.dim, dark = scr.dark;
+        bool touched = field_num(body, "ss", &kind);
+        touched |= field_num(body, "ssa", &after);
+        touched |= field_num(body, "ssd", &dim);
+        touched |= field_num(body, "ssb", &dark);
         if (touched) {
-            net_prov_save_dim((uint16_t)clampl(dim, 0, 1440),
-                              (uint16_t)clampl(blank, 0, 1440));
-            ui_dim_set_minutes(net_prov_dim_min(), net_prov_blank_min());
+            scr.saver = (uint8_t)clampl(kind, 0, NET_SAVER_N - 1);
+            scr.after = (uint16_t)clampl(after, 0, NET_SCREEN_MAX_MIN);
+            scr.dim   = (uint16_t)clampl(dim,   0, NET_SCREEN_MAX_MIN);
+            scr.dark  = (uint16_t)clampl(dark,  0, NET_SCREEN_MAX_MIN);
+            net_prov_save_screen(&scr);
+            net_prov_screen(&scr);
+            ui_screen_set(&scr);
+        }
+    }
+    {   /* The time zone by its name alone: the rule is the knob's own table's,
+         * so a page cannot hand the clock a rule of its making. */
+        char name[NET_TZ_NAME_LEN], rule[NET_TZ_RULE_LEN];
+        const bool zone = field(body, "tz", name, sizeof name) && tz_rule_of(name, rule, sizeof rule);
+        long h24 = net_prov_clock24();
+        const bool hours = field_num(body, "h24", &h24);
+        if (zone || hours) {
+            net_prov_save_time(zone ? name : NULL, zone ? rule : NULL, h24 != 0);
+            if (zone) wallclock_set_zone(net_prov_tz_rule());
+            ui_clock_changed();
+        }
+        /* The clock's face, the Clock firmware's and the clock
+         * screensaver's, and its second hand. */
+        long face = net_prov_clock_face(), sec = net_prov_clock_seconds();
+        bool clock = field_num(body, "ckface", &face);
+        clock |= field_num(body, "cksec", &sec);
+        if (clock && face >= 0 && face < NET_CLOCK_FACES) {
+            net_prov_save_clock((uint8_t)face, sec != 0);
+            ui_clock_changed();
         }
     }
     if (field_num(body, "bright", &v)) {
@@ -1234,8 +1292,9 @@ static size_t radios_names_json(char *j, size_t cap)
 #else
 /* ,"radios":{"sel":0,"names":[...],"via":[...]} -- for the radio's JSON:
  * every radio, and how it is reached ("LAN", "SmartLink"): the configured
- * ones and those the client found on the LAN, then the others. */
-static size_t radios_names_json(char *j, size_t cap)
+ * ones and those the client found on the LAN, then the others. Not on the
+ * clock or the weather, which have no radio page (RADIO_PAGE). */
+__attribute__((unused)) static size_t radios_names_json(char *j, size_t cap)
 {
     const int nd = net_prov_radio_count(), nf = radio_found_count(), nl = nd + radio_found_lan();
     int o = snprintf(j, cap, ",\"radios\":{\"sel\":%d,\"names\":[", radios_sel());
@@ -1971,8 +2030,9 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  * Behind the page's login like everything here. Nothing that transmits:
  * neither PTT nor a tune cycle, on the page or in the API, and no setting at
  * all while the radio is on the air. Not for the setup firmware, which has
- * no radio, nor svxconnect's reflector. */
-#define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE)
+ * no radio, nor svxconnect's reflector, nor the clock or the weather. */
+#define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_CLOCK && \
+                    !VFO_RADIO_WEATHER)
 
 /* ------------------------------------------ Bluetooth headset or speaker */
 
@@ -2377,6 +2437,16 @@ static esp_err_t send_page(httpd_req_t *r, const char *start, const char *end)
 {
     httpd_resp_set_type(r, "text/html");
     return httpd_resp_send(r, start, end - start - 1);
+}
+
+/* The time zones the page offers, "<IANA name> <POSIX rule>" a line
+ * (tools/tz_table.py), cached a day: they change with tzdata, not daily. */
+static esp_err_t tz_get(httpd_req_t *r)
+{
+    REQUIRE_AUTH(r);
+    httpd_resp_set_type(r, "text/plain");
+    httpd_resp_set_hdr(r, "Cache-Control", "max-age=86400");
+    return httpd_resp_send(r, tz_txt_start, tz_txt_end - tz_txt_start - 1);
 }
 
 static esp_err_t config_page(httpd_req_t *r)
@@ -2870,7 +2940,7 @@ esp_err_t webcfg_start(void)
     httpd_config_t c = HTTPD_DEFAULT_CONFIG();
     c.server_port      = 80;
     c.lru_purge_enable = true;
-    c.max_uri_handlers = 13 + KV_TEST_URIS + n_extra + PORTAL_URIS + WIFI_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
+    c.max_uri_handlers = 14 + KV_TEST_URIS + n_extra + PORTAL_URIS + WIFI_URIS + RADIO_URIS + SDR_URIS + RADIOS_URIS + BT_URIS;
     /* An upload ends in esp_ota_end() checking the RSA signature, on this
      * task: at 4608 that left 448 bytes (measured), and 416 more on the path
      * overflowed it. Internal RAM, because the same task writes flash. */
@@ -2901,6 +2971,7 @@ esp_err_t webcfg_start(void)
         { .uri = "/api/report",  .method = HTTP_GET,  .handler = report_get },
         { .uri = "/api/screenshot", .method = HTTP_GET, .handler = screenshot_get },
         { .uri = "/config",      .method = HTTP_GET,  .handler = config_page },
+        { .uri = "/tz.txt",      .method = HTTP_GET,  .handler = tz_get },
     };
     for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++)
         httpd_register_uri_handler(s_srv, &uris[i]);

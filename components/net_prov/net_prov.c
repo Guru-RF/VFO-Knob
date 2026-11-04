@@ -20,6 +20,9 @@
 #if VFO_RADIO_ADSB
 #include "adsb.h"
 #endif
+#if VFO_RADIO_WEATHER
+#include "weather.h"
+#endif
 #include "lwip/netdb.h"
 #include "mdns.h"
 #include "nvs.h"
@@ -77,6 +80,32 @@
 #define KEY_PORT     "abport"
 #define KEY_USER     "abuser"
 #define KEY_PASS     "abpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 80
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
+#elif VFO_RADIO_WEATHER
+/* No radio: the forecast's place is the weather's own (net_prov_weather).
+ * Keys of its own all the same, so it never writes another firmware's. */
+#define KEY_HOST     "wxhost"
+#define KEY_RLIST    "wxlist"
+#define KEY_RSEL     "wxsel"
+#define KEY_PORT     "wxport"
+#define KEY_USER     "wxuser"
+#define KEY_PASS     "wxpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 80
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
+#elif VFO_RADIO_CLOCK
+/* No radio, nor anything to ask: the time is SNTP's (components/wallclock).
+ * Keys of its own all the same, so it never writes another firmware's. */
+#define KEY_HOST     "ckhost"
+#define KEY_RLIST    "cklist"
+#define KEY_RSEL     "cksel"
+#define KEY_PORT     "ckport"
+#define KEY_USER     "ckuser"
+#define KEY_PASS     "ckpass"
 #define DEFAULT_HOST ""
 #define DEFAULT_PORT 80
 #define DEFAULT_USER ""
@@ -215,8 +244,19 @@ static esp_err_t kv_saved_or(esp_err_t e, const char *what)
 }
 
 static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
-static uint16_t s_dim_min = 5;      /* idle before the screen dims;  0 = never */
-static uint16_t s_blank_min = 10;   /* idle before it goes dark;     0 = never */
+/* The screensaver after a minute, dimmed a minute later, dark a minute after
+ * that. The Clock and the Weather are screens to look at: theirs stays up. */
+#if VFO_RADIO_CLOCK || VFO_RADIO_WEATHER
+static net_screen_t s_screen = { NET_SAVER_NONE, 0, 0, 0 };
+#else
+static net_screen_t s_screen = { NET_SAVER_MATRIX, 1, 1, 1 };
+#endif
+static char     s_tz_name[NET_TZ_NAME_LEN] = "Europe/Brussels";
+static char     s_tz_rule[NET_TZ_RULE_LEN] = "CET-1CEST,M3.5.0,M10.5.0/3";
+static bool     s_h24 = true;
+static uint8_t  s_ck_face;          /* the clock's face, CF_* */
+static bool     s_ck_sec = true;    /* ...with a second hand */
+static void     screen_load(kv_handle_t h);
 static uint8_t  s_bright = 80;      /* the screen lit, percent: 80 is the 200 of 255 it always was */
 static bool     s_turned;           /* the USB cable at the bottom: the screen turned 180 degrees */
 static uint8_t  s_beam_n = 4;       /* EpiBeam: the array's directions, 4 or 8 */
@@ -227,6 +267,16 @@ static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
 EXT_RAM_BSS_ATTR static net_adsb_t s_adsb;
 static portMUX_TYPE s_adsb_lock = portMUX_INITIALIZER_UNLOCKED;
 static void adsb_load(kv_handle_t h);
+#endif
+#if VFO_RADIO_CLOCK
+static net_alarms_t s_alarms = { .snooze_min = 9, .ring_min = 10, .volume = 60 };
+static portMUX_TYPE s_alarms_lock = portMUX_INITIALIZER_UNLOCKED;
+static void alarms_load(kv_handle_t h);
+#endif
+#if VFO_RADIO_WEATHER
+EXT_RAM_BSS_ATTR static net_weather_t s_wx;
+static portMUX_TYPE s_wx_lock = portMUX_INITIALIZER_UNLOCKED;
+static void weather_load(kv_handle_t h);
 #endif
 
 /* Credentials for the configuration page. Shipped as admin/admin so a new
@@ -642,8 +692,12 @@ void net_prov_load_settings(void)
     if (kv_get_u8(h, "mic",  &v) == ESP_OK) s_micgain = v;
     if (kv_get_u8(h, "mich", &v) == ESP_OK) s_micgain_hs = v;
     kv_get_u16(h, "otah", &s_ota_hours);
-    kv_get_u16(h, "dim", &s_dim_min);
-    kv_get_u16(h, "blank", &s_blank_min);
+    screen_load(h);
+    len = sizeof s_tz_name; kv_get_str(h, "tz", s_tz_name, &len);
+    len = sizeof s_tz_rule; kv_get_str(h, "tzrule", s_tz_rule, &len);
+    if (kv_get_u8(h, "h24", &v) == ESP_OK) s_h24 = v != 0;
+    if (kv_get_u8(h, "ckface", &v) == ESP_OK && v < NET_CLOCK_FACES) s_ck_face = v;
+    if (kv_get_u8(h, "cksec", &v) == ESP_OK) s_ck_sec = v != 0;
     if (kv_get_u8(h, "bright", &v) == ESP_OK && v >= NET_PROV_BRIGHT_MIN && v <= 100) s_bright = v;
     if (kv_get_u8(h, "turn", &v) == ESP_OK && v <= 1) s_turned = v;
     if (kv_get_u8(h, "beamn", &v) == ESP_OK && (v == 4 || v == 8)) s_beam_n = v;
@@ -651,6 +705,12 @@ void net_prov_load_settings(void)
     if (kv_get_u8(h, "jackdb", &v) == ESP_OK && v <= NET_PROV_JACK_DB_MAX && v % 3 == 0) s_jack_db = v;
 #if VFO_RADIO_ADSB
     adsb_load(h);
+#endif
+#if VFO_RADIO_WEATHER
+    weather_load(h);
+#endif
+#if VFO_RADIO_CLOCK
+    alarms_load(h);
 #endif
     len = sizeof s_web_user; kv_get_str(h, "wuser", s_web_user, &len);
     len = sizeof s_web_pass; kv_get_str(h, "wpass", s_web_pass, &len);
@@ -961,22 +1021,80 @@ esp_err_t net_prov_save_cfg(const vfo_cfg_t *cfg)
 }
 
 uint16_t net_prov_ota_hours(void) { return s_ota_hours; }
-uint16_t net_prov_dim_min(void)   { return s_dim_min; }
-uint16_t net_prov_blank_min(void) { return s_blank_min; }
-
-void net_prov_save_dim(uint16_t dim_minutes, uint16_t blank_minutes)
+/* Before the screensaver the page had "Dim after" and "Go dark after", both
+ * counted from the last use, stored only once changed. An owner who chose
+ * them keeps those moments: the screensaver where the dial dimmed, dimmed a
+ * minute later, dark when it went dark. The old keys are left alone. */
+static void screen_load(kv_handle_t h)
 {
-    /* Blanking before dimming is not a setting, it is a typo. Anything
-     * non-zero below the dim time is pulled up to it so the two stages stay
-     * in the order the operator meant. */
-    if (blank_minutes && dim_minutes && blank_minutes < dim_minutes)
-        blank_minutes = dim_minutes;
-    if (dim_minutes == s_dim_min && blank_minutes == s_blank_min) return;
-    s_dim_min   = dim_minutes;
-    s_blank_min = blank_minutes;
+    uint8_t  kind;
+    uint16_t m;
+    if (kv_get_u8(h, "ss", &kind) == ESP_OK) {
+        if (kind < NET_SAVER_N) s_screen.saver = kind;
+        if (kv_get_u16(h, "ssa", &m) == ESP_OK) s_screen.after = m;
+        if (kv_get_u16(h, "ssd", &m) == ESP_OK) s_screen.dim   = m;
+        if (kv_get_u16(h, "ssb", &m) == ESP_OK) s_screen.dark  = m;
+        return;
+    }
+    uint16_t dim = 5, blank = 10;
+    const bool had_dim   = kv_get_u16(h, "dim",   &dim)   == ESP_OK;
+    const bool had_blank = kv_get_u16(h, "blank", &blank) == ESP_OK;
+    if (!had_dim && !had_blank) return;
+    s_screen.after = dim;
+    s_screen.dim   = dim ? 1 : 0;
+    const uint16_t at = dim + s_screen.dim;     /* the moment it dims, or the saver's */
+    s_screen.dark  = !blank ? 0 : blank > at ? blank - at : 1;
+}
+
+void net_prov_screen(net_screen_t *out) { *out = s_screen; }
+
+void net_prov_save_screen(const net_screen_t *s)
+{
+    net_screen_t n = *s;
+    if (n.saver >= NET_SAVER_N) n.saver = NET_SAVER_MATRIX;
+    if (n.after > NET_SCREEN_MAX_MIN) n.after = NET_SCREEN_MAX_MIN;
+    if (n.dim   > NET_SCREEN_MAX_MIN) n.dim   = NET_SCREEN_MAX_MIN;
+    if (n.dark  > NET_SCREEN_MAX_MIN) n.dark  = NET_SCREEN_MAX_MIN;
+    if (!memcmp(&n, &s_screen, sizeof n)) return;
+    s_screen = n;
     kv_handle_t h = kv();
-    kv_set_u16(h, "dim", s_dim_min);
-    kv_set_u16(h, "blank", s_blank_min);
+    kv_set_u8 (h, "ss",  n.saver);
+    kv_set_u16(h, "ssa", n.after);
+    kv_set_u16(h, "ssd", n.dim);
+    kv_set_u16(h, "ssb", n.dark);
+    kv_commit_now(h);
+}
+
+const char *net_prov_tz_name(void) { return s_tz_name; }
+const char *net_prov_tz_rule(void) { return s_tz_rule; }
+bool        net_prov_clock24(void) { return s_h24; }
+
+void net_prov_save_time(const char *tz_name, const char *tz_rule, bool h24)
+{
+    kv_handle_t h = kv();
+    if (tz_name && tz_rule && tz_name[0] && tz_rule[0] &&
+        (strcmp(tz_name, s_tz_name) || strcmp(tz_rule, s_tz_rule))) {
+        strlcpy(s_tz_name, tz_name, sizeof s_tz_name);
+        strlcpy(s_tz_rule, tz_rule, sizeof s_tz_rule);
+        kv_set_str(h, "tz", s_tz_name);
+        kv_set_str(h, "tzrule", s_tz_rule);
+    }
+    if (h24 != s_h24) {
+        s_h24 = h24;
+        kv_set_u8(h, "h24", h24);
+    }
+    kv_commit_now(h);
+}
+
+uint8_t net_prov_clock_face(void)    { return s_ck_face; }
+bool    net_prov_clock_seconds(void) { return s_ck_sec; }
+
+void net_prov_save_clock(uint8_t face, bool seconds)
+{
+    if (face >= NET_CLOCK_FACES || (face == s_ck_face && seconds == s_ck_sec)) return;
+    kv_handle_t h = kv();
+    if (face != s_ck_face) { s_ck_face = face; kv_set_u8(h, "ckface", face); }
+    if (seconds != s_ck_sec) { s_ck_sec = seconds; kv_set_u8(h, "cksec", seconds); }
     kv_commit_now(h);
 }
 
@@ -1094,6 +1212,164 @@ void net_prov_save_adsb(const net_adsb_t *in)
     if (a.show != was.show)           kv_set_u8(h, "adshow", a.show);
     if (a.opts != was.opts)           kv_set_u8(h, "adopt", a.opts);
     if (a.refresh_s != was.refresh_s) kv_set_u8(h, "adrefr", a.refresh_s);
+    kv_commit_now(h);
+}
+#endif
+
+#if VFO_RADIO_WEATHER
+static bool wx_pos_ok(int32_t la, int32_t lo)
+{
+    return la >= -90000000 && la <= 90000000 && lo >= -180000000 && lo <= 180000000;
+}
+
+/* Each its own key, so a page that changes one writes one. */
+static void weather_load(kv_handle_t h)
+{
+    net_weather_t w = {
+        .lat_e6 = NET_WX_HOME_LAT_E6, .lon_e6 = NET_WX_HOME_LON_E6, .place = NET_WX_HOME,
+        .temp_unit = WX_C, .wind_unit = WX_KMH, .refresh_min = 15, .cycle_s = 5,
+    };
+    int32_t la, lo;
+    if (kv_get_i32(h, "wxlat", &la) == ESP_OK && kv_get_i32(h, "wxlon", &lo) == ESP_OK && wx_pos_ok(la, lo)) {
+        w.lat_e6 = la;
+        w.lon_e6 = lo;
+        size_t len = sizeof w.place;
+        if (kv_get_str(h, "wxplace", w.place, &len) != ESP_OK) w.place[0] = 0;
+    }
+    uint8_t v;
+    if (kv_get_u8(h, "wxtemp", &v) == ESP_OK && wx_temp_unit_ok(v)) w.temp_unit = v;
+    if (kv_get_u8(h, "wxwind", &v) == ESP_OK && wx_wind_unit_ok(v)) w.wind_unit = v;
+    if (kv_get_u8(h, "wxrefr", &v) == ESP_OK && v >= NET_WX_REFRESH_MIN && v <= NET_WX_REFRESH_MAX)
+        w.refresh_min = v;
+    if (kv_get_u8(h, "wxcycle", &v) == ESP_OK && v <= NET_WX_CYCLE_MAX) w.cycle_s = v;
+    if (kv_get_u8(h, "wxface", &v) == ESP_OK && v < NET_WX_FACES) w.face = v;
+    portENTER_CRITICAL(&s_wx_lock);
+    s_wx = w;
+    portEXIT_CRITICAL(&s_wx_lock);
+}
+
+void net_prov_weather(net_weather_t *out)
+{
+    portENTER_CRITICAL(&s_wx_lock);
+    *out = s_wx;
+    portEXIT_CRITICAL(&s_wx_lock);
+}
+
+void net_prov_save_weather(const net_weather_t *in)
+{
+    net_weather_t was, w = *in;
+    net_prov_weather(&was);
+    if (!wx_pos_ok(w.lat_e6, w.lon_e6)) {
+        w.lat_e6 = was.lat_e6;
+        w.lon_e6 = was.lon_e6;
+        memcpy(w.place, was.place, sizeof w.place);
+    }
+    if (!wx_temp_unit_ok(w.temp_unit)) w.temp_unit = was.temp_unit;
+    if (!wx_wind_unit_ok(w.wind_unit)) w.wind_unit = was.wind_unit;
+    if (w.refresh_min < NET_WX_REFRESH_MIN || w.refresh_min > NET_WX_REFRESH_MAX) w.refresh_min = was.refresh_min;
+    if (w.cycle_s > NET_WX_CYCLE_MAX) w.cycle_s = was.cycle_s;
+    if (w.face >= NET_WX_FACES) w.face = was.face;
+    w.place[sizeof w.place - 1] = 0;
+    if (!memcmp(&w, &was, sizeof w)) return;
+    portENTER_CRITICAL(&s_wx_lock);
+    s_wx = w;
+    portEXIT_CRITICAL(&s_wx_lock);
+
+    kv_handle_t h = kv();
+    /* The place with its position, always: kept without it, it is read
+     * back as none. */
+    const bool moved = w.lat_e6 != was.lat_e6 || w.lon_e6 != was.lon_e6;
+    if (moved) {
+        kv_set_i32(h, "wxlat", w.lat_e6);
+        kv_set_i32(h, "wxlon", w.lon_e6);
+    }
+    if (moved || strcmp(w.place, was.place)) kv_set_str(h, "wxplace", w.place);
+    if (w.temp_unit != was.temp_unit)     kv_set_u8(h, "wxtemp", w.temp_unit);
+    if (w.wind_unit != was.wind_unit)     kv_set_u8(h, "wxwind", w.wind_unit);
+    if (w.refresh_min != was.refresh_min) kv_set_u8(h, "wxrefr", w.refresh_min);
+    if (w.cycle_s != was.cycle_s)         kv_set_u8(h, "wxcycle", w.cycle_s);
+    if (w.face != was.face)               kv_set_u8(h, "wxface", w.face);
+    kv_commit_now(h);
+}
+#endif
+
+#if VFO_RADIO_CLOCK
+/* One key for the lot, its first byte the layout's: ALARMS_V, then each
+ * alarm's hour, minute, days and on, then the snooze, the ring, the volume
+ * and what rings. Version 1, the first test knob's, had no last byte: both. */
+#define ALARMS_V   2
+#define ALARMS_LEN (1 + ALARM_N * 4 + 4)
+
+static bool alarms_ok(const net_alarms_t *a)
+{
+    for (int i = 0; i < ALARM_N; i++)
+        if (!alarm_ok(&a->a[i])) return false;
+    return a->snooze_min >= 1 && a->snooze_min <= NET_ALARM_MIN_MAX &&
+           a->ring_min >= 1 && a->ring_min <= NET_ALARM_MIN_MAX && a->volume <= 100 &&
+           a->by < NET_ALARM_BYS;
+}
+
+static void alarms_load(kv_handle_t h)
+{
+    /* Until set: each off, at 07:00, a morning a few turns away. */
+    portENTER_CRITICAL(&s_alarms_lock);
+    for (int i = 0; i < ALARM_N; i++) s_alarms.a[i].hour = 7;
+    portEXIT_CRITICAL(&s_alarms_lock);
+    uint8_t b[ALARMS_LEN];
+    size_t len = sizeof b;
+    if (kv_get_blob(h, "alarms", b, &len) != ESP_OK) return;
+    if (!(len == sizeof b && b[0] == ALARMS_V) && !(len == sizeof b - 1 && b[0] == 1)) return;
+    net_alarms_t a;
+    for (int i = 0; i < ALARM_N; i++) {
+        const uint8_t *e = b + 1 + i * 4;
+        a.a[i] = (alarm_t){ .hour = e[0], .min = e[1], .days = e[2], .on = e[3] != 0 };
+    }
+    a.snooze_min = b[1 + ALARM_N * 4];
+    a.ring_min   = b[2 + ALARM_N * 4];
+    a.volume     = b[3 + ALARM_N * 4];
+    a.by         = len == sizeof b ? b[4 + ALARM_N * 4] : NET_ALARM_BOTH;
+    if (!alarms_ok(&a)) return;
+    portENTER_CRITICAL(&s_alarms_lock);
+    s_alarms = a;
+    portEXIT_CRITICAL(&s_alarms_lock);
+}
+
+void net_prov_alarms(net_alarms_t *out)
+{
+    portENTER_CRITICAL(&s_alarms_lock);
+    *out = s_alarms;
+    portEXIT_CRITICAL(&s_alarms_lock);
+}
+
+void net_prov_save_alarms(const net_alarms_t *in)
+{
+    if (!alarms_ok(in)) return;
+    net_alarms_t was;
+    net_prov_alarms(&was);
+    bool same = in->snooze_min == was.snooze_min && in->ring_min == was.ring_min &&
+                in->volume == was.volume && in->by == was.by;
+    for (int i = 0; same && i < ALARM_N; i++)
+        same = in->a[i].hour == was.a[i].hour && in->a[i].min == was.a[i].min &&
+               in->a[i].days == was.a[i].days && in->a[i].on == was.a[i].on;
+    if (same) return;
+    portENTER_CRITICAL(&s_alarms_lock);
+    s_alarms = *in;
+    portEXIT_CRITICAL(&s_alarms_lock);
+    uint8_t b[ALARMS_LEN];
+    b[0] = ALARMS_V;
+    for (int i = 0; i < ALARM_N; i++) {
+        uint8_t *e = b + 1 + i * 4;
+        e[0] = in->a[i].hour;
+        e[1] = in->a[i].min;
+        e[2] = in->a[i].days;
+        e[3] = in->a[i].on;
+    }
+    b[1 + ALARM_N * 4] = in->snooze_min;
+    b[2 + ALARM_N * 4] = in->ring_min;
+    b[3 + ALARM_N * 4] = in->volume;
+    b[4 + ALARM_N * 4] = in->by;
+    kv_handle_t h = kv();
+    kv_set_blob(h, "alarms", b, sizeof b);
     kv_commit_now(h);
 }
 #endif

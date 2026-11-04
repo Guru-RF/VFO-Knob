@@ -31,6 +31,12 @@
 #if VFO_RADIO_ADSB
 #include "adsb_client.h"
 #endif
+#if VFO_RADIO_WEATHER
+#include "weather_client.h"
+#endif
+#if VFO_RADIO_CLOCK
+#include "clock_client.h"
+#endif
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "sd_cache.h"
@@ -45,6 +51,7 @@
 #include "hal_touch.h"
 #include "panel.h"
 #include "ui.h"
+#include "wallclock.h"
 #include "usb_net.h"
 #include "netlog.h"
 #include "ota.h"
@@ -171,6 +178,10 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "EpiBeam";
 #elif VFO_RADIO_ADSB
     const char *name = "ADS-B Radar";
+#elif VFO_RADIO_CLOCK
+    const char *name = "Clock";
+#elif VFO_RADIO_WEATHER
+    const char *name = "Weather";
 #else
     const char *name = "AetherSDR";
 #endif
@@ -354,6 +365,10 @@ enum { CABLE_UNKNOWN = 0, CABLE_COMPUTER, CABLE_NONE };
 static atomic_int s_cable;
 #endif
 
+/* A turn that wakes the dial is spent on that for this long: long enough
+ * for a brisk turn to end, short enough not to be felt as lag. */
+#define WAKE_TURN_MS 400
+
 static void encoder_task(void *arg)
 {
     (void)arg;
@@ -366,6 +381,7 @@ static void encoder_task(void *arg)
     int64_t  run_counts   = 0;
     bool     moving       = false;
     float    v_peak       = 0.0f;
+    uint32_t woke_ms      = 0;          /* a turn woke the dial: when; 0 none */
 
     ESP_LOGI(TAG, "--- knob ready (tuning is silent by design) ---");
 
@@ -397,8 +413,18 @@ static void encoder_task(void *arg)
             continue;
         }
 
-        ui_note_activity();
+        /* A turn that brings the dial back from a screensaver or a dark
+         * screen is spent on that, and on the rest of that turn: nothing is
+         * tuned behind a screen nobody can see. ui_wake notes the use. */
+        if (ui_wake()) woke_ms = now_ms;
         ui_note_user();                 /* someone is listening: see radio_user_activity */
+        if (woke_ms && now_ms - woke_ms < WAKE_TURN_MS) { residue = 0; continue; }
+        woke_ms = 0;
+#if VFO_RADIO_CLOCK
+        /* An alarm ringing: a turn snoozes it, locked or not (ui.c spends
+         * the rest of that turn on nothing). */
+        if (ui_alarm_ringing()) { residue = 0; ui_clock_turn(delta); continue; }
+#endif
         /* Turning the knob answers a question on the dial: "update?" no, and
          * the knob tunes on; "firmware?" yes, and the turn is spent on it. */
         if (ui_ask_knob_moved()) continue;
@@ -431,6 +457,16 @@ static void encoder_task(void *arg)
 #if VFO_RADIO_ADSB
         /* The dial is the radar's range, a range a detent (ui.c's radar). */
         ui_adsb_turn(detents);
+        continue;
+#endif
+#if VFO_RADIO_CLOCK
+        /* The dial goes from face to face, a face a detent (ui.c's clock). */
+        ui_clock_turn(detents);
+        continue;
+#endif
+#if VFO_RADIO_WEATHER
+        /* The dial goes from face to face: now, the next hours, the days. */
+        ui_weather_turn(detents);
         continue;
 #endif
 #if VFO_RADIO_PHONE
@@ -1018,6 +1054,8 @@ static bool audio_busy(void)
     radio_status_t st;
     radio_get_status(&st);
     return st.call != RADIO_CALL_IDLE && st.call != RADIO_CALL_ENDED;
+#elif VFO_RADIO_CLOCK
+    return ui_alarm_ringing();
 #else
     return radio_on_air();
 #endif
@@ -1036,6 +1074,7 @@ static esp_err_t settings_up(void)
     const kv_boot_t b = { .wipe = s_wipe, .safe = net_prov_boot_count() >= 3 };
     const esp_err_t e = kv_init(&(kv_hooks_t){ .busy = audio_busy, .sound = sound_on }, &b);
     net_prov_load_settings();
+    wallclock_set_zone(net_prov_tz_rule());
 #if VFO_KV_TEST
     kv_test_start();                    /* the settings' bench tests: a test build's only */
 #endif
@@ -1193,6 +1232,39 @@ static void probe_task(void *arg)
         if (core == 1 && s_probe_ring) {
             probe_read(&s_probe_ring[s_probe_head]);
             s_probe_head = (s_probe_head + 1) % PROBE_RING;
+        }
+    }
+}
+#endif
+
+#if VFO_RADIO_PHONE || VFO_RADIO_CLOCK
+/* A ring, felt as a phone's: the motor driven flat out on the ring's own
+ * rhythm -- 400 ms, 200 rest, 400, then the rest of `period_ms` -- from the
+ * ui task's loop, 20 times a second. Not the clicks' effects: short by
+ * design, at the 1.3 V the clicks are tuned to. For the ring the coin motor
+ * gets its own 3 V, and the clicks their voltage back after. A telephone's
+ * call rings every three seconds, the Clock's alarm more insistently. */
+static void ring_motor(bool ring, uint32_t period_ms)
+{
+    const uint8_t RING_RATED = 0x89;        /* 2.9 V: the overdrive clamp */
+    static bool     ringing, on;
+    static uint32_t t0;
+    const uint32_t nowb = (uint32_t)(esp_timer_get_time() / 1000);
+    if (ring && !ringing) {
+        ringing = true;
+        on = false;
+        t0 = nowb;
+        drv2605_rtp_begin_at(&s_drv, RING_RATED);
+    } else if (!ring && ringing) {
+        ringing = false;
+        drv2605_rtp_end(&s_drv);
+    }
+    if (ringing) {
+        const uint32_t p = (nowb - t0) % period_ms;
+        const bool want = p < 400 || (p >= 600 && p < 1000);
+        if (want != on) {
+            on = want;
+            drv2605_rtp_write(&s_drv, want ? 0x7F : 0);
         }
     }
 }
@@ -1560,35 +1632,9 @@ static void ui_task(void *arg)
             }
             if (ui_take_calls_seen()) phone_history_seen();
         }
-        {
-            /* A call ringing in, felt as a phone's: the motor driven flat out
-             * on the ring's own rhythm -- 400 ms, 200 rest, 400, then two
-             * seconds -- as the face breathes green (ui.c). Not the clicks'
-             * effects: short by design, at the 1.3 V the clicks are tuned to.
-             * For the ring the coin motor gets its own 3 V, and the clicks
-             * their voltage back after. */
-            const uint8_t RING_RATED = 0x89;        /* 2.9 V: the overdrive clamp */
-            static bool     ringing, on;
-            static uint32_t t0;
-            const uint32_t nowb = (uint32_t)(esp_timer_get_time() / 1000);
-            if (s_call_ringing && !ringing) {
-                ringing = true;
-                on = false;
-                t0 = nowb;
-                drv2605_rtp_begin_at(&s_drv, RING_RATED);
-            } else if (!s_call_ringing && ringing) {
-                ringing = false;
-                drv2605_rtp_end(&s_drv);
-            }
-            if (ringing) {
-                const uint32_t p = (nowb - t0) % 3000;
-                const bool want = p < 400 || (p >= 600 && p < 1000);
-                if (want != on) {
-                    on = want;
-                    drv2605_rtp_write(&s_drv, want ? 0x7F : 0);
-                }
-            }
-        }
+        /* A call ringing in buzzes as a phone does, the face breathing
+         * green (ui.c). */
+        ring_motor(s_call_ringing, 3000);
 #elif !VFO_RADIO_SETUP && !VFO_RX_ONLY
         /* A Bluetooth headset's call button is the PTT while one is
          * connected: a press keys, the next unkeys. Not with the headset's
@@ -1696,6 +1742,60 @@ static void ui_task(void *arg)
                 left--;
                 wait = BEAM_CLICK_TICKS - 1;
             }
+        }
+#endif
+#if VFO_RADIO_WEATHER
+        /* The forecast, each time one comes, and the page's place and units,
+         * to the face; the face the dial rested on, kept. */
+        {
+            static uint32_t gen;
+            EXT_RAM_BSS_ATTR static wx_t wx;
+            if (weather_client_take(&wx, &gen)) ui_weather_data(&wx);
+            if (weather_client_take_settings()) {
+                net_weather_t w;
+                net_prov_weather(&w);
+                ui_weather_set(&w);
+            }
+            static uint32_t said;
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (now_ms - said >= 1000) {
+                said = now_ms;
+                char state[24];
+                weather_client_state(state, sizeof state);
+                ui_weather_state(state);
+            }
+            const int f = ui_take_weather_face();
+            if (f >= 0) {
+                net_weather_t w;
+                net_prov_weather(&w);
+                w.face = (uint8_t)f;
+                net_prov_save_weather(&w);
+            }
+        }
+#endif
+#if VFO_RADIO_CLOCK
+        /* The face the dial rested on, kept: the next start's, the page's,
+         * and the clock screensaver's. The alarms the page saved, to the
+         * face; those set on the knob, or one rung once and so off, kept.
+         * One ringing: the motor, and the beeps on the jack. */
+        {
+            const int f = ui_take_clock_face();
+            if (f >= 0) net_prov_save_clock((uint8_t)f, net_prov_clock_seconds());
+            net_alarms_t al;
+            if (clock_client_take_alarms()) {
+                net_prov_alarms(&al);
+                ui_alarms_set(&al);
+            }
+            if (ui_take_alarms(&al)) net_prov_save_alarms(&al);
+            /* What rings, and how loud: the page's volume is the knob's
+             * VOLUME here, which the jack plays at and a speaker that takes
+             * its source's turns itself to (bt_link_set_volume, above) --
+             * kept so, a speaker's own buttons too. */
+            net_prov_alarms(&al);
+            if (ui_volume() != al.volume) ui_set_levels(al.volume, 0xFF);
+            const bool ringing = ui_alarm_ringing();
+            ring_motor(ringing && al.by != NET_ALARM_SOUND, 1600);
+            clock_client_sound(ringing && al.by != NET_ALARM_MOTOR);
         }
 #endif
 #if VFO_RADIO_ADSB
@@ -1914,10 +2014,10 @@ static void ui_task(void *arg)
          * nothing goes over it. */
         else if (!link_ok) { }
 #endif
-#if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR || VFO_RADIO_ADSB
+#if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR || VFO_RADIO_ADSB || VFO_RADIO_WEATHER
         /* A receiver on its way, with nothing said against it: no warning
          * over the face -- its slab says "connecting...", the radar's foot
-         * "asking". */
+         * "asking", the weather's "asking Open-Meteo". */
         else if ((st.link == RADIO_LINK_CONNECTING || st.link == RADIO_LINK_GREETING) &&
                  !st.link_why[0]) { }
 #endif
@@ -2462,6 +2562,14 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * itself, and says NO LOCATION until the radar has a middle. */
     strlcpy(ip, "ADSB", iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (ADS-B) ---");
+#elif VFO_RADIO_CLOCK
+    /* Nothing to connect to: the time is SNTP's (wallclock_start). */
+    strlcpy(ip, "CLOCK", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (Clock) ---");
+#elif VFO_RADIO_WEATHER
+    /* Open-Meteo, for the page's place: the client asks it itself. */
+    strlcpy(ip, "WEATHER", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (Weather) ---");
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -2680,6 +2788,8 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "phone",      "Telephone",  false },
     { "epibeam",    "EpiBeam",    true  },
     { "adsb",       "ADS-B Radar", false },
+    { "clock",      "Clock",      false },
+    { "weather",    "Weather",    false },
 };
 
 static void setup_wifi_page(void)
@@ -4039,8 +4149,10 @@ void app_main(void)
      * off only once the card has been emptied (setup_task). */
     s_flashed_now = s_wipe;
 #endif
-    /* net_prov_init() brings up esp_netif, so the log server can bind now. */
+    /* net_prov_init() brings up esp_netif, so the log server can bind now,
+     * and the clock ask an NTP server once the station is up. */
     netlog_start();
+    wallclock_start();
     /* Configuration page. Started before the transport is chosen so it is
      * reachable even when nothing else comes up -- which is exactly when
      * someone needs to correct an SSID or a host address. */
@@ -4071,6 +4183,21 @@ void app_main(void)
 #if VFO_RADIO_EPIBEAM
     ui_beam_set(net_prov_beam_dirs(), net_prov_beam_dir());
 #endif
+#if VFO_RADIO_WEATHER
+    {
+        net_weather_t w;
+        net_prov_weather(&w);
+        ui_weather_set(&w);
+    }
+#endif
+#if VFO_RADIO_CLOCK
+    {
+        net_alarms_t al;
+        net_prov_alarms(&al);
+        ui_alarms_set(&al);
+        ui_set_levels(al.volume, 0xFF);             /* the alarms' sound: see the ui task */
+    }
+#endif
 #if VFO_RADIO_ADSB
     {
         const uint8_t *map, *apt;
@@ -4092,7 +4219,9 @@ void app_main(void)
      * rollback, which put the previous image back. */
     if (have_ui) {
         ui_set_brightness(net_prov_brightness());
-        ui_dim_set_minutes(net_prov_dim_min(), net_prov_blank_min());
+        net_screen_t scr;
+        net_prov_screen(&scr);
+        ui_screen_set(&scr);
     }
 
     bring_up("knob", hal_encoder_init);

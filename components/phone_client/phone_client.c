@@ -30,7 +30,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
-#include "esp_netif_sntp.h"
+#include "wallclock.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -1210,9 +1210,8 @@ static void phone_task(void *arg)
     (void)arg;
     const sip_events_t ev = { .on_call = on_call, .on_media = on_media };
     bool started = false;
-    /* The clock, for the history's "12 min ago". */
-    esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    esp_netif_sntp_init(&sc);
+    /* The clock, for the history's "12 min ago": app_main started it already. */
+    wallclock_start();
     for (;;) {
         const uint64_t t = now_ms();
         if (!have_ip()) {

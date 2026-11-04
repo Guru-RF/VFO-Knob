@@ -7,9 +7,14 @@
 #include "panel.h"
 #include "net_prov.h"
 #include "beam.h"
+#include "saver.h"
+#include "clockface.h"
+#include "wallclock.h"
 #if VFO_RADIO_ADSB
 #include "adsb.h"
-#include "src/core/lv_obj_event_private.h"   /* the radar canvas's cover check */
+#endif
+#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK
+#include "src/core/lv_obj_event_private.h"   /* the radar's and the clock's canvas cover check */
 #endif
 
 #include "esp_attr.h"
@@ -360,8 +365,28 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #else
 #define ADSB_FACE 0
 #endif
+/* The clock firmware's: a clock, over a face it leaves unseen too (see
+ * "Clock" below). */
+#if VFO_RADIO_CLOCK
+#define CLOCK_FACE 1
+#else
+#define CLOCK_FACE 0
+#endif
+/* The weather firmware's: the forecast, over a face it leaves unseen too
+ * (see "Weather" below). */
+#if VFO_RADIO_WEATHER
+#define WEATHER_FACE 1
+#else
+#define WEATHER_FACE 0
+#endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
+
+/* A moment to time from with lv_tick_elaps: never 0, which says none, and
+ * never ahead of now. `t | 1` was, by a millisecond when t was even, and
+ * lv_tick_elaps took that for 2^32 ms gone by: a beam taken, or a slab's
+ * waiting release keyed, without the wait. */
+static inline uint32_t tick_mark(uint32_t t) { return t ? t : UINT32_MAX; }
 /* A receiver's face (the ubersdr firmware): no PTT, no microphone, no RIT.
  * The slab holds the spots and voices on the band, the AGC's place the SNR,
  * the gain's the noise filter; a swipe from the right, the SSTV pictures. */
@@ -1412,6 +1437,8 @@ static bool          s_slab_finger;  /* the antennas came up under a finger stil
 static volatile bool s_slab_hold;    /* the antennas came up under it: the buzz is owed */
 RADIO_ONLY static float s_meter_disp = -127.0f;
 static lv_display_t *s_disp;
+static bool screen_hidden(void);
+static void saver_cb(lv_timer_t *t);
 /* The panel is mounted upside down relative to the USB-C port: with the cable
  * at the top, the image needs 180 degrees. Software rotation, because this
  * panel honours MADCTL MX but not MY so the controller cannot do a full turn.
@@ -2748,7 +2775,7 @@ static void klock_set(bool on)
 }
 
 /* A touch or a turn the lock refused: the padlock says why nothing moved. */
-static void klock_nudge(void) { s_klock_nudge_at = lv_tick_get() | 1; }
+static void klock_nudge(void) { s_klock_nudge_at = tick_mark(lv_tick_get()); }
 #endif
 
 bool ui_locked(void)
@@ -3102,7 +3129,7 @@ static void beam_update(const ui_state_t *st)
 static void beam_go(uint8_t dir)
 {
     s_beam_dir   = dir;
-    s_beam_moved = lv_tick_get() | 1;
+    s_beam_moved = tick_mark(lv_tick_get());
     atomic_store(&s_beam_stirred, true);
     beam_draw();
 }
@@ -3152,6 +3179,21 @@ void ui_beam_turn(int32_t detents)
 int  ui_take_beam(void)       { return atomic_exchange(&s_beam_taken, -1); }
 bool ui_take_beam_moved(void) { return atomic_exchange(&s_beam_stirred, false); }
 #endif /* EPI_FACE */
+
+#if ADSB_FACE || CLOCK_FACE
+/* A canvas shown hides all under it, its pixels opaque. LVGL 9.3 asks an
+ * image's background first, transparent, and so drew the face's under it on
+ * every chunk of every refresh. */
+static void canvas_cover_cb(lv_event_t *e)
+{
+    lv_cover_check_info_t *info = lv_event_get_param(e);
+    const lv_area_t *a = info->area;
+    lv_area_t c;
+    lv_obj_get_coords(lv_event_get_target(e), &c);
+    if (info->res != LV_COVER_RES_MASKED && a->x1 >= c.x1 && a->y1 >= c.y1 && a->x2 <= c.x2 && a->y2 <= c.y2)
+        info->res = LV_COVER_RES_COVER;
+}
+#endif
 
 #if ADSB_FACE
 /* --- ADS-B Radar: the aircraft round the knob, on a radar ------------------
@@ -4062,19 +4104,6 @@ static lv_obj_t *ad_canvas(uint16_t **buf)
     return c;
 }
 
-/* The shown canvas hides all under it, its pixels opaque. LVGL 9.3 asks an
- * image's background first, transparent, and so drew the face's under it on
- * every chunk of every refresh. */
-static void ad_cover_cb(lv_event_t *e)
-{
-    lv_cover_check_info_t *info = lv_event_get_param(e);
-    const lv_area_t *a = info->area;
-    lv_area_t c;
-    lv_obj_get_coords(lv_event_get_target(e), &c);
-    if (info->res != LV_COVER_RES_MASKED && a->x1 >= c.x1 && a->y1 >= c.y1 && a->x2 <= c.x2 && a->y2 <= c.y2)
-        info->res = LV_COVER_RES_COVER;
-}
-
 static lv_obj_t *ad_label(lv_obj_t *parent, const lv_font_t *f, lv_color_t c)
 {
     lv_obj_t *l = lv_label_create(parent);
@@ -4100,7 +4129,7 @@ static void adsb_build(void)
     s_ad_cleanc = ad_canvas(&s_ad_clean);
     lv_obj_add_flag(s_ad_cleanc, LV_OBJ_FLAG_HIDDEN);
     s_ad_scene = ad_canvas(&s_ad_buf);
-    lv_obj_add_event_cb(s_ad_scene, ad_cover_cb, LV_EVENT_COVER_CHECK, NULL);
+    lv_obj_add_event_cb(s_ad_scene, canvas_cover_cb, LV_EVENT_COVER_CHECK, NULL);
     s_ad_map = heap_caps_malloc((size_t)s_ad_stride * AD_W * 2, MALLOC_CAP_SPIRAM);
     if (!s_ad_map || !s_ad_buf || !s_ad_clean) return;   /* no PSRAM: an empty face */
     s_ad_slice = heap_caps_malloc((size_t)AD_W * AD_W, MALLOC_CAP_SPIRAM);
@@ -4325,15 +4354,1351 @@ void ui_take_adsb_draw_ms(int *map, int *scene, int *sweep)
 }
 #endif /* ADSB_FACE */
 
+#if CLOCK_FACE
+/* --- Clock: the knob as a clock --------------------------------------------
+ * The whole glass is the clock: one of clockface.c's faces, the page's Clock
+ * face. The knob goes on to the next, a face a detent, round and round, and
+ * the one it rests on CK_SETTLE_MS is kept (ui_take_clock_face). A tap
+ * on its middle: the alarms (al_tap, below); anywhere else, the address
+ * card, for the page; held PICKER_HOLD_MS, the firmware picker -- the whole
+ * glass the gear at EpiBeam's foot.
+ *
+ * The face is a canvas in PSRAM, and a tick invalidates only the box the
+ * hands left and came to: some 16 kpx a second, an eighth of the glass.
+ * Every CK_SHIFT_MIN minutes the canvas moves a pixel, round a 3 x 3 square,
+ * so that a dial that never changes does not burn into the AMOLED; the edge
+ * it leaves, outside the round glass, is black. While the screensaver or a
+ * dark screen hides it, it is not drawn; back, it is drawn whole.
+ *
+ * Built over the radio's face, which goes on under it unseen: the card, the
+ * warnings, the questions and the lock are that face's, and come up over
+ * this, as over EpiBeam's compass. Not clickable: every touch is the
+ * screen's own (touch_cb, tap). */
+#define CK_W         360
+#define CK_SETTLE_MS 600
+#define CK_TICK_MS   20
+#define CK_SHIFT_MIN 3
+
+static lv_obj_t   *s_ck, *s_ck_cv;
+static uint16_t   *s_ck_px;
+static cf_opts_t   s_ck_o;
+static uint32_t    s_ck_due, s_ck_moved;   /* the next tick; the last turn, 0 settled */
+static int8_t      s_ck_dx, s_ck_dy;       /* the burn-in shift the canvas is at */
+static bool        s_ck_hidden;            /* hidden at the last tick */
+static atomic_int  s_ck_detents;           /* from the knob's task */
+static atomic_int  s_ck_taken = -1;        /* the face settled on, for app_main */
+static atomic_bool s_ck_changed;           /* the page's: the face, its seconds, the hours */
+
+static void ck_opts(void)
+{
+    s_ck_o.face    = net_prov_clock_face() < CF_N ? net_prov_clock_face() : CF_SHACK;
+    s_ck_o.seconds = net_prov_clock_seconds();
+    s_ck_o.h24     = net_prov_clock24();
+}
+
+/* The burn-in shift for this minute of the day: a pixel's step round the
+ * square every CK_SHIFT_MIN minutes, the middle between. */
+static void ck_shift(void)
+{
+    static const int8_t STEP[9][2] = {
+        { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 },
+    };
+    struct tm lt;
+    if (!wallclock_now(&lt, NULL, NULL)) return;
+    const int i = (lt.tm_hour * 60 + lt.tm_min) / CK_SHIFT_MIN % 9;
+    if (STEP[i][0] == s_ck_dx && STEP[i][1] == s_ck_dy) return;
+    s_ck_dx = STEP[i][0];
+    s_ck_dy = STEP[i][1];
+    lv_obj_set_pos(s_ck_cv, s_ck_dx, s_ck_dy);   /* the glass whole, once */
+}
+
+/* --- The Clock's alarms -----------------------------------------------------
+ * Ten (components/vfo_core alarm.h), set on the knob or on the page. A tap on
+ * the clock's middle, within AL_HIT_R of it, brings their list, one alarm at
+ * a time: the dial goes from one to the next, round ten dots at the rim, lit
+ * green those on. A tap on the time sets it -- the hours with the dial, a
+ * tap, the minutes, a tap, the days, a tap -- and it is kept, on. A tap on
+ * ON / OFF switches it. A tap anywhere else, or AL_IDLE_MS of nothing, and
+ * the clock is back: an alarm half set is left as it was.
+ *
+ * Due -- at its minute, on one of its days, the time known -- it rings: its
+ * time large over everything, a red ring flashing round the glass, the
+ * screen lit and kept lit; app_main drives the motor and the jack's beeps
+ * from ui_alarm_ringing(). A tap stops it, locked or not; a turn snoozes it
+ * for the page's minutes, and the rest of that turn is spent on nothing.
+ * Left alone it stops after the page's minutes. Once (no days), it is off as
+ * it starts ringing. The dial carries the next alarm, with a bell, or the
+ * snooze's time; the list's pill stops a snooze.
+ *
+ * The page's copy comes in through ui_alarms_set, the knob's goes out
+ * through ui_take_alarms, each under s_al_mux: app_main keeps it. */
+LV_FONT_DECLARE(font_hack_96);
+static void set_text(lv_obj_t *o, const char *s);
+static void set_text_color(lv_obj_t *o, lv_color_t c);
+
+#define AL_HIT_R     90           /* the clock's middle: a tap within it */
+#define AL_IDLE_MS   30000        /* the list left alone: the clock back */
+#define AL_FLASH_MS  500          /* the ringing ring's on, then off */
+#define AL_QUIET_MS  1500         /* a snoozing turn's rest, spent on nothing */
+#define AL_DOTS_R    162          /* the ten dots' circle */
+#define AL_TIME_Y    160          /* the time's middle */
+#define AL_ON        lv_color_hex(0x3FD46C)
+#define AL_SET       lv_color_hex(0xFFB000)   /* what the dial sets */
+#define AL_RING      lv_color_hex(0xFF3030)
+
+enum { AL_SHUT, AL_LIST, AL_HOUR, AL_MIN, AL_DAYS };
+
+static net_alarms_t s_al = { .snooze_min = 9, .ring_min = 10, .volume = 60 };   /* the face's: the LVGL task's alone */
+static net_alarms_t s_al_new, s_al_out;     /* the page's in, the knob's out */
+static portMUX_TYPE s_al_mux = portMUX_INITIALIZER_UNLOCKED;
+static atomic_bool  s_al_due, s_al_out_due, s_al_ringing;
+static uint8_t      s_al_mode;              /* AL_* */
+static uint8_t      s_al_sel;               /* the alarm the list is on */
+static alarm_t      s_al_edit;              /* ...as it is being set */
+static uint8_t      s_al_rep;               /* its days: alarm_rep_days, ALARM_REPS the page's own */
+static uint8_t      s_al_own;               /* ...those, when they are none of the dial's */
+static uint32_t     s_al_used;              /* the list's last tap or turn */
+static int8_t       s_al_ring = -1;         /* the alarm ringing, -1 none */
+static uint32_t     s_al_ring_at;
+static int8_t       s_al_snooze = -1;       /* the alarm snoozed, -1 none */
+static uint32_t     s_al_snooze_at;
+static char         s_al_snooze_t[12];      /* ...when it rings again: "07:39", "7:39 AM" */
+static uint32_t     s_al_quiet;             /* a snoozing turn's: its rest begun */
+static int          s_al_minute = -1;       /* the minute of the week last looked at */
+static bool         s_al_mark_due = true;   /* the dial's mark to work out again */
+static lv_obj_t    *s_al_scr, *s_al_title, *s_al_note, *s_al_hh, *s_al_colon, *s_al_mm, *s_al_row,
+                   *s_al_ampm, *s_al_days, *s_al_pill, *s_al_pill_l, *s_al_dot[ALARM_N];
+static lv_obj_t    *s_alr, *s_alr_ring, *s_alr_time, *s_alr_days;
+
+static lv_obj_t *al_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c)
+{
+    lv_obj_t *o = lv_label_create(p);
+    lv_obj_set_style_text_font(o, f, 0);
+    lv_obj_set_style_text_color(o, c, 0);
+    lv_label_set_text(o, "");
+    return o;
+}
+
+/* A screen of its own over the clock, black, hidden. */
+static lv_obj_t *al_screen(void)
+{
+    lv_obj_t *o = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_size(o, 360, 360);
+    lv_obj_set_pos(o, 0, 0);
+    lv_obj_set_style_bg_color(o, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    return o;
+}
+
+/* The knob's copy out, for app_main to keep. */
+static void al_keep(void)
+{
+    taskENTER_CRITICAL(&s_al_mux);
+    s_al_out = s_al;
+    taskEXIT_CRITICAL(&s_al_mux);
+    atomic_store(&s_al_out_due, true);
+    s_al_mark_due = true;
+}
+
+static uint8_t al_edit_days(void)
+{
+    return s_al_rep >= ALARM_REPS ? s_al_own : alarm_rep_days(s_al_rep);
+}
+
+/* The list as it now is: the alarm it is on, or the one being set, the part
+ * the dial sets in amber. */
+static void al_show(void)
+{
+    const bool edit = s_al_mode >= AL_HOUR;
+    alarm_t a = edit ? s_al_edit : s_al.a[s_al_sel];
+    if (edit) a.days = al_edit_days();
+    const bool h24 = net_prov_clock24();
+    char t[24];
+    if (s_al_mode == AL_HOUR)      set_text(s_al_title, "HOURS");
+    else if (s_al_mode == AL_MIN)  set_text(s_al_title, "MINUTES");
+    else if (s_al_mode == AL_DAYS) set_text(s_al_title, "DAYS");
+    else {
+        snprintf(t, sizeof t, "ALARM %u", (unsigned)s_al_sel + 1);
+        set_text(s_al_title, t);
+    }
+    set_text_color(s_al_title, edit ? AL_SET : C_TEXT2);
+
+    const lv_color_t base = edit || a.on ? C_TEXT : C_LABEL;
+    snprintf(t, sizeof t, h24 ? "%02u" : "%u", (unsigned)(h24 ? a.hour : a.hour % 12 ? a.hour % 12 : 12));
+    set_text(s_al_hh, t);
+    snprintf(t, sizeof t, "%02u", (unsigned)a.min);
+    set_text(s_al_mm, t);
+    set_text_color(s_al_hh, s_al_mode == AL_HOUR ? AL_SET : base);
+    set_text_color(s_al_colon, base);
+    set_text_color(s_al_mm, s_al_mode == AL_MIN ? AL_SET : base);
+
+    set_text(s_al_ampm, h24 ? "" : a.hour < 12 ? "AM" : "PM");
+    set_text_color(s_al_ampm, s_al_mode == AL_HOUR ? AL_SET : C_LABEL);
+    alarm_days_text(a.days, t, sizeof t);
+    set_text(s_al_days, t);
+    set_text_color(s_al_days, s_al_mode == AL_DAYS ? AL_SET : a.on || edit ? C_TEXT2 : C_LABEL);
+
+    /* The pill: ON, OFF -- or STOP, for the snooze of this one. */
+    if (edit) {
+        lv_obj_add_flag(s_al_pill, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(s_al_pill, LV_OBJ_FLAG_HIDDEN);
+        const bool snoozed = s_al_snooze == (int8_t)s_al_sel;
+        set_text(s_al_pill_l, snoozed ? "STOP" : a.on ? "ON" : "OFF");
+        set_text_color(s_al_pill_l, snoozed || a.on ? lv_color_black() : C_LABEL);
+        lv_obj_set_style_bg_color(s_al_pill, snoozed ? AL_RING : a.on ? AL_ON : C_SUBTLE, 0);
+        lv_obj_set_style_border_width(s_al_pill, snoozed || a.on ? 0 : 2, 0);
+    }
+
+    for (int i = 0; i < ALARM_N; i++) {
+        const bool here = i == s_al_sel, on = here && edit ? true : s_al.a[i].on;
+        const int32_t d = here ? 22 : 14;
+        const float r = (float)i * 36.0f * (float)M_PI / 180.0f;
+        lv_obj_set_size(s_al_dot[i], d, d);
+        lv_obj_set_pos(s_al_dot[i], CX + (int32_t)lroundf(AL_DOTS_R * sinf(r)) - d / 2,
+                       CY - (int32_t)lroundf(AL_DOTS_R * cosf(r)) - d / 2);
+        lv_obj_set_style_bg_color(s_al_dot[i], on ? AL_ON : C_DISABLED, 0);
+        lv_obj_set_style_border_width(s_al_dot[i], here ? 3 : 0, 0);
+    }
+    lv_obj_set_flag(s_al_note, LV_OBJ_FLAG_HIDDEN, wallclock_now(NULL, NULL, NULL));
+}
+
+static void al_close(void)
+{
+    s_al_mode = AL_SHUT;
+    lv_obj_add_flag(s_al_scr, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void al_open(void)
+{
+    s_al_mode = AL_LIST;
+    s_al_used = tick_mark(lv_tick_get());
+    /* On the snoozed one, to stop it; else the next to ring; else the first. */
+    struct tm lt;
+    int next = -1;
+    if (wallclock_now(&lt, NULL, NULL)) next = alarm_next(s_al.a, ALARM_N, &lt, NULL);
+    s_al_sel = (uint8_t)(s_al_snooze >= 0 ? s_al_snooze : next >= 0 ? next : 0);
+    al_show();
+    lv_obj_remove_flag(s_al_scr, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* The time as the clock writes it: "07:30", or "7:30 AM". */
+static void al_time(uint8_t hour, uint8_t min, char *out, size_t n)
+{
+    char t[8];
+    bool pm;
+    const bool h24 = net_prov_clock24();
+    alarm_time_text(hour, min, h24, t, sizeof t, &pm);
+    snprintf(out, n, "%s%s", t, h24 ? "" : pm ? " PM" : " AM");
+}
+
+static void al_ring_start(int i)
+{
+    const uint32_t now = lv_tick_get();
+    s_al_ring    = (int8_t)i;
+    s_al_ring_at = tick_mark(now);
+    s_al_snooze  = -1;
+    /* Once: off now, as it rings. */
+    if (!s_al.a[i].days && s_al.a[i].on) {
+        s_al.a[i].on = false;
+        al_keep();
+    }
+    al_close();
+    char t[8], d[24], line[32];
+    bool pm;
+    alarm_time_text(s_al.a[i].hour, s_al.a[i].min, net_prov_clock24(), t, sizeof t, &pm);
+    set_text(s_alr_time, t);
+    alarm_days_text(s_al.a[i].days, d, sizeof d);
+    snprintf(line, sizeof line, "%s%s", net_prov_clock24() ? "" : pm ? "PM  " : "AM  ", d);
+    set_text(s_alr_days, line);
+    /* Over everything, the card put away. */
+    netinfo_show(false);
+    lv_obj_remove_flag(s_alr, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_alr);
+    ui_note_activity();
+    atomic_store(&s_al_ringing, true);
+    s_al_mark_due = true;
+}
+
+static void al_ring_stop(bool snooze)
+{
+    if (snooze && s_al_ring >= 0) {
+        s_al_snooze    = s_al_ring;
+        s_al_snooze_at = tick_mark(lv_tick_get());
+        struct tm lt;
+        s_al_snooze_t[0] = 0;
+        if (wallclock_now(&lt, NULL, NULL)) {
+            const int m = (lt.tm_hour * 60 + lt.tm_min + s_al.snooze_min) % 1440;
+            al_time((uint8_t)(m / 60), (uint8_t)(m % 60), s_al_snooze_t, sizeof s_al_snooze_t);
+        }
+    }
+    s_al_ring = -1;
+    lv_obj_add_flag(s_alr, LV_OBJ_FLAG_HIDDEN);
+    atomic_store(&s_al_ringing, false);
+    s_al_mark_due = true;
+}
+
+/* The dial's mark: the snooze's time, or the next alarm's with a bell -- its
+ * day too, when that is not within a day. */
+static void al_mark(const struct tm *lt, bool have)
+{
+    static const char *const DAY[7] = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
+    char m[sizeof s_ck_o.mark] = "", t[12];
+    int mins = 0;
+    const int i = have ? alarm_next(s_al.a, ALARM_N, lt, &mins) : -1;
+    if (s_al_snooze >= 0 && s_al_snooze_t[0]) {
+        snprintf(m, sizeof m, "SNOOZE %s", s_al_snooze_t);
+    } else if (i >= 0) {
+        al_time(s_al.a[i].hour, s_al.a[i].min, t, sizeof t);
+        if (mins < 1440) {
+            snprintf(m, sizeof m, LV_SYMBOL_BELL " %s", t);
+        } else {
+            const int day = (lt->tm_wday + (lt->tm_hour * 60 + lt->tm_min + mins) / 1440) % 7;
+            snprintf(m, sizeof m, LV_SYMBOL_BELL " %s %s", DAY[day], t);
+        }
+    }
+    if (strcmp(m, s_ck_o.mark)) {
+        strlcpy(s_ck_o.mark, m, sizeof s_ck_o.mark);
+        s_ck_due = lv_tick_get();
+    }
+}
+
+/* Every tick: the page's alarms in, one due rung, a ring timed out or
+ * flashing, a snooze over, the list left alone closed, the mark kept. */
+static void al_tick(void)
+{
+    if (atomic_exchange(&s_al_due, false)) {
+        taskENTER_CRITICAL(&s_al_mux);
+        s_al = s_al_new;
+        taskEXIT_CRITICAL(&s_al_mux);
+        s_al_mark_due = true;
+        if (s_al_mode == AL_LIST) al_show();
+    }
+    struct tm lt;
+    const bool have = wallclock_now(&lt, NULL, NULL);
+    if (have) {
+        const int m = (lt.tm_wday * 24 + lt.tm_hour) * 60 + lt.tm_min;
+        if (m != s_al_minute) {
+            s_al_minute   = m;
+            s_al_mark_due = true;
+            const int i = alarm_due(s_al.a, ALARM_N, &lt);
+            if (i >= 0) al_ring_start(i);
+        }
+    }
+    if (s_al_snooze >= 0 && s_al_ring < 0 && lv_tick_elaps(s_al_snooze_at) >= s_al.snooze_min * 60000u) {
+        const int i = s_al_snooze;
+        al_ring_start(i);
+    }
+    if (s_al_ring >= 0) {
+        ui_note_activity();                   /* lit, and kept lit */
+        if (lv_tick_elaps(s_al_ring_at) >= s_al.ring_min * 60000u) al_ring_stop(false);
+        else lv_obj_set_flag(s_alr_ring, LV_OBJ_FLAG_HIDDEN, lv_tick_elaps(s_al_ring_at) / AL_FLASH_MS % 2);
+    }
+    if (s_al_mode != AL_SHUT && lv_tick_elaps(s_al_used) >= AL_IDLE_MS) al_close();
+    if (s_al_mark_due) {
+        s_al_mark_due = false;
+        al_mark(&lt, have);
+    }
+}
+
+/* The dial's detents, while the alarms have them: true, taken. */
+static bool al_turn(int d)
+{
+    if (s_al_ring >= 0) {
+        al_ring_stop(true);
+        s_al_quiet = tick_mark(lv_tick_get());
+        return true;
+    }
+    if (s_al_quiet && lv_tick_elaps(s_al_quiet) < AL_QUIET_MS) return true;
+    s_al_quiet = 0;
+    if (s_al_mode == AL_SHUT) return false;
+    s_al_used = tick_mark(lv_tick_get());
+    switch (s_al_mode) {
+    case AL_LIST: s_al_sel = (uint8_t)((s_al_sel + d % ALARM_N + ALARM_N) % ALARM_N); break;
+    case AL_HOUR: s_al_edit.hour = (uint8_t)((s_al_edit.hour + d % 24 + 24) % 24); break;
+    case AL_MIN:  s_al_edit.min = (uint8_t)((s_al_edit.min + d % 60 + 60) % 60); break;
+    default: {
+        /* The dial's days, and the page's own after them where they are
+         * none of those. */
+        const int n = ALARM_REPS + (alarm_rep_of(s_al_own) < 0);
+        s_al_rep = (uint8_t)((s_al_rep + d % n + n) % n);
+        break;
+    }
+    }
+    al_show();
+    return true;
+}
+
+/* A tap, while the alarms want it: true, taken. One ringing stops at a tap
+ * anywhere, locked or not; the clock's middle opens the list -- not under
+ * the card, nor locked; open, the list takes every tap. */
+static bool al_tap(lv_point_t p)
+{
+    if (s_al_ring >= 0) {
+        al_ring_stop(false);
+        return true;
+    }
+    if (s_al_mode == AL_SHUT) {
+        if (addresses_up() || s_knob_locked) return false;
+        const int32_t dx = p.x - CX, dy = p.y - CY;
+        if (dx * dx + dy * dy > AL_HIT_R * AL_HIT_R) return false;
+        al_open();
+        return true;
+    }
+    s_al_used = tick_mark(lv_tick_get());
+    switch (s_al_mode) {
+    case AL_LIST: {
+        lv_area_t a;
+        lv_obj_get_coords(s_al_pill, &a);
+        /* A finger is wider than the pill's edge. */
+        if (p.x >= a.x1 - 14 && p.x <= a.x2 + 14 && p.y >= a.y1 - 14 && p.y <= a.y2 + 14) {
+            if (s_al_snooze == (int8_t)s_al_sel) {
+                s_al_snooze = -1;
+                s_al_mark_due = true;
+            } else {
+                s_al.a[s_al_sel].on = !s_al.a[s_al_sel].on;
+                al_keep();
+            }
+            al_show();
+        } else if (p.y >= AL_TIME_Y - 62 && p.y < AL_TIME_Y + 66) {
+            s_al_edit = s_al.a[s_al_sel];
+            s_al_own  = s_al_edit.days;
+            const int r = alarm_rep_of(s_al_own);
+            s_al_rep  = (uint8_t)(r >= 0 ? r : ALARM_REPS);
+            s_al_mode = AL_HOUR;
+            al_show();
+        } else {
+            al_close();
+        }
+        break;
+    }
+    case AL_HOUR: s_al_mode = AL_MIN;  al_show(); break;
+    case AL_MIN:  s_al_mode = AL_DAYS; al_show(); break;
+    default:
+        /* Set: kept, on, its snooze -- an old time's -- forgotten. */
+        s_al_edit.days = al_edit_days();
+        s_al_edit.on   = true;
+        s_al.a[s_al_sel] = s_al_edit;
+        if (s_al_snooze == (int8_t)s_al_sel) s_al_snooze = -1;
+        al_keep();
+        s_al_mode = AL_LIST;
+        al_show();
+        break;
+    }
+    return true;
+}
+
+/* The list and the ringing screen, over the clock, under the card, the
+ * questions and the lock. */
+static void al_build(void)
+{
+    s_al_scr = al_screen();
+    for (int i = 0; i < ALARM_N; i++) {
+        lv_obj_t *d = lv_obj_create(s_al_scr);
+        lv_obj_remove_style_all(d);
+        lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(d, C_TEXT, 0);
+        lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
+        s_al_dot[i] = d;
+    }
+    s_al_title = al_label(s_al_scr, &lv_font_montserrat_20, C_TEXT2);
+    lv_obj_align(s_al_title, LV_ALIGN_TOP_MID, 0, 46);
+    s_al_note = al_label(s_al_scr, &lv_font_montserrat_14, C_WARN);
+    lv_label_set_text(s_al_note, "NO TIME YET: NONE CAN RING");
+    lv_obj_align(s_al_note, LV_ALIGN_TOP_MID, 0, 74);
+
+    /* The time in three parts, each coloured on its own: the colon at the
+     * middle, the hours right of nothing but it, the minutes after it. */
+    const int32_t w = lv_font_get_glyph_width(&font_hack_96, '0', 0), x0 = CX - w / 2;
+    const int32_t top = AL_TIME_Y - lv_font_get_line_height(&font_hack_96) / 2;
+    s_al_hh = al_label(s_al_scr, &font_hack_96, C_TEXT);
+    lv_obj_set_width(s_al_hh, 2 * w);
+    lv_obj_set_style_text_align(s_al_hh, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s_al_hh, x0 - 2 * w, top);
+    s_al_colon = al_label(s_al_scr, &font_hack_96, C_TEXT);
+    lv_label_set_text(s_al_colon, ":");
+    lv_obj_set_width(s_al_colon, w);
+    lv_obj_set_pos(s_al_colon, x0, top);
+    s_al_mm = al_label(s_al_scr, &font_hack_96, C_TEXT);
+    lv_obj_set_width(s_al_mm, 2 * w);
+    lv_obj_set_pos(s_al_mm, x0 + w, top);
+
+    /* AM or PM and the days, a line under it, centred together. */
+    s_al_row = lv_obj_create(s_al_scr);
+    lv_obj_remove_style_all(s_al_row);
+    lv_obj_set_size(s_al_row, 300, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(s_al_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_al_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(s_al_row, 12, 0);
+    lv_obj_remove_flag(s_al_row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_al_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(s_al_row, LV_ALIGN_TOP_MID, 0, AL_TIME_Y + 56);
+    s_al_ampm = al_label(s_al_row, &lv_font_montserrat_20, C_LABEL);
+    s_al_days = al_label(s_al_row, &lv_font_montserrat_20, C_TEXT2);
+
+    s_al_pill = lv_obj_create(s_al_scr);
+    lv_obj_remove_style_all(s_al_pill);
+    lv_obj_set_size(s_al_pill, 128, 50);
+    lv_obj_align(s_al_pill, LV_ALIGN_TOP_MID, 0, 262);
+    lv_obj_set_style_radius(s_al_pill, 25, 0);
+    lv_obj_set_style_bg_opa(s_al_pill, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_al_pill, C_DISABLED, 0);
+    lv_obj_remove_flag(s_al_pill, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_al_pill, LV_OBJ_FLAG_SCROLLABLE);
+    s_al_pill_l = al_label(s_al_pill, &lv_font_montserrat_28, C_LABEL);
+    lv_obj_center(s_al_pill_l);
+
+    s_alr = al_screen();
+    s_alr_ring = lv_obj_create(s_alr);
+    lv_obj_remove_style_all(s_alr_ring);
+    lv_obj_set_size(s_alr_ring, 360, 360);
+    lv_obj_set_style_radius(s_alr_ring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(s_alr_ring, AL_RING, 0);
+    lv_obj_set_style_border_width(s_alr_ring, 16, 0);
+    lv_obj_remove_flag(s_alr_ring, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *t = al_label(s_alr, &lv_font_montserrat_28, AL_RING);
+    lv_label_set_text(t, LV_SYMBOL_BELL "  ALARM");
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 58);
+    s_alr_time = al_label(s_alr, &font_hack_96, C_TEXT);
+    lv_obj_align(s_alr_time, LV_ALIGN_TOP_MID, 0, AL_TIME_Y - lv_font_get_line_height(&font_hack_96) / 2);
+    s_alr_days = al_label(s_alr, &lv_font_montserrat_20, C_TEXT2);
+    lv_obj_align(s_alr_days, LV_ALIGN_TOP_MID, 0, AL_TIME_Y + 56);
+    t = al_label(s_alr, &lv_font_montserrat_14, C_LABEL);
+    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(t, "TAP TO STOP\nTURN TO SNOOZE");
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 270);
+}
+
+/* Covered by the list or the ringing: the clock not drawn meanwhile. */
+static bool al_covers(void) { return s_al_mode != AL_SHUT || s_al_ring >= 0; }
+
+static void ck_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    const uint32_t now = lv_tick_get();
+    al_tick();
+    const int d = atomic_exchange(&s_ck_detents, 0);
+    if (d && !al_turn(d)) {
+        s_ck_o.face  = (uint8_t)((s_ck_o.face + d % CF_N + CF_N) % CF_N);
+        s_ck_moved   = tick_mark(now);
+        s_ck_due     = now;
+    }
+    if (s_ck_moved && lv_tick_elaps(s_ck_moved) >= CK_SETTLE_MS) {
+        s_ck_moved = 0;
+        atomic_store(&s_ck_taken, s_ck_o.face);
+    }
+    if (atomic_exchange(&s_ck_changed, false)) {
+        ck_opts();
+        s_ck_due = now;
+    }
+    /* Under the screensaver or dark: nothing to see. Back, drawn whole.
+     * Under the alarms: the last picture kept, and drawn on from it. */
+    const bool hidden = screen_hidden();
+    if (hidden || !s_ck_px) { s_ck_hidden = hidden; return; }
+    if (al_covers()) return;
+    if (s_ck_hidden) { s_ck_hidden = false; clockface_reset(); s_ck_due = now; }
+    if ((int32_t)(now - s_ck_due) < 0) return;
+    ck_shift();
+    lv_area_t a;
+    if (clockface_draw(s_ck_px, &s_ck_o, &a)) {
+        lv_area_move(&a, s_ck_dx, s_ck_dy);
+        lv_obj_invalidate_area(s_ck_cv, &a);
+    }
+    s_ck_due = now + clockface_wait_ms(&s_ck_o);
+}
+
+static void ck_build(void)
+{
+    ck_opts();
+    s_ck = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_ck);
+    lv_obj_set_size(s_ck, CK_W, CK_W);
+    lv_obj_set_pos(s_ck, 0, 0);
+    lv_obj_set_style_bg_color(s_ck, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_ck, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_ck, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_ck, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Its rows CK_W pixels apart, as clockface.c draws them (LVGL's stride
+     * alignment is 1). */
+    s_ck_px = heap_caps_malloc((size_t)CK_W * CK_W * 2, MALLOC_CAP_SPIRAM);
+    s_ck_cv = lv_canvas_create(s_ck);
+    if (s_ck_px) {
+        memset(s_ck_px, 0, (size_t)CK_W * CK_W * 2);
+        lv_canvas_set_buffer(s_ck_cv, s_ck_px, CK_W, CK_W, LV_COLOR_FORMAT_RGB565);
+    }
+    lv_obj_set_pos(s_ck_cv, 0, 0);
+    lv_obj_remove_flag(s_ck_cv, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_ck_cv, canvas_cover_cb, LV_EVENT_COVER_CHECK, NULL);
+    clockface_reset();
+    s_ck_due = lv_tick_get();
+    al_build();
+    lv_timer_create(ck_timer_cb, CK_TICK_MS, NULL);
+}
+
+void ui_clock_turn(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_ck_detents, (int)detents);
+}
+
+int ui_take_clock_face(void) { return atomic_exchange(&s_ck_taken, -1); }
+
+void ui_alarms_set(const net_alarms_t *a)
+{
+    taskENTER_CRITICAL(&s_al_mux);
+    s_al_new = *a;
+    taskEXIT_CRITICAL(&s_al_mux);
+    atomic_store(&s_al_due, true);
+}
+
+bool ui_take_alarms(net_alarms_t *out)
+{
+    if (!atomic_exchange(&s_al_out_due, false)) return false;
+    taskENTER_CRITICAL(&s_al_mux);
+    *out = s_al_out;
+    taskEXIT_CRITICAL(&s_al_mux);
+    return true;
+}
+
+bool ui_alarm_ringing(void) { return atomic_load(&s_al_ringing); }
+#endif /* CLOCK_FACE */
+
+#if WEATHER_FACE
+/* --- Weather: Open-Meteo's forecast, on three faces -------------------------
+ * The whole glass is the weather, a face at a time; the dial goes on to the
+ * next and round, a face a detent, and the one it rests on WX_SETTLE_MS is
+ * kept (ui_take_weather_face). The faces go on by themselves too, every
+ * cycle_s seconds the glass is seen (0: never), a detent starting the count
+ * again; what they come to that way is never kept, the dial's alone is.
+ * Either way the face rolls over: out the way the dial went, the next in
+ * behind it, over WX_SLIDE_MS (wx_slide). A face the page sets comes at once:
+ *   NOW: the weather's icon and the temperature, its words, what it feels
+ *     like, the wind -- an arrow the way it blows, where from and how hard --
+ *     the humidity and the pressure, and today's sunrise and sunset;
+ *   NEXT 24 HOURS: the temperature a line and the chance of rain bars, an
+ *     icon every four hours over them, the hours under them, and the first
+ *     rain likely;
+ *   5 DAYS: a row a day, today first: its icon, its highest and lowest, its
+ *     greatest chance of rain.
+ * Over each the knob's time; under each Open-Meteo, as its licence asks,
+ * with the forecast's time, or what went wrong asking for it. The icons are
+ * drawn from shapes (wx_icon_draw), as the chart and the days are, in their
+ * objects' own draw events: no font, no picture. A tap anywhere: the address
+ * card; held PICKER_HOLD_MS, the firmware picker -- as on the clock. Every
+ * WX_SHIFT_MIN minutes it all moves a pixel round a 3 x 3 square, as the
+ * clock does, so that nothing stands still on the AMOLED for days.
+ *
+ * Built over the radio's face, which goes on under it unseen: the card, the
+ * warnings, the questions and the lock are that face's, and come up over
+ * this. Not clickable: every touch is the screen's own (touch_cb, tap). */
+#define WX_SETTLE_MS 600
+#define WX_SLIDE_MS  450
+#define WX_TICK_MS   20
+#define WX_CLOCK_MS  250                      /* the time and the shift looked at */
+#define WX_SHIFT_MIN 3
+#define WX_DAYS_SHOWN 5
+#define WX_SUN       0xFFC83C
+#define WX_MOON      0xE8E2C0
+#define WX_CLOUD     0xDCE3EC
+#define WX_CLOUD_DK  0x8C96A4
+#define WX_RAIN      0x4AA8FF
+#define WX_SNOW      0xFFFFFF
+#define WX_BOLT      0xFFD23C
+#define WX_FOG       0xA8B0BC
+#define WX_LINE      0xFFA040                 /* the temperature on the chart */
+#define WX_BG        0x000000                 /* black, as the clock's: the AMOLED dark */
+
+static lv_obj_t   *s_wx, *s_wx_in, *s_wx_pg[NET_WX_FACES];
+static lv_obj_t   *s_wx_time, *s_wx_foot, *s_wx_cap[NET_WX_FACES];
+static lv_obj_t   *s_wx_icon, *s_wx_temp, *s_wx_feels, *s_wx_cond, *s_wx_arrow, *s_wx_wind, *s_wx_hum, *s_wx_sun;
+static lv_obj_t   *s_wx_chart, *s_wx_rain, *s_wx_days;
+EXT_RAM_BSS_ATTR static wx_t s_wx_d, s_wx_new;    /* the face's, and the one handed over */
+static net_weather_t s_wx_cfg, s_wx_cfg_new;
+static char        s_wx_state[24], s_wx_state_new[24];
+static bool        s_wx_have;
+static uint8_t     s_wx_face;
+static uint32_t    s_wx_moved;               /* the last turn: 0, settled */
+static uint32_t    s_wx_since;               /* the face up since, for the faces' own turn */
+static int8_t      s_wx_out = -1;            /* the face rolling away, -1 none */
+static int8_t      s_wx_dx, s_wx_dy;
+static portMUX_TYPE s_wx_mux = portMUX_INITIALIZER_UNLOCKED;
+static atomic_bool s_wx_data_due, s_wx_cfg_due, s_wx_state_due;
+static atomic_int  s_wx_detents;
+static atomic_int  s_wx_taken = -1;
+
+static void set_text(lv_obj_t *o, const char *s);
+static void set_text_color(lv_obj_t *o, lv_color_t c);
+static void vis(lv_obj_t *o, bool on);
+
+/* ---- the shapes ---- */
+
+static void wx_disc(lv_layer_t *l, float x, float y, float r, uint32_t c)
+{
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.bg_color = lv_color_hex(c);
+    d.radius   = LV_RADIUS_CIRCLE;
+    const lv_area_t a = { (int32_t)lroundf(x - r), (int32_t)lroundf(y - r), (int32_t)lroundf(x + r),
+                          (int32_t)lroundf(y + r) };
+    lv_draw_rect(l, &d, &a);
+}
+
+static void wx_line(lv_layer_t *l, float x1, float y1, float x2, float y2, float w, uint32_t c)
+{
+    lv_draw_line_dsc_t d;
+    lv_draw_line_dsc_init(&d);
+    d.p1 = (lv_point_precise_t){ x1, y1 };
+    d.p2 = (lv_point_precise_t){ x2, y2 };
+    d.color = lv_color_hex(c);
+    d.width = (int32_t)lroundf(w < 1 ? 1 : w);
+    d.round_start = d.round_end = 1;
+    lv_draw_line(l, &d);
+}
+
+static void wx_tri(lv_layer_t *l, float x1, float y1, float x2, float y2, float x3, float y3, uint32_t c)
+{
+    lv_draw_triangle_dsc_t d;
+    lv_draw_triangle_dsc_init(&d);
+    d.p[0] = (lv_point_precise_t){ x1, y1 };
+    d.p[1] = (lv_point_precise_t){ x2, y2 };
+    d.p[2] = (lv_point_precise_t){ x3, y3 };
+    d.color = lv_color_hex(c);
+    d.opa = LV_OPA_COVER;
+    lv_draw_triangle(l, &d);
+}
+
+static void wx_sun(lv_layer_t *l, float x, float y, float r)
+{
+    for (int i = 0; i < 8; i++) {
+        const float a = (float)i * 0.785398f, s = sinf(a), c = cosf(a);
+        wx_line(l, x + 1.4f * r * s, y - 1.4f * r * c, x + 1.85f * r * s, y - 1.85f * r * c, r * 0.28f, WX_SUN);
+    }
+    wx_disc(l, x, y, r, WX_SUN);
+}
+
+/* A crescent: the moon, and the night's black over all but its edge. */
+static void wx_moon(lv_layer_t *l, float x, float y, float r)
+{
+    wx_disc(l, x, y, r, WX_MOON);
+    wx_disc(l, x + 0.5f * r, y - 0.35f * r, 0.82f * r, WX_BG);
+}
+
+/* A cloud `w` wide, its middle at x, y: a flat foot and three domes. */
+static void wx_cloud(lv_layer_t *l, float x, float y, float w, uint32_t c)
+{
+    wx_disc(l, x - 0.24f * w, y + 0.04f * w, 0.2f * w, c);
+    wx_disc(l, x + 0.02f * w, y - 0.08f * w, 0.27f * w, c);
+    wx_disc(l, x + 0.27f * w, y + 0.07f * w, 0.17f * w, c);
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.bg_color = lv_color_hex(c);
+    d.radius   = (int32_t)lroundf(0.12f * w);
+    const lv_area_t a = { (int32_t)lroundf(x - 0.46f * w), (int32_t)lroundf(y + 0.0f * w),
+                          (int32_t)lroundf(x + 0.46f * w), (int32_t)lroundf(y + 0.24f * w) };
+    lv_draw_rect(l, &d, &a);
+}
+
+/* Under a cloud: n strokes of rain, or of drizzle, slanting. */
+static void wx_drops(lv_layer_t *l, float x, float y, float s, int n, float len, uint32_t c)
+{
+    for (int i = 0; i < n; i++) {
+        const float dx = ((float)i - (float)(n - 1) / 2) * 0.22f * s;
+        wx_line(l, x + dx, y, x + dx - 0.35f * len, y + len, 0.07f * s, c);
+    }
+}
+
+static void wx_flake(lv_layer_t *l, float x, float y, float r)
+{
+    for (int i = 0; i < 3; i++) {
+        const float a = (float)i * 1.0472f, s = sinf(a) * r, c = cosf(a) * r;
+        wx_line(l, x - s, y - c, x + s, y + c, r * 0.45f, WX_SNOW);
+    }
+}
+
+/* The icon for a WX_I_* in a box `s` wide round x, y; by night the moon. */
+static void wx_icon_draw(lv_layer_t *l, uint8_t icon, bool day, float x, float y, float s)
+{
+    const float cy = y - 0.08f * s;           /* the cloud, above what falls */
+    switch (icon) {
+    case WX_I_CLEAR:
+        if (day) wx_sun(l, x, y, 0.24f * s);
+        else     wx_moon(l, x, y, 0.32f * s);
+        break;
+    case WX_I_PARTLY:
+    case WX_I_SHOWERS:
+        if (day) wx_sun(l, x - 0.16f * s, y - 0.17f * s, 0.15f * s);
+        else     wx_moon(l, x - 0.14f * s, y - 0.16f * s, 0.2f * s);
+        if (icon == WX_I_PARTLY) { wx_cloud(l, x + 0.07f * s, y + 0.06f * s, 0.74f * s, WX_CLOUD); break; }
+        wx_cloud(l, x + 0.06f * s, cy + 0.02f * s, 0.72f * s, WX_CLOUD);
+        wx_drops(l, x + 0.08f * s, y + 0.27f * s, s, 3, 0.16f * s, WX_RAIN);
+        break;
+    case WX_I_FOG:
+        wx_cloud(l, x, y - 0.18f * s, 0.7f * s, WX_CLOUD_DK);
+        for (int i = 0; i < 3; i++)
+            wx_line(l, x - (0.36f - 0.06f * (float)(i % 2)) * s, y + (0.12f + 0.12f * (float)i) * s,
+                    x + (0.36f - 0.06f * (float)((i + 1) % 2)) * s, y + (0.12f + 0.12f * (float)i) * s,
+                    0.06f * s, WX_FOG);
+        break;
+    case WX_I_DRIZZLE:
+        wx_cloud(l, x, cy, 0.8f * s, WX_CLOUD);
+        wx_drops(l, x, y + 0.28f * s, s, 3, 0.07f * s, WX_RAIN);
+        break;
+    case WX_I_RAIN:
+        wx_cloud(l, x, cy, 0.8f * s, WX_CLOUD_DK);
+        wx_drops(l, x, y + 0.26f * s, s, 3, 0.18f * s, WX_RAIN);
+        break;
+    case WX_I_SLEET:
+        wx_cloud(l, x, cy, 0.8f * s, WX_CLOUD_DK);
+        wx_drops(l, x - 0.11f * s, y + 0.26f * s, s, 2, 0.16f * s, WX_RAIN);
+        wx_flake(l, x + 0.24f * s, y + 0.34f * s, 0.07f * s);
+        break;
+    case WX_I_SNOW:
+        wx_cloud(l, x, cy, 0.8f * s, WX_CLOUD);
+        for (int i = 0; i < 3; i++)
+            wx_flake(l, x + ((float)i - 1) * 0.24f * s, y + (i == 1 ? 0.38f : 0.3f) * s, 0.07f * s);
+        break;
+    case WX_I_THUNDER:
+        wx_cloud(l, x, cy, 0.8f * s, WX_CLOUD_DK);
+        /* The bolt: two wedges, offset at the waist. */
+        wx_tri(l, x + 0.1f * s, y + 0.08f * s, x - 0.15f * s, y + 0.32f * s, x + 0.05f * s, y + 0.3f * s, WX_BOLT);
+        wx_tri(l, x + 0.13f * s, y + 0.24f * s, x - 0.09f * s, y + 0.27f * s, x - 0.06f * s, y + 0.5f * s, WX_BOLT);
+        break;
+    default:
+        wx_cloud(l, x + 0.14f * s, y - 0.1f * s, 0.6f * s, WX_CLOUD_DK);
+        wx_cloud(l, x - 0.04f * s, y + 0.04f * s, 0.78f * s, WX_CLOUD);
+        break;
+    }
+}
+
+static void wx_text_at(lv_layer_t *l, const char *t, const lv_font_t *f, lv_color_t c, int32_t x1, int32_t x2,
+                       int32_t ymid, lv_text_align_t al)
+{
+    lv_draw_label_dsc_t d;
+    lv_draw_label_dsc_init(&d);
+    d.text = t;
+    d.text_local = 1;                         /* t is the caller's, gone when the layer draws */
+    d.font = f;
+    d.color = c;
+    d.align = al;
+    const int32_t h = lv_font_get_line_height(f);
+    const lv_area_t a = { x1, ymid - h / 2, x2, ymid - h / 2 + h - 1 };
+    lv_draw_label(l, &d, &a);
+}
+
+/* The place's hour, a forecast's Unix time in its own offset. */
+static void wx_local(int64_t t, int32_t off, struct tm *out)
+{
+    const time_t lt = (time_t)(t + off);
+    gmtime_r(&lt, out);
+}
+
+static void wx_hour_text(int hour, char *out, size_t n)
+{
+    if (net_prov_clock24()) snprintf(out, n, "%02d:00", hour);
+    else snprintf(out, n, "%d %s", hour % 12 ? hour % 12 : 12, hour < 12 ? "AM" : "PM");
+}
+
+static void wx_hm(int64_t t, int32_t off, char *out, size_t n)
+{
+    struct tm tm;
+    wx_local(t, off, &tm);
+    if (net_prov_clock24()) snprintf(out, n, "%02d:%02d", tm.tm_hour, tm.tm_min);
+    else snprintf(out, n, "%d:%02d %s", tm.tm_hour % 12 ? tm.tm_hour % 12 : 12, tm.tm_min,
+                  tm.tm_hour < 12 ? "AM" : "PM");
+}
+
+/* ---- the draw events ---- */
+
+static void wx_icon_cb(lv_event_t *e)
+{
+    if (!s_wx_have) return;
+    lv_obj_t *o = lv_event_get_target(e);
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    wx_icon_draw(lv_event_get_layer(e), wx_icon(s_wx_d.now.code), s_wx_d.now.day,
+                 (float)(a.x1 + a.x2) / 2, (float)(a.y1 + a.y2) / 2, (float)lv_area_get_width(&a));
+}
+
+/* The way the wind blows: from wind_deg, so the arrow points the other way. */
+static void wx_arrow_cb(lv_event_t *e)
+{
+    if (!s_wx_have) return;
+    lv_obj_t *o = lv_event_get_target(e);
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    const float x = (float)(a.x1 + a.x2) / 2, y = (float)(a.y1 + a.y2) / 2;
+    const float r = (float)(s_wx_d.now.wind_deg + 180) * 0.0174533f, s = sinf(r), c = -cosf(r);
+    lv_layer_t *l = lv_event_get_layer(e);
+    wx_line(l, x - 8 * s, y - 8 * c, x + 3 * s, y + 3 * c, 3, 0xC0C8D4);
+    wx_tri(l, x + 10 * s, y + 10 * c, x + 2 * s + 6 * c, y + 2 * c - 6 * s, x + 2 * s - 6 * c, y + 2 * c + 6 * s,
+           0xC0C8D4);
+}
+
+/* The next 24 hours: the chance of rain as bars, the temperature a line over
+ * them, its highest and lowest said; an icon every four hours above, the
+ * hour every six under. */
+static void wx_chart_cb(lv_event_t *e)
+{
+    const wx_t *w = &s_wx_d;
+    const int n = w->n_hours;
+    if (!s_wx_have || n < 2) return;
+    lv_obj_t *o = lv_event_get_target(e);
+    lv_layer_t *l = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    const float x0 = (float)a.x1 + 14, x1 = (float)a.x2 - 14, dx = (x1 - x0) / (float)(n - 1);
+    const float top = (float)a.y1 + 40, bot = (float)a.y1 + 148;
+    char t[16];
+
+    float lo = w->hour[0].temp_c, hi = lo;
+    int ilo = 0, ihi = 0;
+    for (int i = 1; i < n; i++) {
+        if (w->hour[i].temp_c < lo) { lo = w->hour[i].temp_c; ilo = i; }
+        if (w->hour[i].temp_c > hi) { hi = w->hour[i].temp_c; ihi = i; }
+    }
+    /* At least 4 degrees tall, the line kept off the bars' top and foot. */
+    const float mid = (lo + hi) / 2, span = hi - lo < 4 ? 4 : hi - lo;
+    const float ty0 = top + 14, ty1 = bot - 22;
+#define WX_TY(c) (ty1 - ((c) - (mid - span / 2)) / span * (ty1 - ty0))
+
+    lv_draw_rect_dsc_t bar;
+    lv_draw_rect_dsc_init(&bar);
+    bar.bg_color = lv_color_hex(WX_RAIN);
+    bar.bg_opa = LV_OPA_60;
+    bar.radius = 2;
+    for (int i = 0; i < n; i++) {
+        if (!w->hour[i].rain_pct) continue;
+        const float x = x0 + dx * (float)i, h = (bot - top) * (float)w->hour[i].rain_pct / 100.0f;
+        const lv_area_t b = { (int32_t)lroundf(x - 4), (int32_t)lroundf(bot - h), (int32_t)lroundf(x + 4),
+                              (int32_t)bot };
+        lv_draw_rect(l, &bar, &b);
+    }
+    wx_line(l, x0, bot + 1, x1, bot + 1, 1, 0x30363F);
+    for (int i = 1; i < n; i++)
+        wx_line(l, x0 + dx * (float)(i - 1), WX_TY(w->hour[i - 1].temp_c), x0 + dx * (float)i,
+                WX_TY(w->hour[i].temp_c), 3, WX_LINE);
+
+    const uint8_t u = s_wx_cfg.temp_unit;
+    snprintf(t, sizeof t, "%d\xC2\xB0", wx_temp(hi, u));
+    float xh = x0 + dx * (float)ihi;
+    wx_text_at(l, t, &lv_font_montserrat_14, lv_color_hex(WX_LINE), (int32_t)xh - 30, (int32_t)xh + 30,
+               (int32_t)WX_TY(hi) - 12, LV_TEXT_ALIGN_CENTER);
+    if (ihi != ilo) {
+        snprintf(t, sizeof t, "%d\xC2\xB0", wx_temp(lo, u));
+        xh = x0 + dx * (float)ilo;
+        wx_text_at(l, t, &lv_font_montserrat_14, lv_color_hex(WX_LINE), (int32_t)xh - 30, (int32_t)xh + 30,
+                   (int32_t)WX_TY(lo) + 13, LV_TEXT_ALIGN_CENTER);
+    }
+#undef WX_TY
+
+    for (int i = 0; i < n; i += 4)
+        wx_icon_draw(l, wx_icon(w->hour[i].code), w->hour[i].day, x0 + dx * (float)i, (float)a.y1 + 16, 28);
+    for (int i = 0; i < n; i += 6) {
+        struct tm tm;
+        wx_local(w->hour[i].t, w->utc_offset_s, &tm);
+        wx_hour_text(tm.tm_hour, t, sizeof t);
+        /* The first from the chart's edge: centred under its hour it would
+         * stand out of the chart, and be cut. */
+        const int32_t x = (int32_t)lroundf(x0 + dx * (float)i);
+        wx_text_at(l, t, &lv_font_montserrat_14, C_TEXT2, i ? x - 30 : a.x1, i ? x + 30 : a.x1 + 60,
+                   (int32_t)bot + 16, i ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT);
+    }
+}
+
+/* A row a day, today first: its name, icon, highest and lowest, and its
+ * greatest chance of rain where there is one to speak of. */
+static void wx_days_cb(lv_event_t *e)
+{
+    const wx_t *w = &s_wx_d;
+    if (!s_wx_have) return;
+    static const char *const WD[7] = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
+    lv_obj_t *o = lv_event_get_target(e);
+    lv_layer_t *l = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    const uint8_t u = s_wx_cfg.temp_unit;
+    const int n = w->n_days < WX_DAYS_SHOWN ? w->n_days : WX_DAYS_SHOWN;
+    char t[16];
+    for (int i = 0; i < n; i++) {
+        const wx_day_t *d = &w->day[i];
+        const int32_t y = a.y1 + 20 + 40 * i;
+        struct tm tm;
+        wx_local(d->t, w->utc_offset_s, &tm);
+        wx_text_at(l, i ? WD[tm.tm_wday] : "TODAY", &lv_font_montserrat_20, i ? C_TEXT : C_ACCENT_HI, a.x1 + 8,
+                   a.x1 + 92, y, LV_TEXT_ALIGN_LEFT);
+        wx_icon_draw(l, wx_icon(d->code), true, (float)a.x1 + 114, (float)y, 34);
+        snprintf(t, sizeof t, "%d\xC2\xB0", wx_temp(d->max_c, u));
+        wx_text_at(l, t, &lv_font_montserrat_20, C_TEXT, a.x1 + 134, a.x1 + 184, y, LV_TEXT_ALIGN_RIGHT);
+        snprintf(t, sizeof t, "%d\xC2\xB0", wx_temp(d->min_c, u));
+        wx_text_at(l, t, &lv_font_montserrat_20, C_LABEL, a.x1 + 188, a.x1 + 234, y, LV_TEXT_ALIGN_RIGHT);
+        if (d->rain_pct >= 10) {
+            snprintf(t, sizeof t, "%u%%", (unsigned)d->rain_pct);
+            wx_text_at(l, t, &lv_font_montserrat_14, lv_color_hex(WX_RAIN), a.x1 + 236, a.x2, y,
+                       LV_TEXT_ALIGN_RIGHT);
+        }
+    }
+}
+
+/* ---- the faces ---- */
+
+static lv_obj_t *wx_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, int32_t y)
+{
+    lv_obj_t *o = lv_label_create(p);
+    lv_obj_set_style_text_font(o, f, 0);
+    lv_obj_set_style_text_color(o, c, 0);
+    lv_label_set_text(o, "");
+    lv_obj_align(o, LV_ALIGN_TOP_MID, 0, y - lv_font_get_line_height(f) / 2);
+    return o;
+}
+
+static lv_obj_t *wx_drawn(lv_obj_t *p, int32_t x, int32_t y, int32_t w, int32_t h, lv_event_cb_t cb)
+{
+    lv_obj_t *o = lv_obj_create(p);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, w, h);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(o, cb, LV_EVENT_DRAW_MAIN, NULL);
+    return o;
+}
+
+/* The time over every face, the knob's own; the foot under it. */
+static void wx_clock(void)
+{
+    struct tm lt;
+    char t[16] = "--:--";
+    if (wallclock_now(&lt, NULL, NULL)) {
+        if (net_prov_clock24()) snprintf(t, sizeof t, "%02d:%02d", lt.tm_hour, lt.tm_min);
+        else snprintf(t, sizeof t, "%d:%02d %s", lt.tm_hour % 12 ? lt.tm_hour % 12 : 12, lt.tm_min,
+                      lt.tm_hour < 12 ? "AM" : "PM");
+    }
+    set_text(s_wx_time, t);
+}
+
+static void wx_foot(void)
+{
+    char t[48];
+    if (s_wx_state[0]) {
+        snprintf(t, sizeof t, "Open-Meteo: %s", s_wx_state);
+        set_text_color(s_wx_foot, C_WARN);
+    } else if (!s_wx_have) {
+        snprintf(t, sizeof t, "asking Open-Meteo...");
+        set_text_color(s_wx_foot, C_LABEL);
+    } else {
+        char hm[12];
+        wx_hm(s_wx_d.now.t, s_wx_d.utc_offset_s, hm, sizeof hm);
+        snprintf(t, sizeof t, "Open-Meteo, %s", hm);
+        set_text_color(s_wx_foot, C_LABEL);
+    }
+    set_text(s_wx_foot, t);
+}
+
+/* Everything said again: a forecast came, or the units changed. */
+static void wx_fill(void)
+{
+    const wx_t *w = &s_wx_d;
+    const uint8_t u = s_wx_cfg.temp_unit;
+    char t[64];
+    set_text(s_wx_cap[0], s_wx_cfg.place);
+    vis(s_wx_icon, s_wx_have);
+    vis(s_wx_arrow, s_wx_have);
+    if (!s_wx_have) {
+        set_text(s_wx_temp, "--");
+        set_text(s_wx_feels, "");
+        for (lv_obj_t **o = (lv_obj_t *[]){ s_wx_cond, s_wx_wind, s_wx_hum, s_wx_sun, s_wx_rain, NULL }; *o; o++)
+            set_text(*o, "");
+    } else {
+        snprintf(t, sizeof t, "%d\xC2\xB0%s", wx_temp(w->now.temp_c, u), u == WX_F ? "F" : "C");
+        set_text(s_wx_temp, t);
+        snprintf(t, sizeof t, "feels like %d\xC2\xB0", wx_temp(w->now.feels_c, u));
+        set_text(s_wx_feels, t);
+        set_text(s_wx_cond, wx_text(w->now.code));
+        const uint8_t wu = s_wx_cfg.wind_unit;
+        const int ws = wx_wind(w->now.wind_kmh, wu), gs = wx_wind(w->now.gust_kmh, wu);
+        if (wu == WX_BFT) snprintf(t, sizeof t, "%s  %d Bft", wx_compass(w->now.wind_deg), ws);
+        else if (gs > ws) snprintf(t, sizeof t, "%s  %d %s, gusts %d", wx_compass(w->now.wind_deg), ws,
+                                   wx_wind_unit(wu), gs);
+        else snprintf(t, sizeof t, "%s  %d %s", wx_compass(w->now.wind_deg), ws, wx_wind_unit(wu));
+        set_text(s_wx_wind, t);
+        lv_obj_update_layout(s_wx_wind);
+        lv_obj_align_to(s_wx_arrow, s_wx_wind, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+        snprintf(t, sizeof t, "humidity %u %%    %d hPa", (unsigned)w->now.humidity,
+                 (int)lroundf(w->now.pressure_hpa));
+        set_text(s_wx_hum, t);
+        t[0] = 0;
+        if (w->n_days && w->day[0].sunrise && w->day[0].sunset) {
+            char r[12], s[12];
+            wx_hm(w->day[0].sunrise, w->utc_offset_s, r, sizeof r);
+            wx_hm(w->day[0].sunset, w->utc_offset_s, s, sizeof s);
+            snprintf(t, sizeof t, "sunrise %s    sunset %s", r, s);
+        }
+        set_text(s_wx_sun, t);
+        /* The first hour rain is likely, else the first it may come. */
+        int at = -1;
+        for (int i = 0; i < w->n_hours && at < 0; i++) if (w->hour[i].rain_pct >= 50) at = i;
+        for (int i = 0; i < w->n_hours && at < 0; i++) if (w->hour[i].rain_pct >= 20) at = i;
+        if (at < 0) {
+            snprintf(t, sizeof t, "no rain likely");
+        } else {
+            char hm[12];
+            struct tm tm;
+            wx_local(w->hour[at].t, w->utc_offset_s, &tm);
+            wx_hour_text(tm.tm_hour, hm, sizeof hm);
+            snprintf(t, sizeof t, "%s %s, %u %%", w->hour[at].rain_pct >= 50 ? "rain likely at" : "rain possible at",
+                     hm, (unsigned)w->hour[at].rain_pct);
+        }
+        set_text(s_wx_rain, t);
+    }
+    lv_obj_invalidate(s_wx_icon);
+    lv_obj_invalidate(s_wx_arrow);
+    lv_obj_invalidate(s_wx_chart);
+    lv_obj_invalidate(s_wx_days);
+    wx_foot();
+}
+
+static void wx_slide_x(void *o, int32_t x) { lv_obj_set_x(o, x); }
+
+static void wx_slid(lv_anim_t *a)
+{
+    (void)a;
+    if (s_wx_out < 0) return;
+    vis(s_wx_pg[s_wx_out], false);
+    lv_obj_set_x(s_wx_pg[s_wx_out], 0);
+    s_wx_out = -1;
+}
+
+/* A roll over cut short: each face where it would have ended. */
+static void wx_slid_now(void)
+{
+    for (int i = 0; i < NET_WX_FACES; i++) {
+        lv_anim_delete(s_wx_pg[i], wx_slide_x);
+        lv_obj_set_x(s_wx_pg[i], 0);
+    }
+    wx_slid(NULL);
+}
+
+static void wx_show(uint8_t face)
+{
+    wx_slid_now();
+    s_wx_face = face % NET_WX_FACES;
+    for (int i = 0; i < NET_WX_FACES; i++) vis(s_wx_pg[i], i == s_wx_face);
+}
+
+/* To `face`, rolling over: the face up goes out to the left for a turn
+ * forward, `dir` > 0, to the right for one back, and the next comes in
+ * behind it, both easing in and out. Only x moves -- no fade, which would
+ * need a layer the size of the glass from LVGL's 64 kB. */
+static void wx_slide(uint8_t face, int dir)
+{
+    face %= NET_WX_FACES;
+    if (face == s_wx_face) return;
+    wx_slid_now();
+    const uint8_t from = s_wx_face;
+    const int32_t w    = dir < 0 ? -360 : 360;
+    s_wx_face = face;
+    s_wx_out  = (int8_t)from;
+    lv_obj_set_x(s_wx_pg[face], w);
+    vis(s_wx_pg[face], true);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_exec_cb(&a, wx_slide_x);
+    lv_anim_set_duration(&a, WX_SLIDE_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_set_var(&a, s_wx_pg[from]);
+    lv_anim_set_values(&a, 0, -w);
+    lv_anim_set_completed_cb(&a, wx_slid);
+    lv_anim_start(&a);
+    lv_anim_set_completed_cb(&a, NULL);
+    lv_anim_set_var(&a, s_wx_pg[face]);
+    lv_anim_set_values(&a, w, 0);
+    lv_anim_start(&a);
+}
+
+/* As the clock's: a pixel's step round the square every WX_SHIFT_MIN
+ * minutes, the middle between. */
+static void wx_shift(void)
+{
+    static const int8_t STEP[9][2] = {
+        { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 },
+    };
+    struct tm lt;
+    if (!wallclock_now(&lt, NULL, NULL)) return;
+    const int i = (lt.tm_hour * 60 + lt.tm_min) / WX_SHIFT_MIN % 9;
+    if (STEP[i][0] == s_wx_dx && STEP[i][1] == s_wx_dy) return;
+    s_wx_dx = STEP[i][0];
+    s_wx_dy = STEP[i][1];
+    lv_obj_set_pos(s_wx_in, s_wx_dx, s_wx_dy);
+}
+
+static void wx_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    const int d = atomic_exchange(&s_wx_detents, 0);
+    if (d) {
+        wx_slide((uint8_t)((s_wx_face + d % NET_WX_FACES + NET_WX_FACES) % NET_WX_FACES), d);
+        s_wx_moved = tick_mark(lv_tick_get());
+        s_wx_since = lv_tick_get();
+    }
+    if (s_wx_moved && lv_tick_elaps(s_wx_moved) >= WX_SETTLE_MS) {
+        s_wx_moved = 0;
+        atomic_store(&s_wx_taken, s_wx_face);
+    }
+    bool fill = false;
+    if (atomic_exchange(&s_wx_cfg_due, false)) {
+        taskENTER_CRITICAL(&s_wx_mux);
+        s_wx_cfg = s_wx_cfg_new;
+        taskEXIT_CRITICAL(&s_wx_mux);
+        if (!s_wx_moved) wx_show(s_wx_cfg.face);
+        s_wx_since = lv_tick_get();
+        fill = true;
+    }
+    /* The faces' own turn. Dark or under a screensaver, none: the count
+     * starts again as the glass comes back, so its first face has its time. */
+    if (screen_hidden() || !s_wx_cfg.cycle_s) {
+        s_wx_since = lv_tick_get();
+    } else if (lv_tick_elaps(s_wx_since) >= s_wx_cfg.cycle_s * 1000u) {
+        wx_slide((uint8_t)(s_wx_face + 1), 1);
+        s_wx_since = lv_tick_get();
+    }
+    if (atomic_exchange(&s_wx_data_due, false)) {
+        taskENTER_CRITICAL(&s_wx_mux);
+        s_wx_d = s_wx_new;
+        taskEXIT_CRITICAL(&s_wx_mux);
+        s_wx_have = true;
+        fill = true;
+    }
+    if (atomic_exchange(&s_wx_state_due, false)) {
+        taskENTER_CRITICAL(&s_wx_mux);
+        memcpy(s_wx_state, s_wx_state_new, sizeof s_wx_state);
+        taskEXIT_CRITICAL(&s_wx_mux);
+        wx_foot();
+    }
+    if (fill) wx_fill();
+    static uint32_t looked;
+    if (screen_hidden() || lv_tick_elaps(looked) < WX_CLOCK_MS) return;
+    looked = lv_tick_get();
+    wx_clock();
+    wx_shift();
+}
+
+static void wx_build(void)
+{
+    s_wx = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_wx);
+    lv_obj_set_size(s_wx, 360, 360);
+    lv_obj_set_pos(s_wx, 0, 0);
+    lv_obj_set_style_bg_color(s_wx, lv_color_hex(WX_BG), 0);
+    lv_obj_set_style_bg_opa(s_wx, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_wx, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_wx, LV_OBJ_FLAG_SCROLLABLE);
+    /* What shifts, inside what does not. */
+    s_wx_in = lv_obj_create(s_wx);
+    lv_obj_remove_style_all(s_wx_in);
+    lv_obj_set_size(s_wx_in, 360, 360);
+    lv_obj_remove_flag(s_wx_in, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_wx_in, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_wx_time = wx_label(s_wx_in, &lv_font_montserrat_20, C_TEXT2, 22);
+    s_wx_foot = wx_label(s_wx_in, &lv_font_montserrat_14, C_LABEL, 318);
+    static const char *const CAP[NET_WX_FACES] = { "", "NEXT 24 HOURS", "5 DAYS" };
+    for (int i = 0; i < NET_WX_FACES; i++) {
+        lv_obj_t *p = lv_obj_create(s_wx_in);
+        lv_obj_remove_style_all(p);
+        lv_obj_set_size(p, 360, 360);
+        lv_obj_remove_flag(p, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+        s_wx_pg[i] = p;
+        s_wx_cap[i] = wx_label(p, &lv_font_montserrat_14, C_LABEL, 74);
+        /* The place's name can be long: one line, cut short within the round, 290 px across there. */
+        lv_obj_set_size(s_wx_cap[i], 270, lv_font_get_line_height(&lv_font_montserrat_14));
+        lv_obj_set_style_text_align(s_wx_cap[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(s_wx_cap[i], LV_LABEL_LONG_DOT);
+        set_text(s_wx_cap[i], CAP[i]);
+    }
+    lv_obj_t *now = s_wx_pg[0];
+    s_wx_icon  = wx_drawn(now, 52, 88, 92, 92, wx_icon_cb);
+    s_wx_temp  = lv_label_create(now);
+    lv_obj_set_style_text_font(s_wx_temp, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(s_wx_temp, C_TEXT, 0);
+    lv_obj_set_pos(s_wx_temp, 158, 94);
+    s_wx_feels = lv_label_create(now);
+    lv_obj_set_style_text_font(s_wx_feels, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_wx_feels, C_TEXT2, 0);
+    lv_obj_set_pos(s_wx_feels, 161, 150);
+    s_wx_cond  = wx_label(now, &lv_font_montserrat_20, C_TEXT, 202);
+    s_wx_wind  = wx_label(now, &lv_font_montserrat_14, C_TEXT2, 232);
+    lv_obj_align(s_wx_wind, LV_ALIGN_TOP_MID, 12, 232 - lv_font_get_line_height(&lv_font_montserrat_14) / 2);
+    s_wx_arrow = wx_drawn(now, 0, 0, 24, 24, wx_arrow_cb);
+    s_wx_hum   = wx_label(now, &lv_font_montserrat_14, C_TEXT2, 256);
+    s_wx_sun   = wx_label(now, &lv_font_montserrat_14, C_TEXT2, 280);
+    s_wx_chart = wx_drawn(s_wx_pg[1], 24, 90, 312, 182, wx_chart_cb);
+    s_wx_rain  = wx_label(s_wx_pg[1], &lv_font_montserrat_14, C_TEXT2, 290);
+    s_wx_days  = wx_drawn(s_wx_pg[2], 40, 88, 280, 200, wx_days_cb);
+
+    taskENTER_CRITICAL(&s_wx_mux);
+    s_wx_cfg = s_wx_cfg_new;
+    taskEXIT_CRITICAL(&s_wx_mux);
+    atomic_store(&s_wx_cfg_due, false);
+    wx_show(s_wx_cfg.face);
+    s_wx_since = lv_tick_get();
+    wx_fill();
+    wx_clock();
+    lv_timer_create(wx_timer_cb, WX_TICK_MS, NULL);
+}
+
+void ui_weather_set(const net_weather_t *w)
+{
+    taskENTER_CRITICAL(&s_wx_mux);
+    s_wx_cfg_new = *w;
+    taskEXIT_CRITICAL(&s_wx_mux);
+    atomic_store(&s_wx_cfg_due, true);
+}
+
+void ui_weather_data(const wx_t *wx)
+{
+    taskENTER_CRITICAL(&s_wx_mux);
+    s_wx_new = *wx;
+    taskEXIT_CRITICAL(&s_wx_mux);
+    atomic_store(&s_wx_data_due, true);
+}
+
+void ui_weather_state(const char *state)
+{
+    bool news;
+    taskENTER_CRITICAL(&s_wx_mux);
+    news = strcmp(s_wx_state_new, state) != 0;
+    if (news) strlcpy(s_wx_state_new, state, sizeof s_wx_state_new);
+    taskEXIT_CRITICAL(&s_wx_mux);
+    if (news) atomic_store(&s_wx_state_due, true);
+}
+
+void ui_weather_turn(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_wx_detents, (int)detents);
+}
+
+int ui_take_weather_face(void) { return atomic_exchange(&s_wx_taken, -1); }
+#endif /* WEATHER_FACE */
+
 /* The faces that own the glass whole, with a gear at their foot for the
- * card and the picker: EpiBeam's compass, ADS-B Radar's radar. */
-#define GEAR_FACE (EPI_FACE || ADSB_FACE)
+ * card and the picker: EpiBeam's compass, ADS-B Radar's radar -- and the
+ * clock and the weather, the whole of their glass the gear. */
+#define GEAR_FACE (EPI_FACE || ADSB_FACE || CLOCK_FACE || WEATHER_FACE)
 __attribute__((unused)) static bool gear_at(lv_point_t p)
 {
 #if EPI_FACE
     return beam_gear_at(p);
 #elif ADSB_FACE
     return adsb_gear_at(p);
+#elif CLOCK_FACE || WEATHER_FACE
+    (void)p;
+    return true;
 #else
     (void)p;
     return false;
@@ -4374,6 +5739,11 @@ static void tap(lv_point_t p, uint32_t held)
         edit_close();
         return;
     }
+#if CLOCK_FACE
+    /* The alarms: one ringing, stopped; the list, open; or the clock's
+     * middle, opening it. */
+    if (al_tap(p)) return;
+#endif
 #if GEAR_FACE
     /* The gear: the address card, for the page -- locked too, as the card
      * carries UNLOCK -- or, up already, away. */
@@ -4423,7 +5793,7 @@ static void tap(lv_point_t p, uint32_t held)
         if (was == ED_MENU && act_switch(s_menu[s_edit_idx])) {
             const uint8_t a = s_menu[s_edit_idx];
             s_menu_lit   ^= (uint16_t)(1u << a);
-            s_menu_tapped = lv_tick_get() | 1;
+            s_menu_tapped = tick_mark(lv_tick_get());
             memset(&s_commit, 0, sizeof s_commit);
             s_commit.action = a;
             s_commit.on     = s_menu_lit >> a & 1;
@@ -4661,7 +6031,7 @@ static void release_cb(lv_event_t *e)
          * has stayed off (slab_cb): back sooner, and the press goes on
          * (touch_cb). No release is told from the glass's by its length. */
         if (ant) {
-            s_slab_wait     = s_released_at | 1;
+            s_slab_wait     = tick_mark(s_released_at);
             s_slab_wait_key = armed;
             return;
         }
@@ -4741,8 +6111,8 @@ static void gesture_cb(lv_event_t *e)
     if (s_knob_locked) { klock_nudge(); return; }
 #endif
 #if GEAR_FACE
-    /* The compass and the radar have nothing a swipe away: the knob and a
-     * tap steer them. */
+    /* The compass, the radar, the clock and the weather have nothing a
+     * swipe away: the knob and a tap steer them. */
     (void)dir;
     return;
 #endif
@@ -4837,9 +6207,10 @@ static void touch_cb(lv_event_t *e)
     s_ptt_armed  = false;
     s_press_ant  = false;
 #if GEAR_FACE
-    /* The compass and the radar have no S-meter: the gear brings the card
-     * with a tap (tap), and held PICKER_HOLD_MS the firmware picker -- or
-     * the card itself, or the warning, held, as on any face. */
+    /* The compass, the radar, the clock and the weather have no S-meter:
+     * the gear brings the card with a tap (tap), and held PICKER_HOLD_MS
+     * the firmware picker -- or the card itself, or the warning, held, as
+     * on any face. */
     s_press_picker = gear_at(p) ||
                      (addresses_up() && (shown_at(s_netinfo, p) || shown_at(s_warn_panel, p)));
     s_press_card   = false;
@@ -5663,6 +7034,17 @@ static void build(void)
     adsb_build();
     lv_obj_move_foreground(s_knob_batt);
 #endif
+#if CLOCK_FACE
+    /* The clock, the same way. */
+    ck_build();
+    lv_obj_move_foreground(s_knob_batt);
+#endif
+#if WEATHER_FACE
+    /* The weather, the same way: the battery between the time and the
+     * place. */
+    wx_build();
+    lv_obj_move_foreground(s_knob_batt);
+#endif
 
     /* Editor overlay: hidden until a field is tapped. */
     /* Network address card. Same treatment as the editor panel, and equally
@@ -6021,8 +7403,17 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
         failed = 3;
         state  = LV_INDEV_STATE_RELEASED;
     }
+    /* A finger on a screensaver or a dark screen brings the dial back and
+     * does nothing else, until it lifts: under the rain a tap could have
+     * keyed the transmitter through a PTT slab nobody could see. */
+    static bool waking;
+    if (state == LV_INDEV_STATE_PRESSED) {
+        if (!waking && screen_hidden()) { waking = true; ui_note_activity(); }
+    } else {
+        waking = false;
+    }
     data->point = at;
-    data->state = state;
+    data->state = waking ? LV_INDEV_STATE_RELEASED : state;
 }
 
 esp_err_t ui_init(void)
@@ -6106,6 +7497,7 @@ esp_err_t ui_init(void)
     build();
     lv_timer_create(detents_cb, 15, NULL);        /* the knob's detents, applied here */
     lv_timer_create(slab_cb, 15, NULL);           /* a slab release waiting to key */
+    lv_timer_create(saver_cb, 20, NULL);          /* the screensaver, when nobody uses the knob */
     {
         /* LVGL's objects live in its own fixed pool, not the heap. */
         lv_mem_monitor_t mm;
@@ -6730,7 +8122,10 @@ static void headset_slab(const ui_state_t *st)
  * on the air, and the battery with it. */
 static void knob_batt_show(const ui_state_t *st)
 {
-    const bool on = st->knob_batt && st->knob_pct <= 100 && (REFLECTOR_FACE || !st->tx);
+    /* Over the clock's 12 only once it is low: a clock is looked at for the
+     * time, and the card says the knob's power. */
+    const bool on = st->knob_batt && st->knob_pct <= (CLOCK_FACE ? BATT_LOW : 100) &&
+                    (REFLECTOR_FACE || !st->tx);
     vis(s_knob_batt, on);
     if (!on) return;
     set_text(s_knob_batt, batt_symbol(st->knob_pct));
@@ -7726,38 +9121,44 @@ bool    ui_take_mute_tap(void)     { bool v = s_mute_tap;    s_mute_tap = false;
 
 /* A knob on a desk spends most of its life being looked at, not touched, so
  * "idle" has to mean nothing happened at all -- no detent, no tap, and no
- * transmit. Dimming rather than blanking: the frequency stays readable across
- * the room, which is the whole point of the thing, while an OLED-ish panel
- * left at full brightness for days is asking for trouble. */
+ * transmit. Three stages, each from the one before (net_screen_t): the
+ * screensaver, which moves, so nothing stands still on the panel for hours;
+ * dimmed; dark, which is what spares it overnight. With no screensaver the
+ * dial itself stays up through the first, then dims and goes dark as ever. */
 #define DIM_FULL  200      /* until the page's brightness is set: 80 % */
 #define DIM_LOW    18
 #define DIM_BLANK   0
 
-/* Two stages, because they answer different questions. Dimming says "nobody is
- * using this" and still leaves the frequency readable from across the room,
- * which is most of what a dial is for. Blanking says "nobody is in the room",
- * and is what actually spares the panel overnight. */
-enum { LVL_FULL = 0, LVL_DIM, LVL_BLANK };
+enum { LVL_LIT = 0, LVL_SAVER, LVL_SAVER_DIM, LVL_DARK };
 
-static uint32_t s_dim_after_ms   =  5u * 60u * 1000u;
-static uint32_t s_blank_after_ms = 10u * 60u * 1000u;
+/* Never, until app_main hands over the page's (ui_screen_set). */
+static net_screen_t s_scr_cfg = { NET_SAVER_NONE, 0, 0, 0 };
 static uint32_t s_last_use_ms;
-static uint8_t  s_level = LVL_FULL;
+static volatile uint8_t s_level = LVL_LIT;
 static volatile uint8_t s_full = DIM_FULL;      /* lit: the page's brightness */
+/* The screensaver wanted on the glass (any task), and on it (the LVGL
+ * task's saver timer): apart, so waking is a flag and the drawing stays in
+ * the one task that may touch the panel. */
+static atomic_bool s_saver_want, s_saver_shown;
 
 /* Dimmed stays dimmer than lit, however low the brightness is set. */
 static uint8_t duty_of(uint8_t level)
 {
     const uint8_t full = s_full;
-    return level == LVL_BLANK ? DIM_BLANK
-         : level == LVL_DIM   ? (full < DIM_LOW ? full : DIM_LOW)
-                              : full;
+    return level == LVL_DARK      ? DIM_BLANK
+         : level == LVL_SAVER_DIM ? (full < DIM_LOW ? full : DIM_LOW)
+                                  : full;
 }
 
 static void set_level(uint8_t level)
 {
     if (level == s_level) return;
     s_level = level;
+    atomic_store(&s_saver_want, (level == LVL_SAVER || level == LVL_SAVER_DIM) &&
+                                s_scr_cfg.saver != NET_SAVER_NONE && s_scr_cfg.after);
+    /* Woken from a screensaver: lit once the dial is back (saver_cb), not
+     * over the last of the rain. */
+    if (level == LVL_LIT && atomic_load(&s_saver_shown)) return;
     panel_set_brightness(duty_of(level));
 }
 
@@ -7770,14 +9171,20 @@ void ui_set_brightness(uint8_t percent)
      * exists, kept for when it does. */
     if (!s_scr) return;
     ui_note_activity();
-    panel_set_brightness(duty_of(LVL_FULL));
+    if (!atomic_load(&s_saver_shown)) panel_set_brightness(duty_of(LVL_LIT));
 }
 
 uint32_t ui_last_use(void) { return s_last_use_ms; }
 
+/* Nobody sees the dial: a screensaver over it, or the screen dark. */
+static bool screen_hidden(void)
+{
+    return s_level == LVL_DARK || atomic_load(&s_saver_want) || atomic_load(&s_saver_shown);
+}
+
 #if ADSB_FACE
-/* Gone dark: the radar's sweep rests. */
-static bool screen_dark(void) { return s_level == LVL_BLANK; }
+/* Gone dark or under a screensaver: the radar's sweep rests. */
+static bool screen_dark(void) { return screen_hidden(); }
 #endif
 
 /* Kept apart from s_last_use_ms, which questions, setup screens, page saves
@@ -7795,14 +9202,26 @@ void ui_note_activity(void)
      * display exists. lv_tick_get() before lv_init() is not survivable. */
     if (!s_scr) return;
     s_last_use_ms = lv_tick_get();
-    set_level(LVL_FULL);
+    set_level(LVL_LIT);
 }
 
-void ui_dim_set_minutes(uint16_t dim_minutes, uint16_t blank_minutes)
+bool ui_wake(void)
 {
-    s_dim_after_ms   = (uint32_t)dim_minutes   * 60u * 1000u;
-    s_blank_after_ms = (uint32_t)blank_minutes * 60u * 1000u;
-    ui_note_activity();        /* no-op until the display is up */
+    if (!s_scr) return false;
+    const bool hidden = screen_hidden();
+    ui_note_activity();
+    return hidden;
+}
+
+void ui_screen_set(const net_screen_t *c)
+{
+    s_scr_cfg = *c;
+    if (!s_scr) return;        /* kept for when the display is up */
+    /* Lit, the next stages counted from now with the new times. */
+    s_last_use_ms = lv_tick_get();
+    s_level = LVL_LIT;
+    atomic_store(&s_saver_want, false);
+    if (!atomic_load(&s_saver_shown)) panel_set_brightness(duty_of(LVL_LIT));
 }
 
 void ui_dim_tick(bool transmitting)
@@ -7810,9 +9229,85 @@ void ui_dim_tick(bool transmitting)
     if (!s_scr) return;
     if (transmitting) { ui_note_activity(); return; }
 
+    const net_screen_t c = s_scr_cfg;
     const uint32_t idle = lv_tick_elaps(s_last_use_ms);
-    /* Checked darkest-first so the stages cannot fight when blank <= dim. */
-    if (s_blank_after_ms && idle >= s_blank_after_ms)    set_level(LVL_BLANK);
-    else if (s_dim_after_ms && idle >= s_dim_after_ms)   set_level(LVL_DIM);
-    else                                                 set_level(LVL_FULL);
+    const uint32_t t_saver = c.after * 60000u;
+    const uint32_t t_dim   = t_saver + c.dim * 60000u;
+    const uint32_t t_dark  = t_dim + c.dark * 60000u;
+    /* Darkest first; a stage at 0 never comes, the next counting on. */
+    if (c.dark && idle >= t_dark)        set_level(LVL_DARK);
+    else if (c.dim && idle >= t_dim)     set_level(LVL_SAVER_DIM);
+    else if (c.after && idle >= t_saver) set_level(LVL_SAVER);
+    else                                 set_level(LVL_LIT);
+}
+
+/* The LVGL task's side: the screensaver put up, drawn and taken down. The
+ * dial comes back whole -- one full refresh -- before the backlight rises. */
+static void saver_cb(lv_timer_t *t)
+{
+    (void)t;
+    const bool want = atomic_load(&s_saver_want);
+    if (want && !saver_running()) {
+        saver_start(s_disp, s_scr_cfg.saver);
+        atomic_store(&s_saver_shown, saver_running());
+    } else if (!want && saver_running()) {
+        saver_stop();
+        lv_obj_invalidate(lv_screen_active());
+        lv_refr_now(s_disp);
+        atomic_store(&s_saver_shown, false);
+        panel_set_brightness(duty_of(s_level));
+    }
+    if (saver_running()) saver_frame(lv_tick_get());
+}
+
+/* The time zone or the hours changed: a clock on the glass is drawn again
+ * at its next second. */
+void ui_clock_changed(void)
+{
+#if CLOCK_FACE
+    atomic_store(&s_ck_changed, true);
+#endif
+}
+
+#if !CLOCK_FACE
+static void label_copy(lv_obj_t *l, char *out, size_t n)
+{
+    snprintf(out, n, "%s", l ? lv_label_get_text(l) : "");
+}
+#endif
+
+void ui_saver_text(char *big, size_t nb, char *small, size_t ns)
+{
+    big[0] = small[0] = 0;
+#if EPI_FACE
+    label_copy(s_beam_big, big, nb);
+    label_copy(s_beam_deg, small, ns);
+#elif ADSB_FACE
+    snprintf(big, nb, "ADS-B");
+    label_copy(s_ad_range, small, ns);
+#elif WEATHER_FACE
+    label_copy(s_wx_temp, big, nb);
+    label_copy(s_wx_cond, small, ns);
+#elif CLOCK_FACE
+    /* The time and the day, as the digital face has them. */
+    struct tm lt;
+    if (!wallclock_now(&lt, NULL, NULL)) { snprintf(big, nb, "--:--"); return; }
+    static const char *const WD[7] = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
+    static const char *const MO[12] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
+    const int h = net_prov_clock24() ? lt.tm_hour : lt.tm_hour % 12 ? lt.tm_hour % 12 : 12;
+    snprintf(big, nb, net_prov_clock24() ? "%02d:%02d" : "%d:%02d", h, lt.tm_min);
+    snprintf(small, ns, "%s %d %s", WD[lt.tm_wday], lt.tm_mday, MO[lt.tm_mon]);
+#else
+    if (s_mem_face) {
+        label_copy(s_mem_big, big, nb);
+        label_copy(s_mem_small, small, ns);
+        return;
+    }
+    /* As the readout groups it: 14.074.000 */
+    const int64_t f = s_last.freq_hz < 0 ? 0 : s_last.freq_hz;
+    snprintf(big, nb, "%ld.%03ld.%03ld", (long)(f / 1000000), (long)(f / 1000 % 1000), (long)(f % 1000));
+    snprintf(small, ns, "%s", s_last.mode ? s_last.mode : "");
+    for (char *c = small; *c; c++) *c = (char)toupper((unsigned char)*c);
+#endif
 }

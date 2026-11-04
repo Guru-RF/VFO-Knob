@@ -18,11 +18,18 @@ permissive terms, with one exception noted at the end.
 | `espressif/mdns` | Apache-2.0 |
 | Font Awesome 5 Free, microphone glyph (`components/ui/font_mic_14.c`) | SIL OFL 1.1 |
 | Font Awesome 5 Free, lock and speaker glyphs (`components/ui/font_svx_icons_24.c`, svxconnect firmware) | SIL OFL 1.1 |
-| Hack 3.003 (Source Foundry), the frequency readout's digits (`components/ui/font_hack_46.c`; its licence texts in `components/ui/fonts/Hack-LICENSE.md`) | MIT, on Bitstream Vera Sans Mono under the Bitstream Vera License |
+| Hack 3.003 (Source Foundry), the frequency readout's digits and the digital clocks' (`components/ui/font_hack_46.c`, `components/ui/font_hack_96.c`; its licence texts in `components/ui/fonts/Hack-LICENSE.md`) | MIT, on Bitstream Vera Sans Mono under the Bitstream Vera License |
+| Noto Sans CJK JP 2.004 (Adobe), the Matrix rain's half-width katakana, a subset (`components/ui/font_matrix_18.c`; its licence text in `components/ui/fonts/NotoSansCJK-LICENSE.txt`) | SIL OFL 1.1 |
+| tzdata, the configuration page's time zones and their rules (`components/webcfg/www/tz.txt`, by `tools/tz_table.py`) | public domain |
 | SVXConnect-CLI's protocol, talkgroup manager, node info and codec (`components/svx_client/svx/`, svxconnect firmware) | MIT |
 | Opus, via `esphome/micro-opus` (svxconnect and multiflex firmwares) | BSD-3-Clause; micro-opus itself Apache-2.0 |
 | Alex-developer's ADSB-Radar, its feeds, fields and altitude colours (`components/vfo_core/src/adsb.c`, `components/adsb_client/`, adsb firmware; its licence text in `components/adsb_client/LICENSE`) | MIT |
 | Natural Earth 1:50m coastlines and land borders, OurAirports' airports, the radar's map (`components/adsb_client/tables/`, adsb firmware) | public domain |
+
+The Weather firmware embeds no data, but shows what it asks for: weather
+data by [Open-Meteo.com](https://open-meteo.com/), under CC BY 4.0, credited
+on the configuration page and in its guide (`docs/weather.md`). Open-Meteo's
+free service is for use that is not commercial.
 
 MIT, BSD-3-Clause and the Bitstream Vera License all require their copyright
 notice and licence text to accompany binary distributions -- the Vera one with

@@ -9,7 +9,7 @@ idf_component_register(
          "svx/tg/tgmanager.c" "svx/reflector/nodeinfo.c"
     PRIV_INCLUDE_DIRS "svx" "svx/common" "svx/audio"
     REQUIRES radio
-    PRIV_REQUIRES vfo_core audio esp_timer esp_netif lwip mbedtls nvs_flash kvstore
+    PRIV_REQUIRES vfo_core audio esp_timer esp_netif lwip mbedtls nvs_flash kvstore wallclock
                   esp_http_client esp_http_server json esphome__micro-opus
                   esp_websocket_client
 )

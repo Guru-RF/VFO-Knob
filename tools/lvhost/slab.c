@@ -54,6 +54,9 @@
 #include "hal_touch.h"
 #include "panel.h"
 #include "ui.h"
+#if VFO_RADIO_CLOCK
+#include "clockface.h"
+#endif
 
 #include <math.h>
 #include <stdarg.h>
@@ -74,9 +77,13 @@ static uint16_t fb[W * H];
 static uint8_t  buf[W * 12 * 2] __attribute__((aligned(4)));
 static lv_display_t *disp;
 
+static int n_flush;                   /* LVGL's flushes, counted */
+static long flush_px;                 /* ...and the pixels they sent */
 static void flush_cb(lv_display_t *d, const lv_area_t *a, uint8_t *px)
 {
+    n_flush++;
     const int w = lv_area_get_width(a);
+    flush_px += (long)w * lv_area_get_height(a);
     for (int y = a->y1; y <= a->y2; y++)
         memcpy(&fb[y * W + a->x1], px + (size_t)(y - a->y1) * w * 2, (size_t)w * 2);
     lv_display_flush_ready(d);
@@ -125,6 +132,41 @@ esp_lcd_panel_handle_t panel_handle(void) { return NULL; }
 esp_lcd_panel_io_handle_t panel_io_handle(void) { return NULL; }
 static int backlight = -1;            /* the duty last set: -1, none yet */
 void panel_set_brightness(uint8_t duty) { backlight = duty; }
+
+/* The screensaver's own path to the glass: its pixels go out byte-swapped,
+ * as the port sends LVGL's, and land in the same frame. */
+static int panel_px;                  /* pixels sent since last asked */
+esp_err_t esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t p, int x1, int y1, int x2, int y2, const void *px)
+{
+    (void)p;
+    const uint16_t *s = px;
+    for (int y = y1; y < y2; y++)
+        for (int x = x1; x < x2; x++, s++)
+            if (x >= 0 && x < W && y >= 0 && y < H) fb[y * W + x] = (uint16_t)(*s << 8 | *s >> 8);
+    panel_px += (x2 - x1) * (y2 - y1);
+    return ESP_OK;
+}
+esp_err_t esp_lcd_panel_disp_on_off(esp_lcd_panel_handle_t p, bool on) { (void)p; (void)on; return ESP_OK; }
+
+/* The time: 2026-11-04 13:52:07 UTC, 14:52 in Brussels, until a run has none. */
+#include "wallclock.h"
+static bool clock_set = true;
+bool wallclock_now(struct tm *local, struct tm *utc, uint16_t *ms)
+{
+    if (!clock_set) return false;
+    const time_t t = 1793800327 + now_ms / 1000;
+    if (local) { const time_t l = t + 3600; gmtime_r(&l, local); }
+    if (utc) gmtime_r(&t, utc);
+    if (ms) *ms = (uint16_t)(now_ms % 1000);
+    return true;
+}
+uint32_t wallclock_age_s(void) { return clock_set ? 60 : UINT32_MAX; }
+bool net_prov_clock24(void) { return true; }
+static uint8_t ck_face;
+static bool    ck_sec = true;
+uint8_t net_prov_clock_face(void) { return ck_face; }
+bool net_prov_clock_seconds(void) { return ck_sec; }
+void net_prov_save_clock(uint8_t face, bool seconds) { ck_face = face; ck_sec = seconds; }
 
 /* splash.c's: no splash here, and no update screen. */
 void ui_splash_start(void) {}
@@ -217,6 +259,28 @@ static void picture(const char *dir, const char *name)
     fprintf(f, "P6\n%d %d\n255\n", W, H);
     for (int i = 0; i < W * H; i++) {
         /* The round glass: outside it, black. */
+        const int x = i % W - W / 2, y = i / W - H / 2;
+        const uint16_t c = x * x + y * y <= 180 * 180 ? fb[i] : 0;
+        const uint8_t px[3] = { (uint8_t)((c >> 11) << 3), (uint8_t)(((c >> 5) & 63) << 2),
+                                (uint8_t)((c & 31) << 3) };
+        fwrite(px, 1, 3, f);
+    }
+    fclose(f);
+    char cmd[1200];
+    snprintf(cmd, sizeof cmd, "command -v magick >/dev/null && magick %s/%s.ppm %s/%s.png", dir, name, dir, name);
+    if (system(cmd)) {}
+}
+
+/* The frame as the glass shows it now: no refresh first, as a screensaver
+ * draws round LVGL. */
+static void snap(const char *dir, const char *name)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s.ppm", dir, name);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", W, H);
+    for (int i = 0; i < W * H; i++) {
         const int x = i % W - W / 2, y = i / W - H / 2;
         const uint16_t c = x * x + y * y <= 180 * 180 ? fb[i] : 0;
         const uint8_t px[3] = { (uint8_t)((c >> 11) << 3), (uint8_t)(((c >> 5) & 63) << 2),
@@ -2757,6 +2821,15 @@ static void runs(const char *dir)
     CHECK(ui_take_beam() == -1);
     CHECK(taken() == 1);
     CHECK(ui_take_beam() == -1 && !ui_take_beam_moved());
+    where = "...at an even tick as at an odd one: never taken before the knob has rested";
+    for (int i = 0; i < 4; i++) {
+        ui_beam_turn(1); run(16);
+        CHECK(ui_take_beam() == -1);
+        run(451);
+        CHECK(ui_take_beam() >= 0);
+    }
+    ui_beam_turn(-4);
+    CHECK(taken() == 1);
     where = "...three back, past N: S";
     ui_beam_turn(-3);
     CHECK(taken() == 2 && shown("S") && shown("180" DEG));
@@ -2868,6 +2941,658 @@ static void runs(const char *dir)
     run(10500);
     st.knob_batt = false; run(60);
     (void)ui_take_beam_moved(); quiet();
+}
+#elif VFO_RADIO_CLOCK
+/* The Clock's face (ui.c CLOCK_FACE): clockface.c's faces, the shack clock
+ * until the page or the knob chooses another. The glass is the face as
+ * clockface.c draws it whole -- give or take the burn-in's pixel -- and a
+ * tick sends the hands' box alone. A detent a face, round and round, kept
+ * once the knob has rested -- once, and where it stopped; the page's face
+ * and second hand drawn at once. A tap anywhere: the card, again away; held
+ * three seconds the firmware picker; no PTT, nothing a swipe away. The
+ * knob's battery only once it is low. The alarms: the next on the dial, a
+ * tap on the middle their list, set with the dial and taps, switched by
+ * their pill, closed by a tap elsewhere or by itself; one due rings over
+ * everything, locked or not -- a tap stops it, a turn snoozes it and the
+ * rest of that turn moves no face, STOP on the list ends a snooze, left
+ * alone it stops; once, it is off as it rings. Pictures: each face, the
+ * card, no time yet, the low battery, the alarms' list and setting, one
+ * ringing, one snoozed. */
+static uint16_t want[W * H];
+static int ck_dx, ck_dy;
+static char ck_mark[20];                 /* the dial's mark, as ui.c should have it */
+
+/* The pixels of the round glass that differ from the face drawn whole now,
+ * at the best of the burn-in's nine shifts: ck_dx, ck_dy. */
+static int face_diff(uint8_t face, bool seconds)
+{
+    cf_opts_t o = { .face = face, .seconds = seconds, .h24 = true };
+    strcpy(o.mark, ck_mark);
+    lv_area_t a;
+    clockface_draw(want, &o, &a);
+    lv_obj_invalidate(lv_screen_active());
+    lv_refr_now(disp);
+    int best = W * H;
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+            int n = 0;
+            for (int y = 2; y < H - 2; y++)
+                for (int x = 2; x < W - 2; x++) {
+                    const int u = x - W / 2, v = y - H / 2;
+                    if (u * u + v * v <= 168 * 168) n += fb[y * W + x] != want[(y - dy) * W + (x - dx)];
+                }
+            if (n < best) { best = n; ck_dx = dx; ck_dy = dy; }
+        }
+    if (best) printf("  [%s] %d pixels differ\n", where, best);
+    return best;
+}
+/* To a tenth into the next second: its tick drawn, the Diver's hand not
+ * yet a sixth on. */
+static void to_tenth(void) { run(1000 - now_ms % 1000 + 100); }
+/* The face the knob rested on, kept as app_main keeps it. */
+static int taken(void)
+{
+    run(650);
+    const int f = ui_take_clock_face();
+    if (f >= 0) net_prov_save_clock((uint8_t)f, net_prov_clock_seconds());
+    return f;
+}
+#define CK_CARD "Clock 1.23.2"
+#define AL_FLASH_PIC 120                 /* into the ringing's first flash: the red ring on */
+
+/* The next minute, local, from now: rung at its start. */
+static int next_minute(void)
+{
+    struct tm lt;
+    wallclock_now(&lt, NULL, NULL);
+    return (lt.tm_hour * 60 + lt.tm_min + 1) % 1440;
+}
+static void to_minute(void)
+{
+    struct tm lt;
+    wallclock_now(&lt, NULL, NULL);
+    run((uint32_t)(60 - lt.tm_sec) * 1000u + 150u);
+}
+
+static void alarms(const char *dir)
+{
+    net_alarms_t al = { .snooze_min = 1, .ring_min = 1, .volume = 60 }, got;
+    char hm[16];
+
+    where = "the alarms: one on, Monday to Friday at 07:30 -- the dial carries it, with a bell";
+    al.a[0] = (alarm_t){ 7, 30, ALARM_WORK, true };
+    al.a[1] = (alarm_t){ 6, 0, 0, false };
+    ui_alarms_set(&al); run(100);
+    strcpy(ck_mark, LV_SYMBOL_BELL " 07:30");
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+    picture(dir, "clock-alarm-mark");
+    where = "...on the other faces too, each where it has room";
+    {
+        static const struct { uint8_t f; const char *pic; } F[] = {
+            { CF_DIVER, "clock-alarm-mark-diver" }, { CF_CLASSIC, "clock-alarm-mark-classic" },
+            { CF_DIGITAL, "clock-alarm-mark-digital" },
+        };
+        for (size_t i = 0; i < sizeof F / sizeof *F; i++) {
+            net_prov_save_clock(F[i].f, true);
+            ui_clock_changed(); run(100);
+            to_tenth();
+            CHECK(face_diff(F[i].f, true) == 0);
+            picture(dir, F[i].pic);
+        }
+        net_prov_save_clock(CF_SHACK, true);
+        ui_clock_changed(); run(100);
+    }
+
+    where = "a tap on the clock's middle: the list, on the next to ring; no card";
+    tap_at(180, 180, 80); run(60);
+    CHECK(shown("ALARM 1") && shown("07") && shown("30") && shown("MON-FRI") && shown("ON"));
+    CHECK(!label_from(lv_screen_active(), CK_CARD));
+    picture(dir, "clock-alarms");
+    where = "...a detent: the second, off, once; the face stays";
+    ui_clock_turn(1); run(60);
+    CHECK(shown("ALARM 2") && shown("06") && shown("00") && shown("ONCE") && shown("OFF"));
+    run(700);
+    CHECK(ui_take_clock_face() == -1);
+    where = "...its pill: on, and kept";
+    tap_at(180, 287, 80); run(60);
+    CHECK(shown("ON") && ui_take_alarms(&got) && got.a[1].on && got.a[0].on);
+    CHECK(!ui_take_alarms(&got));
+    where = "...its time: the hours with the dial, a tap, the minutes, a tap, the days";
+    tap_at(180, 160, 80); run(60);
+    CHECK(shown("HOURS"));
+    ui_clock_turn(3); run(60);
+    CHECK(shown("09") && !shown("ON") && !shown("OFF"));
+    tap_at(180, 160, 80); run(60);
+    CHECK(shown("MINUTES"));
+    ui_clock_turn(-5); run(60);
+    CHECK(shown("55"));
+    tap_at(100, 300, 80); run(60);
+    CHECK(shown("DAYS"));
+    ui_clock_turn(2); run(60);
+    CHECK(shown("MON-FRI"));
+    ui_clock_turn(-3); run(60);
+    CHECK(shown("SUN"));
+    ui_clock_turn(1); run(60);
+    CHECK(shown("ONCE"));
+    ui_clock_turn(2); run(60);
+    picture(dir, "clock-alarm-set");
+    CHECK(!ui_take_alarms(&got));
+    where = "...a tap: kept, on";
+    tap_at(180, 160, 80); run(60);
+    CHECK(ui_take_alarms(&got) && got.a[1].hour == 9 && got.a[1].min == 55 && got.a[1].days == ALARM_WORK &&
+          got.a[1].on);
+    CHECK(shown("ALARM 2") && shown("ON") && shown("MON-FRI"));
+    where = "...a tap elsewhere: the clock back, no card, the next on its dial";
+    tap_at(180, 30, 80); run(60);
+    CHECK(!shown("ALARM 2") && !label_from(lv_screen_active(), CK_CARD));
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+    where = "...left alone 30 s: the clock back by itself";
+    tap_at(180, 180, 80); run(60);
+    CHECK(shown("ALARM 1"));
+    run(30500);
+    CHECK(!shown("ALARM 1"));
+    where = "...the card up: the middle puts it away, and opens nothing";
+    tap_at(60, 180, 80); run(30);
+    CHECK(label_from(lv_screen_active(), CK_CARD) && ui_take_card_shown());
+    tap_at(180, 180, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), CK_CARD) && !shown("ALARM 1"));
+
+    where = "due: it rings at its minute, over everything; once, so off as it rings";
+    int m = next_minute();
+    al.a[1] = got.a[1];
+    al.a[2] = (alarm_t){ (uint8_t)(m / 60), (uint8_t)(m % 60), 0, true };
+    ui_alarms_set(&al); run(100);
+    CHECK(!ui_alarm_ringing());
+    to_minute();
+    snprintf(hm, sizeof hm, "%02d:%02d", m / 60, m % 60);
+    CHECK(ui_alarm_ringing() && shown(hm) && shown("ONCE"));
+    CHECK(ui_take_alarms(&got) && !got.a[2].on && got.a[1].on);
+    run(AL_FLASH_PIC);
+    picture(dir, "clock-ringing");
+    where = "...a tap: stopped, and no card";
+    tap_at(100, 100, 80); run(60);
+    CHECK(!ui_alarm_ringing() && !shown(hm) && !label_from(lv_screen_active(), CK_CARD));
+
+    where = "again: a turn snoozes it, SNOOZE on the dial; the rest of the turn moves no face";
+    m = next_minute();
+    al.a[2] = (alarm_t){ (uint8_t)(m / 60), (uint8_t)(m % 60), 0, true };
+    ui_alarms_set(&al); run(100);
+    to_minute();
+    CHECK(ui_alarm_ringing() && ui_take_alarms(&got) && !got.a[2].on);
+    ui_clock_turn(1); run(60);
+    CHECK(!ui_alarm_ringing());
+    ui_clock_turn(1); run(300);
+    ui_clock_turn(1); run(700);
+    CHECK(ui_take_clock_face() == -1);
+    snprintf(ck_mark, sizeof ck_mark, "SNOOZE %02d:%02d", (m + 1) % 1440 / 60, (m + 1) % 60);
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+    picture(dir, "clock-snoozed");
+    where = "...a snooze's minute on: ringing again";
+    run(60000);
+    CHECK(ui_alarm_ringing());
+    where = "...snoozed again, the list on it: STOP ends the snooze; once, it is off";
+    ui_clock_turn(1); run(1600);
+    tap_at(180, 180, 80); run(60);
+    CHECK(shown("ALARM 3") && shown("STOP"));
+    tap_at(180, 287, 80); run(60);
+    CHECK(shown("OFF") && !shown("STOP"));
+    tap_at(180, 30, 80); run(60);
+    run(61000);
+    CHECK(!ui_alarm_ringing());
+    strcpy(ck_mark, LV_SYMBOL_BELL " 07:30");
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+
+    where = "left alone: it stops after the page's minute";
+    m = next_minute();
+    al.a[2] = (alarm_t){ (uint8_t)(m / 60), (uint8_t)(m % 60), ALARM_DAILY, true };
+    ui_alarms_set(&al); run(100);
+    to_minute();
+    CHECK(ui_alarm_ringing());
+    run(61000);
+    CHECK(!ui_alarm_ringing());
+    CHECK(!ui_take_alarms(&got));                /* every day: still on, nothing to keep */
+
+    where = "locked: the middle opens nothing; a ring still stops at a tap and snoozes at a turn";
+    tap_at(60, 180, 80); run(700);
+    tap_at(180, 84, 60); run(60);
+    CHECK(ui_locked());
+    run(10500);
+    tap_at(180, 180, 80); run(60);
+    CHECK(!shown("ALARM 1"));
+    run(10500);
+    m = next_minute();
+    al.a[2] = (alarm_t){ (uint8_t)(m / 60), (uint8_t)(m % 60), 0, true };
+    ui_alarms_set(&al); run(100);
+    to_minute();
+    CHECK(ui_alarm_ringing());
+    tap_at(240, 240, 80); run(60);
+    CHECK(!ui_alarm_ringing() && ui_locked());
+    run(10500);
+    tap_at(60, 180, 80); run(700);
+    tap_at(180, 84, 60); run(60);
+    CHECK(!ui_locked());
+    run(10500);
+    (void)ui_take_alarms(&got);
+    al.a[2].on = false;
+    ui_alarms_set(&al); run(100);
+    strcpy(ck_mark, LV_SYMBOL_BELL " 07:30");
+    quiet();
+}
+
+static void runs(const char *dir)
+{
+    base();
+    ui_set_netinfo(CK_CARD "\nUSB power\nUSB   -\nWiFi  192.168.254.248\nsetup  http://192.168.254.248");
+    run(1500);
+    (void)ui_take_clock_face(); quiet();
+
+    where = "the shack clock, as clockface.c draws it whole";
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+    picture(dir, "clock-shack");
+    where = "...a minute of ticks: the hands' box alone sent";
+    run(2000);
+    flush_px = 0;
+    run(60000);
+    printf("  %-62s %ld px a second\n", where, flush_px / 60);
+    CHECK(flush_px / 60 < W * H / 4);
+    where = "...the face after them clockface.c's still";
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+
+    where = "a detent: the Diver at once, kept once the knob has rested -- once";
+    ui_clock_turn(1); run(100);
+    CHECK(ui_take_clock_face() == -1);
+    CHECK(taken() == CF_DIVER);
+    CHECK(ui_take_clock_face() == -1);
+    to_tenth();
+    CHECK(face_diff(CF_DIVER, true) == 0);
+    picture(dir, "clock-diver");
+    where = "...on: the classic white";
+    ui_clock_turn(1);
+    CHECK(taken() == CF_CLASSIC);
+    to_tenth();
+    CHECK(face_diff(CF_CLASSIC, true) == 0);
+    picture(dir, "clock-classic");
+    where = "...on: the digital";
+    ui_clock_turn(1);
+    CHECK(taken() == CF_DIGITAL);
+    to_tenth();
+    CHECK(face_diff(CF_DIGITAL, true) == 0);
+    picture(dir, "clock-digital");
+    where = "...on, round: the shack clock; three back: the Diver";
+    ui_clock_turn(1);
+    CHECK(taken() == CF_SHACK);
+    ui_clock_turn(-3);
+    CHECK(taken() == CF_DIVER);
+    where = "...turned on before it rests: kept once, where it stopped";
+    ui_clock_turn(1); run(300);
+    ui_clock_turn(1); run(300);
+    CHECK(ui_take_clock_face() == -1);
+    CHECK(taken() == CF_DIGITAL);
+
+    where = "the page: the classic white without its second hand, at once";
+    net_prov_save_clock(CF_CLASSIC, false);
+    ui_clock_changed(); run(100);
+    to_tenth();
+    CHECK(face_diff(CF_CLASSIC, false) == 0);
+    where = "...the shack clock with it";
+    net_prov_save_clock(CF_SHACK, true);
+    ui_clock_changed(); run(100);
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+    CHECK(ui_take_clock_face() == -1);
+
+    where = "a tap anywhere: the card, and its click; again, away; no PTT";
+    tap_at(120, 250, 80); run(30);
+    CHECK(label_from(lv_screen_active(), CK_CARD) && ui_take_card_shown());
+    picture(dir, "clock-card");
+    tap_at(250, 280, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), CK_CARD) && !ui_locked());
+    CHECK(!ptt() && ui_take_clock_face() == -1);
+    where = "...swipes: nothing";
+    swipe(340, 180, 140, 180); run(60);
+    swipe(180, 20, 180, 220); run(60);
+    CHECK(!ui_edit_active() && !label_from(lv_screen_active(), CK_CARD) && ui_take_clock_face() == -1);
+    where = "...held three seconds: the firmware picker asked for, and no card";
+    down(180, 180); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+    CHECK(!label_from(lv_screen_active(), CK_CARD));
+
+    where = "the burn-in: three minutes on, the face a pixel along";
+    to_tenth();
+    CHECK(face_diff(CF_SHACK, true) == 0);
+    {
+        const int dx = ck_dx, dy = ck_dy;
+        run(180000);
+        to_tenth();
+        CHECK(face_diff(CF_SHACK, true) == 0);
+        CHECK((ck_dx != dx || ck_dy != dy) && abs(ck_dx - dx) <= 1 && abs(ck_dy - dy) <= 1);
+    }
+
+    where = "no time yet: the dial alone, NO TIME YET on it";
+    clock_set = false;
+    ui_clock_changed(); run(1100);
+    CHECK(face_diff(CF_SHACK, true) == 0);
+    picture(dir, "clock-notime");
+    clock_set = true;
+    ui_clock_changed(); run(1100);
+
+    where = "the knob's battery: not over the 12 at 85 %; at 15 %, red";
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    CHECK(!knob_battery());
+    st.knob_pct = 15; run(60);
+    {
+        lv_obj_t *b = knob_battery();
+        CHECK(b && colour_is(lv_obj_get_style_text_color(b, LV_PART_MAIN)) == colour_for(15));
+    }
+    picture(dir, "clock-batt");
+    st.knob_batt = false; run(60);
+    quiet();
+    alarms(dir);
+}
+#elif VFO_RADIO_WEATHER
+/* The Weather's faces (ui.c WEATHER_FACE): before a forecast, the place and
+ * "asking"; then NOW in the page's units, the dial on to the next 24 hours
+ * and the 5 days and round, kept once the knob has rested; the icons, the
+ * chart and the days drawn -- told by their colours on the glass; what went
+ * wrong said at the foot; a tap the card, held the picker, no swipe; the
+ * burn-in's pixel; the knob's battery between the time and the place. */
+#define WX_C565(h) ((uint16_t)((((h) >> 19 & 31) << 11) | (((h) >> 10 & 63) << 5) | ((h) >> 3 & 31)))
+#define WX_CARD "Weather 1.23.2"
+#define WX_SUN   0xFFC83C                  /* ui.c's */
+#define WX_MOON  0xE8E2C0
+#define WX_CLOUD 0xDCE3EC
+#define WX_BOLT  0xFFD23C
+#define WX_LINE  0xFFA040
+static wx_t sky;
+
+/* Pixels of exactly that colour within a box of the glass. */
+static int colour_px(uint32_t hex, int x1, int y1, int x2, int y2)
+{
+    const uint16_t c = WX_C565(hex);
+    int n = 0;
+    for (int y = y1; y <= y2; y++)
+        for (int x = x1; x <= x2; x++) n += fb[y * W + x] == c;
+    return n;
+}
+
+/* The rain's bars, blue at 60 % over the black. */
+static int bluish_px(int x1, int y1, int x2, int y2)
+{
+    int n = 0;
+    for (int y = y1; y <= y2; y++)
+        for (int x = x1; x <= x2; x++) {
+            const uint16_t c = fb[y * W + x];
+            const int r = c >> 11, b = c & 31;
+            n += b > 12 && b > 2 * r;
+        }
+    return n;
+}
+
+/* A sky over Brussels at 14:55 on 4 November: partly cloudy, rain likely in
+ * the evening, a thunderstorm on the fifth day. */
+static void make_sky(void)
+{
+    memset(&sky, 0, sizeof sky);
+    sky.utc_offset_s = 3600;
+    snprintf(sky.zone, sizeof sky.zone, "Europe/Brussels");
+    sky.now = (wx_now_t){ .t = 1793800500, .temp_c = 9.7f, .feels_c = 5.4f, .wind_kmh = 19.1f, .gust_kmh = 38.5f,
+                          .pressure_hpa = 1027.4f, .wind_deg = 58, .humidity = 63, .code = 2, .day = true };
+    static const uint8_t RAIN[WX_HOURS] = { 0, 5, 0, 10, 20, 35, 60, 80, 75, 40, 10 };
+    static const uint8_t CODE[WX_HOURS] = { 3, 0, 0, 2, 3, 61, 63, 65, 80, 51, 3 };
+    sky.n_hours = WX_HOURS;
+    for (int i = 0; i < WX_HOURS; i++)
+        sky.hour[i] = (wx_hour_t){ .t = 1793800800 + 3600LL * i, .temp_c = 9.6f - 0.4f * (float)(i < 15 ? i : 30 - i),
+                                   .rain_pct = RAIN[i], .code = CODE[i], .day = i < 1 || i > 16 };
+    static const uint8_t DCODE[WX_DAYS] = { 3, 0, 3, 51, 95, 71, 45 };
+    sky.n_days = WX_DAYS;
+    for (int i = 0; i < WX_DAYS; i++)
+        sky.day[i] = (wx_day_t){ .t = 1793746800 + 86400LL * i, .sunrise = 1793774364 + 86400LL * i,
+                                 .sunset = 1793808740 + 86400LL * i, .max_c = 9.9f + (float)i * 0.3f,
+                                 .min_c = 4.7f - (float)i, .rain_pct = (uint8_t)(i * 15), .code = DCODE[i] };
+}
+
+static int wx_taken(void) { run(650); return ui_take_weather_face(); }
+
+static void runs(const char *dir)
+{
+    base();
+    net_weather_t cfg = { .lat_e6 = NET_WX_HOME_LAT_E6, .lon_e6 = NET_WX_HOME_LON_E6, .place = NET_WX_HOME,
+                          .temp_unit = WX_C, .wind_unit = WX_KMH, .refresh_min = 15 };
+    ui_weather_set(&cfg);
+    ui_set_netinfo(WX_CARD "\nUSB power\nUSB   -\nWiFi  192.168.254.248\nsetup  http://192.168.254.248");
+    run(300);
+    (void)ui_take_weather_face(); quiet();
+
+    where = "before a forecast: the place, the time, asking";
+    CHECK(shown(NET_WX_HOME) && shown("asking Open-Meteo...") && shown("--"));
+    CHECK(label_from(lv_screen_active(), "14:5"));
+    picture(dir, "weather-asking");
+
+    where = "a forecast: now, in degrees C and km/h";
+    make_sky();
+    ui_weather_data(&sky); run(300);
+    CHECK(shown("10\xC2\xB0" "C") && shown("feels like 5\xC2\xB0") && shown("Partly cloudy"));
+    CHECK(shown("ENE  19 km/h, gusts 39"));
+    CHECK(shown("humidity 63 %    1027 hPa"));
+    CHECK(shown("sunrise 07:39    sunset 17:12"));
+    CHECK(shown("Open-Meteo, 14:55") && !shown("asking Open-Meteo..."));
+    picture(dir, "weather-now");
+    where = "...its icon drawn: the sun and a cloud";
+    CHECK(colour_px(WX_SUN, 52, 88, 143, 179) > 100 && colour_px(WX_CLOUD, 52, 88, 143, 179) > 300);
+    where = "...the wind's arrow left of its words";
+    {
+        lv_obj_t *wl = label_from(lv_screen_active(), "ENE");
+        lv_area_t a;
+        CHECK(wl != NULL);
+        if (wl) {
+            lv_obj_get_coords(wl, &a);
+            CHECK(colour_px(0xC0C8D4, a.x1 - 30, a.y1 - 4, a.x1 - 2, a.y2 + 4) > 20);
+        }
+    }
+
+    where = "the page's units: F and knots; Beaufort";
+    cfg.temp_unit = WX_F; cfg.wind_unit = WX_KN;
+    ui_weather_set(&cfg); run(300);
+    CHECK(shown("49\xC2\xB0" "F") && shown("feels like 42\xC2\xB0") && shown("ENE  10 kn, gusts 21"));
+    cfg.wind_unit = WX_BFT;
+    ui_weather_set(&cfg); run(300);
+    CHECK(shown("ENE  3 Bft"));
+    cfg.temp_unit = WX_C; cfg.wind_unit = WX_KMH;
+    ui_weather_set(&cfg); run(300);
+    CHECK(shown("10\xC2\xB0" "C"));
+
+    where = "a long place's name: cut short, within the round where it is";
+    {
+        net_weather_t lc = cfg;
+        snprintf(lc.place, sizeof lc.place, "Sint-Pieters-Leeuw, Flemish Brabant, Belgium");
+        ui_weather_set(&lc); run(300);
+        lv_obj_t *l = label_from(lv_screen_active(), "Sint-Pieters");
+        CHECK(l != NULL);
+        if (l) {
+            lv_area_t a;
+            lv_obj_get_coords(l, &a);
+            /* Its glyphs, not its box: the ink between the box's ends. */
+            int x1 = W, x2 = -1;
+            for (int y = a.y1; y <= a.y2; y++)
+                for (int x = 0; x < W; x++)
+                    if (fb[y * W + x] != 0) { if (x < x1) x1 = x; if (x > x2) x2 = x; }
+            CHECK(x1 >= 180 - 145 && x2 <= 180 + 145 && x2 - x1 > 200);
+            /* One line: nothing between it and the icon, 88 down. */
+            int below = 0;
+            for (int y = a.y2 + 1; y < 88; y++)
+                for (int x = 0; x < W; x++) below += fb[y * W + x] != 0;
+            CHECK(a.y2 - a.y1 < 22 && below == 0);
+        }
+        picture(dir, "weather-longplace");
+        ui_weather_set(&cfg); run(300);
+        CHECK(shown(NET_WX_HOME));
+    }
+
+    where = "by night, clear: the moon, no sun";
+    sky.now.day = false; sky.now.code = 0;
+    ui_weather_data(&sky); run(300);
+    CHECK(shown("Clear sky"));
+    CHECK(colour_px(WX_MOON, 52, 88, 143, 179) > 100 && colour_px(WX_SUN, 52, 88, 143, 179) == 0);
+    picture(dir, "weather-night");
+    where = "each icon drawn";
+    {
+        static const uint8_t CODES[] = { 0, 2, 3, 45, 53, 57, 63, 73, 81, 95 };
+        for (size_t i = 0; i < sizeof CODES; i++) {
+            sky.now.day = true; sky.now.code = CODES[i];
+            ui_weather_data(&sky); run(300);
+            int ink = 0;
+            for (int y = 88; y < 180; y++) for (int x = 52; x < 144; x++) ink += fb[y * W + x] != 0;
+            CHECK(ink > 400);
+            if (CODES[i] == 95) CHECK(colour_px(WX_BOLT, 52, 88, 143, 179) > 60);
+            char name[32];
+            snprintf(name, sizeof name, "weather-icon-%u", (unsigned)CODES[i]);
+            picture(dir, name);
+        }
+        make_sky();
+        ui_weather_data(&sky); run(300);
+    }
+
+    where = "a detent: the next 24 hours rolling in, kept once the knob has rested";
+    ui_weather_turn(1); run(200);
+    CHECK(shown("NEXT 24 HOURS") && shown("Partly cloudy"));        /* both, half way */
+    {
+        lv_obj_t *c = label_from(lv_screen_active(), "NEXT 24 HOURS"), *n = label_from(lv_screen_active(), "Partly cloudy");
+        lv_area_t ca, na;
+        if (c && n) {
+            lv_obj_get_coords(c, &ca);
+            lv_obj_get_coords(n, &na);
+        }
+        CHECK(c && n && ca.x1 > 60 && ca.x1 < 300 && na.x2 < 300);  /* the next from the right, now going left */
+    }
+    run(300);
+    CHECK(shown("NEXT 24 HOURS") && !shown("Partly cloudy"));
+    CHECK(ui_take_weather_face() == -1);
+    CHECK(wx_taken() == 1);
+    CHECK(shown("rain likely at 21:00, 60 %"));
+    CHECK(colour_px(WX_LINE, 24, 120, 335, 250) > 150 && bluish_px(24, 120, 335, 250) > 300);
+    picture(dir, "weather-hours");
+    where = "...on: the 5 days; on, round: now; one back: the days";
+    ui_weather_turn(1);
+    CHECK(wx_taken() == 2 && shown("5 DAYS"));
+    CHECK(colour_px(WX_BOLT, 40, 248, 320, 288) > 12);              /* Sunday's thunder */
+    picture(dir, "weather-days");
+    ui_weather_turn(1);
+    CHECK(wx_taken() == 0 && shown("Partly cloudy"));
+    ui_weather_turn(-1); run(200);
+    {
+        lv_obj_t *d = label_from(lv_screen_active(), "5 DAYS");
+        lv_area_t da;
+        if (d) lv_obj_get_coords(d, &da);
+        CHECK(d && da.x2 < 180);                                     /* back: in from the left */
+    }
+    CHECK(wx_taken() == 2 && !shown("Partly cloudy"));
+    where = "...a turn while one rolls: the first ends at once, the next rolls";
+    ui_weather_turn(1); run(100);
+    ui_weather_turn(1); run(500);
+    CHECK(shown("NEXT 24 HOURS") && !shown("5 DAYS") && !shown("Partly cloudy"));
+    CHECK(wx_taken() == 1);
+    ui_weather_turn(1);
+    CHECK(wx_taken() == 2);
+    where = "...the page's face is the one the dial left";
+    cfg.face = 2;
+    ui_weather_set(&cfg); run(300);
+    CHECK(shown("5 DAYS") && ui_take_weather_face() == -1);
+    ui_weather_turn(1);
+    CHECK(wx_taken() == 0);
+    cfg.face = 0;
+    ui_weather_set(&cfg); run(300);
+
+    where = "the faces' own turn: every 3 s the next, round, never kept";
+    cfg.cycle_s = 3;
+    ui_weather_set(&cfg); run(300);
+    run(2600);
+    CHECK(shown("Partly cloudy"));
+    run(300);
+    CHECK(shown("NEXT 24 HOURS") && ui_take_weather_face() == -1);
+    run(2700);
+    CHECK(shown("NEXT 24 HOURS"));
+    run(300);
+    CHECK(shown("5 DAYS"));
+    run(3000);
+    CHECK(shown("Partly cloudy") && ui_take_weather_face() == -1);
+    where = "...a detent: the next at once, kept, and 3 s from there";
+    run(2000);
+    ui_weather_turn(1); run(150);
+    CHECK(shown("NEXT 24 HOURS"));
+    run(2500);
+    CHECK(shown("NEXT 24 HOURS") && ui_take_weather_face() == 1);
+    run(500);
+    CHECK(shown("5 DAYS") && ui_take_weather_face() == -1);
+    where = "...under a screensaver none; the glass back, its first face its time";
+    ui_screen_set(&(net_screen_t){ NET_SAVER_MATRIX, 1, 1, 1 });
+    run(100);
+    now_ms += 61000; ui_dim_tick(false); run(4000);
+    CHECK(shown("5 DAYS"));
+    tap_at(180, 180, 80); run(400);
+    CHECK(shown("5 DAYS") && !label_from(lv_screen_active(), WX_CARD));
+    run(2300);
+    CHECK(shown("5 DAYS"));
+    run(600);
+    CHECK(shown("Partly cloudy"));
+    ui_screen_set(&(net_screen_t){ NET_SAVER_NONE, 0, 0, 0 });
+    run(200);
+    quiet();
+    where = "...0: never";
+    cfg.cycle_s = 0;
+    ui_weather_set(&cfg); run(300);
+    run(10000);
+    CHECK(shown("Partly cloudy") && ui_take_weather_face() == -1);
+
+    where = "what went wrong, at the foot; and again right";
+    ui_weather_state("no answer"); run(1100);
+    CHECK(shown("Open-Meteo: no answer"));
+    picture(dir, "weather-failing");
+    ui_weather_state(""); run(1100);
+    CHECK(shown("Open-Meteo, 14:55"));
+
+    where = "a tap anywhere: the card, and its click; again, away; no PTT";
+    tap_at(120, 250, 80); run(30);
+    CHECK(label_from(lv_screen_active(), WX_CARD) && ui_take_card_shown());
+    tap_at(250, 280, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), WX_CARD) && !ui_locked());
+    CHECK(!ptt() && ui_take_weather_face() == -1);
+    where = "...swipes: nothing";
+    swipe(340, 180, 140, 180); run(60);
+    swipe(180, 20, 180, 220); run(60);
+    CHECK(!ui_edit_active() && !label_from(lv_screen_active(), WX_CARD) && ui_take_weather_face() == -1);
+    where = "...held three seconds: the firmware picker asked for, and no card";
+    down(180, 180); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+    CHECK(!label_from(lv_screen_active(), WX_CARD));
+
+    where = "the burn-in: three minutes on, the whole a pixel along";
+    {
+        lv_obj_t *c = label_from(lv_screen_active(), "Partly cloudy");
+        lv_area_t a, b;
+        CHECK(c != NULL);
+        if (c) {
+            lv_obj_get_coords(c, &a);
+            run(180000);
+            lv_obj_get_coords(c, &b);
+            CHECK((a.x1 != b.x1 || a.y1 != b.y1) && abs(a.x1 - b.x1) <= 2 && abs(a.y1 - b.y1) <= 2);
+        }
+    }
+
+    where = "the knob's battery, on its own power: between the time and the place";
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    knob_check(dir, "weather-batt");
+    st.knob_pct = 15; run(60);
+    knob_check(dir, NULL);
+    st.knob_batt = false; run(60);
+    quiet();
 }
 #elif VFO_RADIO_ADSB
 /* ADS-B Radar's radar (ui.c ADSB_FACE): a sky round Brussels airport, the
@@ -3249,7 +3974,7 @@ static void brightness(void)
     ui_set_brightness(80);
     CHECK(backlight == 204);
     where = "...dimmed after its minutes, dark after its own";
-    ui_dim_set_minutes(1, 2);
+    ui_screen_set(&(net_screen_t){ NET_SAVER_NONE, 0, 1, 1 });
     now_ms += 61000;
     ui_dim_tick(false);
     CHECK(backlight == 18);
@@ -3270,8 +3995,82 @@ static void brightness(void)
     now_ms += 61000;
     ui_dim_tick(false);
     CHECK(backlight == 13);
-    ui_dim_set_minutes(0, 0);
+    ui_screen_set(&(net_screen_t){ NET_SAVER_NONE, 0, 0, 0 });
     ui_set_brightness(80);
+}
+
+/* The screensavers (GitHub: the third-eye's rain, the clocks): after a
+ * minute of nothing, the saver on the glass at the brightness set; a minute
+ * later dimmed; a minute after that dark, with the dial drawn again behind
+ * it. The first touch on it does nothing but bring the dial back, and the
+ * dial comes back exactly as it was. Every face shares it. */
+static uint16_t dial[W * H], saver_fb[W * H];
+/* The radar's sweep moves by itself, and the clock's hands: there the dial
+ * is only checked to be back, not to be the picture it was. */
+#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER
+#define SAME_DIAL() (memcmp(saver_fb, fb, sizeof fb) != 0)
+#else
+#define SAME_DIAL() (!memcmp(dial, fb, sizeof fb))
+#endif
+static void screensaver(const char *dir)
+{
+    static const struct { uint8_t kind; const char *name; } K[] = {
+        { NET_SAVER_MATRIX, "saver-matrix" }, { NET_SAVER_DIGITAL, "saver-digital" },
+        { NET_SAVER_DRIFT, "saver-drift" }, { NET_SAVER_CLOCK, "saver-clock" },
+    };
+    ui_set_brightness(80);
+    quiet();
+    for (size_t k = 0; k < sizeof K / sizeof *K; k++) {
+        where = K[k].name;
+        ui_screen_set(&(net_screen_t){ K[k].kind, 1, 1, 1 });
+        run(500);
+        lv_obj_invalidate(lv_screen_active());
+        lv_refr_now(disp);
+        memcpy(dial, fb, sizeof fb);
+        now_ms += 59000; ui_dim_tick(false); run(200);
+        memset(saver_fb, 0, sizeof saver_fb);
+        CHECK(SAME_DIAL());                            /* not yet */
+        now_ms += 1500; ui_dim_tick(false);
+        panel_px = 0;
+        run(3000);
+        CHECK(memcmp(dial, fb, sizeof fb) != 0);        /* the saver on the glass */
+        CHECK(backlight == 204);
+        /* What it costs: the pixels sent a second. */
+        printf("%s: %d px/s to the glass\n", K[k].name, panel_px / 3);
+        snap(dir, K[k].name);
+        memcpy(saver_fb, fb, sizeof fb);
+        where = "...the face changing behind it draws nothing over it";
+        n_flush = 0;
+        st.freq_hz += 1000;
+        run(1000);
+        st.freq_hz -= 1000;
+        run(1000);
+        CHECK(n_flush == 0);
+        where = "...dimmed a minute later";
+        now_ms += 60000; ui_dim_tick(false); run(200);
+        CHECK(backlight == 18);
+        where = "...a touch only brings the dial back, as it was";
+        down(SLAB_X, SLAB_Y); run(120); up(); run(400);
+        CHECK(!ptt());
+        CHECK(backlight == 204);
+        CHECK(SAME_DIAL());
+        where = "...dark at the third minute, the dial drawn behind it";
+        now_ms += 181000; ui_dim_tick(false); run(400);
+        CHECK(backlight == 0);
+        CHECK(SAME_DIAL());
+        ui_note_activity(); run(100);
+        CHECK(backlight == 204);
+        quiet();
+    }
+    where = "the digital clock with no time yet";
+    clock_set = false;
+    ui_screen_set(&(net_screen_t){ NET_SAVER_DIGITAL, 1, 1, 1 });
+    now_ms += 61000; ui_dim_tick(false); run(1500);
+    snap(dir, "saver-notime");
+    clock_set = true;
+    ui_screen_set(&(net_screen_t){ NET_SAVER_NONE, 0, 0, 0 });
+    run(200);
+    quiet();
 }
 
 /* Which way up (GitHub #15): with the USB cable at the top, as the knob
@@ -3316,10 +4115,23 @@ int main(int argc, char **argv)
     run(100);
     runs(dir);
     brightness();
+    screensaver(dir);
     turned();
     if (least_room < 99) printf("%s: the battery, %d px clear of anything else at the least\n", argv[0], least_room);
     if (knob_least_room < 99)
         printf("%s: the knob's own battery, %d px clear of anything else at the least\n", argv[0], knob_least_room);
+    {
+        /* LVGL's pool at its fullest, the run's whole: the knob has 64 kB of
+         * it, and a pointer there is half the PC's, so the PC's figure is
+         * larger. Measured 2026-11-04: every released face at most 76 kB
+         * here (the Telephone); the Clock's dial drawn unbatched, 86 kB here,
+         * ran the knob's out and crashed it. */
+        lv_mem_monitor_t m;
+        lv_mem_monitor(&m);
+        printf("%s: LVGL's pool at most %zu bytes\n", argv[0], m.max_used);
+        where = "LVGL's pool, the whole run";
+        CHECK(m.max_used < 80 * 1024);
+    }
     printf("%s: %d checks, %d failed\n", argv[0], n_run, n_fail);
     return n_fail ? 1 : 0;
 }
