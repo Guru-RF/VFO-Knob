@@ -83,7 +83,8 @@ the date; on the Weather the temperature and the sky in words.
 ## The time
 
 The knob takes the time from the internet (pool.ntp.org) once it is on WiFi,
-in UTC. Until the first answer, the clocks say **NO TIME YET**. Without an
+in UTC; on the AetherSDR firmware's cable, once the computer passes it on
+([the internet over the cable](aethersdr.md#the-internet-over-the-cable)). Until the first answer, the clocks say **NO TIME YET**. Without an
 answer for a day, they turn grey.
 
 ## Dark

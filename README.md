@@ -267,6 +267,9 @@ running AetherSDR (step by step: [the AetherSDR guide](docs/aethersdr.md)):
 5. If you want WiFi, set an SSID and the AetherSDR host. The host is only used
    on WiFi: over the cable the knob always talks to the computer it is plugged
    into.
+6. Optional: for the knob's clock and its own update checks, let the computer
+   pass the knob's traffic on to the internet:
+   [the internet over the cable](docs/aethersdr.md#the-internet-over-the-cable).
 
 ## If the page does not open
 

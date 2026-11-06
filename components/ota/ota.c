@@ -36,7 +36,8 @@ static const char *TAG = "ota";
  *
  * The reason is CORS. The configuration page needs to fetch the image itself
  * when the knob is on the USB cable, because there the knob is the DHCP server
- * and has no route to the internet: the browser has to do the downloading.
+ * and has a route to the internet only when the computer forwards for it: the
+ * browser has to do the downloading.
  * Release assets redirect to release-assets.githubusercontent.com, which sends
  * no Access-Control-Allow-Origin, so a page served from 10.55.42.1 cannot read
  * them. raw.githubusercontent.com sends "*", so one source works for both the

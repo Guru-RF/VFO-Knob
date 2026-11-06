@@ -20,9 +20,12 @@ const char *usb_net_host(void)  { return NULL; }
 #include "esp_mac.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_netif_net_stack.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/dns.h"
+#include "lwip/netif.h"
 #include "tinyusb.h"
 #include "tinyusb_net.h"
 #include "tusb.h"
@@ -194,10 +197,44 @@ static esp_err_t usb_recv(void *buffer, uint16_t len, void *ctx)
     return ESP_OK;
 }
 
+/* The address the computer was given is the knob's way out: its default
+ * route. Past the computer it goes only if the computer forwards for it -- a
+ * NAT rule, see docs/aethersdr.md -- and without one nothing gets beyond it,
+ * as before. The resolvers are public ones, through that same NAT: the
+ * computer runs none to ask. lwIP's task. */
+static esp_ip4_addr_t s_lease;
+
+static esp_err_t route_via_lease(void *ctx)
+{
+    (void)ctx;
+    struct netif *n = esp_netif_get_netif_impl(s_netif);
+    if (!n) return ESP_FAIL;
+    ip4_addr_t gw;
+    ip4_addr_set_u32(&gw, s_lease.addr);
+    netif_set_gw(n, &gw);
+    /* Only where none is set: the Xiegu's firmware joins WiFi beside the
+     * cable, and its own network's resolver stays. */
+    if (ip_addr_isany_val(*dns_getserver(0))) {
+        ip_addr_t a;
+        IP_ADDR4(&a, 1, 1, 1, 1);
+        dns_setserver(0, &a);
+        IP_ADDR4(&a, 8, 8, 8, 8);
+        dns_setserver(1, &a);
+    }
+    return ESP_OK;
+}
+
 static void on_dhcp_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    (void)arg; (void)base; (void)data;
+    (void)arg; (void)base;
     if (id == IP_EVENT_ETH_GOT_IP) s_host_seen = true;
+    if (id == IP_EVENT_AP_STAIPASSIGNED) {
+        const ip_event_ap_staipassigned_t *e = data;
+        if (e->esp_netif != s_netif) return;          /* the WiFi setup's hotspot */
+        s_lease = e->ip;
+        if (esp_netif_tcpip_exec(route_via_lease, NULL) == ESP_OK)
+            ESP_LOGI(TAG, "the computer has " IPSTR ": the knob's way out", IP2STR(&e->ip));
+    }
 }
 
 /* Stop the USB OTG controller, DMA engine and all, and hand the PHY back.
@@ -316,11 +353,7 @@ esp_err_t usb_net_init(void)
     base.route_prio = 10;              /* below WiFi's default 50 by design */
     base.flags = (esp_netif_flags_t)(ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP);
 
-    /* No gateway. The DHCP server offers a router only when the interface has
-     * one, and it used to be our own address -- which told the computer to
-     * send its internet traffic down the cable. A 12 Mbit/s link can outrank
-     * slow Wi-Fi in Windows' metrics, and the page's own firmware download
-     * then went nowhere. Nothing on this link lies beyond it. */
+    /* No gateway here: route_via_lease() sets it, below and at each lease. */
     esp_netif_ip_info_t ip = { 0 };
     ip.ip.addr      = esp_ip4addr_aton(USB_NET_DEVICE_IP);
     ip.netmask.addr = esp_ip4addr_aton(USB_NET_NETMASK);
@@ -342,11 +375,30 @@ esp_err_t usb_net_init(void)
      * stops at esp_netif's own copy, for a driver like this one. */
     ESP_RETURN_ON_ERROR(esp_netif_set_mac(s_netif, own), TAG, "netif mac");
 
+    /* No router offered, ever. The DHCP server offers its interface's gateway
+     * -- once the lease sets it, the computer's own address -- and an offered
+     * router (it used to be ours) tells the computer to send its internet
+     * traffic down the cable. A 12 Mbit/s link can outrank slow Wi-Fi in
+     * Windows' metrics, and the page's own firmware download then went
+     * nowhere. The route is the knob's alone. */
+    uint8_t no_router = 0;
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(s_netif, ESP_NETIF_OP_SET,
+                                               ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
+                                               &no_router, sizeof no_router),
+                        TAG, "no router");
+
     esp_netif_action_start(s_netif, NULL, 0, NULL);
     /* Never ESP_ERROR_CHECK during init: an abort here is a reboot loop. */
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID,
                                                    on_dhcp_event, NULL),
                         TAG, "ip evt");
+
+    /* The address the server gives first, before any lease: a computer
+     * keeps its address across a restart of the knob, and may never ask
+     * again (usb_net_is_up). */
+    s_lease.addr = esp_ip4addr_aton(USB_NET_HOST_IP);
+    if (esp_netif_tcpip_exec(route_via_lease, NULL) != ESP_OK)
+        ESP_LOGW(TAG, "no route via the computer");
 
     ESP_LOGI(TAG, "USB network up: device %s, host will be %s",
              USB_NET_DEVICE_IP, USB_NET_HOST_IP);

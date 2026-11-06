@@ -2134,7 +2134,8 @@ static int bt_update_json(char *j, size_t cap, const bt_link_status_t *st)
                  o.from_card ? "card" : "server");
     }
     /* Before its first check the knob can fetch for itself while WiFi is
-     * its way: the USB cable has no route out. */
+     * its way: the USB cable has a route out only when the computer forwards
+     * for it, and the first check says whether it does. */
     char wifi[20];
     netif_addr("WIFI_STA_DEF", wifi, sizeof wifi);
     const bool can_fetch = o.looked ? o.route : wifi[0] != 0;

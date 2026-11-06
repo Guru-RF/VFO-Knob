@@ -47,6 +47,45 @@ the computer's firewall is the usual reason: see the README's
 
 ![NO LINK, with the knob's addresses](aethersdr/03-no-link.svg)
 
+## The internet over the cable
+
+Over the cable the knob reaches the computer, and beyond it only if the
+computer passes its traffic on. Tuning, transmitting and the page never need
+the internet. The time does: the clock screensavers say **NO TIME YET** until
+they have it. So do the knob's own update checks; without them the page
+checks for it. From 1.24.2 the knob sends the computer everything not meant
+for it, and asks Cloudflare's and Google's name servers (1.1.1.1, 8.8.8.8).
+The computer passes it on with NAT:
+
+**Linux.** The first two last until the computer restarts. The third is only
+for ufw, which drops forwarded traffic by default, and it stays:
+
+```sh
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A POSTROUTING -s 10.55.42.0/24 ! -d 10.55.42.0/24 -j MASQUERADE
+sudo ufw route allow from 10.55.42.0/24
+```
+
+**macOS**, not tried yet. `en0` stands for the Mac's own way to the
+internet; `route get default` names it:
+
+```sh
+sudo sysctl -w net.inet.ip.forwarding=1
+echo "nat on en0 from 10.55.42.0/24 to any -> (en0)" | sudo pfctl -a com.apple/vfoknob -f -
+sudo pfctl -E
+```
+
+**Windows**, not tried yet. Its own NAT comes with Hyper-V, so Pro or
+Enterprise with Hyper-V on, from an administrator PowerShell:
+
+```powershell
+New-NetNat -Name VFO-Knob -InternalIPInterfaceAddressPrefix 10.55.42.0/24
+```
+
+Internet Connection Sharing does not do it: it gives the cable addresses of
+its own. The knob still offers the computer no route, so the computer's own
+traffic never goes down the cable.
+
 ## The face
 
 ![The AetherSDR face, its parts named](aethersdr/01-face.svg)

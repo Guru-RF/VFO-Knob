@@ -3513,9 +3513,11 @@ RADIO_ONLY_FN static void net_task(void *arg)
             }
             /* On WiFi the release server is in reach: see if there is
              * anything newer, once, before TCI takes the RAM an install
-             * would need. */
+             * would need. On the cable only for an update accepted before
+             * this restart: the hourly check finds one there when the
+             * computer forwards for the knob, and a yes is never dropped. */
             static bool update_checked;
-            if (host && !via_usb && !update_checked) {
+            if (host && (!via_usb || s_update_accepted) && !update_checked) {
                 update_checked = true;
                 boot_update_check();
             }
