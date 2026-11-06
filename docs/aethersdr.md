@@ -4,7 +4,8 @@
 talking to it over **TCI**, AetherSDR's own control protocol — so the knob is
 not polling, it is told. Tune at the desktop and the knob follows; turn the
 knob and the desktop moves. Audio comes from AetherSDR to the knob's jack, and
-the knob's microphone goes back. Its face wears AetherSDR's dark theme.
+the knob's microphone goes back — or AetherSDR's own, the computer's, with
+the knob for its PTT. Its face wears AetherSDR's dark theme.
 
 The pictures are the knob's own screens, drawn from the firmware's texts and
 layout (`tools/mkdocs.py`); the orange marks are what your hand does.
@@ -102,6 +103,17 @@ forward power across the right, the microphone on the thin inner ring, the mic
 level on AetherSDR's own scale.
 
 ![On the air: SWR 1.3, 50 W of 100](aethersdr/06-tx.svg)
+
+### With the computer's microphone
+
+Until set, the knob transmits its own microphone, or a Bluetooth headset's.
+To transmit with AetherSDR's own microphone input instead — a USB microphone
+on the computer, say — set **Transmit with** to **AetherSDR's own microphone**
+under **Audio** on the configuration page. The knob's PTT then keys AetherSDR
+as a foot switch would: AetherSDR transmits from its own input, and the
+knob's microphone stays off. The mic level on the face is AetherSDR's either
+way, so it shows the computer's microphone. It applies from the next time you
+key.
 
 The transmit time-out is the radio's own: set it in AetherSDR, *Radio Setup →
 TX → Timeout*. The radio enforces it itself, so it holds even if the knob, the

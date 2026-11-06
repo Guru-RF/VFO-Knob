@@ -32,6 +32,7 @@
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
 #include "lwip/sockets.h"
+#include "net_prov.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ptt_fsm.h"
@@ -86,6 +87,7 @@ typedef struct {
     char       last_close[48];
     /* --- PTT --- */
     ptt_fsm_t  ptt;
+    bool       tx_own;              /* this key AetherSDR's own microphone's, not ours */
     int64_t    last_pong_us;
     bool       tx_enable_seen;
     bool       have_chan_sensors;   /* the opt-in, higher-precision stream */
@@ -182,8 +184,19 @@ static void ptt_dispatch(const ptt_out_t *o)
     /* ",tci" names our TX_AUDIO as the source. Without it AetherSDR keys a
      * voice mode like a foot switch: the radio transmits its own mic input,
      * no TX_CHRONO ever arrives, and the knob's microphone is never sent.
-     * Only digital modes default to TCI audio. */
-    if (o->send_key)   send_cmd("trx:%u,true,tci;", (unsigned)S.my_trx);
+     * Only digital modes default to TCI audio. Which of the two is the
+     * page's on AetherSDR (GitHub #19): the knob's microphone -- or a
+     * headset's -- until set, or AetherSDR's own, the computer's, with the
+     * knob for its foot switch. Its tx_sensors mic level is the face's
+     * either way. Taken at each key, so a change on the page is the next
+     * over's. */
+    if (o->send_key) {
+#if VFO_RADIO_AETHERSDR
+        S.tx_own = net_prov_tx_mic() == NET_TX_RADIO;
+#endif
+        if (S.tx_own) send_cmd("trx:%u,true;",     (unsigned)S.my_trx);
+        else          send_cmd("trx:%u,true,tci;", (unsigned)S.my_trx);
+    }
     if (o->send_unkey) send_cmd("trx:%u,false;",    (unsigned)S.my_trx);
 
     if (o->close_socket) {
@@ -200,7 +213,11 @@ static void ptt_dispatch(const ptt_out_t *o)
     }
     /* The microphone runs only while keyed. A live mic when the operator has
      * not asked to transmit is a privacy bug, not just a wasted buffer. */
-    if (o->entered_tx) { audio_in_set_active(true);  ESP_LOGW(TAG, "*** TX ***"); }
+    if (o->entered_tx) {
+        /* ...and not at all while AetherSDR transmits its own. */
+        if (!S.tx_own) audio_in_set_active(true);
+        ESP_LOGW(TAG, "*** TX ***%s", S.tx_own ? " with AetherSDR's own microphone" : "");
+    }
     if (o->left_tx)    { audio_in_set_active(false); ESP_LOGI(TAG, "*** RX ***"); }
     if (o->refused)    log_refusal(o->missing);
 }

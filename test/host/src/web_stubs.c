@@ -72,6 +72,9 @@ uint8_t net_prov_brightness(void) { return s_bright; }
 void net_prov_save_brightness(uint8_t percent) { s_bright = percent; }
 uint8_t net_prov_jack_db(void) { return s_jack_db; }
 void net_prov_save_jack_db(uint8_t db) { if (db <= 12 && db % 3 == 0) s_jack_db = db; }
+static uint8_t s_tx_mic;
+uint8_t net_prov_tx_mic(void) { return s_tx_mic; }
+void net_prov_save_tx_mic(uint8_t src) { if (src <= 1) s_tx_mic = src; }
 static bool s_turned;
 bool net_prov_turned(void) { return s_turned; }
 void net_prov_save_turned(bool turned) { s_turned = turned; }

@@ -705,12 +705,20 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
          <select id="jack"><option value="0">0 dB</option><option value="3">+3 dB</option>
            <option value="6">+6 dB</option><option value="9">+9 dB</option>
            <option value="12">+12 dB</option></select></div>
+    <div id="txmicrow" hidden><label for="txmic">Transmit with</label>
+         <select id="txmic"><option value="0">The knob's microphone</option>
+           <option value="1">AetherSDR's own microphone</option></select></div>
   </div>
   <p class="note" id="jacknote">The jack's level is for wired earphones or a headset too quiet
      with the volume at 100: the jack is a line output. Above 0 dB a loud
      passage is turned down rather than clipped, and the jack plays 10 ms later
      for it, 15 on SVXConnect and the Telephone. A Bluetooth headset or speaker
      has a level of its own, above.</p>
+  <p class="note" id="txmicnote" hidden><b>Transmit with</b>: the knob's microphone &mdash; or a
+     Bluetooth headset's &mdash; sent to AetherSDR, or AetherSDR's own microphone input, the
+     computer's: the knob's PTT then keys AetherSDR as a foot switch would, and the knob's
+     microphone stays off. The mic meter shows AetherSDR's level either way. From the next
+     time you transmit.</p>
   <p class="note" id="micnote">Volume and mic gain take effect immediately. The knob's own
      microphone and a Bluetooth headset's each have their gain: the dial
      turns the one in use.</p>
@@ -1030,7 +1038,7 @@ async function load(){
   $('ss').value=String(c.ss??1); $('ssa').value=c.ssa??1; $('ssd').value=c.ssd??1; $('ssb').value=c.ssb??1;
   $('h24').value=c.h24===false?'0':'1'; tzLoad(c.tz||'Europe/Brussels');
   $('ckface').value=String(c.ckface ?? 0); $('cksec').value=c.cksec===false?'0':'1';
-  $('jack').value=String(c.jack??0); $('bright').value=c.bright??80; $('turn').value=String(c.turn??0);
+  $('jack').value=String(c.jack??0); $('txmic').value=String(c.txmic??0); $('bright').value=c.bright??80; $('turn').value=String(c.turn??0);
   FWROOT=c.fwroot||''; RADIO=c.radio||'aethersdr'; radios();
   /* The address this browser reaches the knob from. Over the cable that is the
      USB link's own 10.55.42.2 -- found automatically there, and unreachable
@@ -1043,6 +1051,8 @@ async function load(){
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
   const ox = c.radio === 'openx6x00';    /* an X6100 or X6200 on OpenX6X00: TCI, found as x6100.local or x6200.local */
+  /* AetherSDR's own microphone, or the knob's (GitHub #19). */
+  $('txmicrow').hidden = $('txmicnote').hidden = c.radio !== 'aethersdr';
   KIWI = c.radio === 'kiwi';              /* web receivers: the list below, one in use */
   OWRX = c.radio === 'owrx';              /* web receivers: this list, each by its address whole */
   WSDR = c.radio === 'websdr';            /* ...WebSDRs, the same way */
@@ -2235,7 +2245,7 @@ $('save').onclick=async()=>{
   const b=new URLSearchParams();
   /* With a list of radios the one in use is saved with the list, below; the
      kiwi firmware's receivers are the web SDRs' list. */
-  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','jack','user','otah','ss','ssa','ssd','ssb','tz','h24','ckface','cksec','bright','turn',...(EPI?['beamn']:[])])
+  for(const k of [...(LIST||KIWI?[]:['host','port']),...(VOLEDIT?['vol']:[]),'mic','mich','jack','user','otah','ss','ssa','ssd','ssb','tz','h24','ckface','cksec','bright','turn',...(EPI?['beamn']:[]),...(RADIO==='aethersdr'?['txmic']:[])])
     b.append(k,$(k).value);
   if(!$('rlogin').hidden){
     b.append('ruser',$('ruser').value);

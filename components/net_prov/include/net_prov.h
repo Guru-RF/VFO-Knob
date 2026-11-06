@@ -261,6 +261,14 @@ void     net_prov_save_alarms(const net_alarms_t *a);
 uint8_t  net_prov_jack_db(void);
 void     net_prov_save_jack_db(uint8_t db);
 
+/* What the AetherSDR firmware transmits with (GitHub #19): NET_TX_KNOB, the
+ * knob's own microphone or a headset's, sent over TCI, until set; or
+ * NET_TX_RADIO, AetherSDR's own microphone input -- the computer's -- the
+ * knob keying it as a foot switch would. Read at each key (tci_client). */
+enum { NET_TX_KNOB, NET_TX_RADIO };
+uint8_t  net_prov_tx_mic(void);
+void     net_prov_save_tx_mic(uint8_t src);
+
 /* Boot-loop guard. net_prov_boot_count() is incremented on every boot and
  * cleared once the device has been up long enough to be considered healthy;
  * call net_prov_boot_ok() from a timer for that. Three rapid boots in a row

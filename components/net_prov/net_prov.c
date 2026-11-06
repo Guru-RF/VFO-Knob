@@ -262,6 +262,7 @@ static bool     s_turned;           /* the USB cable at the bottom: the screen t
 static uint8_t  s_beam_n = 4;       /* EpiBeam: the array's directions, 4 or 8 */
 static uint8_t  s_beam_dir;         /* ...and the one the beam was left on, 0 = N */
 static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
+static uint8_t  s_tx_mic;           /* NET_TX_*: what AetherSDR transmits with */
 #if VFO_RADIO_ADSB
 /* ADS-B Radar's radar: in PSRAM, as large as it is beside the rest. */
 EXT_RAM_BSS_ATTR static net_adsb_t s_adsb;
@@ -703,6 +704,7 @@ void net_prov_load_settings(void)
     if (kv_get_u8(h, "beamn", &v) == ESP_OK && (v == 4 || v == 8)) s_beam_n = v;
     if (kv_get_u8(h, "beamd", &v) == ESP_OK && v < s_beam_n) s_beam_dir = v;
     if (kv_get_u8(h, "jackdb", &v) == ESP_OK && v <= NET_PROV_JACK_DB_MAX && v % 3 == 0) s_jack_db = v;
+    if (kv_get_u8(h, "txmic", &v) == ESP_OK && v <= NET_TX_RADIO) s_tx_mic = v;
 #if VFO_RADIO_ADSB
     adsb_load(h);
 #endif
@@ -1381,6 +1383,16 @@ void net_prov_save_jack_db(uint8_t db)
     if (db > NET_PROV_JACK_DB_MAX || db % 3 || db == s_jack_db) return;
     s_jack_db = db;
     kv_set_u8(kv(), "jackdb", db);
+    kv_commit_now(kv());
+}
+
+uint8_t net_prov_tx_mic(void) { return s_tx_mic; }
+
+void net_prov_save_tx_mic(uint8_t src)
+{
+    if (src > NET_TX_RADIO || src == s_tx_mic) return;
+    s_tx_mic = src;
+    kv_set_u8(kv(), "txmic", src);
     kv_commit_now(kv());
 }
 

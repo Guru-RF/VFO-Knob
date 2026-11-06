@@ -344,7 +344,7 @@ static esp_err_t config_get(httpd_req_t *r)
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"mich\":%u,"
-             "\"jack\":%u,\"bright\":%u,\"turn\":%u,\"beamn\":%u,"
+             "\"jack\":%u,\"txmic\":%u,\"bright\":%u,\"turn\":%u,\"beamn\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"pwforce\":%s,\"otah\":%u,"
              "\"ss\":%u,\"ssa\":%u,\"ssd\":%u,\"ssb\":%u,\"tz\":\"%s\",\"h24\":%s,"
              "\"ckface\":%u,\"cksec\":%s,"
@@ -354,7 +354,7 @@ static esp_err_t config_get(httpd_req_t *r)
              host, (unsigned)c->radio_port, ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              (unsigned)net_prov_mic_gain_headset(),
-             (unsigned)net_prov_jack_db(), (unsigned)net_prov_brightness(),
+             (unsigned)net_prov_jack_db(), (unsigned)net_prov_tx_mic(), (unsigned)net_prov_brightness(),
              (unsigned)net_prov_turned(), (unsigned)net_prov_beam_dirs(),
              user,
              net_prov_web_is_default() ? "true" : "false",
@@ -579,6 +579,7 @@ static esp_err_t config_post(httpd_req_t *r)
         net_prov_save_jack_db((uint8_t)clampl(v, 0, NET_PROV_JACK_DB_MAX));
         audio_out_set_jack_level(net_prov_jack_db());
     }
+    if (field_num(body, "txmic", &v)) net_prov_save_tx_mic((uint8_t)clampl(v, NET_TX_KNOB, NET_TX_RADIO));
 
     ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u",
              cfg.radio_host, (unsigned)cfg.radio_port, cfg.ssid,
