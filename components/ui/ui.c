@@ -141,6 +141,30 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define C_TX_RED    lv_color_hex(0xE8262B)
 #define C_GREEN     lv_color_hex(0x43B649)   /* multiFLEX green         */
 #define PWR_HEX     0x43B649                 /* Po in green, as on the Maestro */
+#elif VFO_RADIO_K4
+/* --- Elecraft palette -------------------------------------------------------
+ * Black, white digits, a gold accent and green meters, the S-meter scale
+ * green up to S9 and red over it. Chosen by eye -- not taken from the K4's own
+ * screen or from an Elecraft style guide. The layout is the other faces', and
+ * the colours say which radio this knob is for. */
+#define C_BG        lv_color_hex(0x000000)
+#define C_BG1       lv_color_hex(0x15171B)   /* panels, the PTT slab    */
+#define C_BG_TX     lv_color_hex(0x2A0709)   /* a red tint on the air   */
+#define C_ACCENT    lv_color_hex(0xF2B01E)   /* gold                    */
+#define C_ACCENT_HI lv_color_hex(0xFFD066)
+#define C_TEXT      lv_color_hex(0xFFFFFF)   /* white digits            */
+#define C_TEXT2     lv_color_hex(0xC8CCD2)
+#define C_LABEL     lv_color_hex(0x7C828C)
+#define C_DISABLED  lv_color_hex(0x3A3E46)
+#define C_SUBTLE    lv_color_hex(0x1A1D22)
+#define C_WARN      lv_color_hex(0xFFB000)
+#define C_DANGER    lv_color_hex(0xF03A2E)
+#define C_TX_BORDER lv_color_hex(0xE8262B)   /* the TX badge            */
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xFFFFFF)
+#define C_TX_RED    lv_color_hex(0xE8262B)
+#define C_GREEN     lv_color_hex(0x3DBE5A)   /* the meters              */
+#define PWR_HEX     0x3DBE5A                 /* Po in green             */
 #elif VFO_RADIO_OPENX6X00
 /* --- OpenX6X00 palette -----------------------------------------------------
  * The X6100's and X6200's own screen under the OpenX6X00 firmware: its
@@ -626,6 +650,10 @@ static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
     { -40.0f, -10.0f, 0x2A9DF4 },   /* blue  */
     { -10.0f,   0.0f, 0xFFB000 },   /* amber */
     {   0.0f,  10.0f, 0xF0302C },   /* red   */
+#elif VFO_RADIO_K4
+    { -40.0f, -10.0f, 0x3DBE5A },   /* green */
+    { -10.0f,   0.0f, 0xFFB000 },   /* amber */
+    {   0.0f,  10.0f, 0xF03A2E },   /* red   */
 #elif VFO_RADIO_OPENX6X00
     { -40.0f, -10.0f, 0x34D399 },   /* ok      */
     { -10.0f,   0.0f, 0xFBBF24 },   /* bar_mid */
@@ -829,6 +857,10 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0x2A9DF4 },   /* blue  */
     { 2.0f, 2.5f, 0xFFB000 },   /* amber */
     { 2.5f, 3.0f, 0xF0302C },   /* red   */
+#elif VFO_RADIO_K4
+    { 1.0f, 2.0f, 0x3DBE5A },   /* green */
+    { 2.0f, 2.5f, 0xFFB000 },   /* amber */
+    { 2.5f, 3.0f, 0xF03A2E },   /* red   */
 #elif VFO_RADIO_OPENX6X00
     { 1.0f, 2.0f, 0x34D399 },   /* ok       */
     { 2.0f, 2.5f, 0xFBBF24 },   /* bar_mid  */
@@ -882,6 +914,15 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -85.0f,  -73.0f, 0x2A9DF4 },   /* S7 to S9   */
     {  -73.0f,  -53.0f, 0xF26A6A },   /* S9 to +20: red over S9, as on the Maestro */
     {  -53.0f,  -33.0f, 0xEE4444 },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0xE8262B },   /* +40 to +60 */
+#elif VFO_RADIO_K4
+    { -127.0f, -121.0f, 0x16502A },   /* S0 to S1: green, brightening */
+    { -121.0f, -109.0f, 0x1E7438 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0x279646 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0x32B054 },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0x3DBE5A },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0xF26A4A },   /* S9 to +20: red over S9 */
+    {  -53.0f,  -33.0f, 0xEE4430 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0xE8262B },   /* +40 to +60 */
 #elif VFO_RADIO_OPENX6X00
     { -127.0f, -121.0f, 0x94A3B8 },   /* S0 to S1: meter_weak, slate brightening */
@@ -1151,6 +1192,13 @@ static const char *AGCS[]  = { "fast","mid","slow" };
 static const char *MODES[] = { "usb","lsb","cw","am","sam","fm","nfm",
                                "digu","digl","rtty" };
 static const char *AGCS[]  = { "fast","med","slow","off" };
+#define GAIN_CAPTION "RF.G"
+#elif VFO_RADIO_K4
+/* The K4's own modes -- LSB, USB, CW and CW-R, AM, FM, and DATA either way up
+ * (its DATA and DATA-R) -- and its AGC: off, slow or fast. The gain beside the
+ * S-meter is its RF gain, an attenuation: 0 to -60 dB. */
+static const char *MODES[] = { "usb","lsb","cw","cwr","am","fm","digu","digl" };
+static const char *AGCS[]  = { "fast","slow","off" };
 #define GAIN_CAPTION "RF.G"
 #elif VFO_RADIO_OPENX6X00
 /* The modes and AGCs OpenX6X00's TCI server names (src/tci_server.c): an

@@ -121,6 +121,17 @@
 #define DEFAULT_PORT 4992            /* FlexRadio's API */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_K4
+#define KEY_HOST     "k4host"
+#define KEY_RLIST    "k4list"     /* the radios, one in use: see below */
+#define KEY_RSEL     "k4sel"
+#define KEY_PORT     "k4port"
+#define KEY_USER     "k4user"     /* unused: a K4 has a password and no users */
+#define KEY_PASS     "k4pass"
+#define DEFAULT_HOST ""              /* the radio's IP address, given on the page */
+#define DEFAULT_PORT 9205            /* the K4's remote server, in the clear */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_UBERSDR
 #define KEY_HOST     "ubhost"
 #define KEY_RLIST    "ublist"     /* the receivers, one in use: see below */

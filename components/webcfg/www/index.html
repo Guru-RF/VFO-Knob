@@ -154,6 +154,14 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      AetherSDR or a Maestro. MultiFlex must be enabled on the radio. The knob
      reaches the radio over WiFi, and applies changes here on its next
      boot.</p>
+  <p class="note" id="k4note" hidden>The K4's IP address, its port (9205, the
+     clear one, unless you changed it) and the server password. On the radio,
+     tap the globe, then <b>SERVER SETTINGS</b>: a password (no &lsquo;$&rsquo;)
+     and <b>Max Clients</b> of 1 or more &mdash; the knob is a client, as
+     K4remote is. The password goes over the network hashed, and nothing else
+     is encrypted: keep it to your own network. <b>Beta</b>: not yet tried on
+     a radio. The knob reaches the radio over WiFi, and applies changes here
+     on its next boot.</p>
   <p class="note" id="xiegunote" hidden>The knob talks to the wfview server
      built into the radio: <b>SYSTEM SETTING &raquo; WFSERVER &raquo; START</b>.
      Its user is <b>user</b>, password <b>123</b>, unless changed there. The
@@ -1068,6 +1076,7 @@ async function load(){
   const lan = icom || xiegu;              /* the radio itself, with a login */
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
+  const k4 = c.radio === 'k4';            /* an Elecraft K4: its address, port and password */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
   const ox = c.radio === 'openx6x00';    /* an X6100 or X6200 on OpenX6X00: TCI, found as x6100.local or x6200.local */
   /* AetherSDR's own microphone, or the knob's (GitHub #19). */
@@ -1103,12 +1112,13 @@ async function load(){
   if (PHONE && !phoneLoaded) { document.documentElement.style.setProperty('--accent','#e5a823'); phoneLoad(); }
   LINKNAME = c.link || 'Radio';
   $('rtitle').textContent = icom ? 'Icom radios' : xiegu ? 'X6100 / X6200'
-                          : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : uber ? 'UberSDR'
+                          : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : k4 ? 'Elecraft K4' : uber ? 'UberSDR'
                           : OWRX ? 'OpenWebRX receivers' : WSDR ? 'WebSDR receivers'
                           : ox ? 'OpenX6X00' : 'AetherSDR';
-  $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu ? "The radio's IP address"
+  $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu || k4 ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
+  $('k4note').hidden = !k4;
   $('ubernote').hidden = !uber;
   $('owrxnote').hidden = !OWRX;
   $('wsdrnote').hidden = !WSDR;
@@ -1127,15 +1137,15 @@ async function load(){
   $('xiegunote').hidden = !xiegu;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
-  myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !uber && !WEBRX && !ox ? c.client : '';
+  myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !k4 && !uber && !WEBRX && !ox ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = lan || SVX || flex || uber || WEBRX || ox || !(c.client && c.client_usb);
+  $('hostusb').hidden = lan || SVX || flex || k4 || uber || WEBRX || ox || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
-  LIST = !SVX && c.radio !== 'setup' && !KIWI && !SCREEN; LAN = lan; UBER = uber; RXONLY = uber || KIWI || WEBRX;
+  LIST = !SVX && c.radio !== 'setup' && !KIWI && !SCREEN; LAN = lan; UBER = uber; K4 = k4; RXONLY = uber || KIWI || WEBRX;
   /* A receiver's firmware has no microphone: no gain to set for one. */
   $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY || SCREEN; $('volnote').hidden = !RXONLY || SCREEN;
-  HOSTLBL = flex || xiegu ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
+  HOSTLBL = flex || xiegu || k4 ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
           : WEBRX ? 'Address (http://\u2026, or https://\u2026)' : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
   if (LIST) { $('rlogin').hidden = true; rigsLoad(); }
@@ -1426,7 +1436,7 @@ function foundAdd(i){
 }
 
 /* ---- the radios: one in use, a swipe up on the knob for another ---- */
-let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, UBER=false, KIWI=false, RXONLY=false, HOSTLBL='Host';
+let RIGS=null, RIG_USE=0, rigsDirty=false, LIST=false, LAN=false, UBER=false, K4=false, KIWI=false, RXONLY=false, HOSTLBL='Host';
 /* The openwebrx and websdr firmwares' receivers: In use chosen here, and
    each one's state as the knob knows it, read again every few seconds. */
 let OWRX=false, WSDR=false, WEBRX=false, rigUseDirty=false, rigsTimer=0, RIG_USE0=0;
@@ -1569,7 +1579,7 @@ function rigsRender(){
       <div><label>${HOSTLBL}${myIp?` <button type="button" class="pill up" data-myip>my IP ${esc(myIp)}</button>`:''}</label>
         <input data-k="host" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
       ${WEBRX?'':'<div><label>Port</label><input data-k="port" inputmode="numeric"></div>'}
-      ${UBER?`<div><label>Password (optional)${x.hasPass?' <button type="button" class="pill down" data-clr>clear</button>':''}</label>
+      ${UBER||K4?`<div><label>Password${UBER?' (optional)':''}${x.hasPass?' <button type="button" class="pill down" data-clr>clear</button>':''}</label>
         <div class="pw"><input data-k="pass" type="password" autocomplete="new-password" autocapitalize="none"
          autocorrect="off" spellcheck="false"><button type="button" class="show">Show</button></div></div>`:''}
       ${LAN?`<div><label>User name</label><input data-k="user" autocomplete="off" autocapitalize="none"></div>
@@ -1616,7 +1626,7 @@ function rigsRender(){
   rigsStates();
 }
 $('radd').onclick=()=>{
-  RIGS.push({name:'',host:'',port:(RIGS[0]&&RIGS[0].port)||(UBER?'443':'50001'),user:'',pass:'',
+  RIGS.push({name:'',host:'',port:(RIGS[0]&&RIGS[0].port)||(UBER?'443':K4?'9205':'50001'),user:'',pass:'',
                hasPass:false,clrPass:false,was:-1});
   rigsDirty=true; rigsRender();
   const all=$('rlist').querySelectorAll('input[data-k=host]'); all[all.length-1].focus();
@@ -2455,6 +2465,7 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'svxconnect',name:'SVXConnect (SvxLink reflectors)'},
               {id:'phone',     name:'Telephone (SIP)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},
+              {id:'k4',        name:'Elecraft K4 (remote, LAN)', beta:true},
               {id:'ubersdr',   name:'UberSDR (a web receiver)'},
               {id:'kiwi',      name:'Kiwi888 (KiwiSDR and Web-888 receivers)'},
               {id:'owrx',      name:'OpenWebRX (OpenWebRX and OpenWebRX+ receivers)'},

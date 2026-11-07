@@ -35,6 +35,10 @@ which it never keys. It also knows the IC-7300MK2, the IC-7760 and the IC-905
 themselves. The guide says
 how to set each radio up for it: see [the Icom guide](docs/icom.md).
 
+With an **Elecraft K4**, a beta not yet tried on a radio, it is a remote
+client of the radio over WiFi, as K4remote is, with audio both ways. See
+[Elecraft K4](#elecraft-k4).
+
 With a **FlexRadio** it is one of the radio's MultiFlex stations, over the
 radio's own API: a station of its own, with Opus audio both ways, or the dial
 and PTT for a SmartSDR, AetherSDR or Maestro station already on the radio. In
@@ -419,6 +423,28 @@ The radio unkeys by itself after half a second without the knob's audio,
 when the link drops, or after three minutes on the air.
 
 Step by step: [the OpenX6X00 guide](docs/openx6x00.md).
+
+## Elecraft K4
+
+The k4 firmware (`vfo-knob-k4`), a **beta**, makes the knob a remote client of
+an [Elecraft K4](https://elecraft.com/products/k4-direct-sampling-sdr-transceiver),
+as K4remote and the K4/0 are: over WiFi, to the radio's remote server, with
+no computer in between. The dial tunes VFO A, the editors set the mode, the
+passband, the AGC, the RF gain, RIT and the DSP, the slab keys the radio, and
+its Opus audio plays on the jack while the knob's microphone goes back. The
+S-meter and, on the air, power, SWR and the microphone's level are the
+radio's. A key the radio refuses is shown with its reason; a radio that stops
+answering while keyed gets the PTT ladder's unkey, as on every firmware.
+
+It speaks the radio's clear port, 9205, where the password goes as its
+SHA-384 hash and nothing else is encrypted: keep it to your own network. The
+K4's server needs a password and Max Clients of 1 or more (the globe button,
+then SERVER SETTINGS). **Not yet tried on a radio**: it is written from
+Elecraft's programmer's reference and K4remote's notes, and has run only
+against a mock. The sub receiver, VFO B, the memories and the antennas are not
+there yet.
+
+Step by step: [the K4 guide](docs/k4.md).
 
 ## Web SDRs
 

@@ -98,7 +98,13 @@ Ticked once the knob has worked with the radio itself, not only built for it.
 - [ ] TS-890
 
 **Elecraft**
-- [ ] K4
+- [ ] K4 -- the k4 firmware, a beta, from the programmer's reference and
+      K4remote's notes; run against a mock (tools/mock_k4.py, tools/k4host),
+      never against a radio. To do: a K4 to try it on (does a remote `TX;`
+      take the knob's audio as its microphone?); port 9204's TLS-PSK;
+      the sub receiver, VFO B, the antenna tuner and antennas, memories;
+      pictures for docs/k4.md; its `dependencies.k4.lock`, which the first
+      `idf.py -D VFO_RADIO=k4 build` writes
 
 **Xiegu**, the xiegu firmware, through the wfview server built into the radio:
 - [ ] X6100 — control works (radio on APP 1.2.0, the newest); receive

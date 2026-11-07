@@ -1,0 +1,27 @@
+# The k4 firmware: an Elecraft K4 over its remote protocol, with no computer
+# in between (VFO_RADIO=k4) -- the knob a remote client of the radio.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: the knob reaches
+# the radio over WiFi, and the USB link has no route to it -- the knob is the
+# DHCP server there, on a link with no gateway. Leaving TinyUSB out also frees
+# the internal RAM its buffers take, and keeps the serial console on the cable.
+
+# Opus in fixed point, as the multiflex and svxconnect firmwares run it: its
+# floating-point encoder does not keep up with real time on the ESP32-S3.
+CONFIG_OPUS_FLOATING_POINT=n
+
+# The radio's socket beside the web page's and the log's, and a browser's.
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# AES in software, as every other firmware: the engine's DMA takes its bounce
+# buffers from internal RAM, and with WiFi and Opus up there is none to spare.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# Internal RAM, kept for what only it can serve -- the WiFi driver's DMA
+# buffers, task stacks, I2S and SPI DMA -- as the multiflex firmware has it:
+# malloc() above 1 kB from PSRAM first (the web page's buffers, lwIP's
+# segments), mDNS's task and NVS's cache in PSRAM.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+CONFIG_NVS_ALLOCATE_CACHE_IN_SPIRAM=y
