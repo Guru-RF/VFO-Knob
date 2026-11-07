@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-clock",
-  "version": "1.24.0",
-  "file": "vfo-knob-clock-1.24.0.bin",
-  "sha256": "e58cf56dece1467db7b055a9b48ac8868ba63e48fb72879cb6caf3dee463c799",
+  "version": "1.24.3",
+  "file": "vfo-knob-clock-1.24.3.bin",
+  "sha256": "d1af5b956c8c8f3cbddc2bdd50422c34bd8151907b2cb785dfdbcaea7d4d5a33",
   "size": 2166784
 }
