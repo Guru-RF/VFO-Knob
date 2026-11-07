@@ -47,6 +47,13 @@ bool audio_in_take(int16_t *out, size_t samples);
 
 void audio_in_set_gain(uint8_t percent);
 
+/* Silence for the first `ms` of each over (default 0: none). The PDM filter and
+ * the DC blocker are still settling when capture starts, and the mic boost
+ * turns that into a pop at nearly full scale -- which a radio's ALC meter
+ * shows (an Elecraft K4 read 8 on a silent mic, decaying over three seconds).
+ * The blocker keeps running meanwhile, so what follows starts clean. */
+void audio_in_set_settle_ms(uint16_t ms);
+
 /* A Bluetooth headset's microphone in place of the knob's own
  * (components/bt_link). While one is in use, keying leaves the PDM
  * microphone off and takes this one instead: mono at TX_AUDIO_RATE_HZ, fed

@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom xiegu openx6x00 svxconnect multiflex ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather)
+set(_vfo_radios aethersdr icom xiegu openx6x00 svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -46,7 +46,9 @@ endif()
 # svxconnect is not a radio but an SvxLink reflector: its client speaks the
 # reflector protocol, and the dial picks talkgroups instead of frequencies.
 # multiflex speaks a FlexRadio's own API, with no computer in between: the
-# knob is one of the radio's MultiFlex stations. ubersdr is no radio either,
+# knob is one of the radio's MultiFlex stations. k4 speaks an Elecraft K4's
+# remote protocol (TCP 9205, CAT text and Opus audio in one envelope), the
+# knob a remote client of the radio like K4remote. ubersdr is no radio either,
 # but a web receiver -- an UberSDR, over its own protocol -- listened to and
 # tuned, with nothing to transmit. kiwi is the same for a KiwiSDR or a
 # Web-888, over KiwiSDR's protocol, with its receivers switched live; owrx
@@ -66,6 +68,8 @@ elseif(VFO_RADIO STREQUAL "svxconnect")
     set(_vfo_client svx_client)
 elseif(VFO_RADIO STREQUAL "multiflex")
     set(_vfo_client flex_client)
+elseif(VFO_RADIO STREQUAL "k4")
+    set(_vfo_client k4_client)
 elseif(VFO_RADIO STREQUAL "ubersdr")
     set(_vfo_client uber_client)
 elseif(VFO_RADIO STREQUAL "kiwi")
@@ -89,7 +93,7 @@ elseif(VFO_RADIO STREQUAL "weather")
 else()
     set(_vfo_client icom_client)
 endif()
-foreach(_c tci_client icom_client svx_client flex_client uber_client kiwi_client owrx_client wsdr_client
+foreach(_c tci_client icom_client svx_client flex_client k4_client uber_client kiwi_client owrx_client wsdr_client
            setup_client phone_client epi_client adsb_client clock_client weather_client)
     if(NOT _c STREQUAL _vfo_client)
         list(APPEND EXCLUDE_COMPONENTS ${_c})
@@ -107,7 +111,7 @@ if(NOT VFO_RADIO STREQUAL "aethersdr")
 endif()
 # For components that call the client (main, webcfg), and for code that looks
 # different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_XIEGU,
-# VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_UBERSDR, VFO_RADIO_KIWI,
+# VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_K4, VFO_RADIO_UBERSDR, VFO_RADIO_KIWI,
 # VFO_RADIO_OWRX, VFO_RADIO_WEBSDR, VFO_RADIO_SETUP, VFO_RADIO_PHONE,
 # VFO_RADIO_EPIBEAM, VFO_RADIO_ADSB, VFO_RADIO_CLOCK or VFO_RADIO_WEATHER is
 # defined as 1.

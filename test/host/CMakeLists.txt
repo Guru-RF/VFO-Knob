@@ -106,6 +106,18 @@ foreach(t test_flex_parse test_radio_list)
     add_test(NAME ${t} COMMAND ${t})
 endforeach()
 
+# The Elecraft K4's remote protocol (components/k4_client/k4_parse.c): pure C,
+# taken here as the knob takes it -- the envelope, the audio packet and the
+# CAT text all come off the network.
+set(K4 ${CMAKE_CURRENT_SOURCE_DIR}/../../components/k4_client)
+add_library(k4_parse STATIC ${K4}/k4_parse.c)
+target_include_directories(k4_parse PUBLIC ${K4})
+target_compile_options(k4_parse PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(test_k4_parse src/test_k4_parse.c)
+target_link_libraries(test_k4_parse PRIVATE k4_parse)
+target_compile_options(test_k4_parse PRIVATE -Wall -Wextra)
+add_test(NAME test_k4_parse COMMAND test_k4_parse)
+
 # The settings' copies on the SD card and the merge of NVS into them
 # (components/kvstore's kv_tlv.c and kv_merge.c): pure C, taken here as the
 # knob takes it -- a copy is read off a card that may have lost power mid-write.

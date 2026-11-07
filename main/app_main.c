@@ -164,6 +164,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "Telephone";
 #elif VFO_RADIO_MULTIFLEX
     const char *name = "FlexRadio";
+#elif VFO_RADIO_K4
+    const char *name = "Elecraft K4";
 #elif VFO_RADIO_UBERSDR
     const char *name = "UberSDR";
 #elif VFO_RADIO_KIWI

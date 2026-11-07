@@ -48,6 +48,7 @@ static volatile bool      s_active;
 static volatile bool      s_priming;    /* start of an over: build a cushion */
 static volatile bool      s_dc_reset;
 static volatile uint8_t   s_gain = 100;
+static volatile uint16_t  s_settle_ms;   /* silence at the start of an over; 0: none */
 static audio_in_stats_t   s_stats;
 static TaskHandle_t       s_task;
 static SemaphoreHandle_t  s_mx;         /* keying, against the source changing */
@@ -59,6 +60,7 @@ bool audio_in_active(void) { return s_active; }
 bool audio_in_ext(void) { return s_ext; }
 void audio_in_set_ext_hook(void (*hook)(bool active)) { s_ext_hook = hook; }
 void audio_in_set_gain(uint8_t g) { s_gain = g > 200 ? 200 : g; }
+void audio_in_set_settle_ms(uint16_t ms) { s_settle_ms = ms; }
 /* The peak is held from one call to the next, then starts again: the loudest
  * moment since the last look, not whichever block happened to be last --
  * which, in speech, is as often the gap between two syllables. */
@@ -175,6 +177,7 @@ static void mic_task(void *arg)
     (void)arg;
     static int16_t buf[MIC_READ_SAMPLES];
     float x1 = 0.0f, y1 = 0.0f;              /* DC blocker state */
+    size_t settle = 0;                       /* samples of this over still to be muted */
 
     for (;;) {
         if (!s_active || !s_pdm_on) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
@@ -190,6 +193,7 @@ static void mic_task(void *arg)
             s_dc_reset = false;
             x1 = buf[0];
             y1 = 0.0f;
+            settle = (size_t)s_settle_ms * 24;      /* 24 kHz */
         }
         const float g = MIC_PREGAIN * (float)s_gain / 100.0f;
         for (size_t i = 0; i < count; i++) {
@@ -205,6 +209,7 @@ static void mic_task(void *arg)
                 v = v < 0.0f ? -lim : lim;
             }
             buf[i] = (int16_t)v;
+            if (settle) { buf[i] = 0; settle--; }
         }
         /* Peak, for a mic-level indicator and for catching a dead microphone
          * before an operator discovers it mid-QSO. */
