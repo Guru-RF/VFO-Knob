@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-weather",
-  "version": "1.24.0",
-  "file": "vfo-knob-weather-1.24.0.bin",
-  "sha256": "00ed35dc4f79e9a8df3c87b30cb40f0876f8f0cc14374bd125865029a5556a29",
+  "version": "1.24.3",
+  "file": "vfo-knob-weather-1.24.3.bin",
+  "sha256": "a1270ecd7330f7a39f686a035b0d59aeb39591bd41d6a90ab0b94ac6f36d5ca5",
   "size": 2166784
 }
