@@ -109,7 +109,7 @@ way the second chip's serial port (a CH340).
 Once per knob, a cable writes what the knob's updates never do: a bootloader
 that can go back to the firmware before, the partition table, an empty
 otadata, and a first firmware. `tools/install-setup.sh` does it for a new
-knob, after the ESP32-S3; on a knob in use, keeping its headset's pairing:
+knob, after the ESP32-S3; on a knob in use, keeping its devices' pairings:
 
 ```sh
 tools/install-setup.sh --second-chip                                # the latest release
