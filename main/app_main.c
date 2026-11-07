@@ -1081,9 +1081,10 @@ static esp_err_t settings_up(void)
     return e;
 }
 
-/* The Bluetooth levels may go to flash (NVS), settled `settled` us
- * ago: with nothing on the air -- though a web receiver plays for hours on
- * end, so on the kiwi firmware at its quiet moment, or 30 s after the change.
+/* The Bluetooth levels, or the devices connected, may go to flash (NVS),
+ * settled `settled` us ago: with nothing on the air -- though a web receiver
+ * plays for hours on end, so on the kiwi firmware at its quiet moment, or 30 s
+ * after the change.
  * Asked only once a flush is due: on the phone firmware audio_busy() copies
  * the whole status. */
 static bool flush_ok(int64_t settled)
@@ -3394,6 +3395,8 @@ static void second_chip(bool idle, bool session)
      * call, and on the kiwi firmware at a quiet moment or 30 s on, as a turn
      * of the dial's VOLUME (flush_ok). */
     if (!busy) bt_link_save_levels(flush_ok);
+    /* ...and a device that has just connected, on the page's list from then on. */
+    if (!busy) bt_link_save_known(flush_ok);
     const bool keep_up = comp_auto(&st, &u);
     ota_companion_offer(&o);
     if (keep_up) comp_say(&st, &u, &o);

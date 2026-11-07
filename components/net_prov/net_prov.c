@@ -263,6 +263,7 @@ static uint8_t  s_beam_n = 4;       /* EpiBeam: the array's directions, 4 or 8 *
 static uint8_t  s_beam_dir;         /* ...and the one the beam was left on, 0 = N */
 static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
 static uint8_t  s_tx_mic;           /* NET_TX_*: what AetherSDR transmits with */
+static uint8_t  s_sat_track;        /* NET_SAT_*: the IC-9700's uplink, on a turn */
 #if VFO_RADIO_ADSB
 /* ADS-B Radar's radar: in PSRAM, as large as it is beside the rest. */
 EXT_RAM_BSS_ATTR static net_adsb_t s_adsb;
@@ -705,6 +706,7 @@ void net_prov_load_settings(void)
     if (kv_get_u8(h, "beamd", &v) == ESP_OK && v < s_beam_n) s_beam_dir = v;
     if (kv_get_u8(h, "jackdb", &v) == ESP_OK && v <= NET_PROV_JACK_DB_MAX && v % 3 == 0) s_jack_db = v;
     if (kv_get_u8(h, "txmic", &v) == ESP_OK && v <= NET_TX_RADIO) s_tx_mic = v;
+    if (kv_get_u8(h, "sattrk", &v) == ESP_OK && v <= NET_SAT_REVERSE) s_sat_track = v;
 #if VFO_RADIO_ADSB
     adsb_load(h);
 #endif
@@ -1393,6 +1395,16 @@ void net_prov_save_tx_mic(uint8_t src)
     if (src > NET_TX_RADIO || src == s_tx_mic) return;
     s_tx_mic = src;
     kv_set_u8(kv(), "txmic", src);
+    kv_commit_now(kv());
+}
+
+uint8_t net_prov_sat_track(void) { return s_sat_track; }
+
+void net_prov_save_sat_track(uint8_t track)
+{
+    if (track > NET_SAT_REVERSE || track == s_sat_track) return;
+    s_sat_track = track;
+    kv_set_u8(kv(), "sattrk", track);
     kv_commit_now(kv());
 }
 

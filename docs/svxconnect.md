@@ -61,11 +61,13 @@ Turn the knob: the next switchable talkgroup, one a detent.
 ![Turn: the next talkgroup](svxconnect/02-turn.svg)
 
 Talkgroups follow SVXConnect's rules, set on the configuration page:
-*switchable* ones are on the dial, *monitored* ones are followed when there is
-traffic, a `+` after a number raises its priority (`9990, 8++, 1745+`), the
-knob stays on a talkgroup for a while after an over, and drops back to
-monitoring after a quiet spell. With no lists set it steps through every
-talkgroup the reflector's portal names.
+*switchable* ones are on the dial and heard only while selected, *monitored*
+ones are heard and followed when there is traffic, a `+` after a monitored
+number raises its priority (`9990, 8++, 1745+`), the knob stays on a talkgroup
+for a while after an over, and drops back to monitoring after a quiet spell, if
+there is a monitored list to drop back to. A talkgroup can be in both lists.
+With no lists set it steps through every talkgroup the reflector's portal
+names.
 
 ## Transmitting
 

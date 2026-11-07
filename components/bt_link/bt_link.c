@@ -140,6 +140,21 @@ EXT_RAM_BSS_ATTR static int64_t     s_levels_at;        /* ...its last change */
  * tap's, which reads it as it goes. */
 static volatile int8_t   s_level = BT_LEVEL_HEADSET;
 
+/* The devices connected before (bt_known.h). Under s_lock: the link's task
+ * adds them as they connect, the page reads and forgets them. To NVS
+ * (btlink/known) from the supervisor as the levels go. */
+EXT_RAM_BSS_ATTR static bt_known_t     s_known;
+EXT_RAM_BSS_ATTR static bool           s_known_dirty;   /* under s_lock */
+EXT_RAM_BSS_ATTR static int64_t        s_known_at;      /* ...its last change */
+/* The records on their way to or from flash, the supervisor's stack being
+ * short of room for them: bt_link_init's, then the supervisor's alone. */
+EXT_RAM_BSS_ATTR static bt_known_rec_t s_known_io[BT_KNOWN_DEVICES];
+/* The device the page just forgot, under s_lock: a report that crossed the
+ * FORGET on the wire still calls it remembered, and would put it back. */
+EXT_RAM_BSS_ATTR static uint8_t        s_known_gone[6];
+EXT_RAM_BSS_ATTR static int64_t        s_known_gone_at;
+#define KNOWN_GONE_US 3000000
+
 static bool send(uint8_t type, const void *p, uint16_t n)
 {
     static uint8_t *f;
@@ -366,8 +381,24 @@ static void on_state(const uint8_t *p, uint16_t n)
     memset(&s, 0, sizeof s);
     memcpy(&s, p, n < sizeof s ? n : sizeof s);
     s.name[sizeof s.name - 1] = 0;
+    const int64_t now = esp_timer_get_time();
     btl_state_t was;
     taskENTER_CRITICAL(&s_lock);
+    /* Called from the page's list, not found by a scan: the second chip has
+     * no name for it until it has connected and asked. */
+    if (!s.name[0]) {
+        const char *known = bt_known_name(&s_known, s.bda);
+        if (known) strlcpy(s.name, known, sizeof s.name);
+    }
+    /* It has connected. Remembered, and not the link being up: going over to
+     * another, the second chip names the new one while the old one's link
+     * still stands, and it may never answer. It remembers a device only once
+     * it has truly connected -- and one from before this list began. */
+    const bool gone = s_known_gone_at && now - s_known_gone_at < KNOWN_GONE_US && !memcmp(s.bda, s_known_gone, 6);
+    if (s.remembered && !gone && bt_known_seen(&s_known, s.bda, s.name, s.kind)) {
+        s_known_dirty = true;
+        s_known_at    = now;
+    }
     was = s_st.hs;
     s_st.hs = s;
     taskEXIT_CRITICAL(&s_lock);
@@ -395,7 +426,6 @@ static void on_state(const uint8_t *p, uint16_t n)
     const bool takes_was   = was.link == BTL_LINK_CONNECTED && was.kind == BTL_KIND_SPEAKER && (was.av & BTL_AV_TAKES);
     const bool set_was     = takes_was && (was.av & BTL_AV_SET);
     const bool refused_was = takes_was && (was.av & BTL_AV_REFUSED);
-    const int64_t now      = esp_timer_get_time();
     uint8_t own = 0xFF;
     bool crossed = false;
     taskENTER_CRITICAL(&s_lock);
@@ -1391,6 +1421,13 @@ void bt_link_forget(const uint8_t bda[6])
         s_levels_at    = now;
     }
     if (!memcmp(s_st.hs.bda, bda, 6)) s_level = (int8_t)bt_level_default(s_st.hs.kind);
+    /* ...and off the list. */
+    if (bt_known_forget(&s_known, bda)) {
+        s_known_dirty = true;
+        s_known_at    = now;
+    }
+    memcpy(s_known_gone, bda, 6);
+    s_known_gone_at = now;
     taskEXIT_CRITICAL(&s_lock);
 }
 
@@ -1419,6 +1456,20 @@ int bt_link_level(const uint8_t bda[6], uint8_t kind, bool *own)
     return db;
 }
 
+/* Records into btlink, or their key gone with none left. */
+static esp_err_t save_blob(const char *key, const void *blob, size_t len)
+{
+    nvs_handle_t h;
+    esp_err_t    e = nvs_open("btlink", NVS_READWRITE, &h);
+    if (e == ESP_OK) {
+        e = len ? nvs_set_blob(h, key, blob, len) : nvs_erase_key(h, key);
+        if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+        if (e == ESP_OK) e = nvs_commit(h);
+        nvs_close(h);
+    }
+    return e;
+}
+
 /* The supervisor's: its stack is internal, so NVS is safe here. */
 void bt_link_save_levels(bool (*ok)(int64_t settled))
 {
@@ -1441,19 +1492,46 @@ void bt_link_save_levels(bool (*ok)(int64_t settled))
     }
     taskEXIT_CRITICAL(&s_lock);
     if (!due) return;
-    nvs_handle_t h;
-    esp_err_t    e = nvs_open("btlink", NVS_READWRITE, &h);
-    if (e == ESP_OK) {
-        e = n ? nvs_set_blob(h, "levels", r, (size_t)n * sizeof r[0]) : nvs_erase_key(h, "levels");
-        if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
-        if (e == ESP_OK) e = nvs_commit(h);
-        nvs_close(h);
-    }
+    const esp_err_t e = save_blob("levels", r, (size_t)n * sizeof r[0]);
     /* Not tried again: an NVS too full for it would cost a flash erase at
      * every try. What is in RAM holds until the knob restarts, and the next
      * level set tries again. */
     if (e == ESP_OK) ESP_LOGI(TAG, "levels saved: %d device%s", n, n == 1 ? "" : "s");
     else             ESP_LOGW(TAG, "levels not saved: %s", esp_err_to_name(e));
+}
+
+int bt_link_known(bt_known_rec_t *out, int max)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const int n = s_known.n < max ? s_known.n : max;
+    memcpy(out, s_known.rec, (size_t)n * sizeof *out);
+    taskEXIT_CRITICAL(&s_lock);
+    return n;
+}
+
+/* The supervisor's, as bt_link_save_levels. */
+void bt_link_save_known(bool (*ok)(int64_t settled))
+{
+    int           n   = 0;
+    const int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_lock);
+    const int64_t settled = s_known_dirty ? now - s_known_at : -1;
+    taskEXIT_CRITICAL(&s_lock);
+    if (settled < LEVELS_SETTLE_US || (ok && !ok(settled))) return;
+    taskENTER_CRITICAL(&s_lock);
+    const bool due = s_known_dirty && now - s_known_at >= LEVELS_SETTLE_US;
+    if (due) {
+        s_known_dirty = false;
+        n = s_known.n;
+        memcpy(s_known_io, s_known.rec, sizeof s_known_io);
+    }
+    taskEXIT_CRITICAL(&s_lock);
+    if (!due) return;
+    const esp_err_t e = save_blob("known", s_known_io, (size_t)n * sizeof s_known_io[0]);
+    /* Not tried again, as the levels are not: the second chip's remembered
+     * device comes back onto the list at the next start. */
+    if (e == ESP_OK) ESP_LOGI(TAG, "devices connected before saved: %d", n);
+    else             ESP_LOGW(TAG, "devices connected before not saved: %s", esp_err_to_name(e));
 }
 
 bool bt_link_set_kind(const uint8_t bda[6], uint8_t kind)
@@ -1599,17 +1677,21 @@ esp_err_t bt_link_init(void)
     nvs_handle_t   h;
     uint8_t        boom = 0;
     bt_level_rec_t lv[BT_LEVEL_DEVICES];
-    size_t         ln = sizeof lv;
+    size_t         ln = sizeof lv, kn = sizeof s_known_io;
     if (nvs_open("btlink", NVS_READONLY, &h) == ESP_OK) {
         nvs_get_u8(h, "boom", &boom);
         if (nvs_get_blob(h, "levels", lv, &ln) != ESP_OK) ln = 0;
+        if (nvs_get_blob(h, "known", s_known_io, &kn) != ESP_OK) kn = 0;
         nvs_close(h);
     } else {
         ln = 0;
+        kn = 0;
     }
     s_boom = boom;
     bt_levels_load(&s_levels, lv, ln);
     if (s_levels.n) ESP_LOGI(TAG, "levels set for %d device%s", s_levels.n, s_levels.n == 1 ? "" : "s");
+    bt_known_load(&s_known, s_known_io, kn);
+    if (s_known.n) ESP_LOGI(TAG, "%d device%s connected before", s_known.n, s_known.n == 1 ? "" : "s");
     s_tx = xSemaphoreCreateMutex();
     s_rx = heap_caps_calloc(1, sizeof *s_rx, MALLOC_CAP_SPIRAM);
     ESP_RETURN_ON_FALSE(s_tx && s_rx, ESP_ERR_NO_MEM, TAG, "memory");

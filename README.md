@@ -594,11 +594,13 @@ The face is the radio face, read differently:
 | **PTT** | Tap to key, tap to unkey, as on the radios. The reflector's own announcement of your callsign confirms the key; on a busy talkgroup it refuses you the floor and the knob says so with the refusal click. |
 | **Link** | Where the step is: **connected**, **connecting** or **disconnected**. |
 
-Talkgroups follow SVXConnect's rules: *switchable* ones are on the dial,
-*monitored* ones are followed when there is traffic, a `+` after a number
-raises its priority (`9990, 8++, 1745+`), the knob stays on a talkgroup for a
-while after an over, and drops back to monitoring after a quiet spell. With
-no lists set it steps through every talkgroup the reflector's portal names.
+Talkgroups follow SVXConnect's rules: *switchable* ones are on the dial and
+heard only while selected, *monitored* ones are heard and followed when there
+is traffic, a `+` after a monitored number raises its priority (`9990, 8++,
+1745+`), the knob stays on a talkgroup for a while after an over, and drops
+back to monitoring after a quiet spell, if there is a monitored list to drop
+back to. A talkgroup can be in both lists. With no lists set it steps through
+every talkgroup the reflector's portal names.
 
 ### First run
 
@@ -732,7 +734,9 @@ wideband speech where the headset has it, the audio passed to and from the
 knob at its own rate. It comes on the second chip, and the knob keeps it up
 to date by itself, at a quiet moment with no headset or speaker connected;
 pair the headset on the configuration page, and the knob calls it whenever it
-is switched on. Step by step: [the headset guide](docs/headset.md).
+is switched on. The page lists the last eight devices connected, and **Connect**
+goes over to another with no pairing mode. Step by step:
+[the headset guide](docs/headset.md).
 
 While a headset is connected its call button is a PTT beside the slab, which
 keys as always, and the knob unkeys by itself if the headset goes out of reach

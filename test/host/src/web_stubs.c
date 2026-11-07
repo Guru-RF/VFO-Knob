@@ -75,6 +75,9 @@ void net_prov_save_jack_db(uint8_t db) { if (db <= 12 && db % 3 == 0) s_jack_db 
 static uint8_t s_tx_mic;
 uint8_t net_prov_tx_mic(void) { return s_tx_mic; }
 void net_prov_save_tx_mic(uint8_t src) { if (src <= 1) s_tx_mic = src; }
+static uint8_t s_sat_track;
+uint8_t net_prov_sat_track(void) { return s_sat_track; }
+void net_prov_save_sat_track(uint8_t track) { if (track <= 2) s_sat_track = track; }
 static bool s_turned;
 bool net_prov_turned(void) { return s_turned; }
 void net_prov_save_turned(bool turned) { s_turned = turned; }
@@ -143,6 +146,7 @@ void bt_link_disconnect(void) {}
 void bt_link_forget(const uint8_t bda[6]) { (void)bda; }
 int bt_link_found(btl_found_t *out, int max) { (void)out; (void)max; return 0; }
 bool bt_link_headset_connected(void) { return false; }
+int bt_link_known(bt_known_rec_t *out, int max) { (void)out; (void)max; return 0; }
 int bt_link_level(const uint8_t bda[6], uint8_t kind, bool *own) { (void)bda; (void)kind; if (own) *own = false; return 0; }
 void bt_link_scan(uint8_t seconds) { (void)seconds; }
 void bt_link_set_boom_ptt(bool on) { (void)on; }

@@ -344,7 +344,7 @@ static esp_err_t config_get(httpd_req_t *r)
     int n = snprintf(buf, sizeof buf,
              "{\"host\":\"%s\",\"port\":%u,\"ssid\":\"%s\","
              "\"vol\":%u,\"mic\":%u,\"mich\":%u,"
-             "\"jack\":%u,\"txmic\":%u,\"bright\":%u,\"turn\":%u,\"beamn\":%u,"
+             "\"jack\":%u,\"txmic\":%u,\"sattrk\":%u,\"bright\":%u,\"turn\":%u,\"beamn\":%u,"
              "\"user\":\"%s\",\"defaultpw\":%s,\"pwforce\":%s,\"otah\":%u,"
              "\"ss\":%u,\"ssa\":%u,\"ssd\":%u,\"ssb\":%u,\"tz\":\"%s\",\"h24\":%s,"
              "\"ckface\":%u,\"cksec\":%s,"
@@ -354,7 +354,8 @@ static esp_err_t config_get(httpd_req_t *r)
              host, (unsigned)c->radio_port, ssid,
              (unsigned)net_prov_volume(), (unsigned)net_prov_mic_gain(),
              (unsigned)net_prov_mic_gain_headset(),
-             (unsigned)net_prov_jack_db(), (unsigned)net_prov_tx_mic(), (unsigned)net_prov_brightness(),
+             (unsigned)net_prov_jack_db(), (unsigned)net_prov_tx_mic(), (unsigned)net_prov_sat_track(),
+             (unsigned)net_prov_brightness(),
              (unsigned)net_prov_turned(), (unsigned)net_prov_beam_dirs(),
              user,
              net_prov_web_is_default() ? "true" : "false",
@@ -580,6 +581,7 @@ static esp_err_t config_post(httpd_req_t *r)
         audio_out_set_jack_level(net_prov_jack_db());
     }
     if (field_num(body, "txmic", &v)) net_prov_save_tx_mic((uint8_t)clampl(v, NET_TX_KNOB, NET_TX_RADIO));
+    if (field_num(body, "sattrk", &v)) net_prov_save_sat_track((uint8_t)clampl(v, NET_SAT_OFF, NET_SAT_REVERSE));
 
     ESP_LOGI(TAG, "config saved: host=%s:%u ssid=\"%s\" vol=%u mic=%u",
              cfg.radio_host, (unsigned)cfg.radio_port, cfg.ssid,
@@ -2175,16 +2177,21 @@ static int bt_update_json(char *j, size_t cap, const bt_link_status_t *st)
  *              whose firmware came before batteries)
  *   level      the device's level, dB, on top of the knob's VOLUME: its own
  *              (do=level), or its kind's; null with no device
- *   level_default  ...its kind's: -12 a speaker's, 0 a headset's */
+ *   level_default  ...its kind's: -12 a speaker's, 0 a headset's
+ *   known      the devices the knob has connected, newest first, each
+ *              {bda, name, kind}: do=connect goes over to one with no
+ *              pairing mode, do=forget takes it off */
 static esp_err_t bt_get_h(httpd_req_t *r)
 {
     REQUIRE_AUTH(r);
     /* This task's stack is tight; internal RAM is the scarce one. */
     EXT_RAM_BSS_ATTR static bt_link_status_t st;
     EXT_RAM_BSS_ATTR static btl_found_t found[16];
-    EXT_RAM_BSS_ATTR static char j[4096];
+    EXT_RAM_BSS_ATTR static bt_known_rec_t known[BT_KNOWN_DEVICES];
+    EXT_RAM_BSS_ATTR static char j[6144];
     bt_link_status(&st);
     const int nf = bt_link_found(found, 16);
+    const int nk = bt_link_known(known, BT_KNOWN_DEVICES);
     char name[72], ver[72], b[18] = "", svc[32];
     static const char *const links[]  = { "idle", "connecting", "connected" };
     static const char *const audios[] = { "", "CVSD 8 kHz", "mSBC 16 kHz", "SBC 44.1 kHz" };
@@ -2217,7 +2224,15 @@ static esp_err_t bt_get_h(httpd_req_t *r)
                      st.hs.scanning ? "true" : "false", st.hs.spk, st.hs.mic, (unsigned long)st.presses,
                      (unsigned long)st.up_frames, bt_link_boom_ptt() ? "true" : "false");
     o += bt_update_json(j + o, sizeof j - o, &st);
-    o += snprintf(j + o, sizeof j - o, "\"found\":[");
+    o += snprintf(j + o, sizeof j - o, "\"known\":[");
+    for (int i = 0; i < nk; i++) {
+        json_esc(known[i].name, name, sizeof name);
+        bda_text(known[i].bda, b);
+        o += snprintf(j + o, sizeof j - o, "%s{\"bda\":\"%s\",\"name\":\"%s\",\"kind\":\"%s\"}",
+                      i ? "," : "", b, name,
+                      !spks ? "" : known[i].kind == BTL_KIND_SPEAKER ? "speaker" : "headset");
+    }
+    o += snprintf(j + o, sizeof j - o, "],\"found\":[");
     /* An entry is 200 bytes at the most: room for it and the end. */
     for (int i = 0; i < nf && o < (int)sizeof j - 256; i++) {
         json_esc(found[i].name, name, sizeof name);

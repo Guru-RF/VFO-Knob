@@ -191,8 +191,6 @@ void tglist_format(char *dst, size_t cap, const svx_tg_entry *v, int n) {
 int config_tg_priority(const svx_config *cfg, uint32_t id) {
     for (int i = 0; i < cfg->n_monitored; i++)
         if (cfg->monitored[i].id == id) return cfg->monitored[i].priority;
-    for (int i = 0; i < cfg->n_switchable; i++)
-        if (cfg->switchable[i].id == id) return cfg->switchable[i].priority;
     return -1;
 }
 

@@ -44,7 +44,11 @@ static int cmp_u32(const void *a, const void *b) {
  * While locked this is EMPTY. MsgTgMonitor subscribes to audio as well as to
  * status, so a non-empty set would leak other talkgroups into your ears —
  * which is precisely what locking is supposed to prevent. The selected
- * talkgroup stays audible on its own account. */
+ * talkgroup stays audible on its own account.
+ *
+ * For the same reason the monitored list alone, never the switchable one: a
+ * switchable talkgroup is heard while it is selected, and not otherwise
+ * (GitHub #21), as in SVXConnect on Android. */
 static size_t monitor_set(const tg_manager *m, uint32_t *out, size_t cap) {
     if (m->locked) return 0;
 
@@ -53,13 +57,6 @@ static size_t monitor_set(const tg_manager *m, uint32_t *out, size_t cap) {
         uint32_t id = m->cfg->monitored[i].id;
         if (id == m->selected || tgm_is_muted(m, id)) continue;
         out[n++] = id;
-    }
-    for (int i = 0; i < m->cfg->n_switchable && n < cap; i++) {
-        uint32_t id = m->cfg->switchable[i].id;
-        if (id == m->selected || tgm_is_muted(m, id)) continue;
-        int dup = 0;
-        for (size_t j = 0; j < n; j++) if (out[j] == id) { dup = 1; break; }
-        if (!dup) out[n++] = id;
     }
     if (n > 1) qsort(out, n, sizeof(uint32_t), cmp_u32);
     return n;
@@ -337,6 +334,9 @@ void tgm_tick(tg_manager *m, uint64_t now) {
 
     if (m->locked || m->selected == 0 || m->n_active > 0) return;
     if (m->cfg->idle_seconds <= 0) return;
+    /* Nothing to monitor: dropping would leave the knob deaf, with a switchable
+     * talkgroup heard only while selected. It stays where it is. */
+    if (m->cfg->n_monitored == 0) return;
     if (TGM_SINCE(m->last_traffic) < (uint64_t)m->cfg->idle_seconds * 1000) return;
 
     #undef TGM_SINCE

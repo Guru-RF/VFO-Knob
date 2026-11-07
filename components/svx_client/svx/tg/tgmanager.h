@@ -7,8 +7,8 @@
  * Three ideas interact here, and it is worth being precise about them because
  * the interaction is the whole point:
  *
- *   PRIORITY   Each talkgroup has a priority from its config suffix — 8 is 0,
- *              8+ is 1, 8++ is 2. When someone keys up on a talkgroup with a
+ *   PRIORITY   Each monitored talkgroup has a priority from its config suffix
+ *              — 8 is 0, 8+ is 1, 8++ is 2. When someone keys up on one with a
  *              higher priority than the one you are on, you are moved to it.
  *              Priority 0 never takes a busy channel away from you, even from
  *              another priority-0 talkgroup.

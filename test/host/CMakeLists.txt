@@ -163,6 +163,16 @@ target_link_libraries(test_bt_level PRIVATE bt_level m)
 target_compile_options(test_bt_level PRIVATE -Wall -Wextra)
 add_test(NAME test_bt_level COMMAND test_bt_level)
 
+# The Bluetooth devices this knob has connected (components/bt_link/bt_known.c):
+# pure C -- the order, the eight at most, and what comes back from NVS.
+add_library(bt_known STATIC ${BTLINK}/bt_known.c)
+target_include_directories(bt_known PUBLIC ${BTLINK}/include)
+target_compile_options(bt_known PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(test_bt_known src/test_bt_known.c)
+target_link_libraries(test_bt_known PRIVATE bt_known)
+target_compile_options(test_bt_known PRIVATE -Wall -Wextra)
+add_test(NAME test_bt_known COMMAND test_bt_known)
+
 # The jack's level (components/audio/jack_level.c): pure C -- its steps and
 # gains, the block it holds back, and a loud passage turned down ahead of it
 # rather than clipped, both ears alike.
@@ -209,6 +219,19 @@ add_executable(test_alarm src/test_alarm.c)
 target_link_libraries(test_alarm PRIVATE vfo_core)
 target_compile_options(test_alarm PRIVATE -Wall -Wextra)
 add_test(NAME test_alarm COMMAND test_alarm)
+
+# SVXConnect's talkgroups (components/svx_client/svx/tg/tgmanager.c): what is
+# monitored, what moves the knob, and the quiet spell's drop (GitHub #21).
+set(SVX ${CMAKE_CURRENT_SOURCE_DIR}/../../components/svx_client/svx)
+add_executable(test_tgmanager src/test_tgmanager.c ${SVX}/tg/tgmanager.c ${SVX}/common/util.c)
+target_include_directories(test_tgmanager PRIVATE ${SVX} ${SVX}/common ${SVX}/tg
+                           ${CMAKE_CURRENT_SOURCE_DIR}/shim)
+# util.c's logger, ESP_LOG's level calls: nothing to say here.
+target_compile_definitions(test_tgmanager PRIVATE
+                           ESP_LOG_ERROR=1 ESP_LOG_WARN=2 ESP_LOG_INFO=3 ESP_LOG_DEBUG=4)
+target_compile_options(test_tgmanager PRIVATE -Wall -Wextra
+                       "-DESP_LOG_LEVEL_LOCAL(l,t,...)=((void)(l),(void)(t))")
+add_test(NAME test_tgmanager COMMAND test_tgmanager)
 
 # KiwiSDR's protocol, the plain-C part (components/kiwi_proto/kiwi_proto.c).
 set(KIWI ${CMAKE_CURRENT_SOURCE_DIR}/../../components/kiwi_proto)

@@ -25,6 +25,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "bt_known.h"
 #include "bt_link_proto.h"
 #include "esp_err.h"
 
@@ -131,6 +132,14 @@ int  bt_link_level(const uint8_t bda[6], uint8_t kind, bool *own);
  * Nothing changed: nothing done. */
 void bt_link_save_levels(bool (*ok)(int64_t settled));
 
+/* The devices this knob has connected, newest first (bt_known.h), for the
+ * configuration page to go over to one with bt_link_connect(), no pairing
+ * mode needed. Kept in NVS, on every firmware, as the levels are: */
+int  bt_link_known(bt_known_rec_t *out, int max);
+/* ...into NVS the same way: from a task whose stack is internal, never
+ * during an over or a call. */
+void bt_link_save_known(bool (*ok)(int64_t settled));
+
 /* The boom arm as the PTT, an option on the configuration page: lowering it
  * -- the headset's microphone live -- transmits, raising it -- muted --
  * stops (app_main.c). Kept in NVS. */
@@ -140,8 +149,8 @@ void bt_link_set_boom_ptt(bool on);
 /* What the last scan found (its newest first), and whether one runs. */
 int  bt_link_found(btl_found_t *out, int max);
 
-/* The configuration page's buttons. Forget unpairs the device, and forgets
- * its level. */
+/* The configuration page's buttons. Forget unpairs the device, forgets its
+ * level, and takes it off the devices connected before. */
 void bt_link_scan(uint8_t seconds);
 void bt_link_connect(const uint8_t bda[6]);
 void bt_link_disconnect(void);

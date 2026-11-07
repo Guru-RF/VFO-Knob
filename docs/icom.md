@@ -173,6 +173,22 @@ another band's channels, change band in VFO mode first.
 |---|---|
 | ![V/M: MEMORY](icom/11-vm.svg) | ![ON0ORA, M40, 438.800 −7.6](icom/12-memory.svg) |
 
+### Satellite mode (IC-9700)
+
+In satellite mode the radio's own dial moves SUB, the uplink, with MAIN, the
+downlink, while its tracking is on. A turn of the knob reaches MAIN alone until
+you say how the uplink should follow: on the configuration page, under the
+radio's login, **IC-9700 in satellite mode: the uplink, on a turn**. **Moves the
+same way** is normal tracking, **Moves the other way** reverse tracking, the one
+for most linear transponders; FM satellites use normal. No command tells the
+knob how the radio's tracking is set, so set it the same on both. The radio's
+satellite memories do not keep it either, so check both when you change
+satellite. The knob looks for satellite mode itself: outside it, this does
+nothing.
+
+Keep MAIN selected on the radio. Tuned on the radio's own dial, the radio moves
+both as it always does, and the knob follows.
+
 ### The IC-R8600, a receiver
 
 The knob tunes the IC-R8600 from 10 kHz to 3 GHz, in its USB, LSB, CW, CW-R,

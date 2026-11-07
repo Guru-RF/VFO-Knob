@@ -26,6 +26,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
 
@@ -43,6 +44,7 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "kvstore.h"
+#include "net_prov.h"
 #include "ptt_fsm.h"
 #include "vfo_tune.h"
 
@@ -233,6 +235,11 @@ static struct {
     bool       mem_select_due;     /* go to a channel once it has */
     int16_t    mem_sent;           /* the channel the radio was put on; -1 */
     uint32_t   t_mem_req, t_mem_sel, t_mem_dirty;
+    /* Satellite mode: the uplink, moved after a turn of the knob (sat_step). */
+    bool       sat_on, no_sat;
+    uint8_t    sat_phase;
+    int64_t    sat_delta;          /* what the turn has still to move it by */
+    uint32_t   t_sat, t_sat_deaf;
 } C;
 
 /* One memory channel, as the radio holds it (see the memories section). */
@@ -521,7 +528,12 @@ static void on_refused(uint8_t c, uint8_t sub, uint8_t len)
         S.mem_state = RADIO_MEM_OFF;
         taskEXIT_CRITICAL(&S_LOCK);
         ESP_LOGW(TAG, "the radio has no memories over CI-V: no memory mode");
-    } else if (c == 0x07 && sub == 0xD2 && len == 2) {           /* MAIN or SUB? */
+    } else if (c == 0x16 && sub == 0x5A && len == 2 && !C.no_sat) {  /* satellite mode? */
+        C.no_sat = true;
+        C.sat_on = false;
+        ESP_LOGW(TAG, "the radio will not say whether it is in satellite mode: "
+                      "a turn of the knob moves the band selected alone");
+    } else if (c == 0x07 && sub == 0xD2 && len == 2 && !C.sat_on) {  /* MAIN or SUB? */
         static bool said;
         if (!said) {
             said = true;
@@ -693,6 +705,7 @@ typedef struct model {
      * the dial shows as %: 0 = as the band below. */
     uint16_t       max_w_2g, max_mw_10g;
     bool           no_rit;          /* no 21 xx: RIT neither read nor set */
+    bool           sat;             /* satellite mode, 16 5A: SUB the uplink */
     /* wfview's modulation-input numbers on a radio nobody here has tried:
      * read and logged against modin_names, never written (modin_voice 0). */
     uint16_t       probe_voice, probe_data;
@@ -761,7 +774,7 @@ static const model_t MODELS[] = {
       .modin_voice = 0x0115, .modin_data = 0x0116, .modin_lan = 5,
       .modin_names = MODIN_7610, .n_modin_names = 6,
       .memories = true, .mem_by_band = true,
-      .n_rx = 1, .max_w = 100, .max_w_uhf = 75, .max_w_shf = 10 },
+      .n_rx = 1, .max_w = 100, .max_w_uhf = 75, .max_w_shf = 10, .sat = true },
     /* The IC-7300MK2: 30 kHz-74.8 MHz -- HF, 6 m and 4 m -- 100 W, one
      * receiver, P.AMP1 and P.AMP2. Its S-meter is the IC-705's and its Po the
      * IC-705's ten times over (wfview's rig file; 4 m may be 50 W on some
@@ -1067,6 +1080,126 @@ static void on_freq(int64_t f, uint32_t t)
 static void on_memory(const uint8_t *p, size_t n);
 static void mem_nvs(bool save);
 
+/* ---------------------------------------------------------- satellite mode */
+
+/* The IC-9700 in satellite mode: MAIN the downlink, SUB the uplink. Its own
+ * dial moves both while its tracking is on, but a frequency set over CI-V moves
+ * the band selected alone (GitHub #18). So a turn of the knob goes on to the
+ * uplink here, by the same amount or, on an inverting transponder, the opposite
+ * (net_prov_sat_track: no command reads the radio's own setting).
+ *
+ * Only by selecting SUB: Icom's guide has 25 xx answer FA in satellite mode, and
+ * 25 01 is VFO B anyway. Nothing else may go out meanwhile, or a set meant for
+ * MAIN lands on the uplink, so the task holds the rest until this is back on
+ * MAIN. One step at a time, each on the answer to the last:
+ *
+ *   SAT_ASK     16 5A: still in satellite mode? Switched off on the radio since
+ *               the slow poll last asked, 07 D1 would move another band.
+ *   SAT_SELECT  07 D1, until its FB: what was asked before it answers before it.
+ *   SAT_READ    03, the uplink as it is now: the radio's dial moves it too.
+ *   SAT_BACK    05 and 07 D0, until the FB of the 07 D0.
+ */
+enum { SAT_IDLE, SAT_ASK, SAT_SELECT, SAT_READ, SAT_BACK };
+#define SAT_TIMEOUT_MS   500          /* no answer: back to MAIN                */
+#define SAT_DEAF_MS      1000         /* ...and a late answer is not the dial's */
+#define SAT_MAX_STEP_HZ  1000000      /* more than this is no turn: a new band  */
+
+/* What the radio reports while SUB is selected is the uplink's, not the dial's;
+ * and after giving up, a late answer may be. */
+static bool sat_holds_reports(uint32_t t)
+{
+    return C.sat_phase >= SAT_SELECT || (C.t_sat_deaf && (int32_t)(C.t_sat_deaf - t) > 0);
+}
+
+/* 16 5A's answer: the slow poll's, or this round's first step. */
+static void on_sat_mode(bool on, uint32_t t)
+{
+    if (on != C.sat_on) {
+        C.sat_on = on;
+        ESP_LOGI(TAG, "satellite mode %s", on ? "on" : "off");
+        if (on) CIV(0x07, 0xD2);         /* for the log: does it say, in this mode? */
+    }
+    if (C.sat_phase != SAT_ASK) return;
+    if (!on) {
+        C.sat_delta = 0;
+        C.sat_phase = SAT_IDLE;
+        return;
+    }
+    CIV(0x07, 0xD1);
+    C.sat_phase = SAT_SELECT;
+    C.t_sat = t;
+}
+
+/* 03's answer with SUB selected. */
+static void on_sat_uplink(int64_t f, uint32_t t)
+{
+    const int64_t d  = C.sat_delta;
+    const int64_t up = net_prov_sat_track() == NET_SAT_REVERSE ? f - d : f + d;
+    C.sat_delta = 0;
+    if (net_prov_sat_track() != NET_SAT_OFF) {
+        uint8_t b[7] = { 0x05 };
+        civ_send(b, 1 + freq_to(b + 1, up));
+    }
+    CIV(0x07, 0xD0);
+    C.sat_phase = SAT_BACK;
+    C.t_sat = t;
+}
+
+/* An FB or FA: for this round's step, or nothing to do with it. */
+static void sat_answered(uint8_t cmd, uint8_t sub, bool ok, uint32_t t)
+{
+    switch (C.sat_phase) {
+    case SAT_ASK:
+        if (cmd == 0x16 && sub == 0x5A && !ok) {
+            C.sat_delta = 0;
+            C.sat_phase = SAT_IDLE;
+        }
+        break;
+    case SAT_SELECT:
+        if (cmd != 0x07 || sub != 0xD1) break;
+        if (ok) {
+            CIV(0x03);
+            C.sat_phase = SAT_READ;
+            C.t_sat = t;
+        } else {
+            C.sat_delta = 0;
+            C.sat_phase = SAT_IDLE;
+        }
+        break;
+    case SAT_READ:
+        if (cmd == 0x03 && !ok) {
+            C.sat_delta = 0;
+            CIV(0x07, 0xD0);
+            C.sat_phase = SAT_BACK;
+            C.t_sat = t;
+        }
+        break;
+    case SAT_BACK:
+        if (cmd == 0x07 && sub == 0xD0) C.sat_phase = SAT_IDLE;
+        break;
+    }
+}
+
+/* Once a pass, ahead of everything the round holds up. */
+static void sat_step(uint32_t t)
+{
+    if (C.t_sat_deaf && (int32_t)(C.t_sat_deaf - t) <= 0) C.t_sat_deaf = 0;
+    if (C.sat_phase != SAT_IDLE) {
+        if (t - C.t_sat < SAT_TIMEOUT_MS) return;
+        ESP_LOGW(TAG, "satellite mode: no answer from the radio, back to MAIN");
+        if (C.sat_phase != SAT_ASK) CIV(0x07, 0xD0);
+        C.sat_delta = 0;
+        C.sat_phase = SAT_IDLE;
+        C.t_sat_deaf = t + SAT_DEAF_MS;
+        return;
+    }
+    if (!C.sat_delta || S.link != RADIO_LINK_READY || S.ptt.state != PTT_IDLE || S.tx) return;
+    if (t - S.t_last_send_ms < SET_PERIOD_MS) return;     /* a turn gets its set first */
+    CIV(0x16, 0x5A);
+    C.sat_phase = SAT_ASK;
+    C.t_sat = t;
+}
+
 /* The radio works its other receiver now, chosen on the dial or on the radio:
  * all the dial shows is that one's, the frequency first -- the radio's to say
  * again, as on a new session. */
@@ -1101,6 +1234,14 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
      * queue, and later refusals would go to the wrong command. */
     const bool answer = f[2] == CIV_US && cmd != 0x29 &&
                         await_pop(cmd, &asked, &asked_sub, &asked_len);
+
+    if (cmd == 0x03 && C.sat_phase == SAT_READ && answer && bn >= 5) {
+        on_sat_uplink(freq_from_n(b, 5), t);
+        return;
+    }
+    if (sat_holds_reports(t) && (cmd == 0x00 || cmd == 0x01 ||
+                                 (cmd == 0x03 && C.sat_phase < SAT_SELECT)))
+        return;
 
     switch (cmd) {
     case 0x00: case 0x03:                            /* frequency */
@@ -1215,10 +1356,14 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         } else if (bn >= 2 && b[0] == 0x12) {        /* AGC time constant */
             static const char *AGC[] = { "", "fast", "mid", "slow" };
             strlcpy(S.agc, b[1] <= 3 ? AGC[b[1]] : "", sizeof S.agc);
+        } else if (bn >= 2 && b[0] == 0x5A && b[1] <= 1 && model_now()->sat) {
+            on_sat_mode(b[1], t);
         }
         return;
     case 0x07:                                       /* 07 D2: MAIN or SUB */
-        if (bn >= 2 && b[0] == 0xD2 && b[1] <= 1 && model_now()->n_rx > 1) {
+        if (bn >= 2 && b[0] == 0xD2 && b[1] <= 1 && model_now()->sat) {
+            ESP_LOGI(TAG, "satellite mode: the radio has %s selected", b[1] ? "SUB" : "MAIN");
+        } else if (bn >= 2 && b[0] == 0xD2 && b[1] <= 1 && model_now()->n_rx > 1) {
             const bool first = !S.have_rx;
             if (first || b[1] != S.rx) {
                 if (!first) ESP_LOGI(TAG, "on the %s receiver", b[1] ? "SUB" : "MAIN");
@@ -1246,12 +1391,14 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         }
         return;
     case 0xFB:                                       /* OK */
+        if (answer) sat_answered(asked, asked_sub, true, t);
         return;
     case 0xFA:                                       /* NG */
         S.rejects++;
         if (answer) {
             log_refused(asked, asked_sub);
             on_refused(asked, asked_sub, asked_len);
+            sat_answered(asked, asked_sub, false, t);
         }
         return;
     case 0x14:                                       /* levels: 0000-0255 */
@@ -1579,6 +1726,12 @@ static void civ_hello(uint32_t t)
     C.civ_open = true;
     C.t_civ_open = t;
     C.t_civ_rx = t;
+    /* A session lost with the uplink selected left the radio on it. */
+    if (C.sat_phase >= SAT_SELECT) CIV(0x07, 0xD0);
+    C.sat_phase = SAT_IDLE;
+    C.sat_delta = 0;
+    C.sat_on = C.no_sat = false;
+    if (model_now()->sat) CIV(0x16, 0x5A);
     CIV(0x03);                    /* frequency */
     CIV(0x26, 0x00);              /* mode, data, filter */
     if (!S.mem_mode) CIV(0x1A, 0x03);   /* filter width; refused on a memory */
@@ -2065,7 +2218,7 @@ static void poll_civ(uint32_t t)
          * -- its RF power and its tuner were never known. */
         if (t - C.t_poll_slow >= SLOW_TICK_MS && t - S.t_last_input_ms >= QUIET_MS) {
             const model_t *m = model_now();
-            switch (C.slow_i++ % 9) {
+            switch (C.slow_i++ % 10) {
             case 0: CIV(0x03); break;
             case 1: CIV(0x26, 0x00); break;
             case 2: CIV(0x16, 0x12); break;
@@ -2089,6 +2242,7 @@ static void poll_civ(uint32_t t)
                 if (m->squelch)  CIV(0x14, 0x03);
                 break;
             case 8: if (m->tuner) CIV(0x1C, 0x01); break;
+            case 9: if (m->sat && !C.no_sat) CIV(0x16, 0x5A); break;
             }
             C.t_poll_slow = t;
         }
@@ -2101,11 +2255,12 @@ static void tune_out(uint32_t t)
      * there would take the radio off the channel. */
     if (S.link != RADIO_LINK_READY || S.ptt.state != PTT_IDLE || S.mem_mode) return;
     bool    fire = false;
-    int64_t want = 0;
+    int64_t want = 0, step = 0;
     taskENTER_CRITICAL(&S_LOCK);
     if (S.have_freq && S.tune.f_display != S.f_committed &&
         t - S.t_last_send_ms >= SET_PERIOD_MS) {
         want = S.tune.f_display;
+        step = want - S.f_committed;
         S.f_committed = want;
         S.t_last_send_ms = t;
         fire = true;
@@ -2114,6 +2269,8 @@ static void tune_out(uint32_t t)
     if (fire) {
         uint8_t b[7] = { 0x05 };
         civ_send(b, 1 + freq_to(b + 1, want));
+        if (C.sat_on && net_prov_sat_track() != NET_SAT_OFF && llabs(step) <= SAT_MAX_STEP_HZ)
+            C.sat_delta += step;
     }
 }
 
@@ -2235,14 +2392,16 @@ static void icom_task(void *arg)
         if (S.link == RADIO_LINK_READY && t - S.t_ready_ms > 30000) C.backoff_ms = 500;
 
         ptt_step(t);
-        {
+        sat_step(t);
+        /* With the uplink selected nothing else goes out: it would land on it. */
+        if (C.sat_phase == SAT_IDLE) {
             civ_msg_t m;
             while (xQueueReceive(s_later, &m, 0) == pdTRUE) civ_send(m.b, m.n);
+            tune_out(t);
+            mem_task(t);
+            rx_ant_task();
+            poll_civ(t);
         }
-        tune_out(t);
-        mem_task(t);
-        rx_ant_task();
-        poll_civ(t);
 
         /* TX audio, every 20 ms from the moment the key goes out -- and on a
          * radio that wants audio both ways, silence the rest of the time. */

@@ -166,6 +166,31 @@ does: switch the headset on and it is there in a few seconds. **Disconnect**
 lets it go until it calls again or you connect it; **Forget it** unpairs it,
 and forgets what the knob made of it, and its level.
 
+### More than one
+
+The knob calls one device, the last connected, but it keeps the pairing of
+the ones before. The configuration page lists the last eight it has
+connected, newest first, on every firmware, with **Connect** and **Forget**
+beside each. To go from a speaker to a headset and back:
+
+1. Switch on the one you want. No pairing mode.
+2. **Connect** beside it.
+
+The one in use is let go and stays paired, and the knob calls the new one from
+then on. If the new one does not answer, the knob goes back to the one before,
+a little later. Each keeps its own **Level** and **Use as**. A device still
+connected to a phone or a computer may not answer: let it go there first.
+
+**Forget** unpairs a device, as **Forget it** does the one in use, and takes
+it off the list. A ninth device takes the oldest's place on the list; that
+one stays paired, and **Find headsets and speakers** lists it again in its
+pairing mode. One that has lost the pairing at its own end, reset to its
+factory settings say, no longer connects from the list: **Forget** it, then
+pair it again.
+
+The list starts from the device the knob has when it gets this firmware. One
+paired before that and left since needs its pairing mode once more.
+
 ## Its level
 
 **Level**, beside the device on the configuration page, is how loud the
@@ -392,8 +417,9 @@ down what it sends; its update brings the rest.
 ## From a computer
 
 ```
-GET  /api/bt                        the headset or speaker, its state, what a scan
-                                    found; the second chip's firmware, and its update
+GET  /api/bt                        the headset or speaker, its state, the devices
+                                    connected before, what a scan found; the second
+                                    chip's firmware, and its update
 POST /api/bt   do=scan              look for headsets and speakers, ten seconds
                do=connect&bda=…     pair if need be, and connect
                do=disconnect

@@ -62,11 +62,11 @@ int  tglist_parse(const char *s, svx_tg_entry *out, int max);
 /* Format back to "8++, 1745+, 8000". */
 void tglist_format(char *dst, size_t cap, const svx_tg_entry *v, int n);
 
-/* Priority of `id`: the monitored list wins, then switchable, else 0.
- * Returns -1 if `id` is in neither list (i.e. not watched at all). */
+/* Priority of `id` in the monitored list. Returns -1 if it is not there (i.e.
+ * not watched at all): a switchable talkgroup has none, being only dialled. */
 int  config_tg_priority(const svx_config *cfg, uint32_t id);
 
-/* Is `id` in either list? */
+/* Is `id` in the monitored list? */
 int  config_tg_is_watched(const svx_config *cfg, uint32_t id);
 
 #endif

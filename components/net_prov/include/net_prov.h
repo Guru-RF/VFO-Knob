@@ -269,6 +269,15 @@ enum { NET_TX_KNOB, NET_TX_RADIO };
 uint8_t  net_prov_tx_mic(void);
 void     net_prov_save_tx_mic(uint8_t src);
 
+/* The IC-9700 in satellite mode (GitHub #18): what a turn of the knob does to
+ * the uplink, the SUB band. The radio's tracking follows its own dial only,
+ * and no CI-V command reads how it is set, so this says it again: NET_SAT_OFF,
+ * the downlink alone, until set; NET_SAT_NORMAL, the same way; NET_SAT_REVERSE,
+ * the other way, an inverting transponder's. Read at each turn (icom_client). */
+enum { NET_SAT_OFF, NET_SAT_NORMAL, NET_SAT_REVERSE };
+uint8_t  net_prov_sat_track(void);
+void     net_prov_save_sat_track(uint8_t track);
+
 /* Boot-loop guard. net_prov_boot_count() is incremented on every boot and
  * cleared once the device has been up long enough to be considered healthy;
  * call net_prov_boot_ok() from a timer for that. Three rapid boots in a row
