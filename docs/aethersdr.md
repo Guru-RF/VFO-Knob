@@ -75,16 +75,37 @@ echo "nat on en0 from 10.55.42.0/24 to any -> (en0)" | sudo pfctl -a com.apple/v
 sudo pfctl -E
 ```
 
-**Windows**, not tried yet. Its own NAT comes with Hyper-V, so Pro or
-Enterprise with Hyper-V on, from an administrator PowerShell:
+**Windows**, tried on Windows 11. Internet Connection Sharing does it, on
+every edition, once it is pointed at the knob's addresses: out of the box it
+gives the cable addresses of its own (192.168.137.x), and the knob would lose
+the computer. First, from an administrator PowerShell:
 
 ```powershell
-New-NetNat -Name VFO-Knob -InternalIPInterfaceAddressPrefix 10.55.42.0/24
+$p = 'HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters'
+Set-ItemProperty $p ScopeAddress 10.55.42.2
+Set-ItemProperty $p ScopeAddressBackup 10.55.42.2
+Restart-Service SharedAccess
 ```
 
-Internet Connection Sharing does not do it: it gives the cable addresses of
-its own. The knob still offers the computer no route, so the computer's own
-traffic never goes down the cable.
+Then **Win+R**, `ncpa.cpl`: the knob is the connection with **UsbNcm Host
+Device** under its name. Right-click the one that has the internet (WiFi or
+Ethernet), **Properties > Sharing**, tick **Allow other network users to
+connect through this computer's Internet connection**, and under *Home
+networking connection* choose the knob's. `ipconfig` should show 10.55.42.2 on
+the knob's adapter; if it shows 192.168.137.1, untick the sharing, run
+`Restart-Service SharedAccess`, and tick it again. Windows can forget the
+sharing when it restarts; Microsoft's fix
+([KB4055559](https://learn.microsoft.com/en-us/troubleshoot/windows-client/networking/ics-not-work-after-computer-or-service-restart)),
+as administrator too:
+
+```powershell
+New-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\SharedAccess EnableRebootPersistConnection -Value 1 -PropertyType DWord
+Set-Service SharedAccess -StartupType Automatic
+```
+
+The knob needs no restart: the time comes within a few minutes. The knob
+still offers the computer no route, so the computer's own traffic never goes
+down the cable.
 
 ## The face
 
