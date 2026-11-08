@@ -35,7 +35,7 @@ which it never keys. It also knows the IC-7300MK2, the IC-7760 and the IC-905
 themselves. The guide says
 how to set each radio up for it: see [the Icom guide](docs/icom.md).
 
-With an **Elecraft K4**, a beta not yet tried on a radio, it is a remote
+With an **Elecraft K4**, a beta tried on one radio, it is a remote
 client of the radio over WiFi, as K4remote is, with audio both ways. See
 [Elecraft K4](#elecraft-k4).
 
@@ -439,9 +439,9 @@ answering while keyed gets the PTT ladder's unkey, as on every firmware.
 It speaks the radio's clear port, 9205, where the password goes as its
 SHA-384 hash and nothing else is encrypted: keep it to your own network. The
 K4's server needs a password and Max Clients of 1 or more (the globe button,
-then SERVER SETTINGS). **Not yet tried on a radio**: it is written from
-Elecraft's programmer's reference and K4remote's notes, and has run only
-against a mock. The sub receiver, VFO B, the memories and the antennas are not
+then SERVER SETTINGS). **Tried on one K4**: it is written from Elecraft's
+programmer's reference and K4remote's notes, and run against a mock K4 as
+well. The sub receiver, VFO B, the memories and the antennas are not
 there yet.
 
 Step by step: [the K4 guide](docs/k4.md).

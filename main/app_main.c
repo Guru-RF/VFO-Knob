@@ -2782,6 +2782,7 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "aethersdr",  "AetherSDR",  false },
     { "icom",       "Icom",       false },
     { "multiflex",  "FlexRadio",  false },
+    { "k4",         "Elecraft K4", true },
     { "ubersdr",    "UberSDR",    false },
     { "kiwi",       "Kiwi888",    false },
     { "owrx",       "OpenWebRX",  false },

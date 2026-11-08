@@ -23,8 +23,9 @@
  * skipped. The sub receiver, memories, the antenna tuner and the antennas
  * are not here.
  *
- * Not yet tried against a K4: written from the programmer's reference and
- * K4remote's notes, and run against tools/mock_k4.py (tools/k4host).
+ * Tried on one K4 (DC0SK's, 2026-11-07); written from the programmer's
+ * reference and K4remote's notes, and run against tools/mock_k4.py
+ * (tools/k4host).
  */
 #include "radio.h"
 
