@@ -162,11 +162,6 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      is encrypted: keep it to your own network. <b>Beta</b>: tried on one
      K4. The knob reaches the radio over WiFi, and applies changes here
      on its next boot.</p>
-  <p class="note" id="xiegunote" hidden>The knob talks to the wfview server
-     built into the radio: <b>SYSTEM SETTING &raquo; WFSERVER &raquo; START</b>.
-     Its user is <b>user</b>, password <b>123</b>, unless changed there. The
-     radio announces no name on the network, so give its IP address above.
-     Changes here apply on the knob's next boot.</p>
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
@@ -1072,8 +1067,8 @@ async function load(){
      from WiFi -- so it is only offered when it can be the right answer. */
   /* The endpoint is the radio's own on the Icom firmware, with its login; on
      AetherSDR's it is a computer, which the cable finds by itself. */
-  const icom = c.radio === 'icom', xiegu = c.radio === 'xiegu';
-  const lan = icom || xiegu;              /* the radio itself, with a login */
+  const icom = c.radio === 'icom';
+  const lan = icom;                       /* the radio itself, with a login */
   SVX = c.radio === 'svxconnect';         /* a reflector: named, no login here */
   const flex = c.radio === 'multiflex';   /* the radio itself, by its address */
   const k4 = c.radio === 'k4';            /* an Elecraft K4: its address, port and password */
@@ -1111,11 +1106,11 @@ async function load(){
   $('cknote').hidden = CLOCK; $('ckclocknote').hidden = !CLOCK;
   if (PHONE && !phoneLoaded) { document.documentElement.style.setProperty('--accent','#e5a823'); phoneLoad(); }
   LINKNAME = c.link || 'Radio';
-  $('rtitle').textContent = icom ? 'Icom radios' : xiegu ? 'X6100 / X6200'
+  $('rtitle').textContent = icom ? 'Icom radios'
                           : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : k4 ? 'Elecraft K4' : uber ? 'UberSDR'
                           : OWRX ? 'OpenWebRX receivers' : WSDR ? 'WebSDR receivers'
                           : ox ? 'OpenX6X00' : 'AetherSDR';
-  $('hostlbl').textContent = SVX ? 'Reflector' : flex || xiegu || k4 ? "The radio's IP address"
+  $('hostlbl').textContent = SVX ? 'Reflector' : flex || k4 ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
   $('k4note').hidden = !k4;
@@ -1134,7 +1129,6 @@ async function load(){
   if (SVX) { document.documentElement.style.setProperty('--accent','#e5a823'); svxLoad(); }
   $('rlogin').hidden = !lan;
   $('icomnote').hidden = !icom;
-  $('xiegunote').hidden = !xiegu;
   $('ruser').value = c.ruser || '';
   $('rpass').placeholder = c.rpass ? 'unchanged' : 'not set';
   myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !k4 && !uber && !WEBRX && !ox ? c.client : '';
@@ -1145,7 +1139,7 @@ async function load(){
   LIST = !SVX && c.radio !== 'setup' && !KIWI && !SCREEN; LAN = lan; UBER = uber; K4 = k4; RXONLY = uber || KIWI || WEBRX;
   /* A receiver's firmware has no microphone: no gain to set for one. */
   $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY || SCREEN; $('volnote').hidden = !RXONLY || SCREEN;
-  HOSTLBL = flex || xiegu || k4 ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
+  HOSTLBL = flex || k4 ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
           : WEBRX ? 'Address (http://\u2026, or https://\u2026)' : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST;
   if (LIST) { $('rlogin').hidden = true; rigsLoad(); }
@@ -1707,7 +1701,7 @@ async function wifiSave(){
   return r.ok ? '' : await r.text();
 }
 
-/* ---- web SDRs, beside the radio: the Icom, Xiegu and FlexRadio firmwares --
+/* ---- web SDRs, beside the radio: the Icom and FlexRadio firmwares --
    ---- and on the kiwi firmware its receivers, one of them In use, and
    ---- another maybe in the right ear ---- */
 let SDRS=null, sdrDirty=false, SDR_USE=-1, sdrUseDirty=false, SDRSTATE='', WHO='', SDR_RIGHT=-1, RIGHTSTATE='';
@@ -2460,7 +2454,6 @@ $('upload').onclick = async()=>{
  * which the knob accepts only when the upload names that radio. */
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 / IC-9700 / IC-R8600 (LAN)'},
-              {id:'xiegu',     name:'Xiegu X6100 / X6200 (LAN)', soon:true},
               {id:'openx6x00', name:'OpenX6X00 (an X6100 or X6200 on the OpenX6X00 firmware, TCI)'},
               {id:'svxconnect',name:'SVXConnect (SvxLink reflectors)'},
               {id:'phone',     name:'Telephone (SIP)'},

@@ -184,7 +184,7 @@ Put them after led_show (ui.c:521-527) so build() and the VU can use them. Use E
 - TX/RX swap (4554-4584) becomes band_show(&s_rx_band, !st->tx).
 - On SVXConnect in TX the arc stays and only the background changes: one full repaint per PTT edge, as today.
 
-6. Phase 3: radio faces (aethersdr, icom, xiegu, multiflex, ubersdr, plus setup compiling)
+6. Phase 3: radio faces (aethersdr, icom, multiflex, ubersdr, plus setup compiling)
 
 Started on the kiwi face (2026-10-04): its S-meter is s_rx_band already (ui.c, under KIWI_FACE), its peak LED
 red as the receivers' page has it -- vu_band_led_color() gives a band a colour of its own for its LED, in place of

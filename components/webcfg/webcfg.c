@@ -2019,7 +2019,7 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  *       ...&mode=usb&filter=2&agc=mid&gain=1&rfgain=80&power=50
  *       ...&tuner=on&squelch=30&rx=sub&ant=2&rxant=1&rit=-120&lo=100&hi=2800
  *       ...&sdr=0&balance=-30    a web SDR beside it, "local" for none (see
- *                                above: the Icom, Xiegu and FlexRadio ones)
+ *                                above: the Icom and FlexRadio ones)
  *       ...&receiver=1           the kiwi and openwebrx firmwares' receiver in
  *                                use, by its place in the list: at once, and
  *                                even while the one in use is down

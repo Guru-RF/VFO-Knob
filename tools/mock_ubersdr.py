@@ -2,8 +2,8 @@
 """Mock UberSDR: a receiver on the LAN, in the clear -- its own protocol on
 http://host:8080, and its KiwiSDR input on port 8073.
 
-For the ubersdr firmware's receiver on a LAN, and for the web SDR of the icom,
-xiegu and multiflex firmwares on UberSDR's Kiwi input, without a receiver:
+For the ubersdr firmware's receiver on a LAN, and for the web SDR of the icom
+and multiflex firmwares on UberSDR's Kiwi input, without a receiver:
 what ka9q_ubersdr 0.1.66 serves, as its source has it -- /api/description and
 /connection (main.go), /ws and its version-4 Opus frames (websocket.go,
 pcm_v4_header.go), /ws/dxcluster (dxcluster_websocket.go), the noise floor's

@@ -10,8 +10,8 @@
 #                                   driven: the slab's tap, its hold for the
 #                                   antennas; and for every face, the reflector's,
 #                                   the telephone's, the receivers' -- UberSDR's
-#                                   and Kiwi888's -- AetherSDR's and the Xiegus'
-#                                   too, a Bluetooth device's battery beside its
+#                                   and Kiwi888's -- and AetherSDR's too, a
+#                                   Bluetooth device's battery beside its
 #                                   logo; on UberSDR's, a guest's time left at the
 #                                   slab's left end; on all of them and the setup
 #                                   firmware's, the knob's own battery at the top
@@ -46,7 +46,7 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 # Warnings on for the code under test; LVGL's headers are LVGL's.
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
-SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_xiegu slab_setup slab_kiwi slab_owrx \
+SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_setup slab_kiwi slab_owrx \
          slab_websdr slab_epibeam slab_adsb slab_clock slab_weather
 all: vu_compare chooser kiwi_face readout clockfaces $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
@@ -117,8 +117,6 @@ slab_uber: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_UBERSDR=1 -DVFO_HAS_SDR=1 -DVFO_RX_ONLY=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_aether: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_AETHERSDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
-slab_xiegu: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
-	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_XIEGU=1 -DVFO_HAS_SDR=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_setup: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_SETUP=1 slab.c $(UI_SRCS) $(FONT_OBJS) $(OBJS) -lm -o $@
 slab_kiwi: slab.c $(UI_SRCS) $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)

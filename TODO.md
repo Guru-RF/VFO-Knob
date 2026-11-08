@@ -103,26 +103,10 @@ Ticked once the knob has worked with the radio itself, not only built for it.
       the sub receiver, VFO B, the antenna tuner and antennas, memories;
       pictures for docs/k4.md
 
-**Xiegu**, the xiegu firmware, through the wfview server built into the radio:
-- [ ] X6100 — control works (radio on APP 1.2.0, the newest); receive
-      audio does not. Its WFSERVER (wfview's server; it says so at login)
-      stops sending audio after anything from 0.4 s to 39 s and often never
-      recovers, even in a new session. Measured from a PC with a prototype
-      client: sooner at 24 kHz, the knob's rate, than at 48 kHz; sooner with
-      silence streamed back to it; no help from a longer latency or from
-      answering its resend requests as wfview does. Next: a wired link
-      instead of its WiFi. If that holds, the firmware should ask for
-      48 kHz and halve it for the knob's output.
-      - the knob as the radio's network adapter: the xiegu firmware does
-        USB networking, like the AetherSDR one, plugged into the radio's USB
-        host port (its DHCP server gives the radio 10.55.42.2, where the
-        knob finds its WFSERVER), with WiFi beside it for the configuration
-        page. Tried: on the X6100's port the knob restarts over and over
-        before its start-up finishes -- most likely the port cannot power
-        it (unconfirmed: no boot there got as far as logging why). Needs a
-        knob on its own battery;
-      - or a USB-C Ethernet adapter on the radio (ordered).
-- [ ] X6200 — said to behave the same
+**Xiegu**: the X6100 and X6200 through OpenX6X00's own TCI server, the
+openx6x00 firmware. The xiegu firmware, through the wfview server built into
+the radio, was removed on 2026-11-08: that server dropped its receive audio
+within seconds and seldom gave it back.
 
 **FlexRadio**, the multiflex firmware, over its own API:
 - [x] FLEX-6600 — on the LAN (a routed hop away) and through SmartLink
@@ -820,7 +804,7 @@ network protocols as well as Icom's: a reference for those clients.
         `tools/release.sh`'s NAMES and the setup firmware's list offer it,
         and the setup guide, docs/README.md and README.md name it with the
         others, 2026-10-06.
-- [ ] **Web SDRs beside the radio.** For the icom, xiegu and multiflex
+- [ ] **Web SDRs beside the radio.** For the icom and multiflex
       firmwares (`VFO_HAS_SDR`, `components/sdr_rx`): a KiwiSDR, a Web-888 or
       an UberSDR's Kiwi input as a second receiver, over KiwiSDR's protocol
       (WebSocket, `SND` frames of IMA-ADPCM at 12 kHz, resampled to 24).
@@ -892,7 +876,7 @@ network protocols as well as Icom's: a reference for those clients.
         lets go by before it has a channel (applyAGC, applySquelch)
         (`test_kiwi_proto`, `fuzz_kiwi`, `make -C tools/uberhost test`),
         2026-10-05;
-      - [ ] on the multiflex and xiegu firmwares.
+      - [ ] on the multiflex firmware.
       - [x] on the kiwi branch, with the right ear's: a web SDR that cannot
         reach the radio's frequency -- a KiwiSDR beside the IC-7610 on 6 m
         -- goes quiet and says so (*can't reach* in amber, "out of range: it

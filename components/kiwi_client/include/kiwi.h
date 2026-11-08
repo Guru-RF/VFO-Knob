@@ -3,7 +3,7 @@
  * The receivers are the configuration page's list (components/sdr_rx: up to
  * four, each a KiwiSDR or a Web-888 by host:port -- or by its https:// link,
  * behind the kiwisdr.com proxy or Cloudflare -- with its passwords): the
- * same list the Icom, Xiegu, FlexRadio and UberSDR firmwares keep their web
+ * same list the Icom, FlexRadio and UberSDR firmwares keep their web
  * SDRs in. One is in use, the dial tunes it, and another takes over at once
  * -- the swipe up, a tap on the slab, the page's In use or the API's
  * receiver= -- with no restart. Each owner's limits are kept: what refused

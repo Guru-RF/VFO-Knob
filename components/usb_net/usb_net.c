@@ -212,8 +212,7 @@ static esp_err_t route_via_lease(void *ctx)
     ip4_addr_t gw;
     ip4_addr_set_u32(&gw, s_lease.addr);
     netif_set_gw(n, &gw);
-    /* Only where none is set: the Xiegu's firmware joins WiFi beside the
-     * cable, and its own network's resolver stays. */
+    /* Only where none is set: a resolver another network gave stays. */
     if (ip_addr_isany_val(*dns_getserver(0))) {
         ip_addr_t a;
         IP_ADDR4(&a, 1, 1, 1, 1);

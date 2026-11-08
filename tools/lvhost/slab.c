@@ -12,8 +12,8 @@
  * as it always did. And the swipe down's row, the memory face, a web SDR's
  * reading under the S-units -- playing, and quiet where it cannot reach the
  * dial -- and pictures of each (PPM, and PNG where ImageMagick is). The
- * other faces with a web SDR -- the Xiegu's, the UberSDR's, Kiwi888's -- for
- * that reading too, between their neighbours at their widest.
+ * other faces with a web SDR -- the UberSDR's, Kiwi888's -- for that reading
+ * too, between their neighbours at their widest.
  *
  * On every face that shows a Bluetooth headset's logo -- the radios', the
  * reflector's, the telephone's, the receivers' -- the device's battery
@@ -1024,9 +1024,6 @@ SOME static void knob_radio(const char *dir, const char *face)
 #if VFO_RADIO_ICOM
 #define SDR_HEX  0x5A9BFF
 #define WARN_HEX 0xFFB000
-#elif VFO_RADIO_XIEGU
-#define SDR_HEX  0x4DA6FF
-#define WARN_HEX 0xFFD000
 #elif VFO_RADIO_UBERSDR
 #define SDR_HEX  0x8B7CF8
 #define WARN_HEX 0xF2B544
@@ -1715,11 +1712,10 @@ static void runs(const char *dir)
     settle(); quiet();
     sdr_reading(dir, "icom", "SLOW", "OFF");
 }
-#elif VFO_RADIO_SVXCONNECT || VFO_RADIO_AETHERSDR || VFO_RADIO_XIEGU
-/* The reflector's face, AetherSDR's and the Xiegus': the slab as the
- * others', in each one's palette. On the reflector's, the knob's battery
- * over the talker, however long his call and where he is; on the Xiegus',
- * the web SDR's reading. */
+#elif VFO_RADIO_SVXCONNECT || VFO_RADIO_AETHERSDR
+/* The reflector's face and AetherSDR's: the slab as the others', in each
+ * one's palette. On the reflector's, the knob's battery over the talker,
+ * however long his call and where he is. */
 static void runs(const char *dir)
 {
     base(); run(120);
@@ -1735,22 +1731,11 @@ static void runs(const char *dir)
     knob_levels(dir);
     knob_check(dir, "svx-knob-batt-talker");
     st.talker[0] = st.talker_info[0] = 0; st.rx_level_db = -90.0f; st.knob_batt = false; run(1500);
-#elif VFO_RADIO_AETHERSDR
+#else
     batt_radio(dir, "aether");
     knob_sweep(dir, "aether");
     lock_sweep(dir, "aether");
     knob_radio(dir, "aether");
-#else
-    batt_radio(dir, "xiegu");
-    knob_sweep(dir, "xiegu");
-    lock_sweep(dir, "xiegu");
-    knob_radio(dir, "xiegu");
-    /* The web SDR's reading alone, between the AGC and the preamp. */
-    base();
-    strcpy(st.agc, "slow");
-    st.have_gain = true; st.gain = 0; st.gain_max = 1; st.gain_step = 1;
-    settle(); quiet();
-    sdr_reading(dir, "xiegu", "SLOW", "OFF");
 #endif
 }
 #elif VFO_RADIO_PHONE

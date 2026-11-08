@@ -199,17 +199,6 @@
 #define DEFAULT_PORT 50001           /* OpenX6X00's TCI server (src/tci_server.h) */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
-#elif VFO_RADIO_XIEGU
-#define KEY_HOST     "xhost"
-#define KEY_RLIST    "xlist"     /* the radios, one in use: see below */
-#define KEY_RSEL     "xsel"
-#define KEY_PORT     "xport"
-#define KEY_USER     "xuser"
-#define KEY_PASS     "xpass"
-#define DEFAULT_HOST ""              /* the X6100 and X6200 announce no name */
-#define DEFAULT_PORT 50001
-#define DEFAULT_USER "user"          /* their wfview server's own login */
-#define DEFAULT_PASS "123"
 #elif VFO_RADIO_ICOM
 #define KEY_HOST     "rhost"
 #define KEY_RLIST    "rlist"     /* the radios, one in use: see below */

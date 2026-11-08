@@ -18,7 +18,6 @@ const kv_ns_def_t KV_NS[] = {
     { .name = "flex", .flags = KVF_FROZEN, .identity = L("uuid") },
     { .name = "phone", .flags = KVF_FROZEN },
     { .name = "icom", .flags = KVF_FROZEN },
-    { .name = "xiegu", .flags = KVF_FROZEN },
 #if VFO_KV_TEST
     { .name = "kvtest" },                 /* kv_test.c's writer: a test build's only */
 #endif

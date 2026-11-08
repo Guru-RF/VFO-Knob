@@ -31,15 +31,13 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom xiegu openx6x00 svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather)
+set(_vfo_radios aethersdr icom openx6x00 svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
 
 # Each radio's client implements components/radio/include/radio.h, so exactly
-# one may be built: two would be two definitions of everything in it. The
-# Xiegu X6100 and X6200 run wfview's server, which speaks Icom's network
-# protocol and presents the radio as an IC-705: they share the Icom client.
+# one may be built: two would be two definitions of everything in it.
 # openx6x00 is an X6100 or X6200 running the OpenX6X00 firmware, whose own TCI
 # server speaks what AetherSDR serves: the AetherSDR firmware's TCI client,
 # over WiFi.
@@ -110,7 +108,7 @@ if(NOT VFO_RADIO STREQUAL "aethersdr")
     idf_build_set_property(DEPENDENCIES_LOCK dependencies.${VFO_RADIO}.lock)
 endif()
 # For components that call the client (main, webcfg), and for code that looks
-# different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_XIEGU,
+# different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_OPENX6X00,
 # VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_K4, VFO_RADIO_UBERSDR, VFO_RADIO_KIWI,
 # VFO_RADIO_OWRX, VFO_RADIO_WEBSDR, VFO_RADIO_SETUP, VFO_RADIO_PHONE,
 # VFO_RADIO_EPIBEAM, VFO_RADIO_ADSB, VFO_RADIO_CLOCK or VFO_RADIO_WEATHER is
@@ -123,7 +121,7 @@ idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND
 # which is an SDR already -- and beside an UberSDR, a KiwiSDR. The kiwi
 # firmware's receivers are that same list: one in use in the left ear, and
 # another of them in the right, an antenna against another.
-if(VFO_RADIO MATCHES "^(icom|xiegu|multiflex|ubersdr|kiwi)$")
+if(VFO_RADIO MATCHES "^(icom|multiflex|ubersdr|kiwi)$")
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_HAS_SDR=1" APPEND)
 endif()
 # A firmware that only receives: no PTT, no microphone, no transmit face.
