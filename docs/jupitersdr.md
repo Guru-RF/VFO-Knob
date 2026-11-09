@@ -1,28 +1,25 @@
 # The JupiterSDR firmware
 
-`vfo-knob-jupitersdr`, a **beta**, is a dial for [Zeus SDR](https://zeussdr.com/)
-driving an **OpenHPSDR radio**: an Apache Labs ANAN or a Hermes Lite 2. It
-talks to Zeus SDR's **TCI** server over WiFi, as WSJT-X and other TCI programs
-do. Tune in Zeus SDR and the knob follows. Turn the knob and Zeus SDR moves.
+`vfo-knob-jupitersdr`, a **beta**, is a client for
+[Zeus SDR](https://zeussdr.com/). It talks to Zeus SDR's **TCI** server over
+WiFi, as WSJT-X and other TCI programs do. Tune in Zeus SDR and the knob follows. Turn the knob and Zeus SDR moves.
 Zeus SDR's audio plays on the knob's jack, and the knob's microphone goes back
 to it. Its face wears Zeus SDR's colours: near-black, its blue for what is
 selected, its S-meter's amber, and TX in its red. JupiterSDR is compatible
 with ZeusSDR; it is not made by Zeus SDR's authors.
 
 **Help wanted.** This beta has received through Zeus SDR on one station, and
-has not yet been tried on the air with an ANAN or a Hermes Lite 2. If you have
-one, please try it and tell us what works and what does not: in
+has not yet been tried on the air through it. If you run Zeus SDR, please try
+it and tell us what works and what does not: in
 [GitHub issue #17](https://github.com/Guru-RF/VFO-Knob/issues/17), or with
 **Report a problem** on the knob's configuration page.
 
 The pictures are the knob's own screens, drawn from the firmware's texts and
 layout (`tools/mkdocs.py`). The orange marks show what your hand does.
 
-## Only with an OpenHPSDR radio
+## With a FlexRadio
 
-JupiterSDR is for the radios Zeus SDR drives itself, over the OpenHPSDR
-protocol: the ANAN family and the Hermes Lite 2.
-
+JupiterSDR keys and meters the radios Zeus SDR drives itself.
 **With a FlexRadio**, use the [FlexRadio firmware](multiflex.md) instead,
 beside Zeus SDR. Through *Zeus Link for Flex*, Zeus SDR's TCI server gives
 receive audio and the frequency, but it refuses to key and sends no S-meter,
@@ -105,8 +102,8 @@ Zeus SDR refuses a key, the knob buzzes the refusal and stays in receive.
 The face turns to transmit:
 
 - SWR across the left half;
-- forward power across the right, on a scale that follows the power: 10 W
-  for a Hermes Lite 2, 100 W for an ANAN;
+- forward power across the right, on a scale that follows the power: 10 W,
+  100 W or more;
 - the knob's microphone level on the thin inner ring.
 
 ![On the air: SWR 1.2, 4 W of 10](jupitersdr/05-tx.svg)

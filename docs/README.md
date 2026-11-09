@@ -11,7 +11,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [FlexRadio](multiflex.md) | `vfo-knob-multiflex` — a MultiFlex station, on the LAN and through SmartLink |
 | [Elecraft K4](k4.md) | `vfo-knob-k4`, a beta — a remote client of a K4: tune, mode, passband, DSP, PTT with audio both ways, over WiFi, tried on one K4; help wanted with testing |
 | [OpenX6X00](openx6x00.md) | `vfo-knob-openx6x00` — a Xiegu X6100 running OpenX6X00, over the radio's own TCI on WiFi, found as x6100.local |
-| [JupiterSDR](jupitersdr.md) | `vfo-knob-jupitersdr`, a beta — a dial for Zeus SDR driving an ANAN or a Hermes Lite 2, over Zeus SDR's TCI on WiFi; help wanted with testing |
+| [JupiterSDR](jupitersdr.md) | `vfo-knob-jupitersdr`, a beta — a client for Zeus SDR, over its TCI on WiFi; help wanted with testing |
 | [AetherSDR](aethersdr.md) | `vfo-knob-aethersdr` — a dial for AetherSDR, over the USB cable or WiFi |
 | [SVXConnect](svxconnect.md) | `vfo-knob-svxconnect` — a node on an SvxLink reflector, no radio needed |
 | [Telephone](phone.md) | `vfo-knob-phone` — a telephone on one SIP account: favourites on the dial, a keypad, a call history, Google Contacts |
