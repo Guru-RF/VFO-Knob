@@ -1,5 +1,7 @@
 # VFO-Knob
 
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-on6ure-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/on6ure)
+
 A hardware VFO knob and control head for [AetherSDR](https://github.com/aethersdr/AetherSDR),
 FlexRadio, the Icom IC-705, IC-7610, IC-9700 and IC-R8600, and the Xiegu X6100 and X6200 on
 [OpenX6X00](https://github.com/Guru-RF/OpenX6X00), built on the Waveshare ESP32-S3-Knob-Touch-LCD-1.8. Tune,
