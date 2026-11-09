@@ -85,6 +85,8 @@ static const char *TAG = "icom";
 #define STREAM_DEAD_MS 5000          /* CI-V or audio silent: the session is gone */
 #define SLOW_TICK_MS   220           /* one slow-poll question per tick */
 #define CIV_FRESH_MS   1500          /* PTT only while CI-V is answering */
+#define MODIN_RETRY_MS 600           /* modulation inputs not read back: again */
+#define MODIN_TRIES    10            /* ...then left for the next over's end */
 
 /* Memory channels: groups 00-99 of channels 00-99 (see the memories
  * section). */
@@ -195,6 +197,20 @@ static struct {
      * (voice modes) and 19 (data modes). 0xFF until the radio has said. */
     uint8_t    modin_off, modin_d1;
     bool       modin_switched, modin_logged;
+    /* Putting them back: once the radio is on receive, and again until it
+     * reads them back as they were (modin_step). modin_back: bit 0 DATA OFF
+     * MOD read back, bit 1 DATA MOD. */
+    bool       modin_restoring;
+    uint8_t    modin_tries, modin_back;
+    uint32_t   t_modin;
+    /* A lost session's record found at the start: an input still on the
+     * network is put back, one the operator has changed since is theirs.
+     * modin_fix: the inputs found still on it, as modin_back. */
+    bool       modin_leftover;
+    uint8_t    modin_fix;
+    /* This over is on the radio's own microphone: nothing switched, nothing
+     * sent (Transmit with, net_prov_tx_mic). */
+    bool       tx_own;
     /* This over's microphone, for the line logged when it ends. */
     uint16_t   over_frames, over_silent;
     int        over_peak;
@@ -226,16 +242,21 @@ static mem_t *s_mem;                 /* MEM_CHANNELS of them, PSRAM */
 static bool   s_mem_restored;        /* the dial's memory state, read from NVS */
 
 /* While one of our overs has them switched to the network, the operator's
- * values are kept here too. RTC_NOINIT survives a crash or a watchdog reset,
- * so the next session puts them back instead of leaving the radio deaf to its
- * own microphone -- by the commands they were read with, and only to a radio
- * that has the same: another radio's numbers mean other settings. */
-#define MODIN_MAGIC 0x4D4F4449u
-RTC_NOINIT_ATTR static struct {
+ * values are kept here too, until the radio has read them back: RTC_NOINIT
+ * survives a crash or a watchdog reset, and the card ("modin" in the icom
+ * namespace) a knob switched off. So the next session puts them back instead
+ * of leaving the radio deaf to its own microphone -- by the commands they
+ * were read with, and only to the radio they came from, with the same
+ * numbers: another radio's mean other settings. */
+#define MODIN_MAGIC 0x4D4F4432u
+typedef struct {
     uint32_t magic;
-    uint8_t  off, d1;
     uint16_t voice, data;
-} s_modin_saved;
+    uint8_t  off, d1;
+    char     host[48];
+} modin_saved_t;
+RTC_NOINIT_ATTR static modin_saved_t s_modin_saved;
+static modin_saved_t s_modin_left;    /* the record a new session found */
 
 static uint8_t  s_rx[1500];
 static uint8_t *s_txa;              /* one outbound audio packet, PSRAM */
@@ -918,10 +939,59 @@ static void modin_set(uint16_t which, uint8_t v)
     CIV(0x1A, 0x05, (uint8_t)(which >> 8), (uint8_t)which, v);
 }
 
+/* The operator's values kept, or let go once the radio has them back: in RTC
+ * memory and on the card, as s_modin_saved says. */
+static void modin_keep(bool keep)
+{
+    const model_t *m = model_now();
+    if (keep) {
+        s_modin_saved = (modin_saved_t){ .magic = MODIN_MAGIC,
+                                         .voice = m->modin_voice, .data = m->modin_data,
+                                         .off = C.modin_off, .d1 = C.modin_d1 };
+        strlcpy(s_modin_saved.host, C.host, sizeof s_modin_saved.host);
+    } else {
+        s_modin_saved.magic = 0;
+    }
+    kv_handle_t h;
+    if (kv_open(MEM_NVS_NS, &h) != ESP_OK) return;
+    if (keep) kv_set_blob(h, "modin", &s_modin_saved, sizeof s_modin_saved);
+    else      kv_erase_key(h, "modin");
+    kv_commit(h);
+    kv_close(h);
+}
+
+/* What a lost session left for this radio: in RTC memory after a crash or a
+ * reset, on the card after the knob was switched off. */
+static bool modin_left_over(const model_t *m)
+{
+    modin_saved_t r = s_modin_saved;
+    if (r.magic != MODIN_MAGIC) {
+        kv_handle_t h;
+        size_t len = sizeof r;
+        if (kv_open(MEM_NVS_NS, &h) != ESP_OK) return false;
+        const esp_err_t e = kv_get_blob(h, "modin", &r, &len);
+        kv_close(h);
+        if (e != ESP_OK || len != sizeof r) return false;
+    }
+    r.host[sizeof r.host - 1] = '\0';
+    if (r.magic != MODIN_MAGIC || r.voice != m->modin_voice || r.data != m->modin_data ||
+        strcmp(r.host, C.host) != 0) return false;
+    s_modin_left = r;
+    return true;
+}
+
 static void modin_to_wlan(void)
 {
     const model_t *m = model_now();
-    if (C.modin_switched || C.no_modin || !m->modin_voice) return;
+    if (C.no_modin || !m->modin_voice) return;
+    if (C.modin_switched) {
+        /* Not yet back from the last over, or never taken back: on the
+         * network again for this one. */
+        C.modin_restoring = false;
+        modin_set(m->modin_voice, m->modin_lan);
+        modin_set(m->modin_data, m->modin_lan);
+        return;
+    }
     if (C.modin_off == 0xFF || C.modin_d1 == 0xFF) {
         ESP_LOGW(TAG, "modulation inputs not known: this over is the radio's own microphone");
         return;
@@ -929,29 +999,103 @@ static void modin_to_wlan(void)
     if (C.modin_off == m->modin_lan && C.modin_d1 == m->modin_lan) return;
     ESP_LOGI(TAG, "modulation input %s for this over (was %s, data %s)",
              modin_name(m->modin_lan), modin_name(C.modin_off), modin_name(C.modin_d1));
-    s_modin_saved.off = C.modin_off;
-    s_modin_saved.d1 = C.modin_d1;
-    s_modin_saved.voice = m->modin_voice;
-    s_modin_saved.data = m->modin_data;
-    s_modin_saved.magic = MODIN_MAGIC;
+    modin_keep(true);
     modin_set(m->modin_voice, m->modin_lan);
     modin_set(m->modin_data, m->modin_lan);
     C.modin_switched = true;
 }
 
+/* Put them back -- by modin_step, with the radio on receive. Sent at the
+ * unkey, an IC-7610 still on the air was left on LAN (GitHub #23). */
 static void modin_restore(void)
 {
-    if (!C.modin_switched) return;
-    modin_set(model_now()->modin_voice, C.modin_off);
-    modin_set(model_now()->modin_data, C.modin_d1);
-    C.modin_switched = false;
-    s_modin_saved.magic = 0;
+    if (!C.modin_switched || C.modin_restoring) return;
+    C.modin_restoring = true;
+    C.modin_tries = 0;
+    C.modin_back = 0;
+    C.t_modin = now_ms() - MODIN_RETRY_MS;
+}
+
+static void modin_step(uint32_t t)
+{
+    if (!C.modin_restoring || S.link != RADIO_LINK_READY || S.ptt.state != PTT_IDLE || S.tx)
+        return;
+    if (t - C.t_modin < MODIN_RETRY_MS) return;
+    if (C.modin_tries >= MODIN_TRIES) {
+        ESP_LOGE(TAG, "the radio did not take its modulation inputs back (%s, data %s) "
+                      "in %u tries: again after the next over, or the next session",
+                 modin_name(C.modin_off), modin_name(C.modin_d1), (unsigned)MODIN_TRIES);
+        C.modin_restoring = false;
+        return;
+    }
+    const model_t *m = model_now();
+    C.modin_tries++;
+    modin_set(m->modin_voice, C.modin_off);
+    modin_set(m->modin_data, C.modin_d1);
+    modin_read(m->modin_voice);
+    modin_read(m->modin_data);
+    C.t_modin = t;
+}
+
+/* A modulation input read: 1A 05 <which> <value>. */
+static void on_modin(uint16_t which, uint8_t v)
+{
+    const model_t *m = model_now();
+    const uint8_t bit = which == m->modin_voice ? 1 : which == m->modin_data ? 2 : 0;
+    if (!bit) return;
+    if (C.modin_switched) {
+        /* On the network for an over, or read back while being put back --
+         * never the operator's own value. */
+        if (!C.modin_restoring || v != (bit == 1 ? C.modin_off : C.modin_d1)) return;
+        C.modin_back |= bit;
+        if (C.modin_back == 3) {
+            ESP_LOGI(TAG, "modulation inputs back: %s, data %s",
+                     modin_name(C.modin_off), modin_name(C.modin_d1));
+            C.modin_switched = C.modin_restoring = false;
+            modin_keep(false);
+        }
+        return;
+    }
+    if (C.modin_leftover) {
+        const uint8_t was = bit == 1 ? s_modin_left.off : s_modin_left.d1;
+        if (v == m->modin_lan && was != m->modin_lan) {
+            C.modin_fix |= bit;                  /* still as the lost session left it */
+            v = was;
+        }
+    }
+    if (bit == 1) C.modin_off = v;
+    else          C.modin_d1 = v;
+    if (C.modin_off == 0xFF || C.modin_d1 == 0xFF) return;
+    if (C.modin_leftover) {
+        C.modin_leftover = false;
+        if (C.modin_fix) {
+            ESP_LOGW(TAG, "putting back the modulation inputs a lost session left on the network");
+            C.modin_switched = true;
+            modin_restore();
+        } else {
+            modin_keep(false);                   /* back already, or the operator's since */
+        }
+    }
+    if (!C.modin_logged) {
+        C.modin_logged = true;
+        ESP_LOGI(TAG, "modulation inputs: %s, data %s",
+                 modin_name(C.modin_off), modin_name(C.modin_d1));
+    }
 }
 
 static void ptt_dispatch(const ptt_out_t *o)
 {
     if (o->haptic) haptic_hook(o->haptic, o->haptic_prio);
-    if (o->send_key)   { modin_to_wlan(); CIV(0x1C, 0x00, 0x01); }
+    /* Transmit with (GitHub #23): the knob's microphone -- or a headset's --
+     * over the network, the radio's input switched to it for the over; or
+     * the radio's own, which the knob only keys and leaves as it is set.
+     * Taken at each key, so a change on the page is the next over's. */
+    if (o->send_key) {
+        C.tx_own = net_prov_tx_mic() == NET_TX_RADIO;
+        if (!C.tx_own) modin_to_wlan();
+        else           S.tx_mic_dbm = -60.0f;      /* the radio's microphone: not heard here */
+        CIV(0x1C, 0x00, 0x01);
+    }
     if (o->send_unkey) { CIV(0x1C, 0x00, 0x00); modin_restore(); }
     /* Rungs 2 and 3: the IC-705 stops transmitting when the client that keyed
      * it over the LAN goes away, so ending the session is the stronger unkey. */
@@ -976,10 +1120,10 @@ static void ptt_dispatch(const ptt_out_t *o)
         esp_restart();
     }
     if (o->entered_tx) {
-        audio_in_set_active(true);
+        if (!C.tx_own) audio_in_set_active(true);
         C.over_frames = C.over_silent = 0;
         C.over_peak = 0;
-        ESP_LOGW(TAG, "*** TX ***");
+        ESP_LOGW(TAG, "*** TX ***%s", C.tx_own ? " with the radio's own microphone" : "");
     }
     if (o->left_tx && C.over_frames) {
         ESP_LOGI(TAG, "over: %u audio frames, %u of them silence, microphone peak %d dBFS",
@@ -1255,15 +1399,8 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
                 ESP_LOGW(TAG, "%s answers wfview's modulation-input numbers short: "
                               "they are not its own", C.radio_name);
             C.no_probe = true;
-        } else if (bn >= 4 && b[0] == 0x05 && model_now()->modin_voice && !C.modin_switched) {
-            const uint16_t which = (uint16_t)(b[1] << 8 | b[2]);
-            if (which == model_now()->modin_voice) C.modin_off = b[3];   /* modulation inputs */
-            if (which == model_now()->modin_data)  C.modin_d1 = b[3];
-            if (!C.modin_logged && C.modin_off != 0xFF && C.modin_d1 != 0xFF) {
-                C.modin_logged = true;
-                ESP_LOGI(TAG, "modulation inputs: %s, data %s",
-                         modin_name(C.modin_off), modin_name(C.modin_d1));
-            }
+        } else if (bn >= 4 && b[0] == 0x05 && model_now()->modin_voice) {
+            on_modin((uint16_t)(b[1] << 8 | b[2]), b[3]);   /* modulation inputs */
         } else if (bn >= 4 && b[0] == 0x05 && model_now()->probe_voice) {
             /* wfview's numbers on a radio nobody here has tried: what they
              * hold, for its owner to hold against the radio's own menu. */
@@ -1451,7 +1588,13 @@ static void set_close_reason(const char *why)
  * dropped, each stream told. */
 static void goodbye(void)
 {
-    modin_restore();
+    /* No time to read them back: their record stays, and the next session
+     * finds them back, or puts them back. */
+    if (C.modin_switched) {
+        modin_set(model_now()->modin_voice, C.modin_off);
+        modin_set(model_now()->modin_data, C.modin_d1);
+        C.modin_switched = C.modin_restoring = false;
+    }
     if (C.civ_open) civ_openclose(false);
     if (C.authed) send_token(0x01);
     control(&s_civ, 0x05, 0);
@@ -1527,7 +1670,8 @@ static bool session_begin(uint32_t t)
     C.civ_seqb = C.aud_seqb = 0;
     C.authed = C.streaming = C.civ_open = false;
     C.modin_off = C.modin_d1 = 0xFF;
-    C.modin_switched = C.modin_logged = false;
+    C.modin_switched = C.modin_logged = C.modin_restoring = C.modin_leftover = false;
+    C.modin_fix = 0;
     C.civ_addr = CIV_RADIO;
     C.no_mem = C.no_modin = C.no_probe = C.probing = false;
     C.waiting_busy = false;
@@ -1713,12 +1857,13 @@ static void civ_hello(uint32_t t)
     if (m->tuner) CIV(0x1C, 0x01);      /* the tuner in the line? */
     if (m->n_rx > 1) CIV(0x07, 0xD2);   /* MAIN or SUB */
     if (m->n_ant) CIV(0x12);            /* the antenna */
-    if (s_modin_saved.magic == MODIN_MAGIC && m->modin_voice &&
-        s_modin_saved.voice == m->modin_voice && s_modin_saved.data == m->modin_data) {
-        ESP_LOGW(TAG, "putting back the modulation inputs a lost session left on the network");
-        modin_set(m->modin_voice, s_modin_saved.off);
-        modin_set(m->modin_data, s_modin_saved.d1);
-        s_modin_saved.magic = 0;
+    /* What a lost session left on the network is put back once the reads
+     * below say it is still there (on_modin). */
+    if (m->modin_voice && !C.modin_switched && modin_left_over(m)) {
+        ESP_LOGW(TAG, "a lost session may have left the modulation inputs on the network: "
+                      "%s, data %s, if so", modin_name(s_modin_left.off), modin_name(s_modin_left.d1));
+        C.modin_leftover = true;
+        C.modin_fix = 0;
     }
     if (m->modin_voice && !C.no_modin) {  /* as the operator has them */
         modin_read(m->modin_voice);
@@ -2352,11 +2497,13 @@ static void icom_task(void *arg)
             tune_out(t);
             mem_task(t);
             rx_ant_task();
+            modin_step(t);
             poll_civ(t);
         }
 
-        /* TX audio, every 20 ms from the moment the key goes out. */
-        const bool on_air = S.ptt.state == PTT_REQ_ON || S.ptt.state == PTT_ON;
+        /* TX audio, every 20 ms from the moment the key goes out -- none
+         * when the over is on the radio's own microphone. */
+        const bool on_air = (S.ptt.state == PTT_REQ_ON || S.ptt.state == PTT_ON) && !C.tx_own;
         if (on_air) {
             if (t - C.t_tx_frame >= 20) {
                 C.t_tx_frame = (t - C.t_tx_frame > 60) ? t : C.t_tx_frame + 20;

@@ -273,7 +273,7 @@ static bool     s_turned;           /* the USB cable at the bottom: the screen t
 static uint8_t  s_beam_n = 4;       /* EpiBeam: the array's directions, 4 or 8 */
 static uint8_t  s_beam_dir;         /* ...and the one the beam was left on, 0 = N */
 static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
-static uint8_t  s_tx_mic;           /* NET_TX_*: what AetherSDR transmits with */
+static uint8_t  s_tx_mic;           /* NET_TX_*: what AetherSDR or an Icom transmits with */
 static uint8_t  s_sat_track;        /* NET_SAT_*: the IC-9700's uplink, on a turn */
 #if VFO_RADIO_ADSB
 /* ADS-B Radar's radar: in PSRAM, as large as it is beside the rest. */

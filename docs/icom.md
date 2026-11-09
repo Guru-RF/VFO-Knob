@@ -308,13 +308,28 @@ inner ring.
 
 The knob's audio reaches the radio over the network: for each over the knob
 switches the radio's modulation input to it — WLAN on the IC-705, LAN on the
-IC-7610 and the IC-9700 — and back to what it was after. Nothing to set on the
-radio for that, on those four. On the IC-7300MK2, the IC-7760 and the IC-905
-the knob does not switch it yet: set **DATA OFF MOD** (and **DATA MOD**, for the
-data modes) to **LAN** on the radio, or the over goes out on the radio's own
-microphone.
+IC-7610 and the IC-9700. Once the radio is back on receive, the knob puts the
+input back to what it was, and asks until the radio reads it back that way.
+Nothing to set on the radio for that, on those three. A knob switched off or
+cut from the radio in the middle of an over remembers what to put back. At its
+next connection to that radio it puts the input back, if it is still on the
+network; an input you have changed since is left as you set it. On the
+IC-7300MK2, the IC-7760 and the IC-905 the knob does not switch it yet: set
+**DATA OFF MOD** (and **DATA MOD**, for the data modes) to **LAN** on the
+radio, or the over goes out on the radio's own microphone.
 
 ![On the air: SWR 1.3, 50 W of 100](icom/17-tx.svg)
+
+### With the radio's own microphone
+
+Until set, the knob transmits its own microphone, or a Bluetooth headset's.
+To transmit with the radio's own microphone instead, set **Transmit with** to
+**The radio's own microphone** under **Audio** on the configuration page.
+The over then goes out on whatever the radio's modulation input is set to:
+its MIC, a computer on USB, ACC. The knob's PTT only keys the radio, as a foot
+switch would, and never touches its modulation input. The knob's microphone
+stays off, and so does the mic ring on the face. It applies from the next time
+you key.
 
 Nothing vibrates on the air — the motor sits beside the microphone and would be
 heard — and the radio's own transmit time-out is the backstop: set it.
