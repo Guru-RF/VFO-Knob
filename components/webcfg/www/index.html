@@ -160,8 +160,17 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      and <b>Max Clients</b> of 1 or more &mdash; the knob is a client, as
      K4remote is. The password goes over the network hashed, and nothing else
      is encrypted: keep it to your own network. <b>Beta</b>: tried on one
-     K4. The knob reaches the radio over WiFi, and applies changes here
-     on its next boot.</p>
+     K4; reports welcome. The knob reaches the radio over WiFi, and applies
+     changes here on its next boot.</p>
+  <p class="note" id="jsnote" hidden>The address of the computer running Zeus
+     SDR, and its TCI port (40001). In Zeus SDR, turn TCI on and let it listen
+     on the network, not on that computer alone, and let the computer's
+     firewall pass TCP 40001. The knob is a TCI client there, as WSJT-X is.
+     For the radios Zeus SDR drives itself: an ANAN or a Hermes Lite 2. With a
+     FlexRadio, choose the FlexRadio firmware instead, beside Zeus SDR.
+     <b>Beta</b>: compatible with ZeusSDR, not yet tried on the air; reports
+     welcome. The knob reaches the computer over WiFi, and applies changes
+     here on its next boot.</p>
   <p class="note" id="hostusb" hidden>You are on the USB cable. Over it the knob
      finds AetherSDR on this computer by itself; this host is what it uses on
      WiFi. Open this page over WiFi and <b>my IP</b> fills it in.</p>
@@ -1074,6 +1083,7 @@ async function load(){
   const k4 = c.radio === 'k4';            /* an Elecraft K4: its address, port and password */
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
   const ox = c.radio === 'openx6x00';    /* an X6100 or X6200 on OpenX6X00: TCI, found as x6100.local or x6200.local */
+  const js = c.radio === 'jupitersdr';   /* Zeus SDR: TCI, on a computer, by its address */
   /* AetherSDR's own microphone, or the knob's (GitHub #19). */
   $('txmicrow').hidden = $('txmicnote').hidden = c.radio !== 'aethersdr';
   /* The IC-9700's uplink in satellite mode (GitHub #18). */
@@ -1109,11 +1119,12 @@ async function load(){
   $('rtitle').textContent = icom ? 'Icom radios'
                           : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : k4 ? 'Elecraft K4' : uber ? 'UberSDR'
                           : OWRX ? 'OpenWebRX receivers' : WSDR ? 'WebSDR receivers'
-                          : ox ? 'OpenX6X00' : 'AetherSDR';
+                          : ox ? 'OpenX6X00' : js ? 'Zeus SDR' : 'AetherSDR';
   $('hostlbl').textContent = SVX ? 'Reflector' : flex || k4 ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
   $('k4note').hidden = !k4;
+  $('jsnote').hidden = !js;
   $('ubernote').hidden = !uber;
   $('owrxnote').hidden = !OWRX;
   $('wsdrnote').hidden = !WSDR;
@@ -1134,7 +1145,7 @@ async function load(){
   myIp = c.client && !c.client_usb && !lan && !SVX && !flex && !k4 && !uber && !WEBRX && !ox ? c.client : '';
   $('myip').hidden = !myIp;
   $('myip').textContent = 'my IP ' + myIp;
-  $('hostusb').hidden = lan || SVX || flex || k4 || uber || WEBRX || ox || !(c.client && c.client_usb);
+  $('hostusb').hidden = lan || SVX || flex || k4 || uber || WEBRX || ox || js || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
   LIST = !SVX && c.radio !== 'setup' && !KIWI && !SCREEN; LAN = lan; UBER = uber; K4 = k4; RXONLY = uber || KIWI || WEBRX;
   /* A receiver's firmware has no microphone: no gain to set for one. */
@@ -2455,6 +2466,7 @@ $('upload').onclick = async()=>{
 const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'icom',      name:'Icom IC-705 / IC-7610 / IC-9700 / IC-R8600 (LAN)'},
               {id:'openx6x00', name:'OpenX6X00 (an X6100 or X6200 on the OpenX6X00 firmware, TCI)'},
+              {id:'jupitersdr',name:'JupiterSDR (compatible with ZeusSDR, TCI)', beta:true},
               {id:'svxconnect',name:'SVXConnect (SvxLink reflectors)'},
               {id:'phone',     name:'Telephone (SIP)'},
               {id:'multiflex', name:'FlexRadio (MultiFlex)'},

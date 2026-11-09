@@ -1,0 +1,15 @@
+# The jupitersdr firmware: Zeus SDR's station engine, over its TCI server on
+# WiFi (VFO_RADIO=jupitersdr) -- the AetherSDR firmware's client, to the
+# computer running Zeus SDR for an OpenHPSDR radio or a FlexRadio.
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet, as the openx6x00
+# firmware: leaving TinyUSB out frees the internal RAM its buffers take, and
+# keeps the serial console on the cable (the website's WiFi page uses it).
+
+# The station engine's socket beside the web page's and the log's, and a
+# browser's.
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# AES in software, as every other firmware: the engine's DMA takes its bounce
+# buffers from internal RAM, and an update's download needs it to spare.
+CONFIG_MBEDTLS_HARDWARE_AES=n

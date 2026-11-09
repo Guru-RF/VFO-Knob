@@ -174,6 +174,28 @@ static void test_state_and_telemetry(void)
     CHECK_EQ(f.kind, TCI_TX_SENSORS);
     CHECK(f.f1 > 48.1f && f.f1 < 48.3f);
     CHECK(f.f3 > 1.39f && f.f3 < 1.41f);
+
+    /* Zeus SDR's: the S-meter with its channel between, and tx_sensors with
+     * the reflected power where AetherSDR's peak is and no ALC. */
+    f = P("rx_smeter:0,1,-139;");
+    CHECK_EQ(f.kind, TCI_RX_SMETER);
+    CHECK_EQ(f.trx, 0);
+    CHECK_EQ(f.channel, 1);
+    CHECK_EQ(f.i0, -139);
+    CHECK_EQ(P("rx_smeter:0,-93;").channel, -1);
+    f = P("tx_sensors:0,0,48.2,1.3,1.4;");
+    CHECK_EQ(f.kind, TCI_TX_SENSORS);
+    CHECK(f.f1 > 48.1f && f.f1 < 48.3f);
+    CHECK(f.f3 > 1.39f && f.f3 < 1.41f);
+    CHECK(f.f4 > -0.01f && f.f4 < 0.01f);
+    static const char *const ZEUS_IGNORED[] = {
+        "if:0,0,0;", "tx_frequency_ex:7240000,false,false;", "rx_step_att_ex:0,10;",
+        "rx_preamp_att_ex:0,0;", "tx_power:0.0;", "tx_forward_power:0.0;",
+        "tx_swr:1.0;", "swr:1.0;", "tx_alc:0;", "cw_macros_empty;",
+        "preamp:0,false;", "attenuator:0,0;",
+    };
+    for (size_t i = 0; i < sizeof ZEUS_IGNORED / sizeof ZEUS_IGNORED[0]; i++)
+        CHECK_EQ(P(ZEUS_IGNORED[i]).kind, TCI_IGNORED);
 }
 
 static void test_robustness(void)

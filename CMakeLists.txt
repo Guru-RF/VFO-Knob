@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom openx6x00 svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather)
+set(_vfo_radios aethersdr icom openx6x00 jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -40,7 +40,8 @@ endif()
 # one may be built: two would be two definitions of everything in it.
 # openx6x00 is an X6100 or X6200 running the OpenX6X00 firmware, whose own TCI
 # server speaks what AetherSDR serves: the AetherSDR firmware's TCI client,
-# over WiFi.
+# over WiFi. jupitersdr is the same client for Zeus SDR, whose station engine
+# serves TCI too, on a computer driving an OpenHPSDR radio or a FlexRadio.
 # svxconnect is not a radio but an SvxLink reflector: its client speaks the
 # reflector protocol, and the dial picks talkgroups instead of frequencies.
 # multiflex speaks a FlexRadio's own API, with no computer in between: the
@@ -60,7 +61,7 @@ endif()
 # round the knob, from an ADS-B feed on the internet or a receiver of one's
 # own, after Alex-developer's ADSB-Radar. clock is a clock: its faces, the
 # time from SNTP. weather is the weather: Open-Meteo's forecast for a place.
-if(VFO_RADIO STREQUAL "aethersdr" OR VFO_RADIO STREQUAL "openx6x00")
+if(VFO_RADIO MATCHES "^(aethersdr|openx6x00|jupitersdr)$")
     set(_vfo_client tci_client)
 elseif(VFO_RADIO STREQUAL "svxconnect")
     set(_vfo_client svx_client)
@@ -109,8 +110,9 @@ if(NOT VFO_RADIO STREQUAL "aethersdr")
 endif()
 # For components that call the client (main, webcfg), and for code that looks
 # different per radio: VFO_RADIO_AETHERSDR, VFO_RADIO_ICOM, VFO_RADIO_OPENX6X00,
-# VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_K4, VFO_RADIO_UBERSDR, VFO_RADIO_KIWI,
-# VFO_RADIO_OWRX, VFO_RADIO_WEBSDR, VFO_RADIO_SETUP, VFO_RADIO_PHONE,
+# VFO_RADIO_JUPITERSDR, VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_K4,
+# VFO_RADIO_UBERSDR, VFO_RADIO_KIWI, VFO_RADIO_OWRX, VFO_RADIO_WEBSDR,
+# VFO_RADIO_SETUP, VFO_RADIO_PHONE,
 # VFO_RADIO_EPIBEAM, VFO_RADIO_ADSB, VFO_RADIO_CLOCK or VFO_RADIO_WEATHER is
 # defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})

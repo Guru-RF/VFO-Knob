@@ -192,6 +192,29 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define C_TX_RED    lv_color_hex(0xB91C1C)   /* tx_bg: its TX red       */
 #define C_GREEN     lv_color_hex(0x34D399)   /* ok, meter_low           */
 #define PWR_HEX     0x4F8BF5                 /* vfo, info: the electric blue */
+#elif VFO_RADIO_JUPITERSDR
+/* --- JupiterSDR palette ----------------------------------------------------
+ * Zeus SDR's own screen, from its pictures on zeussdr.com: near-black panels
+ * and buttons, its blue for what is selected, its S-meter's amber bar, and
+ * TX in its red. The layout is the other faces'. */
+#define C_BG        lv_color_hex(0x0E0E10)   /* its page                */
+#define C_BG1       lv_color_hex(0x222124)   /* its buttons: the PTT slab */
+#define C_BG_TX     lv_color_hex(0x2E1516)   /* a red tint on the air   */
+#define C_ACCENT    lv_color_hex(0x5D88DB)   /* a selected button's blue */
+#define C_ACCENT_HI lv_color_hex(0x8FAEEA)
+#define C_TEXT      lv_color_hex(0xF4F8FA)   /* the frequency's white   */
+#define C_TEXT2     lv_color_hex(0xC5C5C5)   /* its labels              */
+#define C_LABEL     lv_color_hex(0x8A8A8E)
+#define C_DISABLED  lv_color_hex(0x48484A)
+#define C_SUBTLE    lv_color_hex(0x18181A)   /* a panel's header: the tracks */
+#define C_WARN      lv_color_hex(0xE8A33D)
+#define C_DANGER    lv_color_hex(0xDE5952)   /* its red                 */
+#define C_TX_BORDER lv_color_hex(0xDE5952)
+#define C_TX_TEXT   lv_color_hex(0xFFFFFF)
+#define C_PEAK      lv_color_hex(0xF4F8FA)
+#define C_TX_RED    lv_color_hex(0xDE5952)
+#define C_GREEN     lv_color_hex(0x6FA866)   /* its green               */
+#define PWR_HEX     0xD2A76D                 /* Po in the S-meter's amber */
 #elif VFO_RADIO_UBERSDR
 /* --- UberSDR palette -------------------------------------------------------
  * UberSDR's own dark theme, from its v2 page: ink, its accent blue, its dim
@@ -635,6 +658,10 @@ static const struct { float from, to; uint32_t rgb; } MIC_ZONE[MIC_ZONES] = {
     { -40.0f, -10.0f, 0x34D399 },   /* ok      */
     { -10.0f,   0.0f, 0xFBBF24 },   /* bar_mid */
     {   0.0f,  10.0f, 0xF87171 },   /* bar_high */
+#elif VFO_RADIO_JUPITERSDR
+    { -40.0f, -10.0f, 0xD2A76D },   /* amber */
+    { -10.0f,   0.0f, 0xE8A33D },   /* warm  */
+    {   0.0f,  10.0f, 0xDE5952 },   /* red   */
 #elif SVX_LOOK
     { -40.0f, -10.0f, 0x35B35A },   /* SvxConnect's meter: green  */
     { -10.0f,   0.0f, 0xD8C43A },   /* yellow */
@@ -838,6 +865,10 @@ static const struct { float from, to; uint32_t rgb; } ZONES[SWR_ZONES] = {
     { 1.0f, 2.0f, 0x34D399 },   /* ok       */
     { 2.0f, 2.5f, 0xFBBF24 },   /* bar_mid  */
     { 2.5f, 3.0f, 0xF87171 },   /* bar_high */
+#elif VFO_RADIO_JUPITERSDR
+    { 1.0f, 2.0f, 0xD2A76D },   /* amber */
+    { 2.0f, 2.5f, 0xE8A33D },   /* warm  */
+    { 2.5f, 3.0f, 0xDE5952 },   /* red   */
 #elif SVX_LOOK
     { 1.0f, 2.0f, 0x35B35A },
     { 2.0f, 2.5f, 0xD8C43A },
@@ -902,6 +933,15 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0x34D399 },   /* S9 to +20: meter_low, green over S9 */
     {  -53.0f,  -33.0f, 0xFBBF24 },   /* +20 to +40: warn */
     {  -33.0f,  -13.0f, 0xF87171 },   /* +40 to +60: meter_high */
+#elif VFO_RADIO_JUPITERSDR
+    { -127.0f, -121.0f, 0x5A4630 },   /* S0 to S1: its bar's amber, brightening */
+    { -121.0f, -109.0f, 0x7A6040 },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0x9A7B52 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0xB89361 },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0xD2A76D },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0xE8A33D },   /* S9 to +20: warmer, as its scale's +10 to +60 */
+    {  -53.0f,  -33.0f, 0xEC8A36 },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0xDE5952 },   /* +40 to +60: its red */
 #elif VFO_RADIO_UBERSDR
     /* UberSDR's own S-meter colours: hsl(0..120, 90%, 55%) from S1 to S9,
      * red through yellow to green, and green all the way up from there. */
@@ -1168,6 +1208,13 @@ static const char *AGCS[]  = { "fast","slow","off" };
 static const char *MODES[] = { "usb","lsb","cw","cwr","am","sam","nfm","wfm","digu","digl" };
 static const char *MODES_NO_SAM[] = { "usb","lsb","cw","cwr","am","nfm","digu","digl" };
 static const char *AGCS[]  = { "auto","fast","slow","off" };
+#define GAIN_CAPTION "RF.G"
+#elif VFO_RADIO_JUPITERSDR
+/* The modes Zeus SDR's TCI server names (Tci/TciProtocol.cs), CW by its
+ * sideband, and its AGCs -- MEDIUM as "med", which it takes too, to fit the
+ * dial's word. TCI carries no RF gain: shown greyed, as on AetherSDR. */
+static const char *MODES[] = { "usb","lsb","cwu","cwl","am","sam","dsb","fm","digu","digl" };
+static const char *AGCS[]  = { "fast","med","slow","long","fixed" };
 #define GAIN_CAPTION "RF.G"
 #elif VFO_RADIO_UBERSDR
 /* UberSDR's own modes, by its own names. It has no AGC to choose -- its SNR

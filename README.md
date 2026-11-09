@@ -50,6 +50,10 @@ no computer in between. It finds the radio as `x6100.local` or
 `x6200.local`, and its face wears OpenX6X00's RF.Guru colours. See
 [OpenX6X00](#openx6x00).
 
+With **Zeus SDR** driving an ANAN or a Hermes Lite 2, the JupiterSDR
+firmware, a beta, is a TCI client of Zeus SDR over WiFi, as WSJT-X is, with
+audio both ways, in Zeus SDR's colours. See [JupiterSDR](#jupitersdr).
+
 With the **SVXConnect** firmware there is no radio at all: the knob is an
 [SvxLink](https://www.svxlink.org/) reflector client over WiFi, in the style of
 [SVXConnect](https://svxconnect.app/) and in its colours. The dial picks the
@@ -442,9 +446,35 @@ K4's server needs a password and Max Clients of 1 or more (the globe button,
 then SERVER SETTINGS). **Tried on one K4**: it is written from Elecraft's
 programmer's reference and K4remote's notes, and run against a mock K4 as
 well. The sub receiver, VFO B, the memories and the antennas are not
-there yet.
+there yet. **Help wanted**: with a K4, please try it and tell us how it
+went, with **Report a problem** on the knob's configuration page.
 
 Step by step: [the K4 guide](docs/k4.md).
+
+## JupiterSDR
+
+The jupitersdr firmware (`vfo-knob-jupitersdr`), a **beta**, is a dial for
+[Zeus SDR](https://zeussdr.com/) driving an OpenHPSDR radio, an ANAN or a
+Hermes Lite 2. It uses the same TCI as the AetherSDR firmware, over WiFi, on
+Zeus SDR's TCI server (port 40001): turn TCI on in Zeus SDR, let it listen on
+the network, and give the knob the computer's address. Zeus SDR's audio plays
+on the jack, and the knob's microphone transmits through Zeus SDR, which
+refuses a key outside the bands it allows. Zeus SDR does not unkey when the
+link drops: the knob sends the unkey again when it is back, and Zeus SDR's
+own transmit timeout ends the over until then. JupiterSDR is compatible with
+ZeusSDR, and not made by its authors.
+
+It is for the radios Zeus SDR drives itself. **With a FlexRadio**, choose the
+[FlexRadio firmware](#flexradio-multiflex) beside Zeus SDR: through Zeus Link
+for Flex, Zeus SDR's TCI gives receive audio and the frequency, but neither
+keys the radio nor sends the S-meter.
+
+**Help wanted**: it has received through Zeus SDR on one station, and has not
+yet been on the air with an ANAN or a Hermes Lite 2. With one, please try it
+and tell us, in [issue #17](https://github.com/Guru-RF/VFO-Knob/issues/17)
+or with **Report a problem** on the knob's configuration page.
+
+Step by step: [the JupiterSDR guide](docs/jupitersdr.md).
 
 ## Web SDRs
 
@@ -930,7 +960,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock` and `vfo-knob-weather` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock` and `vfo-knob-weather` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -975,7 +1005,7 @@ idf.py -B build_icom -D VFO_RADIO=icom \
        build flash
 ```
 
-So are the openx6x00, multiflex, svxconnect, ubersdr, kiwi, phone and setup firmwares:
+So are the openx6x00, jupitersdr, multiflex, svxconnect, ubersdr, kiwi, phone and setup firmwares:
 
 ```sh
 idf.py -B build_openx6x00 -D VFO_RADIO=openx6x00 \

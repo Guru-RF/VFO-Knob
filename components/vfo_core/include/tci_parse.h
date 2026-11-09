@@ -60,7 +60,7 @@ typedef enum {
     TCI_TX_AUDIO_BUFFERING,    /* i0 */
 
     /* telemetry */
-    TCI_RX_SMETER,          /* trx, i0 = dBm (int, truncated)   */
+    TCI_RX_SMETER,          /* trx, [channel,] i0 = dBm (int)   */
     TCI_RX_CHANNEL_SENSORS, /* trx, channel, f0 = dBm           */
     TCI_TX_SENSORS,         /* f0 mic, f1 fwd_w, f2 peak_w,
                                f3 swr, f4 alc_dbfs              */

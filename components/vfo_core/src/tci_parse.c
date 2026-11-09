@@ -94,6 +94,21 @@ static const struct { const char *name; tci_kind_t kind; } NAMES[] = {
     { "vfo_lock",            TCI_IGNORED             },
     { "keyer",               TCI_IGNORED             },
     { "cw_msg",              TCI_IGNORED             },
+    /* Zeus SDR's (Tci/TciHandshake.cs, TciServer.cs): the IF offsets, the
+     * extended frequency and front end, its TX meters one by one -- the knob
+     * reads them from tx_sensors -- and the CW keyer's queue running dry. */
+    { "if",                  TCI_IGNORED             },
+    { "tx_frequency_ex",     TCI_IGNORED             },
+    { "rx_step_att_ex",      TCI_IGNORED             },
+    { "rx_preamp_att_ex",    TCI_IGNORED             },
+    { "tx_power",            TCI_IGNORED             },
+    { "tx_forward_power",    TCI_IGNORED             },
+    { "tx_swr",              TCI_IGNORED             },
+    { "swr",                 TCI_IGNORED             },
+    { "tx_alc",              TCI_IGNORED             },
+    { "cw_macros_empty",     TCI_IGNORED             },
+    { "preamp",              TCI_IGNORED             },
+    { "attenuator",          TCI_IGNORED             },
 };
 
 static bool arg_bool(const char *s, bool *out)
@@ -246,9 +261,20 @@ bool tci_parse(const char *line, size_t len, tci_fact_t *out)
     case TCI_RIT_OFFSET:
     case TCI_XIT_OFFSET:
     case TCI_DRIVE:
-    case TCI_RX_SMETER:
         out->trx = (int32_t)arg_i64(argv, argc, 0, -1);
         out->i0  = (int32_t)arg_i64(argv, argc, 1, 0);
+        break;
+
+    case TCI_RX_SMETER:
+        /* AetherSDR's "rx_smeter:0,-93", or the spec's -- Zeus SDR's --
+         * "rx_smeter:0,1,-139", its channel between. */
+        out->trx = (int32_t)arg_i64(argv, argc, 0, -1);
+        if (argc >= 3) {
+            out->channel = (int32_t)arg_i64(argv, argc, 1, -1);
+            out->i0      = (int32_t)arg_i64(argv, argc, 2, 0);
+        } else {
+            out->i0      = (int32_t)arg_i64(argv, argc, 1, 0);
+        }
         break;
 
     case TCI_RX_CHANNEL_SENSORS:

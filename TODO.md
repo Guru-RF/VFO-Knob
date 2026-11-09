@@ -118,6 +118,17 @@ broadcast, IQ from the radio and demodulated in the knob:
 - [ ] Apache Labs ANAN (Hermes, Angelia, Orion)
 - [ ] others on the protocol (Red Pitaya's STEMlab SDR transceivers ...)
 
+**Zeus SDR**, the jupitersdr firmware (GitHub #17), a beta, over Zeus SDR's
+TCI server, for the OpenHPSDR radios Zeus SDR drives:
+- [ ] a Hermes Lite 2 through Zeus SDR
+- [ ] an ANAN through Zeus SDR
+
+Tried on 2026-11-08 only through Zeus Link for Flex on the FLEX-6600: receive
+audio and the frequency, no key and no S-meter. There the radio belongs to
+Zeus Link, and the part of Zeus SDR that serves TCI refuses MOX as "not
+connected" -- Zeus SDR's side, not the knob's. A FlexRadio takes the multiflex
+firmware beside Zeus SDR.
+
 **Web SDRs, native**: a receiver firmware of its own, with no radio -- the
 dial tunes a web SDR itself, its S-meter and audio the knob's:
 - [x] UberSDR -- the ubersdr firmware, over UberSDR's own protocol (see

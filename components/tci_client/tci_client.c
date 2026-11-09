@@ -1,7 +1,8 @@
-/* TCI v2.0 client for AetherSDR.
+/* TCI v2.0 client for AetherSDR -- and for OpenX6X00 and Zeus SDR, whose
+ * servers speak it too.
  *
- * Connects out to ws://<host>:50001 and speaks the same protocol AetherSDR
- * already serves to WSJT-X. Design notes that matter:
+ * Connects out to ws://<host>:50001 (Zeus SDR's: 40001) and speaks the same
+ * protocol AetherSDR already serves to WSJT-X. Design notes that matter:
  *
  *  - Tuning is OPTIMISTIC. The wire round trip is 30-80 ms with an unbounded
  *    tail (it waits on someone else's Qt event loop), while the glass and the
@@ -26,6 +27,7 @@
 #include "antiecho.h"
 #include "audio_in.h"
 #include "audio_out.h"
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -90,6 +92,9 @@ typedef struct {
     bool       tx_own;              /* this key AetherSDR's own microphone's, not ours */
     int64_t    last_pong_us;
     bool       tx_enable_seen;
+    bool       need_tx_enable;      /* Zeus SDR: say tx_enable once settled */
+    bool       need_unkey;          /* Zeus SDR: an unkey owed, to send now */
+    uint32_t   t_trx_poll;
     bool       have_chan_sensors;   /* the opt-in, higher-precision stream */
     bool       need_sensors_enable;
     bool       need_audio_start;
@@ -115,9 +120,14 @@ static int64_t     s_retry_at_us;      /* 0 = connected or connecting */
 #define AUD_CAP 12288
 static uint8_t    *s_aud;
 static size_t      s_aud_len;
-/* Outbound TX_AUDIO frame: 64-byte header + TX_CHRONO_FRAMES int16 samples.
- * PSRAM, because internal RAM is the contended resource here. */
+/* Outbound TX_AUDIO frame: 64-byte header + TX_CHRONO_FRAMES int16 samples
+ * -- float32 for Zeus SDR, which drops any other. PSRAM, because internal RAM
+ * is the contended resource here. */
+#if VFO_RADIO_JUPITERSDR
+#define TXA_BYTES  (64 + TX_CHRONO_FRAMES * 4)
+#else
 #define TXA_BYTES  (64 + TX_CHRONO_FRAMES * 2)
+#endif
 static uint8_t    *s_txa;
 /* The TCI connection's socket, found on connect; -1 while there is none. */
 static int         s_fd = -1;
@@ -125,6 +135,51 @@ static uint16_t    s_port;
 static uint32_t    s_backoff_ms = 250;
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+#if VFO_RADIO_JUPITERSDR
+/* Zeus SDR leaves MOX as it is when a TCI client goes: the end of its session
+ * unkeys nothing (Tci/TciSession.cs Dispose), and only its TX timeout, 120 s
+ * as it comes, ends an over nobody ends. So a key leaves an unkey owed until
+ * the server says trx:false, and a knob back after a lost link sends it at
+ * once. Kept over a restart, the PTT ladder's last rung being one. */
+#define UNKEY_OWED  0x5A17E0FFu
+#define TRX_POLL_MS     2000   /* MOX is not broadcast: asked for, now and then */
+#define TRX_POLL_TX_MS  500    /* ...and often while anyone is on the air */
+static RTC_NOINIT_ATTR uint32_t s_unkey_owed;
+
+/* The trx frames Zeus SDR owes this session, oldest first: a poll's answer
+ * (a 1 bit) or a key's or an unkey's echo (0). Its replies keep their
+ * requests' order, so the answer to a poll sent just before a key -- false,
+ * arriving before the key's own echo -- is known for what it is, and is not
+ * taken for a refusal that would leave Zeus on the air and the knob not. */
+static uint32_t s_trx_q;
+static uint8_t  s_trx_qn;
+
+static void trx_q_push(bool poll)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    if (s_trx_qn < 32) {
+        if (poll) s_trx_q |= 1u << s_trx_qn;
+        else      s_trx_q &= ~(1u << s_trx_qn);
+        s_trx_qn++;
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+/* 1 for a poll's answer, 0 for an echo, -1 for a frame nobody asked for. */
+static int trx_q_pop(void)
+{
+    int b = -1;
+    taskENTER_CRITICAL(&S_LOCK);
+    if (s_trx_qn) {
+        b = (int)(s_trx_q & 1u);
+        s_trx_q >>= 1;
+        s_trx_qn--;
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+    return b;
+}
+#endif
 
 #if VFO_RADIO_OPENX6X00
 /* OpenX6X00 calls both radios OpenX6X00; only the X6200's base has SAM and
@@ -160,6 +215,8 @@ static void log_refusal(uint32_t missing)
     if (!missing) {
 #if VFO_RADIO_OPENX6X00
         ESP_LOGW(TAG, "PTT REFUSED by the radio, or not confirmed in time");
+#elif VFO_RADIO_JUPITERSDR
+        ESP_LOGW(TAG, "PTT REFUSED by Zeus SDR, or not confirmed in time");
 #else
         ESP_LOGW(TAG, "PTT REFUSED by AetherSDR, or not confirmed in time");
 #endif
@@ -176,7 +233,8 @@ static void log_refusal(uint32_t missing)
 /* Perform whatever the FSM decided. Rungs 2-4 tear down our own socket, which
  * is a MORE reliable unkey than any command we can send: AetherSDR unkeys
  * unconditionally when a PTT-owning client disconnects, whereas a trx:false may
- * never be dispatched at all. */
+ * never be dispatched at all. Zeus SDR does not: there the new link that
+ * follows pays the unkey owed (s_unkey_owed). */
 static void ptt_dispatch(const ptt_out_t *o)
 {
     if (o->haptic) haptic_hook(o->haptic, o->haptic_prio);
@@ -194,10 +252,23 @@ static void ptt_dispatch(const ptt_out_t *o)
 #if VFO_RADIO_AETHERSDR
         S.tx_own = net_prov_tx_mic() == NET_TX_RADIO;
 #endif
+#if VFO_RADIO_JUPITERSDR
+        s_unkey_owed = UNKEY_OWED;
+        trx_q_push(false);
+#endif
         if (S.tx_own) send_cmd("trx:%u,true;",     (unsigned)S.my_trx);
         else          send_cmd("trx:%u,true,tci;", (unsigned)S.my_trx);
     }
+#if VFO_RADIO_JUPITERSDR
+    /* Zeus SDR stays on the air through a closed socket: ask it plainly
+     * first, before any rung that tears the link down. */
+    if (o->send_unkey || o->close_socket || o->destroy_socket || o->restart) {
+        trx_q_push(false);
+        send_cmd("trx:%u,false;", (unsigned)S.my_trx);
+    }
+#else
     if (o->send_unkey) send_cmd("trx:%u,false;",    (unsigned)S.my_trx);
+#endif
 
     if (o->close_socket) {
         ESP_LOGW(TAG, "PTT ladder rung 2: closing the socket");
@@ -224,6 +295,14 @@ static void ptt_dispatch(const ptt_out_t *o)
 
 /* --------------------------------------------------------------- inbound */
 
+#if VFO_RADIO_JUPITERSDR
+/* A meter's channel 0, the main receiver's: Zeus SDR sends channel 1's too,
+ * its second receiver's (Tci/TciServer.cs OnRxMeterUpdated). */
+#define MAIN_CHANNEL(f) ((f)->channel <= 0)
+#else
+#define MAIN_CHANNEL(f) true
+#endif
+
 static void apply_fact(const tci_fact_t *f)
 {
     switch (f->kind) {
@@ -237,6 +316,11 @@ static void apply_fact(const tci_fact_t *f)
         S.need_audio_start    = !S.audio_blocked;
         S.audio_on            = false;
         S.t_audio_start_ms    = 0;
+#if VFO_RADIO_JUPITERSDR
+        S.need_tx_enable      = true;
+        /* The greeting's trx:false has settled it if Zeus is off the air. */
+        S.need_unkey          = s_unkey_owed == UNKEY_OWED;
+#endif
         /* The greeting is authoritative: adopt the rig's frequency wholesale
          * and forget anything we thought we knew. */
         tune_assign(&S.tune, S.f_server);
@@ -309,7 +393,14 @@ static void apply_fact(const tci_fact_t *f)
         break;
 
     case TCI_AGC_MODE:
-        if (f->trx == S.my_trx) strlcpy(S.agc, f->s0, sizeof S.agc);
+        if (f->trx != S.my_trx) break;
+#if VFO_RADIO_JUPITERSDR
+        /* Zeus SDR's MEDIUM and CUSTOM, in the dial's five letters; it takes
+         * "med" back. */
+        if (!strcmp(f->s0, "medium")) { strlcpy(S.agc, "med", sizeof S.agc); break; }
+        if (!strcmp(f->s0, "custom")) { strlcpy(S.agc, "cust", sizeof S.agc); break; }
+#endif
+        strlcpy(S.agc, f->s0, sizeof S.agc);
         break;
 
     case TCI_RIT_OFFSET:
@@ -345,6 +436,13 @@ static void apply_fact(const tci_fact_t *f)
         }
         S.tx = S.tx_mask != 0;
         if (f->trx != S.my_trx) break;
+#if VFO_RADIO_JUPITERSDR
+        if (!f->b0) s_unkey_owed = 0;
+        /* A poll's answer while a key or an unkey waits for its echo was
+         * asked before it: the echo, still to come, settles it. */
+        if (trx_q_pop() == 1 && S.ptt.state != PTT_IDLE && S.ptt.state != PTT_ON)
+            break;
+#endif
         /* One frame, three meanings, disambiguated purely by our own state.
          * In IDLE an unsolicited trx:true is someone ELSE keying -- possibly
          * our own dead previous session -- and we must NOT try to unkey it,
@@ -376,9 +474,11 @@ static void apply_fact(const tci_fact_t *f)
         /* tx_sensors:0,<mic_dbm>,<fwd_w>,<peak_w>,<swr>,<alc_dbfs>;
          * Field 2 is "peak" but carries the same cached value as fwd, so it is
          * never rendered. */
-#if !VFO_RADIO_OPENX6X00
+#if !VFO_RADIO_OPENX6X00 && !VFO_RADIO_JUPITERSDR
         /* OpenX6X00 sends a fixed -20 here, neither radio having a mic meter
-         * to read: that firmware's ring is the knob's own, from send_tx_audio. */
+         * to read, and Zeus SDR 0: those firmwares' ring is the knob's own,
+         * from send_tx_frame. Zeus's third field is the reflected power, where
+         * AetherSDR's peak is, and it has no ALC. */
         S.tx_mic_dbm = f->f0;
 #endif
         S.tx_fwd_w   = f->f1;
@@ -388,9 +488,13 @@ static void apply_fact(const tci_fact_t *f)
         S.tx_sensor_frames++;
         /* Rate-limited: the stream is 5 Hz and only flows while transmitting,
          * so one line a second is enough to see whether it is arriving at all
-         * and what range the mic figure actually uses. */
+         * and what range the mic figure actually uses. Zeus SDR's flows on
+         * receive too: logged on the air only. */
         {
             uint32_t t = now_ms();
+#if VFO_RADIO_JUPITERSDR
+            if (!S.tx && S.ptt.state == PTT_IDLE) break;
+#endif
             if (t - S.tx_sensor_log_ms > 1000) {
                 S.tx_sensor_log_ms = t;
                 ESP_LOGI(TAG, "tx_sensors mic=%.1f fwd=%.1f swr=%.2f alc=%.1f",
@@ -401,7 +505,7 @@ static void apply_fact(const tci_fact_t *f)
         break;
 
     case TCI_RX_CHANNEL_SENSORS:
-        if (f->trx == S.my_trx) {
+        if (f->trx == S.my_trx && MAIN_CHANNEL(f)) {
             S.have_chan_sensors = true;      /* 0.1 dB resolution */
             S.smeter_dbm = f->f0;
         }
@@ -415,7 +519,7 @@ static void apply_fact(const tci_fact_t *f)
          * on the very first sample and the meter never moved again. It looked
          * correct against the mock only because the mock sends the opt-in
          * stream without being asked. */
-        if (f->trx == S.my_trx && !S.have_chan_sensors)
+        if (f->trx == S.my_trx && MAIN_CHANNEL(f) && !S.have_chan_sensors)
             S.smeter_dbm = (float)f->i0;
         break;
 
@@ -496,7 +600,64 @@ static bool socket_has_room(void)
     return select(s_fd + 1, NULL, &w, NULL, &now) > 0;
 }
 
-/* Answer one TX_CHRONO with one TX_AUDIO frame.
+#if VFO_RADIO_OPENX6X00 || VFO_RADIO_JUPITERSDR
+/* The mic ring's level, from what goes out: neither server has a mic meter to
+ * read (OpenX6X00 sends a fixed -20 in tx_sensors, Zeus SDR 0). The same scale
+ * the other firmwares' mic meters use: dB below full. */
+static void mic_level(const int16_t *pcm, int n)
+{
+    int peak = 0;
+    for (int i = 0; i < n; i++) {
+        const int v = pcm[i] < 0 ? -pcm[i] : pcm[i];
+        if (v > peak) peak = v;
+    }
+    S.tx_mic_dbm = peak ? 20.0f * log10f((float)peak / 32767.0f) : -60.0f;
+}
+#endif
+
+/* One TX_AUDIO frame of `n` samples, at most TX_CHRONO_FRAMES, if the socket
+ * has room for it. */
+static void send_tx_frame(uint32_t receiver, int n)
+{
+    if (!socket_has_room()) { S.txa_skipped++; return; }
+
+    tci_audio_hdr_t *h = (tci_audio_hdr_t *)s_txa;
+    memset(h, 0, sizeof *h);
+    h->receiver    = receiver;
+    h->sample_rate = TX_AUDIO_RATE_HZ;   /* server resamples 1:1 from 24 kHz */
+    h->length      = (uint32_t)n;
+    h->type        = TCI_AUDIO_TYPE_TX;
+    h->channels    = 1;
+
+    int16_t *pcm = (int16_t *)(s_txa + sizeof *h);
+    if (!audio_in_take(pcm, n))
+        memset(pcm, 0, (size_t)n * sizeof(int16_t));
+#if VFO_RADIO_OPENX6X00 || VFO_RADIO_JUPITERSDR
+    mic_level(pcm, n);
+#endif
+#if VFO_RADIO_JUPITERSDR
+    /* Zeus SDR takes float32 only, and drops anything else unheard. Widened
+     * in place from the end: sample i's float lands on int16 samples 2i and
+     * 2i+1, both read already by then. */
+    h->format = TCI_AUDIO_FMT_FLOAT32;
+    float *f = (float *)pcm;
+    for (int i = n - 1; i >= 0; i--) f[i] = (float)pcm[i] * (1.0f / 32768.0f);
+    const size_t bytes = sizeof *h + (size_t)n * sizeof(float);
+#else
+    h->format = TCI_AUDIO_FMT_INT16;
+    const size_t bytes = sizeof *h + (size_t)n * sizeof(int16_t);
+#endif
+
+    const int64_t t0 = esp_timer_get_time();
+    const int sent = esp_websocket_client_send_bin(s_ws, (const char *)s_txa,
+                                                   (int)bytes, pdMS_TO_TICKS(50));
+    const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+    if (us > S.txa_max_us) S.txa_max_us = us;
+    if (sent == (int)bytes) S.txa_sent++;
+    else                    S.txa_failed++;
+}
+
+/* Answer one TX_CHRONO with TX_AUDIO.
  *
  * Transmit is paced by the server: it asks every 21.33 ms and we answer, which
  * is why this is driven from the receive path rather than from a timer of our
@@ -512,42 +673,26 @@ static bool socket_has_room(void)
  * knob restarted itself. A send that times out is worse again: the client
  * drops the connection. So a frame goes out only when the socket has room for
  * it, and is skipped otherwise -- 21 ms of silence is the cheapest thing that
- * can go wrong here. */
-static void send_tx_audio(uint32_t receiver)
+ * can go wrong here.
+ *
+ * Zeus SDR asks every 42.67 ms instead, for as long as the chrono says --
+ * 2048 samples at 48 kHz, its count scaled to the session's rate: 1024 at
+ * ours. Those go out as TX_CHRONO_FRAMES-sized frames, so that each still
+ * fits the room the socket is checked for. */
+static void send_tx_audio(const tci_audio_hdr_t *chrono)
 {
     S.chronos++;
     if (!s_txa || !s_ws) return;
-    if (!socket_has_room()) { S.txa_skipped++; return; }
-
-    tci_audio_hdr_t *h = (tci_audio_hdr_t *)s_txa;
-    memset(h, 0, sizeof *h);
-    h->receiver    = receiver;
-    h->sample_rate = TX_AUDIO_RATE_HZ;   /* server resamples 1:1 from 24 kHz */
-    h->format      = TCI_AUDIO_FMT_INT16;
-    h->length      = TX_CHRONO_FRAMES;
-    h->type        = TCI_AUDIO_TYPE_TX;
-    h->channels    = 1;
-
-    int16_t *pcm = (int16_t *)(s_txa + sizeof *h);
-    if (!audio_in_take(pcm, TX_CHRONO_FRAMES))
-        memset(pcm, 0, TX_CHRONO_FRAMES * sizeof(int16_t));
-#if VFO_RADIO_OPENX6X00
-    /* The same scale the other firmwares' mic meters use: dB below full. */
-    int peak = 0;
-    for (int i = 0; i < TX_CHRONO_FRAMES; i++) {
-        const int v = pcm[i] < 0 ? -pcm[i] : pcm[i];
-        if (v > peak) peak = v;
-    }
-    S.tx_mic_dbm = peak ? 20.0f * log10f((float)peak / 32767.0f) : -60.0f;
+#if VFO_RADIO_JUPITERSDR
+    const uint32_t ch   = chrono->channels ? chrono->channels : 1;
+    const uint32_t rate = chrono->sample_rate ? chrono->sample_rate : TX_AUDIO_RATE_HZ;
+    uint64_t want = (uint64_t)(chrono->length / ch) * TX_AUDIO_RATE_HZ / rate;
+    if (want > 4 * TX_CHRONO_FRAMES) want = 4 * TX_CHRONO_FRAMES;
+    for (int left = (int)want; left > 0; left -= TX_CHRONO_FRAMES)
+        send_tx_frame(chrono->receiver, left < TX_CHRONO_FRAMES ? left : TX_CHRONO_FRAMES);
+#else
+    send_tx_frame(chrono->receiver, TX_CHRONO_FRAMES);
 #endif
-
-    const int64_t t0 = esp_timer_get_time();
-    const int n = esp_websocket_client_send_bin(s_ws, (const char *)s_txa,
-                                                TXA_BYTES, pdMS_TO_TICKS(50));
-    const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
-    if (us > S.txa_max_us) S.txa_max_us = us;
-    if (n == TXA_BYTES) S.txa_sent++;
-    else                S.txa_failed++;
 }
 
 /* The link is gone, however we found out. Runs on the WebSocket task. */
@@ -575,10 +720,14 @@ static void link_lost(void)
     S.tx_mask = 0;
     memset(S.dsp_has, 0, sizeof S.dsp_has);      /* the next greeting says again */
     s_fd   = -1;
+#if VFO_RADIO_JUPITERSDR
+    s_trx_qn = 0;                                /* a new session owes nothing */
+#endif
 
     /* AetherSDR calls abortTciPtt() when a PTT-owning client disconnects,
      * so the radio is already unkeyed. Collapse our own state to match
-     * rather than continuing to climb a ladder against a dead socket. */
+     * rather than continuing to climb a ladder against a dead socket. Zeus
+     * SDR does not, and is unkeyed by the next link (s_unkey_owed). */
     if (S.ptt.state != PTT_IDLE) {
         ESP_LOGW(TAG, "link lost while %s -- server fails closed",
                  ptt_state_name(S.ptt.state));
@@ -645,7 +794,7 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
                 const tci_audio_hdr_t *h = (const tci_audio_hdr_t *)s_aud;
                 if (s_aud_len >= sizeof *h) {
                     if (h->type == TCI_AUDIO_TYPE_RX)      audio_out_feed(s_aud, s_aud_len);
-                    else if (h->type == TCI_AUDIO_TYPE_CHRONO) send_tx_audio(h->receiver);
+                    else if (h->type == TCI_AUDIO_TYPE_CHRONO) send_tx_audio(h);
                 }
                 s_aud_len = 0;
             }
@@ -796,6 +945,15 @@ static void tx_task(void *arg)
         }
 
         if (S.link != RADIO_LINK_READY && S.link != RADIO_LINK_DEGRADED) continue;
+#if VFO_RADIO_JUPITERSDR
+        /* At once, settled or not: Zeus SDR may be on the air still. */
+        if (S.need_unkey) {
+            S.need_unkey = false;
+            trx_q_push(false);
+            send_cmd("trx:%u,false;", (unsigned)S.my_trx);
+            ESP_LOGW(TAG, "unkeying Zeus SDR: the knob was on the air when its link went");
+        }
+#endif
         /* Settle after a reconnect before pushing anything. */
         if (t - S.t_ready_ms < 500) continue;
 
@@ -810,7 +968,22 @@ static void tx_task(void *arg)
              * transmitter is running. */
             send_cmd("tx_sensors_enable:true;");
             ESP_LOGI(TAG, "sensor streams requested (rx + tx)");
+#if VFO_RADIO_JUPITERSDR
+            /* Mono both ways, at the knob's rate, whether or not RX audio is
+             * ever started: a TX_CHRONO asks in the session's shape too. */
+            send_cmd("audio_samplerate:%d;", AUDIO_RATE_HZ);
+            send_cmd("audio_stream_channels:1;");
+#endif
         }
+#if VFO_RADIO_JUPITERSDR
+        /* Zeus SDR echoes tx_enable as a client says it, as ExpertSDR2's
+         * clients expect: its greeting's is false until then, and with it the
+         * knob's permit. Whether a key is taken stays the server's. */
+        if (S.need_tx_enable) {
+            S.need_tx_enable = false;
+            send_cmd("tx_enable:%u,true;", (unsigned)S.my_trx);
+        }
+#endif
 
         /* Audio is declared on the SAME trx we control. effectiveTrx()
          * redirects a PTT request for trx 0 to the client's declared audio
@@ -839,6 +1012,20 @@ static void tx_task(void *arg)
             ESP_LOGI(TAG, "RX audio requested on trx %u at %d Hz",
                      (unsigned)S.my_trx, AUDIO_RATE_HZ);
         }
+
+#if VFO_RADIO_JUPITERSDR
+        /* Zeus SDR says nothing when MOX changes -- only the client that keys
+         * hears its trx echoed -- so ask: often while anyone is on the air,
+         * so that an over ended there (its TX timeout, its MOX button) ends
+         * here too, and now and then otherwise, so that a key made there
+         * shows here. Not while answers are going unanswered. */
+        if (t - S.t_trx_poll >= ((S.ptt.state != PTT_IDLE || S.tx) ? TRX_POLL_TX_MS : TRX_POLL_MS) &&
+            s_trx_qn < 4) {
+            S.t_trx_poll = t;
+            trx_q_push(true);
+            send_cmd("trx:%u;", (unsigned)S.my_trx);
+        }
+#endif
 
         /* No vfo: traffic while keyed. You are not tuning during a
          * transmission, and an empty server queue guarantees the trx:false
@@ -1106,7 +1293,7 @@ const char *radio_link_name(void) { return "TCI"; }
 esp_err_t radio_start(const char *host, uint16_t port,
                       const char *user, const char *pass)
 {
-    (void)user; (void)pass;       /* AetherSDR's TCI server has no login */
+    (void)user; (void)pass;       /* AetherSDR's TCI server has no login, nor Zeus SDR's */
     char uri[96];
     snprintf(uri, sizeof uri, "ws://%s:%u/", host, (unsigned)port);
     s_port = port;

@@ -208,6 +208,8 @@ const PAL={
        accent:'#2a9df4','accent-hi':'#62bbff',danger:'#f0302c',tx:'#e8262b',meter:'#2a9df4'},
  k4:{bg:'#000000',panel:'#30383c',panel2:'#1b2124',line:'#3a4448',text2:'#d3d9dc',label:'#dcc871',dim:'#4e585c',
        accent:'#88def5','accent-hi':'#bdeffb',danger:'#f0483a',tx:'#f26a2e',meter:'#88def5'},
+ jupitersdr:{bg:'#0e0e10',panel:'#222124',panel2:'#18181a',line:'#2e2d31',text2:'#c5c5c5',label:'#8a8a8e',dim:'#48484a',
+       accent:'#5d88db','accent-hi':'#8faeea',danger:'#de5952',tx:'#de5952',meter:'#d2a76d'},
  aethersdr:{bg:'#0f0f1a',panel:'#1a2a3a',panel2:'#121e2b',line:'#26394d',text2:'#8ea8c0',label:'#506070',dim:'#3a4a5a',
        accent:'#00b4d8','accent-hi':'#00c8f0',danger:'#ff4d4d',tx:'#e01010',meter:'#00b4d8'},
  ubersdr:{bg:'#090c12',panel:'#141a25',panel2:'#0f141d',line:'#212a39',text2:'#8d99ad',label:'#5c6779',dim:'#2f3b4e',
@@ -220,20 +222,22 @@ const PAL={
  websdr:{bg:'#0b0f14',panel:'#1a222c',panel2:'#141b23',line:'#2b3644',text2:'#d0d8e2',label:'#8a97a8',dim:'#4a5666',
        accent:'#4fb3ff','accent-hi':'#80c8ff',on:'#000000',warn:'#f2c14e',danger:'#ff5a5a',tx:'#ff5a5a',meter:'#3ddc84',
        ok:'#3ddc84'}};
-const NAME={icom:'Icom',multiflex:'FlexRadio',k4:'Elecraft K4',aethersdr:'AetherSDR',ubersdr:'UberSDR',kiwi:'Kiwi888',
+const NAME={icom:'Icom',multiflex:'FlexRadio',k4:'Elecraft K4',jupitersdr:'Zeus SDR',aethersdr:'AetherSDR',ubersdr:'UberSDR',kiwi:'Kiwi888',
   owrx:'OpenWebRX',websdr:'WebSDR'};
-const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',cwu:'CWU',cwl:'CWL',am:'AM',sam:'SAM',sal:'SAL',sau:'SAU',
+const ML={usb:'USB',lsb:'LSB',cw:'CW',cwr:'CW-R',cwu:'CWU',cwl:'CWL',am:'AM',sam:'SAM',sal:'SAL',sau:'SAU',dsb:'DSB',
   fm:'FM',nfm:'NFM',nbfm:'NBFM',wfm:'WFM',rtty:'RTTY',digu:'DIGU',digl:'DIGL'};
 const MODES={icom:['usb','lsb','cw','cwr','am','fm','rtty','digu','digl'],
   multiflex:['usb','lsb','cw','am','sam','fm','nfm','digu','digl','rtty'],
   k4:['usb','lsb','cw','cwr','am','fm','digu','digl'],
+  jupitersdr:['usb','lsb','cwu','cwl','am','sam','dsb','fm','digu','digl'],
   aethersdr:['usb','lsb','cw','cwr','am','sam','fm','nfm','digu','digl','rtty'],
   ubersdr:['usb','lsb','cwu','cwl','am','sam','fm','nfm'],
   kiwi:['usb','lsb','cw','am','sam','sal','sau','nbfm'],
   owrx:['usb','lsb','cw','am','sam','nfm','wfm'],websdr:['usb','lsb','cw','am','sam','nfm']};
-const AGCS={icom:['fast','mid','slow'],multiflex:['fast','med','slow','off'],k4:['fast','slow','off'],aethersdr:['fast','med','slow','off'],
+const AGCS={icom:['fast','mid','slow'],multiflex:['fast','med','slow','off'],k4:['fast','slow','off'],
+  jupitersdr:['fast','med','slow','long','fixed'],aethersdr:['fast','med','slow','off'],
   ubersdr:[],kiwi:['fast','med','slow'],owrx:[],websdr:[]};
-const GAINCAP={icom:'P.AMP',multiflex:'RF.G',k4:'RF.G',aethersdr:'RF.G',ubersdr:'Noise filter',kiwi:'Noise filter',owrx:'',websdr:''};
+const GAINCAP={icom:'P.AMP',multiflex:'RF.G',k4:'RF.G',jupitersdr:'RF.G',aethersdr:'RF.G',ubersdr:'Noise filter',kiwi:'Noise filter',owrx:'',websdr:''};
 /* An UberSDR, a KiwiSDR and an OpenWebRX only receive: no RIT or microphone,
  * and their passbands by mode (the knob's ui.c) -- an UberSDR's SNR where
  * the AGC is. */

@@ -153,6 +153,22 @@ PALETTES = {
                                 (2.5, 3.0, "#F87171")],
                       MICZONES=[(-40, -10, "#34D399"), (-10, 0, "#FBBF24"),
                                 (0, 10, "#F87171")]),
+    # The jupitersdr firmware's face (ui.c under VFO_RADIO_JUPITERSDR): Zeus
+    # SDR's own screen -- near-black panels, its blue for what is selected,
+    # its S-meter's amber bar warming to red over S9, TX in its red.
+    "jupitersdr": dict(BG="#0E0E10", BG1="#222124", BG_TX="#2E1516", ACCENT="#5D88DB",
+                       ACCENT_HI="#8FAEEA", TEXT="#F4F8FA", TEXT2="#C5C5C5",
+                       LABEL="#8A8A8E", SUBTLE="#18181A", WARN="#E8A33D",
+                       DANGER="#DE5952", TX_RED="#DE5952", TX_TEXT="#FFFFFF",
+                       GREEN="#6FA866", BATT_OK="#6FA866", DISABLED="#48484A", PWR="#D2A76D",
+                       RXZONES=[(-127, -121, "#5A4630"), (-121, -109, "#7A6040"),
+                                (-109,  -97, "#9A7B52"), (-97,   -85, "#B89361"),
+                                (-85,   -73, "#D2A76D"), (-73,   -53, "#E8A33D"),
+                                (-53,   -33, "#EC8A36"), (-33,   -13, "#DE5952")],
+                       SWRZONES=[(1.0, 2.0, "#D2A76D"), (2.0, 2.5, "#E8A33D"),
+                                 (2.5, 3.0, "#DE5952")],
+                       MICZONES=[(-40, -10, "#D2A76D"), (-10, 0, "#E8A33D"),
+                                 (0, 10, "#DE5952")]),
 }
 # The phone firmware wears SVXConnect's face (ui.c SVX_LOOK), colours and all.
 PALETTES["phone"] = PALETTES["svxconnect"]

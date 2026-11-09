@@ -1002,6 +1002,39 @@ def openx6x00_pictures():
     return out
 
 
+def jupitersdr_pictures():
+    """The jupitersdr firmware: AetherSDR's face and TCI client, over WiFi to
+    Zeus SDR on a computer, in Zeus SDR's colours; on the air a Hermes Lite
+    2's few watts."""
+    R = dict(dbm=-86, band="40m", mode="LSB", filt="2700", digits="  7100" "00", active=6,
+             step="100 Hz", agc="MED", gain_cap="RF.G", gain="", gain_known=False)
+    f = face("jupitersdr", **R)
+    quiet = face("jupitersdr", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
+    left, right = radio_parts("RF.G · greyed: not over TCI")
+    out = {}
+    out["01-face"] = callouts("js-01", "The JupiterSDR firmware's face", f, left, right)
+    out["02-no-link"] = knob("js-02", "NO LINK: Zeus SDR not reached yet",
+                             quiet + warning("NO LINK", "JupiterSDR"))
+    out["03-mode"] = knob("js-03", "The mode, chosen on the dial",
+                          f + editor("MODE", "USB"), turn(),
+                          "tap the mode  ·  turn  ·  tap the panel")
+    out["04-radio"] = knob("js-04", "Swipe up: Zeus SDR on another computer",
+                           f + editor("RADIO", "shack-pc", 28, hint="LAN  -  tap to switch"),
+                           swipe_at("up"), "swipe up  ·  tap the panel")
+    out["05-tx"] = knob("js-05", "On the air: SWR, power and the microphone",
+                        tx_face("jupitersdr", swr=1.2, watts=4, fs=10,
+                                pegs=((1, "1"), (5, "5"), (10, "10")), band="40m", mode="LSB",
+                                filt="2700", digits="  7100" "00"))
+    out["06-headset"] = knob("js-06", "A Bluetooth headset: its button is the PTT",
+                             headset_face(f), "", "the headset's button: key, and key off")
+    md.use_palette("jupitersdr")
+    out["07-battery"] = knob("js-07", "On its own battery: the knob's charge at the top of the arc",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  ·  none on USB power")
+    lock_pictures(out, 8, "js", "jupitersdr", "JupiterSDR", f)
+    return out
+
+
 def svxconnect_pictures():
     f = reflector()
     left = [(64, 64, "audio, dBFS · hold: addresses"), (88, 122, "lock"),
@@ -2671,7 +2704,7 @@ def saver_pictures():
 
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
-             "svxconnect": svxconnect_pictures,
+             "jupitersdr": jupitersdr_pictures, "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
              "epibeam": epibeam_pictures, "adsb": adsb_pictures, "clock": clock_pictures,
              "weather": weather_pictures, "screensaver": saver_pictures, "headset": headset_pictures}

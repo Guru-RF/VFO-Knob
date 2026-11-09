@@ -199,6 +199,17 @@
 #define DEFAULT_PORT 50001           /* OpenX6X00's TCI server (src/tci_server.h) */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_JUPITERSDR
+#define KEY_HOST     "jshost"
+#define KEY_RLIST    "jslist"    /* the computers, one in use: see below */
+#define KEY_RSEL     "jssel"
+#define KEY_PORT     "jsport"
+#define KEY_USER     "jsuser"    /* unused: Zeus SDR's TCI server has no login */
+#define KEY_PASS     "jspass"
+#define DEFAULT_HOST ""              /* the computer's address, given on the page: none is announced */
+#define DEFAULT_PORT 40001           /* Zeus SDR's TCI server (Tci/TciOptions.cs) */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_ICOM
 #define KEY_HOST     "rhost"
 #define KEY_RLIST    "rlist"     /* the radios, one in use: see below */
