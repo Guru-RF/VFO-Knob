@@ -652,6 +652,12 @@ def setup_pictures():
     out["05-connected"] = knob("setup-05", "The knob on the network",
                                setup_screen("WIFI SETUP", f"Connected to\n{net}"))
     out["06-portal-joined"] = phone("setup-06", "The phone's page once the knob has joined", portal(True))
+    # The first time online, what the card has none of goes onto it before
+    # the list (app_main.c card_fill_wait): the 16 firmwares and the second
+    # chip's, on a knob made on the website's bench.
+    out["21-card-fill"] = knob("setup-21", "The firmwares onto the SD card, before the list",
+                               setup_screen("SD CARD", "The firmwares onto\nthe SD card, once:\n3 of 17\n"
+                                                       f"Icom {VERSION}\n42%"))
     out["07-firmwares"] = knob(
         "setup-07", "The firmwares published for the knob, one a detent",
         setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",

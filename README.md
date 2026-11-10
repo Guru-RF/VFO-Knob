@@ -935,8 +935,11 @@ folder, `VFO-KNOB` (components/sd_cache). Every install takes the image from
 the card when it holds the one wanted — its sha256 against the manifest, then
 the signature as for any image — and otherwise downloads it straight in, as
 without a card, and then keeps a copy on the card. The setup firmware fills the card with
-every firmware published while it shows its list, and with no update server
-in reach lists and installs what the card holds; a radio's firmware goes back
+every firmware published: those the card has none of before it shows its
+list, with a screen that counts them (so a knob made with only the setup
+firmware on it has every one before its owner chooses), and newer versions
+of the rest while the list is up. With no update server in reach it lists
+and installs what the card holds; a radio's firmware goes back
 to the setup firmware from the card without a network. Without a card,
 everything downloads as before. The second chip's firmware is kept there
 too, `COMPANIO.BIN`: a radio's firmware sends it to that chip, never

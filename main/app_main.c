@@ -2813,26 +2813,89 @@ static void setup_wifi_page(void)
  * The list is the release server's (firmware/index.json, written by
  * tools/release.sh), not this build's: a radio whose firmware is published
  * after this one was made is offered too. */
-/* Every firmware published onto the SD card, in the background while the
- * list is up -- this one too, for the way back to it from a radio's. */
+/* Every firmware published onto the SD card -- this one too, for the way
+ * back to it from a radio's. Those the card has none of at all go first,
+ * before the list comes up, with their own screen: a knob made on the
+ * website's bench has only this one, and so its card is full before its
+ * owner chooses, the choice installs from it, and no install cuts the
+ * filling short. Newer versions of those it has go on after them, in the
+ * background while the list is up. */
 #define FILL_MAX (UI_CHOICES + 2)
 /* The index, read whole: 99 firmwares at some 70 bytes each in the compact
  * form tools/release.sh writes, 7 kB, and room for it pretty-printed. One
  * that does not fit is refused (components/ota), never parsed cut short. */
 #define SETUP_INDEX_MAX 16384
-EXT_RAM_BSS_ATTR static char s_fill[FILL_MAX][16];
+EXT_RAM_BSS_ATTR static char s_fill[FILL_MAX][16], s_fill_name[FILL_MAX][24];
 static int  s_nfill;
+/* Where the filling is, for its screen: the firmware, how far its download
+ * is, and whether it waits to try that one again. */
+static volatile int  s_fill_at, s_fill_pct;
+static volatile bool s_fill_again;
+/* Those the card has already, while the list is made: after the others. */
+EXT_RAM_BSS_ATTR static char s_later[FILL_MAX][16], s_later_name[FILL_MAX][24];
+
+/* One more for the filling's list, the card mounted: among the first when
+ * the card has none of it, else among those after. */
+static void card_fill_add(const char *radio, const char *name, const char *ver, int *first, int *later)
+{
+    if (*first + *later >= FILL_MAX) return;
+    const bool has = ota_card_has(radio, NULL, 0);
+    const int  at  = has ? (*later)++ : (*first)++;
+    strlcpy(has ? s_later[at] : s_fill[at], radio, sizeof s_fill[0]);
+    snprintf(has ? s_later_name[at] : s_fill_name[at], sizeof s_fill_name[0], "%s %s", name, ver ? ver : "");
+}
 
 static void card_fill_task(void *arg)
 {
     (void)arg;
     int ok = 0;
-    for (int i = 0; i < s_nfill && !s_fill_stop; i++)
-        if (ota_cache(s_fill[i], &s_fill_stop) == ESP_OK) ok++;
+    for (int i = 0; i < s_nfill && !s_fill_stop; i++) {
+        s_fill_pct = 0;
+        s_fill_at  = i;
+        /* A download cut short -- the WiFi, the server -- gets two more tries. */
+        esp_err_t e = ESP_FAIL;
+        for (int t = 0; t < 3 && !s_fill_stop; t++) {
+            if (t) {
+                s_fill_again = true;
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                s_fill_pct   = 0;
+                s_fill_again = false;
+            }
+            if ((e = ota_cache(s_fill[i], &s_fill_stop, &s_fill_pct)) == ESP_OK) break;
+        }
+        if (e == ESP_OK) ok++;
+    }
     ESP_LOGI(TAG, "SD card: %d of %d firmwares on it%s", ok, s_nfill, s_fill_stop ? " (stopped)" : "");
     sdc_log_state();
+    s_fill_at      = s_nfill;
     s_fill_running = false;
     vTaskDelete(NULL);
+}
+
+/* The filling's screen while it puts on the card the first `first` of its
+ * list, the firmwares it had none of: which, of how many, and how far.
+ * Returns once they are done; the rest go on in the background. */
+static void card_fill_wait(int first)
+{
+    int at = -1, pct = -1;
+    bool again = false;
+    for (;;) {
+        const int a = s_fill_at, p = s_fill_pct;
+        if (!s_fill_running || a >= first) break;
+        if (a != at || p / 5 != pct / 5 || s_fill_again != again) {
+            at    = a;
+            pct   = p;
+            again = s_fill_again;
+            char msg[128], how[16];
+            if (again) strlcpy(how, "trying again", sizeof how);
+            else       snprintf(how, sizeof how, "%d%%", pct);
+            snprintf(msg, sizeof msg, "The firmwares onto\nthe SD card, once:\n%d of %d\n%s\n%s", at + 1, first,
+                     s_fill_name[at], how);
+            ui_setup_show("SD CARD", msg);
+        }
+        net_prov_tick();
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
 }
 
 static void setup_pick(void)
@@ -2852,10 +2915,15 @@ static void setup_pick(void)
             ie   = ESP_OK;
             card = true;
         }
+        /* The filling's list, once: those the card has none of first, then
+         * those it has, to be brought up to date. Without a card, none. */
+        const bool fill = !card && !filling && !s_fill_running && ie == ESP_OK;
+        const bool sd   = fill && sdc_mount();  /* held through the looks below */
+        int first = 0, nlater = 0;
+        if (fill) s_nfill = 0;
         if (ie == ESP_OK) {
             cJSON *root = cJSON_Parse(idx);
             const cJSON *f;
-            if (!card) s_nfill = 0;
             cJSON_ArrayForEach(f, cJSON_GetObjectItem(root, "firmwares")) {
                 const char *r  = cJSON_GetStringValue(cJSON_GetObjectItem(f, "radio"));
                 const char *nm = cJSON_GetStringValue(cJSON_GetObjectItem(f, "name"));
@@ -2864,7 +2932,7 @@ static void setup_pick(void)
                  * this list (tools/release.sh): should it ever be, it is
                  * neither offered nor installed here. */
                 if (r && strcmp(r, "companion") == 0) continue;
-                if (!card && r && s_nfill < FILL_MAX) strlcpy(s_fill[s_nfill++], r, sizeof s_fill[0]);
+                if (sd && r) card_fill_add(r, nm && *nm ? nm : r, v, &first, &nlater);
                 /* Not this one: it is what is running. */
                 if (!r || !v || strcmp(r, "setup") == 0 || n >= UI_CHOICES - 1) continue;
                 char cv[16];
@@ -2879,21 +2947,40 @@ static void setup_pick(void)
             /* The second chip's firmware onto the card too, under its own
              * key: the radio's firmware installed from here finds it there
              * and hands it to the chip. This firmware never sends it. */
-            if (!card && cJSON_GetObjectItem(root, "companion") && s_nfill < FILL_MAX)
-                strlcpy(s_fill[s_nfill++], "companion", sizeof s_fill[0]);
+            const cJSON *comp = cJSON_GetObjectItem(root, "companion");
+            if (sd && comp)
+                card_fill_add("companion", "Second chip",
+                              cJSON_GetStringValue(cJSON_GetObjectItem(comp, "version")), &first, &nlater);
             cJSON_Delete(root);
             if (card) ESP_LOGW(TAG, "no update server: the SD card's firmwares");
         }
         free(idx);
-        if (!card && n && !filling && !s_fill_running) {
+        if (sd) {
+            sdc_unmount();
+            for (int i = 0; i < nlater; i++) {
+                strlcpy(s_fill[first + i], s_later[i], sizeof s_fill[0]);
+                strlcpy(s_fill_name[first + i], s_later_name[i], sizeof s_fill_name[0]);
+            }
+            s_nfill = first + nlater;
+        }
+        if (sd && n && s_nfill) {
             /* Its stack in PSRAM: TLS and the card, never the flash. The
              * install that stops it needs 8 kB of internal RAM in one piece. */
             EXT_RAM_BSS_ATTR static StackType_t fill_stack[8192];
             static StaticTask_t fill_tcb;
             filling        = true;
             s_fill_stop    = false;
-            s_fill_running = xTaskCreateStaticPinnedToCore(card_fill_task, "cardfill", sizeof fill_stack,
-                                                           NULL, 2, fill_stack, &fill_tcb, 0) != NULL;
+            s_fill_at      = 0;
+            /* Running before the task is: it may end before the call returns. */
+            s_fill_running = true;
+            if (!xTaskCreateStaticPinnedToCore(card_fill_task, "cardfill", sizeof fill_stack, NULL, 2,
+                                               fill_stack, &fill_tcb, 0))
+                s_fill_running = false;
+            if (first) {
+                ESP_LOGW(TAG, "SD card: %d firmwares not on it, before the list; %d to bring up to date after",
+                         first, nlater);
+                card_fill_wait(first);
+            }
         }
         if (!n) {
             ESP_LOGW(TAG, "no firmware index: the radios this build knows");
@@ -2949,9 +3036,11 @@ static void setup_task(void *arg)
     (void)arg;
     const vfo_cfg_t *cfg = net_prov_cfg();
     ui_setup_show("VFO-KNOB", "Starting");
-    /* Provisioned just now (tools/install-setup.sh): the SD card emptied --
-     * the board's demo off it -- this once, and never otherwise. The script
-     * then puts the firmwares on it, through the cable (card_session). */
+    /* Provisioned just now (tools/install-setup.sh, or the website's bench
+     * or its /provision): the SD card emptied -- the board's demo off it --
+     * this once, and never otherwise. The script and /provision then put the
+     * firmwares on it, through the cable (card_session); the bench leaves
+     * them to setup_pick, which fills the card before its list. */
     if (s_flashed_now) {
         ui_setup_show("VFO-KNOB", "Emptying the\nSD card");
         const esp_err_t e = sdc_format();

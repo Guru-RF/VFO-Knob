@@ -55,6 +55,14 @@ few seconds; the phone can be put away.
 
 ## 4. Choose your radio's firmware
 
+The first time it is on the network, the knob first puts every firmware
+published onto its SD card, one after another, and says how far it has got.
+It takes a few minutes, once. Whichever you then choose installs from the
+card in a few seconds, and the knob can go from one firmware to another
+later without a network. See [The SD card](#the-sd-card).
+
+![SD CARD: the firmwares onto the card, 3 of 17](setup/21-card-fill.svg)
+
 The knob looks up the firmwares published for it, with their versions, and
 shows them on the dial, one a detent. Turn to your radio's and tap the panel.
 A name too long for the panel is shown in smaller type, so it fits.
@@ -158,10 +166,11 @@ new password, or remove one.
 ## The SD card
 
 The knob keeps a copy of its firmwares on its microSD card. The setup
-firmware fills it with every one published, in the background while it shows
-the list, and every install puts its image there too; a firmware already on
-the card installs from it in a few seconds, its checksum and signature
-checked as for a download. So:
+firmware fills it with every one published: those the card has none of
+before it shows the list, with the screen above, and newer versions of the
+others in the background while the list is up. Every install puts its image
+there too. A firmware already on the card installs from it in a few seconds,
+its checksum and signature checked as for a download. So:
 
 - switching firmware is quick, and going back to the setup firmware works
   without any network at all;

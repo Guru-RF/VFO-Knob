@@ -98,8 +98,8 @@ esp_err_t ota_fetch_index(char *buf, size_t cap);
 /* The latest of a radio's firmware onto the card, unless it is there: the
  * setup firmware fills the card with every one. Into PSRAM first, then onto
  * the card. TLS on the caller's stack, which wants 8 kB; `stop` set ends a
- * download early. */
-esp_err_t ota_cache(const char *radio, volatile bool *stop);
+ * download early; `pct`, when given, follows the download, 0-100. */
+esp_err_t ota_cache(const char *radio, volatile bool *stop, volatile int *pct);
 
 /* The index, as the card last kept it: for a setup firmware whose update
  * server is out of reach. */

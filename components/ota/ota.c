@@ -331,6 +331,7 @@ typedef struct {
     int            timeout_ms;   /* each read's: how long a stop may wait */
     bool           floors;       /* each read only above ram_floors(), else ESP_ERR_NO_MEM */
     volatile bool *stop;         /* set: it ends early */
+    volatile int  *pct;          /* how far, 0-100, when given */
 } dl_t;
 
 /* A file downloaded whole into PSRAM, its connection closed after; *out is
@@ -384,6 +385,7 @@ static esp_err_t download_to_psram(const char *url, const char *what, const dl_t
         }
         moved = esp_timer_get_time();
         got += n;
+        if (d->pct) *d->pct = (int)(got * 100 / total);
     }
     esp_http_client_close(h);
     esp_http_client_cleanup(h);
@@ -404,9 +406,9 @@ static esp_err_t download_to_psram(const char *url, const char *what, const dl_t
  * went without ("esp-aes: Failed to allocate memory") a few per cent in.
  * `stop` ends it early. */
 static esp_err_t download_to_card(const char *url, const char *radio, const char *sha_hex,
-                                  const char *manifest, volatile bool *stop)
+                                  const char *manifest, volatile bool *stop, volatile int *pct)
 {
-    const dl_t d = { .max = 4 * 1024 * 1024, .buffer = 4096, .timeout_ms = 20000, .stop = stop };
+    const dl_t d = { .max = 4 * 1024 * 1024, .buffer = 4096, .timeout_ms = 20000, .stop = stop, .pct = pct };
     uint8_t *img = NULL;
     size_t   n   = 0;
     esp_err_t err = download_to_psram(url, radio, &d, &img, &n);
@@ -1338,7 +1340,7 @@ bool ota_card_has(const char *radio, char *ver, size_t cap)
     return have;
 }
 
-esp_err_t ota_cache(const char *radio, volatile bool *stop)
+esp_err_t ota_cache(const char *radio, volatile bool *stop, volatile int *pct)
 {
     if (!radio || !*radio) return ESP_ERR_INVALID_ARG;
     char base[128], url[256], file[96] = "", sha[72] = "", ver[32] = "";
@@ -1361,7 +1363,7 @@ esp_err_t ota_cache(const char *radio, volatile bool *stop)
         } else {
             snprintf(url, sizeof url, "%s%s", base, file);
             const int64_t t = esp_timer_get_time();
-            e = download_to_card(url, radio, sha, body, stop);
+            e = download_to_card(url, radio, sha, body, stop, pct);
             ESP_LOGI(TAG, "SD card: %s %s %s in %lld s", radio, ver,
                      e == ESP_OK ? "fetched" : esp_err_to_name(e),
                      (long long)((esp_timer_get_time() - t) / 1000000));
