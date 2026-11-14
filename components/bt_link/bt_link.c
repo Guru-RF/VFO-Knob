@@ -50,7 +50,7 @@ static volatile bool     s_boom;        /* the boom arm is the PTT */
 /* The headset's audio -- or the speaker's: open whenever it is connected, as
  * a radio's audio never stops, or, on the telephone, only while it says: its
  * calls; on the clock, its alarms ringing. */
-#if VFO_RADIO_PHONE || VFO_RADIO_CLOCK
+#if VFO_RADIO_PHONE || VFO_RADIO_CLOCK || VFO_RADIO_WIFITEST
 static volatile bool     s_want_audio = false;
 #else
 static volatile bool     s_want_audio = true;

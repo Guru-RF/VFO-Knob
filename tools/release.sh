@@ -70,7 +70,7 @@ fi
 NAMES='{"aethersdr": "AetherSDR", "icom": "Icom", "openx6x00": "OpenX6X00", "multiflex": "FlexRadio", "k4": "Elecraft K4", "jupitersdr": "JupiterSDR", "ubersdr": "UberSDR",
         "kiwi": "Kiwi888", "owrx": "OpenWebRX", "websdr": "WebSDR", "svxconnect": "SVXConnect",
         "phone": "Telephone", "epibeam": "EpiBeam", "adsb": "ADS-B Radar", "clock": "Clock",
-        "weather": "Weather", "setup": "Setup"}'
+        "weather": "Weather", "wifitest": "WiFi Test", "setup": "Setup"}'
 # ...and those of them stamped BETA on the setup firmware's dial (its
 # index.json entry's "beta": true), until they have been tried enough.
 BETA='["epibeam", "k4", "jupitersdr"]'

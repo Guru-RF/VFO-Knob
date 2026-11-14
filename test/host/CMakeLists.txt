@@ -75,6 +75,7 @@ add_library(vfo_core STATIC
     ${CORE}/src/adsb.c
     ${CORE}/src/weather.c
     ${CORE}/src/alarm.c
+    ${CORE}/src/wifitest.c
 )
 target_include_directories(vfo_core PUBLIC ${CORE}/include)
 target_compile_options(vfo_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -223,6 +224,14 @@ add_executable(test_weather src/test_weather.c)
 target_link_libraries(test_weather PRIVATE vfo_core)
 target_compile_options(test_weather PRIVATE -Wall -Wextra)
 add_test(NAME test_weather COMMAND test_weather)
+
+# The WiFi Test firmware's arithmetic (components/vfo_core/src/wifitest.c):
+# the pings' counts and their minute, the signal's, the events, the counts
+# begun again, the reasons in words, and the verdict, the worst first.
+add_executable(test_wifitest src/test_wifitest.c)
+target_link_libraries(test_wifitest PRIVATE vfo_core)
+target_compile_options(test_wifitest PRIVATE -Wall -Wextra)
+add_test(NAME test_wifitest COMMAND test_wifitest)
 
 # The Clock firmware's alarms (components/vfo_core/src/alarm.c): due at
 # their minute on their days, the next one over midnight and the week's end,

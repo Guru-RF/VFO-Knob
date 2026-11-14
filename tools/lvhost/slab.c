@@ -3946,6 +3946,205 @@ static void runs(const char *dir)
     st.knob_batt = false; run(60);
     quiet();
 }
+#elif VFO_RADIO_WIFITEST
+/* The WiFi Test's pages (ui.c WIFITEST_FACE): an hour on a home network --
+ * one drop for lost beacons, a host on the LAN, the internet -- each page in
+ * turn on the dial and round, the verdict at the foot in its colour; off
+ * WiFi; all fine; no host; the knob's battery between the page's name and
+ * its dots. Pictures of each. */
+#define WT_C565(h) ((uint16_t)((((h) >> 19 & 31) << 11) | (((h) >> 10 & 63) << 5) | ((h) >> 3 & 31)))
+static wt_t net;
+
+static int wt_px(uint32_t hex, int x1, int y1, int x2, int y2)
+{
+    const uint16_t c = WT_C565(hex);
+    int n = 0;
+    for (int y = y1; y <= y2; y++)
+        for (int x = x1; x <= x2; x++) n += fb[y * W + x] == c;
+    return n;
+}
+
+static void ping_fill(wt_ping_t *p, const char *name, const char *addr, uint16_t base, uint32_t sent)
+{
+    snprintf(p->name, sizeof p->name, "%s", name);
+    snprintf(p->addr, sizeof p->addr, "%s", addr);
+    p->state = WT_P_ON;
+    p->sent = sent;
+    p->got = sent - sent / 400;
+    p->late = sent / 900;
+    p->sum_ms = p->got * (base + 2);
+    p->min_ms = base > 1 ? base - 1 : 1;
+    p->max_ms = 240;
+    p->worst_gap_ms = 1400;
+    for (int i = 0; i < WT_HIST; i++) p->hist[i] = (uint16_t)(base + i * 7 % 5);
+}
+
+static void make_net(void)
+{
+    memset(&net, 0, sizeof net);
+    net.up_s = 3725;
+    net.joined = true;
+    snprintf(net.ssid, sizeof net.ssid, "Shack WiFi");
+    static const uint8_t B[6] = { 0x02, 0x00, 0x00, 0x3c, 0x5a, 0x1e };
+    memcpy(net.bssid, B, 6);
+    net.channel = 6;
+    snprintf(net.phy, sizeof net.phy, "11n");
+    snprintf(net.auth, sizeof net.auth, "WPA2");
+    snprintf(net.country, sizeof net.country, "BE");
+    net.rssi = -58;
+    net.rssi_min = -81;
+    net.rssi_max = -51;
+    for (int i = 0; i < WT_HIST; i++) {
+        net.rssi_hist[i] = (int8_t)(-55 - i * 7 % 9);
+        net.rssi_sum += net.rssi_hist[i];
+        net.rssi_n++;
+    }
+    net.rssi_hist[40] = 0;
+    net.rssi_hist[39] = -79;
+    snprintf(net.ip, sizeof net.ip, "192.168.1.40");
+    snprintf(net.gw, sizeof net.gw, "192.168.1.1");
+    snprintf(net.dns, sizeof net.dns, "192.168.1.1");
+    net.join_s = 1520;
+    net.drops = 1;
+    net.last_reason = 200;
+    net.beacons = 2;
+    ping_fill(&net.p[WT_T_GW], "router", "192.168.1.1", 3, 18600);
+    net.p[WT_T_GW].hist[40] = WT_LOST;
+    net.p[WT_T_GW].hist[41] = 180 | 0x8000;
+    net.p[WT_T_GW].hist[52] = 140;
+    ping_fill(&net.p[WT_T_HOST], "IC-705.local", "192.168.1.20", 6, 18550);
+    net.p[WT_T_HOST].hist[40] = WT_LOST;
+    ping_fill(&net.p[WT_T_NET], "internet", "1.1.1.1", 14, 3720);
+    net.dns_ok = 62;
+    net.mdns_ok = 61;
+    net.mdns_fail = 1;
+    static const struct { uint32_t at; uint8_t kind; const char *what; } EV[] = {
+        { 3600, WT_EV_SCAN, "scan: 23 networks, 14 near ch 6, 2 APs of its own" },
+        { 2205, WT_EV_JOINED, "joined again after 4.2 s: ch 6, -66 dBm" },
+        { 2201, WT_EV_DROPPED, "dropped: beacons lost (reason 200), -81 dBm" },
+        { 2196, WT_EV_BEACONS, "beacons missed, -81 dBm" },
+        { 1400, WT_EV_SILENT, "the router silent 1.4 s, joined" },
+        { 60, WT_EV_NAME, "mDNS: IC-705.local not found" },
+        { 0, WT_EV_JOINED, "joined \"Shack WiFi\": ch 6, -57 dBm" },
+        { 0, WT_EV_START, "counting began" },
+    };
+    for (size_t i = 0; i < sizeof EV / sizeof EV[0]; i++) {
+        wt_event_t *e = &net.ev[net.n_ev++];
+        e->at_s = EV[i].at;
+        e->unix_s = 1794650000 - 3725 + EV[i].at;
+        e->kind = EV[i].kind;
+        snprintf(e->what, sizeof e->what, "%s", EV[i].what);
+    }
+    static const uint8_t PER[14] = { 0, 5, 1, 0, 2, 0, 7, 1, 0, 1, 0, 4, 1, 1 };
+    memcpy(net.per_ch, PER, sizeof PER);
+    net.n_heard = 23;
+    net.scan_at_s = 3600;
+    static const struct { const char *ssid; uint8_t ch; int8_t rssi; bool ours; } AP[] = {
+        { "Shack WiFi", 6, -57, true }, { "telenet-5A1B2", 1, -63, false },
+        { "Shack WiFi", 11, -78, true }, { "Proximus-Home-1234", 6, -70, false },
+    };
+    for (size_t i = 0; i < sizeof AP / sizeof AP[0]; i++) {
+        wt_ap_t *a = &net.ap[net.n_ap++];
+        snprintf(a->ssid, sizeof a->ssid, "%s", AP[i].ssid);
+        a->channel = AP[i].ch;
+        a->rssi = AP[i].rssi;
+        a->ours = AP[i].ours;
+    }
+}
+
+static void runs(const char *dir)
+{
+    base();
+    ui_set_netinfo("WiFi Test 1.25.3 dev\nUSB power\nUSB   -\nWiFi  192.168.1.40\nsetup  http://192.168.1.40");
+    run(300);
+    quiet();
+
+    where = "before anything measured: starting";
+    CHECK(shown("SIGNAL") && shown("starting..."));
+    picture(dir, "wifitest-starting");
+
+    where = "an hour measured: the signal";
+    make_net();
+    ui_wifitest_data(&net); run(300);
+    CHECK(shown("-58 dBm") && shown("good") && shown("Shack WiFi"));
+    CHECK(shown("ch 6  11n  WPA2"));
+    CHECK(shown("dropped once: beacons lost"));
+    CHECK(wt_px(0xFF4040, 60, 172, 299, 223) > 40);            /* the drop's red bar in the minute */
+    CHECK(wt_px(0x3FD26A, 60, 172, 299, 223) > 400);           /* ...the good seconds round it */
+    picture(dir, "wifitest-signal");
+
+    where = "a detent: the pings";
+    ui_wifitest_turn(1); run(200);
+    CHECK(shown("PINGS") && !shown("-58 dBm"));
+    CHECK(shown("router 192.168.1.1") && shown("IC-705.local") && shown("internet 1.1.1.1"));
+    CHECK(shown("5 ms  0.2%") && shown("8 ms  0.2%") && shown("16 ms  0.2%"));
+    CHECK(wt_px(0xFF4040, 50, 98, 309, 132) > 30);             /* the router's lost second */
+    CHECK(wt_px(0xFFB000, 50, 98, 309, 132) > 10);             /* ...its late ones */
+    picture(dir, "wifitest-pings");
+
+    where = "...the drops";
+    ui_wifitest_turn(1); run(200);
+    CHECK(shown("DROPS") && shown("drop in 1h 02m") && shown("roamed 0  beacons missed 2  silent 0"));
+    {
+        /* The newest first, timed in the knob's zone: the rejoin over the drop. */
+        struct tm tm;
+        const time_t at = 1794650000 - 3725 + 2201;
+        localtime_r(&at, &tm);
+        char t[32];
+        snprintf(t, sizeof t, "%02d:%02d  dropped: beacons lost", tm.tm_hour, tm.tm_min);
+        lv_obj_t *drop = label_from(lv_screen_active(), t);
+        CHECK(drop != NULL);
+        if (drop) CHECK(lv_obj_get_y(drop) == 186 + 20);
+    }
+    picture(dir, "wifitest-drops");
+
+    where = "...the channels";
+    ui_wifitest_turn(1); run(200);
+    CHECK(shown("CHANNELS") && shown("23 networks, 12 near ch 6"));
+    CHECK(shown("own APs: ch 6 -57, ch 11 -78"));
+    CHECK(wt_px(0x5A9BFF, 40, 82, 319, 237) > 100);            /* its own channel, lit */
+    picture(dir, "wifitest-channels");
+
+    where = "...and round: the signal; one back: the channels";
+    ui_wifitest_turn(1); run(200);
+    CHECK(shown("SIGNAL") && shown("-58 dBm"));
+    ui_wifitest_turn(-1); run(200);
+    CHECK(shown("CHANNELS"));
+    ui_wifitest_turn(1); run(200);
+
+    where = "off WiFi: the reason at the foot, red";
+    net.joined = false;
+    ui_wifitest_data(&net); run(300);
+    CHECK(shown("off WiFi") && shown("off WiFi: beacons lost"));
+    picture(dir, "wifitest-off");
+
+    where = "all fine";
+    make_net();
+    net.drops = 0;
+    net.beacons = 0;
+    net.rssi_hist[40] = -56;
+    net.p[WT_T_GW].worst_gap_ms = 400;
+    memset(net.per_ch, 0, sizeof net.per_ch);
+    net.per_ch[6] = 3;
+    ui_wifitest_data(&net); run(300);
+    CHECK(shown("WiFi looks fine"));
+    CHECK(wt_px(0x3FD26A, 60, 300, 299, 330) > 50);
+    picture(dir, "wifitest-fine");
+
+    where = "no host: said on the pings' page";
+    net.p[WT_T_HOST].state = WT_P_OFF;
+    ui_wifitest_data(&net); run(300);
+    ui_wifitest_turn(1); run(200);
+    CHECK(shown("no host: set one on the page"));
+    picture(dir, "wifitest-nohost");
+    ui_wifitest_turn(-1); run(200);
+
+    where = "the knob's battery, between the page's name and its dots";
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    knob_check(dir, "wifitest-batt");
+    st.knob_batt = false; run(60);
+    quiet();
+}
 #endif
 
 /* The backlight (GitHub #14): the page's brightness, lit at once; dimmed
@@ -3992,7 +4191,7 @@ static void brightness(void)
 static uint16_t dial[W * H], saver_fb[W * H];
 /* The radar's sweep moves by itself, and the clock's hands: there the dial
  * is only checked to be back, not to be the picture it was. */
-#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER
+#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST
 #define SAME_DIAL() (memcmp(saver_fb, fb, sizeof fb) != 0)
 #else
 #define SAME_DIAL() (!memcmp(dial, fb, sizeof fb))

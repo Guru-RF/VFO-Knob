@@ -37,6 +37,9 @@
 #if VFO_RADIO_CLOCK
 #include "clock_client.h"
 #endif
+#if VFO_RADIO_WIFITEST
+#include "wifitest_client.h"
+#endif
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "sd_cache.h"
@@ -184,6 +187,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "Clock";
 #elif VFO_RADIO_WEATHER
     const char *name = "Weather";
+#elif VFO_RADIO_WIFITEST
+    const char *name = "WiFi Test";
 #else
     const char *name = "AetherSDR";
 #endif
@@ -469,6 +474,12 @@ static void encoder_task(void *arg)
 #if VFO_RADIO_WEATHER
         /* The dial goes from face to face: now, the next hours, the days. */
         ui_weather_turn(detents);
+        continue;
+#endif
+#if VFO_RADIO_WIFITEST
+        /* The dial goes from page to page: the signal, the pings, the drops,
+         * the channels. */
+        ui_wifitest_turn(detents);
         continue;
 #endif
 #if VFO_RADIO_PHONE
@@ -1776,6 +1787,19 @@ static void ui_task(void *arg)
             }
         }
 #endif
+#if VFO_RADIO_WIFITEST
+        /* What the test measured, to the face, once a second. */
+        {
+            static uint32_t said;
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (now_ms - said >= 1000) {
+                said = now_ms;
+                EXT_RAM_BSS_ATTR static wt_t wt;
+                wifitest_snapshot(&wt);
+                ui_wifitest_data(&wt);
+            }
+        }
+#endif
 #if VFO_RADIO_CLOCK
         /* The face the dial rested on, kept: the next start's, the page's,
          * and the clock screensaver's. The alarms the page saved, to the
@@ -2551,6 +2575,11 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     /* Open-Meteo, for the page's place: the client asks it itself. */
     strlcpy(ip, "WEATHER", iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (Weather) ---");
+#elif VFO_RADIO_WIFITEST
+    /* The network itself is what is tried: the client pings the router,
+     * its hosts and the internet itself. */
+    strlcpy(ip, "WIFITEST", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (WiFi Test) ---");
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -2773,6 +2802,7 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "adsb",       "ADS-B Radar", false },
     { "clock",      "Clock",      false },
     { "weather",    "Weather",    false },
+    { "wifitest",   "WiFi Test",  false },
 };
 
 static void setup_wifi_page(void)
@@ -3807,7 +3837,15 @@ RADIO_ONLY_FN static void net_task(void *arg)
                 snprintf(memtag, sizeof memtag, " MEM %02u/%02u%s%s",
                          (unsigned)st.mem_group, (unsigned)st.mem_ch,
                          st.mem_name[0] ? " " : "", st.mem_name);
-            if (!st.reflector) ESP_LOGI(TAG,
+            /* The WiFi Test says what it found itself, every 30 s
+             * (wifitest_client.c): a radio's line every 2 s, of a radio it
+             * has not, would only push its events out of the log's ring. */
+#if VFO_RADIO_WIFITEST
+            const bool radio_line = false;
+#else
+            const bool radio_line = true;
+#endif
+            if (!st.reflector && radio_line) ESP_LOGI(TAG,
                 "[%s] %-10s f=%lld srv=%lld %s %ld..%ld s=%.0fdBm%s%s ptt=%s | "
                 "conn=%u close=%u send=%u echo=%u recon=%u rej=%u unk=%u%s%s",
                 radio_link_name(), L[st.link],

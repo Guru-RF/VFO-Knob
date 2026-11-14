@@ -481,6 +481,15 @@ void ui_weather_turn(int32_t detents);
 int  ui_take_weather_face(void);
 #endif
 
+/* The WiFi Test firmware's pages (VFO_RADIO=wifitest; components/vfo_core
+ * wifitest.h, components/wifitest_client). From any task: what was measured,
+ * copied, and drawn on the LVGL task; detents, a page each. */
+#if VFO_RADIO_WIFITEST
+#include "wifitest.h"
+void ui_wifitest_data(const wt_t *w);
+void ui_wifitest_turn(int32_t detents);
+#endif
+
 /* The ADS-B Radar firmware's radar (VFO_RADIO=adsb; components/vfo_core
  * adsb.h, components/adsb_client). */
 #if VFO_RADIO_ADSB

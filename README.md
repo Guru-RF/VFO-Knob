@@ -99,6 +99,12 @@ With the **Weather** firmware the knob is a weather station for one
 place, from Open-Meteo's forecast: now, the next 24 hours and the next 5
 days, the pages rolling on by themselves or a detent each. See [Weather](#weather).
 
+With the **WiFi Test** firmware the knob measures the WiFi network it is on,
+for a knob whose links drop: the signal, every drop and the reason the access
+point gave, pings to the router, your radio and the internet, and the
+networks round it. After an hour or more it says in a few words what is
+wrong, and its report goes into a problem report. See [WiFi Test](#wifi-test).
+
 ---
 
 ## Reporting a problem
@@ -133,7 +139,9 @@ and the knob's report filled in. The form asks for these; please give:
 5. **WiFi**: for a WiFi problem, the exact message on the face, the router's
    security (WPA2, WPA2/WPA3, WPA3 only), its 2.4 GHz channel, whether the
    network has more than one access point (a mesh, a repeater), and whether a
-   phone's hotspot works.
+   phone's hotspot works. For links that drop, install the
+   [WiFi Test](#wifi-test) firmware where it happens, leave it an hour or
+   more, and paste its report.
 6. **Audio and Bluetooth**: what you heard (the radio's audio, or your own
    transmission), the volume and the mic gain, and where: the jack, or a
    headset or speaker, by its make and model.
@@ -186,8 +194,8 @@ feature per issue lets each be answered, built and closed on its own.
 | **Web SDR** | On the Icom and FlexRadio firmwares, a KiwiSDR, a Web-888 or an UberSDR as a second receiver beside the radio (and beside an UberSDR, a KiwiSDR): swipe down, turn to **LOCAL** or a receiver, and tap. It follows the radio's frequency, mode and passband. The radio is in the left ear and the SDR in the right, brought to the same loudness, and **BALANCE** — first on the swipe from the left — fades from one to the other. See [Web SDRs](#web-sdrs). On the Kiwi888 firmware a second of its own receivers plays in the right ear: **RIGHT EAR**, **OFF** or a receiver, and **BALANCE** from **LEFT** to **RIGHT** — see [Kiwi888](#kiwi888). |
 | **Network** | Hold a finger on the S-meter until the knob clicks: the card comes up with the firmware and its version (`UberSDR 1.19.0`, or `… dev` for a build that is not a release), the knob's power — **battery 85 %**, or **on USB power** — and its addresses; tap the card to put it away. With the card up, hold the S-meter again, until the knob buzzes, for the [firmware picker](#first-run). |
 | **Lock** | With the address card up, tap **LOCK** over the S-meter: a padlock shows at the top of the arc (on EpiBeam, which has the gear for the card, inside the ring; on ADS-B Radar, which has one too, under the range), and the knob ignores turns, taps and swipes and keys nothing — not the slab, a headset's button or its boom arm. Unkeying is never locked, and the telephone's slab still hangs up. A question the knob asks still takes its answer. **UNLOCK** on the card again, or a restart, frees it. On every firmware but the setup one. |
-| **Screen** | Its brightness on the configuration page, 10 to 100 % (80 % until it is set). Left alone for a minute, the knob shows a screensaver — Matrix rain until set, or an analog clock, a digital clock, the frequency drifting round the glass, or none — dims it a minute later and goes dark a minute after that, all three times set there too; a turn, a touch or transmitting brings the dial back, and that first turn or touch does nothing else. The Clock and the Weather have none and stay lit until set. Step by step: [the screensaver guide](docs/screensaver.md). The knob comes with its USB cable at the top; for a stand or a mount with the cable at the bottom, **The USB cable: At the bottom** there turns the screen the other way up, and the touch with it. |
-| **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face — on EpiBeam inside the ring, over the array, on ADS-B Radar under the range, on the Weather under the time, on the Clock only once it is low: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
+| **Screen** | Its brightness on the configuration page, 10 to 100 % (80 % until it is set). Left alone for a minute, the knob shows a screensaver — Matrix rain until set, or an analog clock, a digital clock, the frequency drifting round the glass, or none — dims it a minute later and goes dark a minute after that, all three times set there too; a turn, a touch or transmitting brings the dial back, and that first turn or touch does nothing else. The Clock, the Weather and the WiFi Test have none and stay lit until set. Step by step: [the screensaver guide](docs/screensaver.md). The knob comes with its USB cable at the top; for a stand or a mount with the cable at the bottom, **The USB cable: At the bottom** there turns the screen the other way up, and the touch with it. |
+| **Battery** | Unplugged, the knob runs on its own battery and shows its charge at the top of the arc, over the S-meter's reading, as a phone does, on every firmware's face — on EpiBeam inside the ring, over the array, on ADS-B Radar under the range, on the Weather under the time, on the WiFi Test under the page's name, on the Clock only once it is low: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below — a headset's battery's look. None on USB power, where the charge cannot be read, nor on a radio's face on the air, where the transmit scale is. The configuration page says the same, with the voltage the knob reads. |
 | **Branding** | RF.Guru boot splash in the palette of [rfguru.app](https://rfguru.app/), over the site's own backdrop. |
 
 ## Two transports
@@ -782,6 +790,27 @@ step: [the Weather guide](docs/weather.md).
 | **A tap** | Anywhere: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
 | **Kept** | The place, the units and the page, across a restart. No screensaver and never dark until set. No PTT, no swipes, no audio and no Bluetooth. |
 
+## WiFi Test
+
+The WiFi Test firmware (`vfo-knob-wifitest`) is no radio: it measures the
+WiFi network the knob is on, for a knob whose links drop. Leave it an hour or
+more where the links drop, read what it says, and paste its report into a
+[problem report](#reporting-a-problem). Step by step:
+[the WiFi Test guide](docs/wifitest.md).
+
+| | |
+|---|---|
+| **The signal** | In dBm and a word, its last minute a bar a second; the network, its channel, mode and security, the access point and how long the knob has been joined. |
+| **The pings** | The router and up to three hosts (a radio, or the computer it talks to) five times a second, the internet (1.1.1.1) once: the mean answer, the share lost, the answers over 100 ms, the longest silence, the last minute a bar a second. The hosts come from the knob's other firmwares at its first start, and are set on the page. |
+| **The drops** | Each with the reason the access point gave, in words and with what it tends to mean; the roams to another access point, the beacons missed, the router going silent while joined, a new address, a name not found. |
+| **The channels** | The 2.4 GHz networks heard on each channel at its start and every half hour, the knob's own channel and those it overlaps, its own network's access points. |
+| **The names** | DNS asked straight of the network's server each minute, and the hosts' `.local` names by mDNS. |
+| **The verdict** | At the foot of every page, the worst first: red for what breaks a radio's link (a drop, a very weak signal, the router losing or silent for seconds), amber for what its audio would feel, green for **WiFi looks fine**. |
+| **The page** | All of it, the hosts to ping, a scan on demand, the counts begun again, and the report as text to copy. |
+| **The dial** | A page a detent: the signal, the pings, the drops, the channels, round and round. |
+| **A tap** | Anywhere: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list, and from there to the radio's firmware, its settings as they were. |
+| **Kept** | The hosts, across a restart; the counts start again with each start. No screensaver and never dark until set. No PTT, no swipes, no audio and no Bluetooth. |
+
 ## A Bluetooth headset
 
 The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
@@ -964,7 +993,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock` and `vfo-knob-weather` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather` and `vfo-knob-wifitest` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice

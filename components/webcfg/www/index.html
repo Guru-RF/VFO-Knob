@@ -343,6 +343,48 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      free for use that is not commercial.</p>
 </section>
 
+<section id="wtsec" hidden>
+  <h2>WiFi Test</h2>
+  <p id="wtverdict" style="font-size:16px;font-weight:600;margin:0 0 8px"></p>
+  <p class="note" id="wthint" style="margin-top:0"></p>
+  <div id="wtnow"></div>
+  <h2 style="margin-top:16px">Pings</h2>
+  <div id="wtpings"></div>
+  <p class="note">The router and each host five times a second, the internet (1.1.1.1) once:
+     the mean answer, the lost, the slowest, the answers later than 100 ms &mdash; a radio's audio
+     would hear those &mdash; and the longest the target said nothing while the knob stayed on
+     the network. A computer whose firewall refuses pings says <i>no answer</i>: Windows'
+     does unless told otherwise.</p>
+  <h2 style="margin-top:16px">What happened</h2>
+  <div id="wtev"></div>
+  <h2 style="margin-top:16px">The channels</h2>
+  <div id="wtair"></div>
+  <p class="note">Scanned at the start and every half hour; the pings rest the second or two it
+     takes. The knob has 2.4 GHz only. Channels less than 5 apart overlap: 1, 6 and 11 do not.
+     <b>*</b> marks this network's own access points.</p>
+  <button type="button" class="ghost" id="wtscan">Scan the channels now</button>
+  <button type="button" class="ghost" id="wtrecount">Count from nothing</button>
+  <h2 style="margin-top:16px">Hosts to ping</h2>
+  <div class="grid">
+    <div><label for="wth0">A radio, or the computer it talks to</label><input id="wth0" list="wtel"
+         maxlength="63" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="IC-705.local"></div>
+    <div><label for="wth1">Another</label><input id="wth1" list="wtel" maxlength="63"
+         autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <div><label for="wth2">Another</label><input id="wth2" list="wtel" maxlength="63"
+         autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+  </div>
+  <datalist id="wtel"></datalist>
+  <p class="note" id="wtelnote"></p>
+  <button type="button" id="wthsave">Save the hosts</button>
+  <h2 style="margin-top:16px">Report</h2>
+  <p class="note" style="margin-top:0">All of the above as text, to paste into an e-mail or a
+     problem report: leave the knob where the links drop for an hour or more first.</p>
+  <button type="button" id="wtrep">Show the report</button>
+  <button type="button" class="ghost" id="wtcopy" hidden>Copy it</button>
+  <textarea id="wtreport" rows="16" readonly hidden></textarea>
+  <p class="note" id="wtmsg"></p>
+</section>
+
 <section id="alsec" hidden>
   <h2>Alarms</h2>
   <div id="alrows"></div>
@@ -1106,7 +1148,8 @@ async function load(){
   ADSB = c.radio === 'adsb';              /* a radar of the aircraft: no radio, no audio */
   CLOCK = c.radio === 'clock';            /* a clock: no radio; its alarms' sound alone */
   WX = c.radio === 'weather';             /* Open-Meteo's forecast: no radio, no audio */
-  SCREEN = EPI || ADSB || CLOCK || WX;
+  WT = c.radio === 'wifitest';            /* the WiFi network measured: no radio, no audio */
+  SCREEN = EPI || ADSB || CLOCK || WX || WT;
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || SCREEN;
   $('episec').hidden = !EPI; $('beamn').value = String(c.beamn ?? 4);
@@ -1114,6 +1157,8 @@ async function load(){
   if (ADSB) adsbLoad();
   $('wxsec').hidden = !WX;
   if (WX) wxLoad();
+  $('wtsec').hidden = !WT;
+  if (WT) wtStart();
   $('alsec').hidden = !CLOCK;
   if (CLOCK) alLoad();
   /* EpiBeam, the radar, the clock and the weather play nothing: of Audio, only the screen's settings. */
@@ -1955,7 +2000,7 @@ function pwHint(d,x){
 /* ---- the phone firmware: its SIP account, a call, the favourites ---- */
 let PHONE=false, phoneLoaded=false, FAVS=[];
 let EPI=false;                          /* the EpiBeam firmware's page */
-let ADSB=false, CLOCK=false, WX=false, SCREEN=false; /* ADS-B Radar's, the Clock's, the Weather's; any, a face with no radio */
+let ADSB=false, CLOCK=false, WX=false, WT=false, SCREEN=false; /* ADS-B Radar's, the Clock's, the Weather's, the WiFi Test's; any, a face with no radio */
 
 /* ---- ADS-B Radar: the radar's middle, its feed, what it shows ---- */
 const ADOPT={adapt:1, adcty:2, adswp:4, adgnd:8};    /* net_prov.h NET_ADSB_* */
@@ -1988,6 +2033,76 @@ async function adsbSave(){
   let r; try{ r=await fetch('/api/adsb',{method:'POST',body:b}) }catch(e){ return 'the knob did not answer' }
   return r.ok?'':await r.text();
 }
+/* ---- WiFi Test: what the knob finds of its network ---- */
+let wtTimer=0, wtHostsSet=false;
+const WTGRADE=['var(--ok)','var(--accent)','var(--bad)'];
+function wtDur(s){ return s>=3600?Math.floor(s/3600)+'h '+String(Math.floor(s/60)%60).padStart(2,'0')+'m'
+                  :s>=60?Math.floor(s/60)+'m '+String(s%60).padStart(2,'0')+'s':s+'s' }
+function wtPct(pm){ return (pm/10).toFixed(1)+' %' }
+async function wtLoad(){
+  let w; try{ const r=await fetch('/api/wifitest',{cache:'no-store'}); if(!r.ok) return; w=await r.json() }catch(e){ return }
+  const G=['Fine','Fair','Poor'];
+  $('wtverdict').textContent=G[w.grade]+': '+w.why; $('wtverdict').style.color=WTGRADE[w.grade];
+  $('wthint').textContent=w.hint||'';
+  const ht=w.ht40==1?', 40 MHz (+)':w.ht40==2?', 40 MHz (-)':'';
+  $('wtnow').innerHTML=
+    row('Measured for',esc(wtDur(w.up)))+
+    row('Network',w.joined?esc(w.ssid)+' <span class="pill up">on</span>':'<span class="pill down">off</span>')+
+    row('Signal',w.joined?`${w.rssi} dBm, ${esc(w.word)} <span class="note">(minute ${w.recent}, lowest ${w.rmin}, highest ${w.rmax})</span>`:'-')+
+    row('Access point',esc(w.bssid)+', channel '+w.ch+ht)+
+    row('Mode',esc(w.phy)+', '+esc(w.auth)+(w.cc?', '+esc(w.cc):''))+
+    row('Address',esc(w.ip)+', router '+esc(w.gw)+', DNS '+esc(w.dns))+
+    row('Drops',w.drops+(w.drops?' &mdash; the last: '+esc(w.reason_text)+' ('+w.reason+')':'')+
+        `; roamed ${w.roams}, beacons missed ${w.beacons}, new address ${w.ipch}`)+
+    row('This join',esc(wtDur(w.join))+(w.down?'; off WiFi '+esc(wtDur(w.down))+' in all':''))+
+    row('Names',`DNS ${w.dns_ok} answered, ${w.dns_fail} not (the last in ${w.dns_ms} ms); mDNS ${w.mdns_ok} found, ${w.mdns_fail} not`);
+  const ST=['','looking up','not found',''];
+  $('wtpings').innerHTML=w.p.filter(p=>p.state).map((p,i)=>{
+    const who=p.name==='router'||p.name==='internet'?p.name+' '+p.addr:p.name+(p.addr?' ('+p.addr+')':'');
+    if(p.state!==3) return row(esc(who),ST[p.state]);
+    if(!p.sent) return row(esc(who),'-');
+    if(!p.got) return row(esc(who),'<span style="color:var(--bad)">no answer</span>');
+    const c=p.loss>=50?'var(--bad)':p.loss>=10||p.mean>100?'var(--accent)':'var(--ok)';
+    return row(esc(who),`<span style="color:${c}">${p.mean} ms, ${wtPct(p.loss)} lost</span>`+
+      ` <span class="note">${p.min}-${p.max} ms, ${p.late} late, silent ${(p.worst/1000).toFixed(1)} s, of ${p.sent}</span>`);
+  }).join('');
+  $('wtev').innerHTML=w.ev.length?w.ev.map(e=>row(esc(e.t?new Date(e.t*1000).toLocaleString():wtDur(e.at)),esc(e.what))).join('')
+                                 :row('','nothing yet');
+  if(w.scanning) $('wtair').innerHTML=row('','scanning\u2026');
+  else if(!w.scan_at) $('wtair').innerHTML=row('','not scanned yet');
+  else {
+    const per=w.per.slice(0,13).map((n,i)=>(i+1==w.ch?'<b>':'')+(i+1)+':'+n+(i+1==w.ch?'</b>':'')).join(' ');
+    $('wtair').innerHTML=row('Heard '+wtDur(w.up-w.scan_at)+' ago',w.heard+' networks')+row('Per channel',per)+
+      w.ap.map(a=>row((a.ours?'* ':'')+'ch '+a.ch+', '+a.rssi+' dBm',esc(a.ssid||'(hidden)')+' <span class="note">'+esc(a.bssid)+'</span>')).join('');
+  }
+  if(!wtHostsSet){
+    wtHostsSet=true;
+    for(let i=0;i<3;i++) $('wth'+i).value=w.hosts[i]||'';
+    $('wtel').innerHTML=w.elsewhere.map(h=>`<option value="${esc(h.host)}">${esc(h.name)}</option>`).join('');
+    $('wtelnote').textContent=w.elsewhere.length?'This knob\'s other firmwares talk to '
+      +w.elsewhere.map(h=>h.host+' ('+h.name+')').join(', ')+'.':'';
+  }
+}
+function wtStart(){ wtLoad(); clearInterval(wtTimer); wtTimer=setInterval(()=>{ if(!document.hidden) wtLoad() },2000) }
+async function wtAct(b,msg){
+  try{ const r=await fetch('/api/wifitest',{method:'POST',body:b}); $('wtmsg').textContent=r.ok?msg:await r.text() }
+  catch(e){ $('wtmsg').textContent='the knob did not answer' }
+  wtLoad();
+}
+$('wtscan').onclick=()=>wtAct(new URLSearchParams({act:'scan'}),'Scanning: a few seconds.');
+$('wtrecount').onclick=()=>{ if(confirm('Begin every count again from nothing?')) wtAct(new URLSearchParams({act:'recount'}),'Counting from nothing.') };
+$('wthsave').onclick=()=>{
+  const b=new URLSearchParams({act:'hosts'}); for(let i=0;i<3;i++) b.append('h'+i,$('wth'+i).value.trim());
+  wtAct(b,'Hosts saved: they are pinged now.');
+};
+$('wtrep').onclick=async()=>{
+  let t; try{ t=await (await fetch('/api/wifitest/report',{cache:'no-store'})).text() }catch(e){ $('wtmsg').textContent='the knob did not answer'; return }
+  $('wtreport').value=t; $('wtreport').hidden=false; $('wtcopy').hidden=false;
+};
+$('wtcopy').onclick=async()=>{
+  try{ await navigator.clipboard.writeText($('wtreport').value); $('wtmsg').textContent='Copied.' }
+  catch(e){ $('wtreport').select(); document.execCommand('copy'); $('wtmsg').textContent='Copied.' }
+};
 /* ---- Weather: where, in what units, how often ---- */
 let WXPLACE='';                         /* the name the place was found by; '' typed */
 /* The face's font has ASCII and the degree sign: accents folded, the rest dropped. */
@@ -2488,6 +2603,7 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'adsb',      name:'ADS-B Radar (the aircraft round you)'},
               {id:'clock',     name:'Clock (the knob as a clock)'},
               {id:'weather',   name:'Weather (Open-Meteo\'s forecast)'},
+              {id:'wifitest',  name:'WiFi Test (what the WiFi network does, for links that drop)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

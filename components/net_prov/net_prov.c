@@ -97,6 +97,21 @@
 #define DEFAULT_PORT 80
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_WIFITEST
+/* No radio: the hosts it pings beside the router -- the radios and computers
+ * the knob's other firmwares talk to, found there at its first start
+ * (net_prov_hosts_elsewhere) -- are this list. Keys of its own, so it never
+ * writes another firmware's. */
+#define KEY_HOST     "wthost"
+#define KEY_RLIST    "wtlist"
+#define KEY_RSEL     "wtsel"
+#define KEY_PORT     "wtport"
+#define KEY_USER     "wtuser"
+#define KEY_PASS     "wtpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 0
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_CLOCK
 /* No radio, nor anything to ask: the time is SNTP's (components/wallclock).
  * Keys of its own all the same, so it never writes another firmware's. */
@@ -256,8 +271,9 @@ static esp_err_t kv_saved_or(esp_err_t e, const char *what)
 
 static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
 /* The screensaver after a minute, dimmed a minute later, dark a minute after
- * that. The Clock and the Weather are screens to look at: theirs stays up. */
-#if VFO_RADIO_CLOCK || VFO_RADIO_WEATHER
+ * that. The Clock and the Weather are screens to look at: theirs stays up --
+ * and the WiFi Test's, whose face is what it found. */
+#if VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST
 static net_screen_t s_screen = { NET_SAVER_NONE, 0, 0, 0 };
 #else
 static net_screen_t s_screen = { NET_SAVER_MATRIX, 1, 1, 1 };
@@ -421,6 +437,81 @@ static void radios_load(void)
                  s_radios[s_radio_sel].name[0] ? s_radios[s_radio_sel].name
                                                : s_radios[s_radio_sel].host);
 }
+
+#if VFO_RADIO_WIFITEST
+/* The radios and computers the knob's other firmwares were set up for, each
+ * once, for the WiFi Test to ping: their lists' hosts -- a web receiver's
+ * address without its scheme, port or path. Read only: never written. */
+int net_prov_hosts_elsewhere(net_radio_t *out, int max)
+{
+    static const struct { const char *list, *host, *who; } FW[] = {
+        { "hlist", "host", "AetherSDR" },  { "rlist", "rhost", "Icom" },
+        { "oxlist", "oxhost", "OpenX6X00" }, { "jslist", "jshost", "Zeus SDR" },
+        { "fxlist", "fxhost", "FlexRadio" }, { "k4list", "k4host", "K4" },
+        { "kwrlist", "kwhost", "KiwiSDR" }, { "owlist", "owhost", "OpenWebRX" },
+    };
+    int n = 0;
+    for (size_t f = 0; f < sizeof FW / sizeof FW[0] && n < max; f++) {
+        size_t len = 0;
+        char *blob = kv_dup(kv(), FW[f].list, &len);
+        if (!blob || !len) {
+            free(blob);
+            char h[64];
+            size_t hn = sizeof h;
+            if (kv_get_str(kv(), FW[f].host, h, &hn) != ESP_OK || !h[0]) continue;
+            blob = strdup(h);
+            if (!blob) continue;
+        }
+        for (char *line = blob, *next; line && *line && n < max; line = next) {
+            next = strchr(line, '\n');
+            if (next) *next++ = 0;
+            /* name \t host \t ...; a lone host, from KEY_HOST */
+            char *tab = strchr(line, '\t');
+            const char *name = tab ? line : "";
+            char *host = tab ? tab + 1 : line;
+            if (tab) *tab = 0;
+            char *end = strchr(host, '\t');
+            if (end) *end = 0;
+            host = (char *)net_prov_host_shown(host);
+            host[strcspn(host, ":/")] = 0;
+            if (!host[0]) continue;
+            bool dup = false;
+            for (int i = 0; i < n && !dup; i++) dup = !strcasecmp(out[i].host, host);
+            if (dup) continue;
+            memset(&out[n], 0, sizeof out[n]);
+            snprintf(out[n].name, sizeof out[n].name, "%s", name[0] ? name : FW[f].who);
+            strlcpy(out[n].host, host, sizeof out[n].host);
+            n++;
+        }
+        free(blob);
+    }
+    return n;
+}
+
+/* Whether this firmware's list was ever saved -- emptied counts: the hosts
+ * elsewhere are offered once, at its first start, never again over a list
+ * the page cleared. */
+bool net_prov_radios_stored(void)
+{
+    size_t len = 0;
+    char *blob = kv_dup(kv(), KEY_RLIST, &len);
+    free(blob);
+    return blob != NULL;
+}
+
+static esp_err_t radios_write(bool wait);
+
+/* The list emptied: one radio with no host, as a knob that never had one. */
+esp_err_t net_prov_radios_clear(void)
+{
+    memset(&s_radios[0], 0, sizeof s_radios[0]);
+    s_nradios   = 1;
+    s_radio_sel = 0;
+    s_radios_gen++;
+    radio_to_cfg(&s_radios[0]);
+    return radios_write(true);
+}
+#endif
 
 static bool clean(const char *s)
 {

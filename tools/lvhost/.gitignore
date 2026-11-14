@@ -20,4 +20,5 @@ slab_epibeam
 slab_adsb
 slab_clock
 slab_weather
+slab_wifitest
 clockfaces

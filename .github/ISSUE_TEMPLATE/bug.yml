@@ -54,7 +54,7 @@ body:
     id: wifi
     attributes:
       label: WiFi
-      description: "For a WiFi problem: the exact message on the face, the router's security (WPA2, WPA2/WPA3, WPA3 only), its 2.4 GHz channel, whether the network has more than one access point (a mesh, a repeater), and whether a phone's hotspot works."
+      description: "For a WiFi problem: the exact message on the face, the router's security (WPA2, WPA2/WPA3, WPA3 only), its 2.4 GHz channel, whether the network has more than one access point (a mesh, a repeater), and whether a phone's hotspot works. For links that drop: the WiFi Test firmware's report, after an hour or more where it happens."
   - type: textarea
     id: audio
     attributes:

@@ -84,6 +84,7 @@ A name too long for the panel is shown in smaller type, so it fits.
 | **ADS-B Radar** | a radar of the aircraft round you, from an ADS-B feed or your own receiver |
 | **Clock** | a clock for the shack: local time, UTC, four faces, ten alarms |
 | **Weather** | a weather station for one place, from Open-Meteo's forecast |
+| **WiFi Test** | the WiFi network measured, for a knob whose links drop: its signal, every drop and why, pings, the channels |
 
 A firmware still in beta is stamped **BETA** in the panel's corner: it is
 published for those who want to try it, before it has been tried widely.

@@ -147,6 +147,16 @@ network protocols as well as Icom's: a reference for those clients.
 
 ## Firmware
 
+- [ ] **The WiFi Test, further** (vfo-knob-wifitest, first released in
+      1.26.0): what its pings may miss.
+      - [ ] a radio's load: an audio stream's worth of traffic, as TCI's
+            48 kHz both ways, to the router or a host, for a network that
+            drops only under it;
+      - [ ] the second chip's Bluetooth on while it measures, for the
+            2.4 GHz it shares with the WiFi beside it;
+      - [ ] a real drop seen on a knob, its reason and its hint (so far only
+            the PC's tests have had one: the test knob's network never
+            dropped).
 - [ ] **Every firmware's settings on the SD card** (components/kvstore,
       SETTINGS-ON-CARD-PLAN.md). Built and on the bench knob (2026-10-09):
       every setting but the WiFi, the Bluetooth records and the boot counter

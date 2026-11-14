@@ -2622,6 +2622,231 @@ def weather_pictures():
     return out
 
 
+# --- the WiFi Test firmware ------------------------------------------------------
+
+WT_GOOD, WT_FAIR, WT_POOR, WT_GUIDE = "#3FD26A", "#FFB000", "#FF4040", "#262C36"   # ui.c WTC_*
+WT_MINE, WT_NEAR, WT_FAR = "#5A9BFF", "#B07A10", "#4A5260"                      # ui.c wt_chans_cb
+WT_GREY = "#707884"                       # a ping row still looking its host up
+WT_CAPS = ("SIGNAL", "PINGS", "DROPS", "CHANNELS")
+# The harness's network (tools/lvhost/slab.c make_net): an hour on a home
+# network, one drop for lost beacons, a host on the LAN, the internet.
+WT_RSSI = [0 if i == 40 else -79 if i == 39 else -55 - i * 7 % 9 for i in range(60)]
+WT_LOST = 0xFFFF
+
+
+def wt_hist(base, marks=()):
+    h = [base + i * 7 % 5 for i in range(60)]
+    for i, v in marks:
+        h[i] = v
+    return h
+
+
+WT_ROWS = [("router 192.168.1.1", "5 ms  0.2%", wt_hist(3, ((40, WT_LOST), (41, 180 | 0x8000), (52, 140)))),
+           ("IC-705.local", "8 ms  0.2%", wt_hist(6, ((40, WT_LOST),))),
+           ("internet 1.1.1.1", "16 ms  0.2%", wt_hist(14))]
+WT_EVENTS = [("10:28", "joined again after 4.2 s: ch 6, -66 dBm", None),   # None: the text's own
+             ("10:27", "dropped: beacons lost (reason 200), -81 dBm", WT_POOR),
+             ("10:27", "beacons missed, -81 dBm", WT_FAIR),
+             ("10:14", "the router silent 1.4 s, joined", WT_FAIR),
+             ("09:52", "mDNS: IC-705.local not found", WT_FAIR)]
+WT_PER_CH = (5, 1, 0, 2, 0, 7, 1, 0, 1, 0, 4, 1, 1)   # channels 1-13
+
+
+def wt_dots_left(f, text, room):
+    """LV_LABEL_LONG_MODE_DOTS on one line `room` wide, the text left-aligned:
+    as dotted(), from the line's left end."""
+    if f.width(text) <= room:
+        return text
+    x, at, k = 0, room - 3 * f.advance(".", "."), 0
+    while k < len(text) - 1:
+        gw = f.advance(text[k], text[k + 1:k + 2])
+        if at < x + gw:
+            break
+        x += gw
+        k += 1
+    return text[:min(k, len(text) - 3)] + "..."
+
+
+def wt_mid(y, s, size, colour, room=0):
+    """ui.c wt_label(): a line centred on (180, y); `room` wide, cut with dots."""
+    if room and montserrat(size).width(s) > room:
+        s = dotted(montserrat(size), s, room)
+    return centred(180, y, s, size, colour).replace("<text ", '<text xml:space="preserve" ', 1)
+
+
+def wt_at(x, top, s, size, colour, room=0, anchor="start"):
+    """A label set at (x, top), left-aligned and cut with dots `room` wide;
+    or right-aligned, its box ending at x."""
+    f = montserrat(size)
+    if room:
+        s = wt_dots_left(f, s, room)
+    return md.text(x, top + f.line_height - f.base_line, esc(s), size, colour, anchor=anchor,
+                   extra=' xml:space="preserve"')
+
+
+def wt_rect(x1, y1, x2, y2, c):
+    return f'<rect x="{x1}" y="{y1}" width="{x2 - x1 + 1}" height="{y2 - y1 + 1}" fill="{c}"/>'
+
+
+def wt_rssi_colour(r):
+    return WT_POOR if not r else WT_GOOD if r >= -65 else WT_FAIR if r >= -75 else WT_POOR
+
+
+def wt_top(page, foot, foot_colour):
+    """What every page has (ui.c wt_build): the page's name, the dots under
+    it -- this page's lit -- and the verdict at the foot in its colour."""
+    s = '<rect x="0" y="0" width="360" height="360" fill="#000000"/>' + wt_mid(26, WT_CAPS[page], 14, md.LABEL)
+    for i in range(4):
+        s += (f'<circle cx="{180 - 27 + i * 18}" cy="66" r="3" '
+              f'fill="{md.TEXT if i == page else md.DISABLED}"/>')
+    return s + wt_mid(318, foot, 14, foot_colour, 232)
+
+
+def wt_rchart(rssi=WT_RSSI):
+    """ui.c wt_rchart_cb: the signal's last minute in (60, 172) 240 x 52."""
+    x1, y2, h = 60, 223, 52
+    ry = lambda db: y2 - (db + 95) * (h - 1) // 60   # noqa: E731
+    s = wt_rect(x1, ry(-65), 299, ry(-65), WT_GUIDE) + wt_rect(x1, ry(-75), 299, ry(-75), WT_GUIDE)
+    for i, r in enumerate(rssi or ()):
+        a, b = x1 + i * 240 // 60, x1 + (i + 1) * 240 // 60 - 2
+        if r is None:                    # before counting began
+            continue
+        if not r:
+            s += wt_rect(a, 172, b, y2, WT_POOR)
+            continue
+        r = max(-95, min(-35, r))
+        s += wt_rect(a, ry(r), b, y2, wt_rssi_colour(r))
+    return s
+
+
+def wt_signal(foot="dropped once: beacons lost", foot_colour=WT_POOR, joined=True, rssi=WT_RSSI, net=True):
+    """The first page (ui.c wt_fill, SIGNAL): the signal now and in a word,
+    its last minute, the network, its channel, the access point -- or, `net`
+    False, no network joined yet."""
+    s = wt_top(0, foot, foot_colour)
+    if not net:
+        return (s + wt_mid(108, "--", 48, WT_POOR) + wt_mid(150, "off WiFi", 20, WT_POOR)
+                + wt_rchart(rssi))
+    if joined:
+        s += wt_mid(108, "-58 dBm", 48, WT_GOOD) + wt_mid(150, "good", 20, WT_GOOD)
+    else:
+        s += wt_mid(108, "--", 48, WT_POOR) + wt_mid(150, "off WiFi", 20, WT_POOR)
+    s += wt_rchart(rssi)
+    s += wt_mid(246, "Shack WiFi", 14, md.TEXT, 260)
+    s += wt_mid(266, "ch 6  11n  WPA2", 14, md.TEXT2, 270)
+    return s + wt_mid(286, "AP ..3c:5a:1e  " + ("joined 25m 20s" if joined else "off "), 14, md.LABEL, 260)
+
+
+def wt_pchart(x, y, hist):
+    """ui.c wt_pchart_cb: a target's last minute, 260 x 34 -- a bar a second
+    on a scale of tens, amber past 100 ms, red where answers were lost."""
+    y1, y2 = y, y + 33
+    s = wt_rect(x, y2, x + 259, y2, WT_GUIDE)
+    for i, v in enumerate(hist or ()):
+        a, b = x + i * 260 // 60, x + (i + 1) * 260 // 60 - 2
+        if v == WT_LOST:
+            s += wt_rect(a, y1, b, y2, WT_POOR)
+            continue
+        ms = v & 0x7FFF
+        bh = max(2, wx_round(min(1.0, math.log10(ms) / 3) * 30))
+        s += wt_rect(a, y2 - bh + 1, b, y2, WT_FAIR if ms > 100 else WT_GOOD)
+        if v & 0x8000:
+            s += wt_rect(a, y1, b, y1 + 2, WT_POOR)
+    return s
+
+
+def wt_pings(foot="dropped once: beacons lost", foot_colour=WT_POOR, host=True):
+    """The second page (ui.c wt_fill, PINGS): the router, the first host,
+    the internet -- each its mean answer and loss, and its last minute."""
+    s = wt_top(1, foot, foot_colour)
+    for r, (name, stat, hist) in enumerate(WT_ROWS):
+        y = 86 + r * 74
+        if r == 1 and not host:
+            s += wt_at(50, y - 8, "no host: set one on the page", 14, md.TEXT2, 260)
+            s += wt_pchart(50, y + 12, None)
+            continue
+        s += wt_at(50, y - 8, name, 14, md.TEXT2, 150 if r == 1 else 160)
+        s += wt_at(310, y - 8, stat, 14, WT_GOOD, anchor="end")
+        s += wt_pchart(50, y + 12, hist)
+    return s
+
+
+def wt_drops():
+    """The third page (ui.c wt_fill, DROPS): how often the network was lost,
+    the other counts, the newest events timed."""
+    s = wt_top(2, "dropped once: beacons lost", WT_POOR)
+    s += wt_mid(104, "1", 48, WT_POOR) + wt_mid(144, "drop in 1h 02m", 14, md.TEXT2)
+    s += wt_mid(166, "roamed 0  beacons missed 2  silent 0", 14, md.LABEL, 280)
+    for i, (when, what, colour) in enumerate(WT_EVENTS):
+        s += wt_at(42, 186 + i * 20, f"{when}  {what}", 14, colour or md.TEXT2, 276)
+    return s
+
+
+def wt_channels():
+    """The fourth page (ui.c wt_chans_cb): the networks heard on each
+    channel at the last scan, the knob's own lit, those it overlaps amber."""
+    s = wt_top(3, "dropped once: beacons lost", WT_POOR)
+    ax1, ay1, ay2, w = 40, 82, 237, 280
+    foot, top, own = ay2 - 20, ay1 + 18, 6
+    most = max(4, *WT_PER_CH)
+    for c, n in enumerate(WT_PER_CH, 1):
+        x1, x2 = ax1 + (c - 1) * w // 13 + 3, ax1 + c * w // 13 - 3
+        mine, near = c == own, abs(c - own) < 5
+        s += wt_rect(x1, foot, x2, foot, WT_GUIDE)
+        if n:
+            bh = n * (foot - top) // most
+            s += wt_rect(x1, foot - bh, x2, foot, WT_MINE if mine else WT_NEAR if near else WT_FAR)
+            s += wx_box_text(x1 - 6, x2 + 6, foot - bh - 10, str(n), 14, md.TEXT if mine else md.TEXT2, "centre")
+        s += wx_box_text(x1 - 6, x2 + 6, ay2 - 8, str(c), 14, WT_MINE if mine else md.LABEL, "centre")
+    s += wt_mid(260, "23 networks, 12 near ch 6", 14, md.TEXT2, 280)
+    return s + wt_mid(282, "own APs: ch 6 -57, ch 11 -78", 14, md.LABEL, 270)
+
+
+def wifitest_pictures():
+    md.use_palette("aethersdr")          # as the face: AetherSDR's palette, on black
+    f = wt_signal()
+    left = [(153, 66, "a dot for each page"), (100, 108, "the signal now"), (150, 150, "...in a word"),
+            (64, 200, "its last minute")]
+    right = [(212, 26, "the page"), (245, 246, "the network"), (240, 266, "channel, mode, security"),
+             (276, 286, "access point, time on"), (276, 318, "the verdict, worst first")]
+    out = {}
+    out["01-face"] = callouts("wt-01", "The WiFi Test firmware's first page: the signal", f, left, right)
+    out["02-pings"] = knob("wt-02", "Turn: the pings", wt_pings(), turn(),
+                           "a page a detent  ·  the router, a host, the internet")
+    out["03-drops"] = knob("wt-03", "Turn again: the drops", wt_drops(), turn(),
+                           "how often the network was lost  ·  what happened, newest first")
+    out["04-channels"] = knob("wt-04", "Turn again: the channels", wt_channels(), turn(),
+                              "the networks on each channel  ·  its own lit, the overlapping amber")
+    # Three seconds from its start, the network not joined yet: a red second each.
+    joining = wt_signal("joining WiFi...", WT_POOR, joined=False, net=False, rssi=[None] * 57 + [0, 0, 0])
+    out["05-joining"] = knob("wt-05", "Just started: joining the network", joining, "",
+                             "joining: a red second each, until it is on the network")
+    out["06-off"] = knob("wt-06", "Off the network", wt_signal("off WiFi: beacons lost", WT_POOR, joined=False), "",
+                         "off WiFi: the reason in red, the counting going on")
+    fine_rssi = [-56 if i == 40 else v for i, v in enumerate(WT_RSSI)]
+    out["07-fine"] = knob("wt-07", "Nothing wrong found", wt_signal("WiFi looks fine", WT_GOOD, rssi=fine_rssi), "",
+                          "all fine: green at the foot")
+    out["08-nohost"] = knob("wt-08", "No host to ping", wt_pings("WiFi looks fine", WT_GOOD, host=False), "",
+                            "no host: the router and the internet only, until one is set")
+    card = address_card(f"WiFi Test {VERSION}\n{POWER}\n{ADDRESSES}")
+    out["09-card"] = knob("wt-09", "A tap: the address card, for the configuration page",
+                          f + card + lock_pill(False), tap(180, 300),
+                          "tap anywhere: the address card  ·  again: away")
+    out["10-picker"] = knob("wt-10", "Held three seconds: back to the setup firmware?",
+                            dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
+                                                              "tap to cancel; WiFi is kept"),
+                            tap(180, 300, ring=24), "hold anywhere 3 s until it buzzes, then turn")
+    out["11-battery"] = knob("wt-11", "On its own battery: the knob's charge under the page's name",
+                             f + md.knob_battery(85), "",
+                             "unplugged: its charge, by the quarter  ·  none on USB power")
+    out["12-lock"] = knob("wt-12", "The address card's LOCK", f + card + lock_pill(False), tap(252, 84),
+                          "tap for the card  ·  tap LOCK")
+    out["13-locked"] = knob("wt-13", "Locked: the padlock under the page's name",
+                            f + lock_closed(180, 47.5, md.WARN), "",
+                            "the knob turns no page  ·  a tap still brings the card, UNLOCK on it")
+    return out
+
+
 # --- the screensavers (every firmware) -----------------------------------------------
 
 MX_CW, MX_CH = 15, 20                     # saver.c MX_CW, MX_CH
@@ -2713,7 +2938,8 @@ FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multif
              "jupitersdr": jupitersdr_pictures, "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
              "epibeam": epibeam_pictures, "adsb": adsb_pictures, "clock": clock_pictures,
-             "weather": weather_pictures, "screensaver": saver_pictures, "headset": headset_pictures}
+             "weather": weather_pictures, "wifitest": wifitest_pictures, "screensaver": saver_pictures,
+             "headset": headset_pictures}
 
 
 def main():

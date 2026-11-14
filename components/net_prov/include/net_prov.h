@@ -71,6 +71,15 @@ esp_err_t net_prov_radio_activate(int i);
  * in use alone: a client that switches live (the OpenWebRX firmware's)
  * follows a list saved under it. */
 uint32_t  net_prov_radios_gen(void);
+#if VFO_RADIO_WIFITEST
+/* The WiFi Test's: the hosts the knob's other firmwares were set up for --
+ * their radio lists' -- each once, up to max, named for the firmware where
+ * the list gave no name. Read only. */
+int       net_prov_hosts_elsewhere(net_radio_t *out, int max);
+/* Whether its list was ever saved, emptied included; and the list emptied. */
+bool      net_prov_radios_stored(void);
+esp_err_t net_prov_radios_clear(void);
+#endif
 
 /* Written by the HTTP configuration page. Takes effect on the next boot: the
  * transport is chosen once at startup and the TCI client has no restart path.

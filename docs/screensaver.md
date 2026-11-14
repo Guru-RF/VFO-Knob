@@ -9,7 +9,7 @@ The pictures are the knob's own screens, drawn from the firmware's savers
 
 ## When it comes
 
-On every firmware but the Clock and the Weather, until set:
+On every firmware but the Clock, the Weather and the WiFi Test, until set:
 
 1. **A minute** with nothing done: the screensaver, at full brightness.
 2. **A minute later**: dimmed.
@@ -24,8 +24,8 @@ The first turn or touch on a screensaver or a dark screen only brings the
 dial back: it does not tune, key or tap whatever was under your finger. The
 next one does.
 
-The **Clock** and the **Weather** are screens to look at: theirs is **None**
-and never dark, until set.
+The **Clock**, the **Weather** and the **WiFi Test** are screens to look at:
+theirs is **None** and never dark, until set.
 
 ## The settings
 
@@ -78,7 +78,8 @@ What the dial shows largest, drifting the same way: on a radio the frequency
 and the mode, or the memory channel; on SVXConnect the talk group and the
 reflector; on the Telephone the favourite on the dial; on EpiBeam the beam's
 direction and heading; on ADS-B Radar its range; on the Clock the time and
-the date; on the Weather the temperature and the sky in words.
+the date; on the Weather the temperature and the sky in words; on the WiFi
+Test the signal, in dBm and in a word.
 
 ## The time
 

@@ -1,0 +1,18 @@
+# The WiFi Test firmware: the knob measuring the WiFi network it is on -- the
+# signal, the drops and why, pings to the router, the radios' hosts and the
+# internet -- for a knob whose links drop (VFO_RADIO=wifitest).
+#
+# WiFi only, without the USB networking of sdkconfig.usbnet: WiFi is what is
+# tried. Leaving TinyUSB out also keeps the serial console on the cable.
+#
+# WiFi as every firmware has it (net_prov.c): no power saving, the strongest
+# access point of the network's name, the same buffers -- what it finds is
+# what a radio's firmware would live with.
+
+# AES in software, as every firmware: the engine's DMA takes its bounce buffers
+# from internal RAM.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# The pings' raw socket and the names' lookups beside the web page's sessions
+# and the log's, as the Clock's.
+CONFIG_LWIP_MAX_SOCKETS=16

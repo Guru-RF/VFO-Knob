@@ -403,6 +403,13 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #else
 #define WEATHER_FACE 0
 #endif
+/* The WiFi Test firmware's: what it finds of the network, over a face it
+ * leaves unseen too (see "WiFi Test" below). */
+#if VFO_RADIO_WIFITEST
+#define WIFITEST_FACE 1
+#else
+#define WIFITEST_FACE 0
+#endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
 
@@ -5735,17 +5742,526 @@ void ui_weather_turn(int32_t detents)
 int ui_take_weather_face(void) { return atomic_exchange(&s_wx_taken, -1); }
 #endif /* WEATHER_FACE */
 
+#if WIFITEST_FACE
+/* --- WiFi Test: what the knob finds of its network, on four pages ---------
+ * The whole glass is the test, a page at a time; the dial goes on to the next
+ * and round, a page a detent:
+ *   SIGNAL: the signal now, in dBm and a word, and its last minute; the
+ *     network's name, channel, mode and security, the access point and how
+ *     long this join has lasted;
+ *   PINGS: the router, a host -- the first of the page's, a radio or the
+ *     computer it talks to -- and the internet: each one's mean answer and
+ *     what it loses, and its last minute a bar a second, higher the slower,
+ *     amber past WT_LATE_MS, red where an answer never came;
+ *   DROPS: how often the network was lost, and the newest events, timed;
+ *   CHANNELS: the networks heard on each channel at the last scan, the
+ *     knob's own channel lit, those it overlaps with amber; its own
+ *     network's access points.
+ * Over each its name, under each the verdict (wt_verdict) in its colour. A
+ * tap anywhere: the address card; held PICKER_HOLD_MS, the firmware picker --
+ * as on the clock. Every WT_SHIFT_MIN minutes it all moves a pixel round a
+ * 3 x 3 square, so nothing stands still on the AMOLED for days.
+ *
+ * Built over the radio's face, which goes on under it unseen, as the
+ * weather's is. Not clickable: every touch is the screen's own. */
+#define WT_PAGES     4
+#define WT_TICK_MS   50
+#define WT_SHIFT_MIN 3
+#define WTC_GOOD     0x3FD26A
+#define WTC_FAIR     0xFFB000
+#define WTC_POOR     0xFF4040
+#define WTC_GUIDE    0x262C36
+#define WT_ROWS      3                        /* the pings page: the router, a host, the internet */
+#define WT_EV_LINES  5
+
+static lv_obj_t   *s_wt, *s_wt_in, *s_wt_pg[WT_PAGES], *s_wt_cap, *s_wt_dot[WT_PAGES], *s_wt_foot;
+static lv_obj_t   *s_wt_rssi, *s_wt_word, *s_wt_rchart, *s_wt_ssid, *s_wt_l1, *s_wt_l2;
+static lv_obj_t   *s_wt_pname[WT_ROWS], *s_wt_pstat[WT_ROWS], *s_wt_pchart[WT_ROWS];
+static lv_obj_t   *s_wt_drops, *s_wt_dsub, *s_wt_dline, *s_wt_ev[WT_EV_LINES];
+static lv_obj_t   *s_wt_chans, *s_wt_c1, *s_wt_c2;
+EXT_RAM_BSS_ATTR static wt_t s_wt_d, s_wt_new;   /* the face's, and the one handed over */
+static int8_t      s_wt_row[WT_ROWS];         /* each row's target, -1 none */
+static bool        s_wt_have;
+static uint8_t     s_wt_page;
+static int8_t      s_wt_dx, s_wt_dy;
+static portMUX_TYPE s_wt_mux = portMUX_INITIALIZER_UNLOCKED;
+static atomic_bool s_wt_due;
+static atomic_int  s_wt_detents;
+
+static void set_text(lv_obj_t *o, const char *s);
+static void set_text_color(lv_obj_t *o, lv_color_t c);
+static void vis(lv_obj_t *o, bool on);
+
+static uint32_t wt_grade_hex(int g) { return g == WT_POOR ? WTC_POOR : g == WT_FAIR ? WTC_FAIR : WTC_GOOD; }
+
+static uint32_t wt_rssi_hex(int rssi)
+{
+    if (!rssi) return WTC_POOR;
+    return rssi >= -65 ? WTC_GOOD : rssi >= -75 ? WTC_FAIR : WTC_POOR;
+}
+
+static void wt_rect(lv_layer_t *l, int32_t x1, int32_t y1, int32_t x2, int32_t y2, uint32_t c)
+{
+    if (x2 < x1 || y2 < y1) return;
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.bg_color = lv_color_hex(c);
+    const lv_area_t a = { x1, y1, x2, y2 };
+    lv_draw_rect(l, &d, &a);
+}
+
+static void wt_text_at(lv_layer_t *l, const char *t, const lv_font_t *f, lv_color_t c, int32_t x1, int32_t x2,
+                       int32_t ymid)
+{
+    lv_draw_label_dsc_t d;
+    lv_draw_label_dsc_init(&d);
+    d.text = t;
+    d.text_local = 1;                         /* t is the caller's, gone when the layer draws */
+    d.font = f;
+    d.color = c;
+    d.align = LV_TEXT_ALIGN_CENTER;
+    const int32_t h = lv_font_get_line_height(f);
+    const lv_area_t a = { x1, ymid - h / 2, x2, ymid - h / 2 + h - 1 };
+    lv_draw_label(l, &d, &a);
+}
+
+/* The slots of the last minute before counting began: none to draw. */
+static int wt_first_slot(void)
+{
+    return s_wt_d.up_s >= WT_HIST ? 0 : WT_HIST - (int)s_wt_d.up_s;
+}
+
+/* ---- the draw events ---- */
+
+/* The signal's last minute: a bar a second up to its dBm, -95 at the foot
+ * and -35 at the top, in its colour; off the network, a red one whole. The
+ * guides at -65 and -75, where good turns fair and fair weak. */
+static void wt_rchart_cb(lv_event_t *e)
+{
+    lv_layer_t *l = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target(e), &a);
+    const int32_t w = lv_area_get_width(&a), h = lv_area_get_height(&a);
+#define WT_RY(db) (a.y2 - ((db) + 95) * (h - 1) / 60)
+    wt_rect(l, a.x1, WT_RY(-65), a.x2, WT_RY(-65), WTC_GUIDE);
+    wt_rect(l, a.x1, WT_RY(-75), a.x2, WT_RY(-75), WTC_GUIDE);
+    if (!s_wt_have) return;
+    for (int i = wt_first_slot(); i < WT_HIST; i++) {
+        const int32_t x1 = a.x1 + i * w / WT_HIST, x2 = a.x1 + (i + 1) * w / WT_HIST - 2;
+        int r = s_wt_d.rssi_hist[i];
+        if (!r) {
+            wt_rect(l, x1, a.y1, x2, a.y2, WTC_POOR);
+            continue;
+        }
+        if (r < -95) r = -95;
+        if (r > -35) r = -35;
+        wt_rect(l, x1, WT_RY(r), x2, a.y2, wt_rssi_hex(r));
+    }
+#undef WT_RY
+}
+
+/* A target's last minute: a bar a second, its height the second's slowest
+ * answer on a scale of tens -- 1, 10, 100, 1000 ms -- amber past
+ * WT_LATE_MS; a red cap where some went unanswered, a red bar whole where
+ * none came back. */
+static void wt_pchart_cb(lv_event_t *e)
+{
+    lv_layer_t *l = lv_event_get_layer(e);
+    const int row = (int)(intptr_t)lv_event_get_user_data(e);
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target(e), &a);
+    const int32_t w = lv_area_get_width(&a), h = lv_area_get_height(&a);
+    wt_rect(l, a.x1, a.y2, a.x2, a.y2, WTC_GUIDE);
+    const int t = s_wt_row[row];
+    if (!s_wt_have || t < 0) return;
+    const wt_ping_t *p = &s_wt_d.p[t];
+    for (int i = wt_first_slot(); i < WT_HIST; i++) {
+        const uint16_t v = p->hist[i];
+        if (!v) continue;
+        const int32_t x1 = a.x1 + i * w / WT_HIST, x2 = a.x1 + (i + 1) * w / WT_HIST - 2;
+        if (v == WT_LOST) {
+            wt_rect(l, x1, a.y1, x2, a.y2, WTC_POOR);
+            continue;
+        }
+        const unsigned ms = v & 0x7FFF;
+        float f = log10f((float)ms) / 3.0f;
+        if (f > 1.0f) f = 1.0f;
+        int32_t bh = (int32_t)lroundf(f * (float)(h - 4));
+        if (bh < 2) bh = 2;
+        wt_rect(l, x1, a.y2 - bh + 1, x2, a.y2, ms > WT_LATE_MS ? WTC_FAIR : WTC_GOOD);
+        if (v & 0x8000) wt_rect(l, x1, a.y1, x2, a.y1 + 2, WTC_POOR);
+    }
+}
+
+/* The channels, 1 to 13: a bar of the networks heard on each, the count
+ * over it and the channel under it; the knob's own lit, those it overlaps
+ * with -- less than 5 apart -- amber. */
+static void wt_chans_cb(lv_event_t *e)
+{
+    lv_layer_t *l = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target(e), &a);
+    const int32_t w = lv_area_get_width(&a);
+    const int32_t foot = a.y2 - 20, top = a.y1 + 18;
+    const int own = s_wt_d.channel;
+    int most = 4;
+    for (int c = 1; c <= 13; c++) if (s_wt_d.per_ch[c] > most) most = s_wt_d.per_ch[c];
+    char t[8];
+    for (int c = 1; c <= 13; c++) {
+        const int32_t x1 = a.x1 + (c - 1) * w / 13 + 3, x2 = a.x1 + c * w / 13 - 3;
+        const int n = s_wt_have && s_wt_d.scan_at_s ? s_wt_d.per_ch[c] : 0;
+        const bool mine = c == own, near = own && c - own < 5 && own - c < 5;
+        const uint32_t col = mine ? 0x5A9BFF : near ? 0xB07A10 : 0x4A5260;
+        wt_rect(l, x1, foot, x2, foot, WTC_GUIDE);
+        if (n) {
+            const int32_t bh = n * (foot - top) / most;
+            wt_rect(l, x1, foot - bh, x2, foot, col);
+            snprintf(t, sizeof t, "%d", n);
+            wt_text_at(l, t, &lv_font_montserrat_14, mine ? C_TEXT : C_TEXT2, x1 - 6, x2 + 6, foot - bh - 10);
+        }
+        snprintf(t, sizeof t, "%d", c);
+        wt_text_at(l, t, &lv_font_montserrat_14, mine ? lv_color_hex(0x5A9BFF) : C_LABEL, x1 - 6, x2 + 6,
+                   a.y2 - 8);
+    }
+}
+
+/* ---- the pages ---- */
+
+static lv_obj_t *wt_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, int32_t y, int32_t w)
+{
+    lv_obj_t *o = lv_label_create(p);
+    lv_obj_set_style_text_font(o, f, 0);
+    lv_obj_set_style_text_color(o, c, 0);
+    lv_label_set_text(o, "");
+    if (w) {
+        lv_obj_set_size(o, w, lv_font_get_line_height(f));
+        lv_obj_set_style_text_align(o, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(o, LV_LABEL_LONG_DOT);
+    }
+    lv_obj_align(o, LV_ALIGN_TOP_MID, 0, y - lv_font_get_line_height(f) / 2);
+    return o;
+}
+
+static lv_obj_t *wt_drawn(lv_obj_t *p, int32_t x, int32_t y, int32_t w, int32_t h, lv_event_cb_t cb, void *ud)
+{
+    lv_obj_t *o = lv_obj_create(p);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, w, h);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(o, cb, LV_EVENT_DRAW_MAIN, ud);
+    return o;
+}
+
+static void wt_dur(char *s, size_t n, uint32_t sec)
+{
+    if (sec >= 86400) snprintf(s, n, "%ud %uh", (unsigned)(sec / 86400), (unsigned)(sec / 3600 % 24));
+    else if (sec >= 3600) snprintf(s, n, "%uh %02um", (unsigned)(sec / 3600), (unsigned)(sec / 60 % 60));
+    else if (sec >= 60) snprintf(s, n, "%um %02us", (unsigned)(sec / 60), (unsigned)(sec % 60));
+    else snprintf(s, n, "%us", (unsigned)sec);
+}
+
+static void wt_fill(void)
+{
+    static const char *const CAP[WT_PAGES] = { "SIGNAL", "PINGS", "DROPS", "CHANNELS" };
+    const wt_t *w = &s_wt_d;
+    char t[72], d1[16];
+    set_text(s_wt_cap, CAP[s_wt_page]);
+    for (int i = 0; i < WT_PAGES; i++)
+        lv_obj_set_style_bg_color(s_wt_dot[i], i == s_wt_page ? C_TEXT : C_DISABLED, 0);
+    if (!s_wt_have) {
+        set_text(s_wt_foot, "starting...");
+        set_text_color(s_wt_foot, C_LABEL);
+        return;
+    }
+    char why[48];
+    const int g = wt_verdict(w, why, sizeof why);
+    set_text(s_wt_foot, why);
+    set_text_color(s_wt_foot, lv_color_hex(wt_grade_hex(g)));
+
+    /* SIGNAL */
+    if (w->joined && w->rssi) {
+        snprintf(t, sizeof t, "%d dBm", w->rssi);
+        set_text(s_wt_rssi, t);
+        set_text_color(s_wt_rssi, lv_color_hex(wt_rssi_hex(w->rssi)));
+        set_text(s_wt_word, wt_signal_word(w->rssi));
+        set_text_color(s_wt_word, lv_color_hex(wt_rssi_hex(w->rssi)));
+    } else {
+        set_text(s_wt_rssi, "--");
+        set_text_color(s_wt_rssi, lv_color_hex(WTC_POOR));
+        set_text(s_wt_word, "off WiFi");
+        set_text_color(s_wt_word, lv_color_hex(WTC_POOR));
+    }
+    set_text(s_wt_ssid, w->ssid);
+    snprintf(t, sizeof t, "ch %u%s  %.7s  %.15s", (unsigned)w->channel, w->ht40 ? "+" : "", w->phy, w->auth);
+    set_text(s_wt_l1, w->channel ? t : "");
+    wt_dur(d1, sizeof d1, w->join_s);
+    snprintf(t, sizeof t, "AP ..%02x:%02x:%02x  %s %s", w->bssid[3], w->bssid[4], w->bssid[5],
+             w->joined ? "joined" : "off", w->joined ? d1 : "");
+    set_text(s_wt_l2, w->channel ? t : "");
+    lv_obj_invalidate(s_wt_rchart);
+
+    /* PINGS: the router, the first host there is, the internet. */
+    s_wt_row[0] = WT_T_GW;
+    s_wt_row[1] = -1;
+    for (int i = WT_T_HOST; i < WT_T_HOST + WT_HOSTS; i++)
+        if (w->p[i].state != WT_P_OFF) { s_wt_row[1] = (int8_t)i; break; }
+    s_wt_row[2] = WT_T_NET;
+    for (int r = 0; r < WT_ROWS; r++) {
+        const int ti = s_wt_row[r];
+        /* The hosts' names run long: the row's name has the room the numbers
+         * leave, and with no host the whole row. */
+        lv_obj_set_width(s_wt_pname[r], ti < 0 ? 260 : r == 1 ? 150 : 160);
+        if (ti < 0) {
+            set_text(s_wt_pname[r], "no host: set one on the page");
+            set_text(s_wt_pstat[r], "");
+            lv_obj_invalidate(s_wt_pchart[r]);
+            continue;
+        }
+        const wt_ping_t *p = &w->p[ti];
+        if (ti == WT_T_GW) snprintf(t, sizeof t, "router %.15s", p->addr);
+        else if (ti == WT_T_NET) snprintf(t, sizeof t, "internet %.15s", p->addr);
+        else snprintf(t, sizeof t, "%.39s", p->name);
+        set_text(s_wt_pname[r], t);
+        uint32_t col = WTC_GOOD;
+        if (p->state == WT_P_FINDING) {
+            snprintf(t, sizeof t, "looking up");
+            col = 0x707884;
+        } else if (p->state == WT_P_NOTFOUND) {
+            snprintf(t, sizeof t, "not found");
+            col = WTC_FAIR;
+        } else if (!p->sent) {
+            snprintf(t, sizeof t, "-");
+            col = 0x707884;
+        } else if (!p->got) {
+            snprintf(t, sizeof t, "no answer");
+            col = WTC_POOR;
+        } else {
+            const unsigned pm = wt_loss_pm(p);
+            snprintf(t, sizeof t, "%u ms  %u.%u%%", wt_mean_ms(p), pm / 10, pm % 10);
+            col = pm >= 50 ? WTC_POOR : pm >= 10 || wt_mean_ms(p) > WT_LATE_MS ? WTC_FAIR : WTC_GOOD;
+        }
+        set_text(s_wt_pstat[r], t);
+        set_text_color(s_wt_pstat[r], lv_color_hex(col));
+        lv_obj_invalidate(s_wt_pchart[r]);
+    }
+
+    /* DROPS */
+    snprintf(t, sizeof t, "%u", (unsigned)w->drops);
+    set_text(s_wt_drops, t);
+    set_text_color(s_wt_drops, lv_color_hex(w->drops ? WTC_POOR : WTC_GOOD));
+    wt_dur(d1, sizeof d1, w->up_s);
+    snprintf(t, sizeof t, "drop%s in %s", w->drops == 1 ? "" : "s", d1);
+    set_text(s_wt_dsub, t);
+    snprintf(t, sizeof t, "roamed %u  beacons missed %u  silent %u", (unsigned)w->roams, (unsigned)w->beacons,
+             (unsigned)w->silences);
+    set_text(s_wt_dline, t);
+    int k = 0;
+    for (int i = 0; i < w->n_ev && k < WT_EV_LINES; i++) {
+        const wt_event_t *e = &w->ev[i];
+        if (e->kind == WT_EV_SCAN || e->kind == WT_EV_START) continue;
+        char when[12];
+        if (e->unix_s) {
+            struct tm tm;
+            const time_t tt = (time_t)e->unix_s;
+            localtime_r(&tt, &tm);
+            snprintf(when, sizeof when, "%02d:%02d", tm.tm_hour, tm.tm_min);
+        } else {
+            wt_dur(when, sizeof when, e->at_s);
+        }
+        snprintf(t, sizeof t, "%.11s  %.55s", when, e->what);
+        set_text(s_wt_ev[k], t);
+        set_text_color(s_wt_ev[k], e->kind == WT_EV_DROPPED ? lv_color_hex(WTC_POOR)
+                                   : e->kind == WT_EV_JOINED ? C_TEXT2 : lv_color_hex(WTC_FAIR));
+        k++;
+    }
+    if (!k) {
+        set_text(s_wt_ev[0], "nothing has happened");
+        set_text_color(s_wt_ev[0], C_LABEL);
+        k = 1;
+    }
+    for (; k < WT_EV_LINES; k++) set_text(s_wt_ev[k], "");
+
+    /* CHANNELS */
+    if (w->scanning) {
+        set_text(s_wt_c1, "scanning...");
+        set_text(s_wt_c2, "");
+    } else if (!w->scan_at_s) {
+        set_text(s_wt_c1, "not scanned yet");
+        set_text(s_wt_c2, "");
+    } else {
+        int near = 0, mine = 0;
+        for (int c = 1; c <= WT_CHANNELS; c++)
+            if (w->channel && c - w->channel < 5 && w->channel - c < 5) near += w->per_ch[c];
+        snprintf(t, sizeof t, "%u networks, %d near ch %u", (unsigned)w->n_heard, near, (unsigned)w->channel);
+        set_text(s_wt_c1, t);
+        int o = snprintf(t, sizeof t, "own APs:");
+        for (int i = 0; i < w->n_ap && o < (int)sizeof t; i++) {
+            if (!w->ap[i].ours) continue;
+            if (++mine > 3) break;
+            o += snprintf(t + o, sizeof t - o, "%s ch %u %d", mine > 1 ? "," : "", (unsigned)w->ap[i].channel,
+                          w->ap[i].rssi);
+        }
+        set_text(s_wt_c2, mine ? t : "");
+    }
+    lv_obj_invalidate(s_wt_chans);
+}
+
+static void wt_show(uint8_t page)
+{
+    s_wt_page = page % WT_PAGES;
+    for (int i = 0; i < WT_PAGES; i++) vis(s_wt_pg[i], i == s_wt_page);
+    wt_fill();
+}
+
+/* As the clock's: a pixel's step round the square every WT_SHIFT_MIN
+ * minutes -- by the knob's uptime, the time maybe unknown. */
+static void wt_shift(void)
+{
+    static const int8_t STEP[9][2] = {
+        { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 },
+    };
+    const int i = (int)(lv_tick_get() / 60000u / WT_SHIFT_MIN % 9);
+    if (STEP[i][0] == s_wt_dx && STEP[i][1] == s_wt_dy) return;
+    s_wt_dx = STEP[i][0];
+    s_wt_dy = STEP[i][1];
+    lv_obj_set_pos(s_wt_in, s_wt_dx, s_wt_dy);
+}
+
+static void wt_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    const int d = atomic_exchange(&s_wt_detents, 0);
+    if (d) wt_show((uint8_t)((s_wt_page + d % WT_PAGES + WT_PAGES) % WT_PAGES));
+    if (atomic_exchange(&s_wt_due, false)) {
+        taskENTER_CRITICAL(&s_wt_mux);
+        s_wt_d = s_wt_new;
+        taskEXIT_CRITICAL(&s_wt_mux);
+        s_wt_have = true;
+        if (!screen_hidden()) wt_fill();
+    }
+    if (!screen_hidden()) wt_shift();
+}
+
+static lv_obj_t *wt_page(void)
+{
+    lv_obj_t *p = lv_obj_create(s_wt_in);
+    lv_obj_remove_style_all(p);
+    lv_obj_set_size(p, 360, 360);
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    return p;
+}
+
+static void wt_build(void)
+{
+    s_wt = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_wt);
+    lv_obj_set_size(s_wt, 360, 360);
+    lv_obj_set_pos(s_wt, 0, 0);
+    lv_obj_set_style_bg_color(s_wt, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_wt, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_wt, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_wt, LV_OBJ_FLAG_SCROLLABLE);
+    s_wt_in = lv_obj_create(s_wt);
+    lv_obj_remove_style_all(s_wt_in);
+    lv_obj_set_size(s_wt_in, 360, 360);
+    lv_obj_remove_flag(s_wt_in, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_wt_in, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Over every page its name, above the knob's battery; the dots under it. */
+    s_wt_cap = wt_label(s_wt_in, &lv_font_montserrat_14, C_LABEL, 26, 0);
+    for (int i = 0; i < WT_PAGES; i++) {
+        lv_obj_t *o = lv_obj_create(s_wt_in);
+        lv_obj_remove_style_all(o);
+        lv_obj_set_size(o, 6, 6);
+        lv_obj_set_pos(o, 180 - 3 - 27 + i * 18, 63);
+        lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(o, C_DISABLED, 0);
+        lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+        s_wt_dot[i] = o;
+    }
+    s_wt_foot = wt_label(s_wt_in, &lv_font_montserrat_14, C_LABEL, 318, 232);
+    for (int i = 0; i < WT_PAGES; i++) s_wt_pg[i] = wt_page();
+
+    lv_obj_t *p = s_wt_pg[0];
+    s_wt_rssi   = wt_label(p, &lv_font_montserrat_48, C_TEXT, 108, 0);
+    s_wt_word   = wt_label(p, &lv_font_montserrat_20, C_TEXT2, 150, 0);
+    s_wt_rchart = wt_drawn(p, 60, 172, 240, 52, wt_rchart_cb, NULL);
+    s_wt_ssid   = wt_label(p, &lv_font_montserrat_14, C_TEXT, 246, 260);
+    s_wt_l1     = wt_label(p, &lv_font_montserrat_14, C_TEXT2, 266, 270);
+    s_wt_l2     = wt_label(p, &lv_font_montserrat_14, C_LABEL, 286, 260);
+
+    p = s_wt_pg[1];
+    for (int r = 0; r < WT_ROWS; r++) {
+        const int32_t y = 86 + r * 74;
+        s_wt_pname[r] = lv_label_create(p);
+        lv_obj_set_style_text_font(s_wt_pname[r], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_wt_pname[r], C_TEXT2, 0);
+        lv_obj_set_size(s_wt_pname[r], 160, lv_font_get_line_height(&lv_font_montserrat_14));
+        lv_label_set_long_mode(s_wt_pname[r], LV_LABEL_LONG_DOT);
+        lv_obj_set_pos(s_wt_pname[r], 50, y - 8);
+        s_wt_pstat[r] = lv_label_create(p);
+        lv_obj_set_style_text_font(s_wt_pstat[r], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_align(s_wt_pstat[r], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_size(s_wt_pstat[r], 100, lv_font_get_line_height(&lv_font_montserrat_14));
+        lv_obj_set_pos(s_wt_pstat[r], 210, y - 8);
+        lv_label_set_text(s_wt_pstat[r], "");
+        s_wt_pchart[r] = wt_drawn(p, 50, y + 12, 260, 34, wt_pchart_cb, (void *)(intptr_t)r);
+    }
+
+    p = s_wt_pg[2];
+    s_wt_drops = wt_label(p, &lv_font_montserrat_48, C_TEXT, 104, 0);
+    s_wt_dsub  = wt_label(p, &lv_font_montserrat_14, C_TEXT2, 144, 0);
+    s_wt_dline = wt_label(p, &lv_font_montserrat_14, C_LABEL, 166, 280);
+    for (int i = 0; i < WT_EV_LINES; i++) {
+        s_wt_ev[i] = lv_label_create(p);
+        lv_obj_set_style_text_font(s_wt_ev[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_wt_ev[i], C_TEXT2, 0);
+        lv_obj_set_size(s_wt_ev[i], 276, lv_font_get_line_height(&lv_font_montserrat_14));
+        lv_label_set_long_mode(s_wt_ev[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_pos(s_wt_ev[i], 42, 186 + i * 20);
+        lv_label_set_text(s_wt_ev[i], "");
+    }
+
+    p = s_wt_pg[3];
+    s_wt_chans = wt_drawn(p, 40, 82, 280, 156, wt_chans_cb, NULL);
+    s_wt_c1    = wt_label(p, &lv_font_montserrat_14, C_TEXT2, 260, 280);
+    s_wt_c2    = wt_label(p, &lv_font_montserrat_14, C_LABEL, 282, 270);
+
+    for (int r = 0; r < WT_ROWS; r++) s_wt_row[r] = -1;
+    wt_show(0);
+    lv_timer_create(wt_timer_cb, WT_TICK_MS, NULL);
+}
+
+void ui_wifitest_data(const wt_t *w)
+{
+    taskENTER_CRITICAL(&s_wt_mux);
+    s_wt_new = *w;
+    taskEXIT_CRITICAL(&s_wt_mux);
+    atomic_store(&s_wt_due, true);
+}
+
+void ui_wifitest_turn(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_wt_detents, (int)detents);
+}
+#endif /* WIFITEST_FACE */
+
+
 /* The faces that own the glass whole, with a gear at their foot for the
  * card and the picker: EpiBeam's compass, ADS-B Radar's radar -- and the
  * clock and the weather, the whole of their glass the gear. */
-#define GEAR_FACE (EPI_FACE || ADSB_FACE || CLOCK_FACE || WEATHER_FACE)
+#define GEAR_FACE (EPI_FACE || ADSB_FACE || CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE)
 __attribute__((unused)) static bool gear_at(lv_point_t p)
 {
 #if EPI_FACE
     return beam_gear_at(p);
 #elif ADSB_FACE
     return adsb_gear_at(p);
-#elif CLOCK_FACE || WEATHER_FACE
+#elif CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE
     (void)p;
     return true;
 #else
@@ -7092,6 +7608,12 @@ static void build(void)
     /* The weather, the same way: the battery between the time and the
      * place. */
     wx_build();
+    lv_obj_move_foreground(s_knob_batt);
+#endif
+#if WIFITEST_FACE
+    /* The WiFi Test, the same way: the battery between the page's name and
+     * its dots. */
+    wt_build();
     lv_obj_move_foreground(s_knob_batt);
 #endif
 
@@ -9337,6 +9859,9 @@ void ui_saver_text(char *big, size_t nb, char *small, size_t ns)
 #elif WEATHER_FACE
     label_copy(s_wx_temp, big, nb);
     label_copy(s_wx_cond, small, ns);
+#elif WIFITEST_FACE
+    label_copy(s_wt_rssi, big, nb);
+    label_copy(s_wt_word, small, ns);
 #elif CLOCK_FACE
     /* The time and the day, as the digital face has them. */
     struct tm lt;
