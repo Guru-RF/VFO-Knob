@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom openx6x00 jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather wifitest)
+set(_vfo_radios aethersdr icom openx6x00 openx6bt jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather wifitest)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -40,7 +40,9 @@ endif()
 # one may be built: two would be two definitions of everything in it.
 # openx6x00 is an X6100 or X6200 running the OpenX6X00 firmware, whose own TCI
 # server speaks what AetherSDR serves: the AetherSDR firmware's TCI client,
-# over WiFi. jupitersdr is the same client for Zeus SDR, whose station engine
+# over WiFi. openx6bt is the same radio and the same TCI over Bluetooth: an
+# RFCOMM link from the knob's second chip, the WebSocket over it (ws_bt).
+# jupitersdr is the same client for Zeus SDR, whose station engine
 # serves TCI too, on a computer driving an OpenHPSDR radio or a FlexRadio.
 # svxconnect is not a radio but an SvxLink reflector: its client speaks the
 # reflector protocol, and the dial picks talkgroups instead of frequencies.
@@ -64,7 +66,7 @@ endif()
 # wifitest is no radio either: it measures the WiFi network the knob is on --
 # the signal, every drop and why, pings to the router, the radios' hosts and
 # the internet -- for a knob whose links drop.
-if(VFO_RADIO MATCHES "^(aethersdr|openx6x00|jupitersdr)$")
+if(VFO_RADIO MATCHES "^(aethersdr|openx6x00|openx6bt|jupitersdr)$")
     set(_vfo_client tci_client)
 elseif(VFO_RADIO STREQUAL "svxconnect")
     set(_vfo_client svx_client)
@@ -123,6 +125,13 @@ endif()
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
 idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND)
+# openx6bt is OpenX6X00's firmware in all but the link: VFO_RADIO_OPENX6X00 as
+# well, and VFO_BT_RADIO for what is Bluetooth's -- the radio's link through
+# the second chip, which then carries no headset.
+if(VFO_RADIO STREQUAL "openx6bt")
+    idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_OPENX6X00=1" APPEND)
+    idf_build_set_property(COMPILE_DEFINITIONS "VFO_BT_RADIO=1" APPEND)
+endif()
 # Web SDRs as a second receiver (components/sdr_rx): for the radios with a
 # receiver of their own to set one beside -- not a reflector, nor AetherSDR,
 # which is an SDR already -- and beside an UberSDR, a KiwiSDR. The kiwi

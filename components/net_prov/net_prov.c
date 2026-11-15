@@ -203,6 +203,19 @@
 #define DEFAULT_PORT 8901            /* most WebSDRs' */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_OPENX6BT
+/* The same radios over Bluetooth: their addresses are Bluetooth's, so keys
+ * of their own -- the WiFi firmware's x6100.local is no address here. */
+#define KEY_HOST     "obhost"    /* the radio's Bluetooth address, aa:bb:cc:dd:ee:ff */
+#define KEY_RLIST    "oblist"    /* the radios, one in use: see below */
+#define KEY_RSEL     "obsel"
+#define KEY_PORT     "obport"    /* the RFCOMM channel if SDP finds none: the service's own */
+#define KEY_USER     "obuser"    /* unused */
+#define KEY_PASS     "obpass"
+#define DEFAULT_HOST ""              /* none chosen: found in the radio's pairing window, or on the page */
+#define DEFAULT_PORT 22              /* OpenX6X00's TCI over Bluetooth, its RFCOMM channel */
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_OPENX6X00
 #define KEY_HOST     "oxhost"
 #define KEY_RLIST    "oxlist"    /* the radios, one in use: see below */

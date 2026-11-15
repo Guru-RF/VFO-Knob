@@ -1,0 +1,14 @@
+# The openx6bt firmware: a Xiegu X6100 or X6200 running the OpenX6X00
+# firmware, over its TCI on Bluetooth (VFO_RADIO=openx6bt) -- the openx6x00
+# firmware's client, the WebSocket over an RFCOMM link from the knob's second
+# chip instead of TCP. WiFi stays, for the page and the updates.
+#
+# Without the USB networking of sdkconfig.usbnet, as openx6x00: the serial
+# console stays on the cable (the website's WiFi page uses it).
+
+# The web page's sockets, the log's, and a browser's.
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# AES in software, as every other firmware: the engine's DMA takes its bounce
+# buffers from internal RAM, and an update's download needs it to spare.
+CONFIG_MBEDTLS_HARDWARE_AES=n

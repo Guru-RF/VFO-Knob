@@ -2067,6 +2067,7 @@ static void svc_text(uint8_t v, char *s, size_t cap)
 {
     static const struct { uint8_t bit; const char *name; } SVC[] = {
         { BTL_SVC_A2DP, "a2dp" }, { BTL_SVC_HFP, "hfp" }, { BTL_SVC_HSP, "hsp" }, { BTL_SVC_AVRCP, "avrcp" },
+        { BTL_SVC_RADIO, "radio" },
     };
     size_t o = 0;
     s[0] = 0;
@@ -2154,6 +2155,64 @@ static int bt_update_json(char *j, size_t cap, const bt_link_status_t *st)
                     can_fetch ? "true" : "false");
 }
 
+#if VFO_BT_RADIO
+/* The openx6bt firmware's radio, for /api/bt: "radio":{...}, its link
+ * through the second chip as the chip last said.
+ *
+ *   can        the second chip carries a radio's link (its firmware's HELLO)
+ *   host       the radio chosen, its Bluetooth address: "" none yet
+ *   state      "closed", "looking" (its SDP), "connecting", "open"
+ *   why        the last link's end, or its failure: "" none
+ *   scn        the RFCOMM channel SDP found
+ *   opens      links opened since the second chip started
+ *   to, from   bytes to the radio and from it, this link
+ *   resends, gaps, dups   the chips' link's repairs since this one started */
+static int bt_radio_json(char *j, size_t cap)
+{
+    btl_radio_state_t st;
+    uint32_t          reports, resends, gaps, dups;
+    uint8_t           conn;
+    bt_link_radio_state(&st, &reports, &conn);
+    bt_link_radio_stats(&resends, &gaps, &dups);
+    static const char *const states[] = { "closed", "looking", "connecting", "open" };
+    static const char *const whys[]   = { "", "closed here", "closed by the radio, or out of range",
+                                          "no TCI over Bluetooth on it", "no answer", "refused, or not there",
+                                          "the second chip could not keep up", "the second chip was busy" };
+    char host[80];
+    json_esc(net_prov_cfg()->radio_host, host, sizeof host);
+    return snprintf(j, cap,
+                    "\"radio\":{\"can\":%s,\"host\":\"%s\",\"state\":\"%s\",\"why\":\"%s\",\"scn\":%u,"
+                    "\"opens\":%u,\"to\":%lu,\"from\":%lu,\"resends\":%lu,\"gaps\":%lu,\"dups\":%lu},",
+                    bt_link_radio_can() ? "true" : "false", host, st.state < 4 ? states[st.state] : "?",
+                    st.state == BTL_RS_IDLE && reports && st.why < 8 ? whys[st.why] : "", st.scn,
+                    (unsigned)st.opens, (unsigned long)st.to_radio, (unsigned long)st.from_radio,
+                    (unsigned long)resends, (unsigned long)gaps, (unsigned long)dups);
+}
+
+/* do=radio with bda=: that radio from now on -- kept, and the knob restarts
+ * into it. do=radio_forget: none, the one there unpaired on the second chip;
+ * the knob restarts and looks for one in its pairing window. */
+static esp_err_t bt_radio_choose(httpd_req_t *r, const uint8_t *bda)
+{
+    EXT_RAM_BSS_ATTR static vfo_cfg_t c;
+    c = *net_prov_cfg();
+    uint8_t old[6];
+    const bool had = bda_parse(c.radio_host, old);
+    if (bda) bda_text(bda, c.radio_host);
+    else     c.radio_host[0] = 0;
+    if (net_prov_save_cfg(&c) != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "not saved");
+    if (!bda && had) bt_link_forget(old);
+    ESP_LOGI(TAG, "bluetooth: the radio %s%s: restarting", bda ? "is " : "forgotten", bda ? c.radio_host : "");
+    ota_mark_valid();
+    net_prov_boot_ok();
+    send_json(r, "{\"ok\":true,\"restart\":true}");
+    const esp_timer_create_args_t a = { .callback = reboot_cb, .name = "wcreboot" };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&a, &t) == ESP_OK) esp_timer_start_once(t, 500 * 1000);
+    return ESP_OK;
+}
+#endif
+
 /* The headset or speaker, and what the last scan found.
  *
  *   speakers   the second chip plays to speakers (its HELLO says so); one
@@ -2225,6 +2284,9 @@ static esp_err_t bt_get_h(httpd_req_t *r)
                      st.hs.scanning ? "true" : "false", st.hs.spk, st.hs.mic, (unsigned long)st.presses,
                      (unsigned long)st.up_frames, bt_link_boom_ptt() ? "true" : "false");
     o += bt_update_json(j + o, sizeof j - o, &st);
+#if VFO_BT_RADIO
+    o += bt_radio_json(j + o, sizeof j - o);
+#endif
     o += snprintf(j + o, sizeof j - o, "\"known\":[");
     for (int i = 0; i < nk; i++) {
         json_esc(known[i].name, name, sizeof name);
@@ -2273,6 +2335,10 @@ static esp_err_t bt_post_h(httpd_req_t *r)
     uint8_t bda[6];
     const bool have = bda_parse(bs, bda);
     char what[12] = "";                         /* the choice, for the log */
+#if VFO_BT_RADIO
+    if (!strcmp(act, "radio") && have) return bt_radio_choose(r, bda);
+    if (!strcmp(act, "radio_forget"))  return bt_radio_choose(r, NULL);
+#endif
     if      (!strcmp(act, "scan"))               bt_link_scan(10);
     else if (!strcmp(act, "connect") && have)    bt_link_connect(bda);
     else if (!strcmp(act, "disconnect"))         bt_link_disconnect();

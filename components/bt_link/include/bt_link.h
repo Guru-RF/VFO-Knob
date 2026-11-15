@@ -275,4 +275,46 @@ void bt_link_update_stop(uint8_t why);
  * words, into `why`. */
 bool bt_link_update_blocked(const uint8_t app_sha[8], char *why, size_t cap);
 
+/* ---- a radio's serial link (the Bluetooth firmware's: VFO_BT_RADIO) ----
+ *
+ * The radio, not a headset, is the second chip's device: an RFCOMM link to a
+ * service of the radio's, found by its class UUID, its bytes carried both
+ * ways over the link between the chips (bt_link_proto.h's CMD_RADIO,
+ * bt_link_stream.h). The WebSocket over it is ws_bt's. Every call is safe
+ * from any task. */
+
+/* Radio mode, with the radio's service's class UUID (most significant byte
+ * first): said to the second chip now and after each of its hellos -- it then
+ * calls no headset nor speaker, and its scans mark the devices that list the
+ * service (BTL_SVC_RADIO). */
+void bt_link_radio_mode(const uint8_t uuid[16]);
+/* The second chip answers, and carries a radio's link (its hello's RADIO). */
+bool bt_link_radio_can(void);
+/* Asks for a link to bda -- its channel through SDP, else scn -- and returns
+ * the count the second chip's reports reach with the first one sent after
+ * this. That one, or a later one, says LOOKING or CONNECTING once the OPEN is
+ * taken (a report already on the wire may still say IDLE: wait for that
+ * first, and ask again if it does not come); an IDLE after it says the open
+ * failed, and why. 0, and nothing asked, when the second chip cannot. */
+uint32_t bt_link_radio_open(const uint8_t bda[6], uint8_t scn);
+/* The link closed, from this end. */
+void bt_link_radio_close(void);
+/* The link as the second chip last said, the count of its reports, and the
+ * number of the link the streams below are for: 0 while none is open. */
+void bt_link_radio_state(btl_radio_state_t *st, uint32_t *reports, uint8_t *conn);
+/* Up to n bytes to the radio on link conn: the count taken -- fewer, or 0,
+ * while the second chip has no room, and 0 for a link that is not the open
+ * one. */
+size_t bt_link_radio_write(uint8_t conn, const void *p, size_t n);
+/* Room for that many now. */
+size_t bt_link_radio_room(uint8_t conn);
+/* Up to max bytes from the radio on link conn: the count. */
+size_t bt_link_radio_read(uint8_t conn, void *out, size_t max);
+/* Called, on the link's task, as bytes come and as the link changes: the
+ * reader's wake-up. Reads only, quick. */
+void bt_link_radio_set_cb(void (*cb)(void));
+/* The streams' repairs since the start: frames sent again, and frames the
+ * knob's end dropped (past a gap, or had already). */
+void bt_link_radio_stats(uint32_t *resends, uint32_t *gaps, uint32_t *dups);
+
 #endif /* BT_LINK_H */

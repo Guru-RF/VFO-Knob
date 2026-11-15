@@ -12,6 +12,7 @@
 #include "hfp.h"
 #include "link.h"
 #include "nvs_flash.h"
+#include "radio.h"
 #include "upd.h"
 
 static const char *TAG = "companion";
@@ -36,7 +37,7 @@ static void hello(bool ask)
     uint8_t p[40];
     p[0] = BTL_PROTO;
     p[1] = (ask ? BTL_HELLO_ASK : 0) | (upd_can_take() ? BTL_HELLO_UPDATE : 0) | BTL_HELLO_SPEAKERS |
-           BTL_HELLO_AV_VOLUME;
+           BTL_HELLO_AV_VOLUME | BTL_HELLO_RADIO;
     const size_t n = strnlen(v, 32);          /* esp_app_desc_t's version[32] */
     memcpy(p + 2, v, n);
     link_send(BTL_HELLO, p, (uint16_t)(2 + n));
@@ -66,6 +67,7 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
             link_log("the knob says hello: protocol %u, %.*s", p[0], n - 2, (const char *)p + 2);
             hello(false);
             hfp_knob_hello();
+            radio_knob_hello();
         }
         /* What it can do, in every hello: a knob that does not say it keeps
          * its own microphone while a speaker plays is given no speaker --
@@ -79,6 +81,11 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
     }
     case BTL_PING:
         link_send(BTL_PONG, p, n);
+        break;
+    case BTL_CMD_RADIO:
+    case BTL_RS_DATA:
+    case BTL_RS_ACK:
+        radio_on_frame(type, p, n);
         break;
     case BTL_UPD_BEGIN:
     case BTL_UPD_DATA:
@@ -110,6 +117,7 @@ void app_main(void)
     upd_boot();
     link_init(on_frame);
     hfp_init();
+    radio_init();
     s_ready = true;                           /* the knob's frames, from here on */
     /* Hello until the knob answers -- it may have started first, or later --
      * and the device's errands meanwhile; and a firmware on trial's: the

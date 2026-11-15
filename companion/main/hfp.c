@@ -45,6 +45,7 @@
 #include "kind.h"
 #include "link.h"
 #include "nvs.h"
+#include "radio.h"
 #include "rs.h"
 #include "upd.h"
 #include "bta/bta_ag_api.h"
@@ -178,6 +179,7 @@ static void narrow_set(const uint8_t *bda)
     if (h) BTA_AgSetCodec(h, BTA_AG_CODEC_CVSD);
 }
 static bool s_hold;                         /* an update coming in: the device not called (s_mx) */
+static bool s_radio;                        /* radio mode (radio.c): no device called (s_mx) */
 
 #define LOCK()   xSemaphoreTake(s_mx, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_mx)
@@ -624,8 +626,9 @@ static void on_found(const esp_bt_gap_cb_param_t *p)
                 memcpy(eir_name, nm, n);
                 eir_name[n] = 0;
             }
-            /* The services it lists: what it is, beside its class. */
-            f->svc = kind_eir_services(q->val);
+            /* The services it lists: what it is, beside its class -- and,
+             * for a knob looking for its radio, the radio's service. */
+            f->svc = kind_eir_services(q->val) | radio_eir_svc(q->val);
             break;
         }
         default:
@@ -644,7 +647,7 @@ static bool ask_next_name(void)
 {
     for (; s_name_next < s_nfound; s_name_next++) {
         btl_found_t *f = &s_found[s_name_next];
-        if (!f->name[0] && (found_audio(f) || f->kind == BTL_KIND_SPEAKER)) {
+        if (!f->name[0] && (found_audio(f) || f->kind == BTL_KIND_SPEAKER || (f->svc & BTL_SVC_RADIO) || s_radio)) {
             esp_bt_gap_read_remote_name(f->bda);
             s_name_next++;
             return true;
@@ -717,14 +720,16 @@ static void gap_cb(esp_bt_gap_cb_event_t ev, esp_bt_gap_cb_param_t *p)
             link_log("paired with %s (%s)", p->auth_cmpl.device_name, bda_str(p->auth_cmpl.bda, b));
         else
             link_log("pairing with %s failed: %d", bda_str(p->auth_cmpl.bda, b), p->auth_cmpl.stat);
+        radio_paired(p->auth_cmpl.bda, p->auth_cmpl.stat);
         break;
     case ESP_BT_GAP_CFM_REQ_EVT: {
         /* Just Works: neither side has a screen. Only the headset we call,
-         * or the one we know. */
+         * or the one we know -- or the radio a link is asked to. */
         bool ok;
         LOCK();
         ok = (S.have && same(p->cfm_req.bda, S.bda)) || (S.remembered && same(p->cfm_req.bda, S.mem));
         UNLOCK();
+        ok = ok || radio_owns(p->cfm_req.bda);
         esp_bt_gap_ssp_confirm_reply(p->cfm_req.bda, ok);
         if (!ok) link_log("pairing refused: %s", bda_str(p->cfm_req.bda, b));
         break;
@@ -1991,6 +1996,35 @@ void hfp_hold(bool on)
     UNLOCK();
 }
 
+void hfp_radio(bool on)
+{
+    LOCK();
+    const bool was = s_radio;
+    s_radio = on;
+    bool hf = false, av = false;
+    esp_bd_addr_t bda, av_bda;
+    if (on && !was) {
+        /* The device in hand let go: its pairing stays, and radio mode off
+         * calls it again. */
+        hf = S.link != BTL_LINK_IDLE && S.have;
+        av = S.av != BTL_LINK_IDLE;
+        memcpy(bda, S.bda, 6);
+        memcpy(av_bda, S.av_conn, 6);
+        if (hf) call_down();
+    }
+    if (!on && was) {
+        const int64_t soon = esp_timer_get_time() + 1000000;
+        if (S.next_page_us < soon) S.next_page_us = soon;
+    }
+    const bool remembered = S.remembered;
+    UNLOCK();
+    if (hf) esp_hf_ag_slc_disconnect(bda);
+    if (av) a2dp_disconnect(av_bda);
+    /* Nor does a headset that knows this chip call it meanwhile. */
+    esp_bt_gap_set_scan_mode(!on && remembered ? ESP_BT_CONNECTABLE : ESP_BT_NON_CONNECTABLE,
+                             ESP_BT_NON_DISCOVERABLE);
+}
+
 bool hfp_audio_open(void)
 {
     LOCK();
@@ -2067,7 +2101,7 @@ void hfp_tick(void)
      * not while an update comes in: the transfer would only stop for it. A
      * headset on its hands-free link; a speaker on A2DP, once the knob has
      * said it knows speakers. */
-    if (S.have && !S.scanning && !S.user_off && now >= S.next_page_us && !s_hold) {
+    if (S.have && !S.scanning && !S.user_off && now >= S.next_page_us && !s_hold && !s_radio) {
         if (!spk && S.link == BTL_LINK_IDLE) {
             S.link         = BTL_LINK_CONNECTING;
             memcpy(S.conn, S.bda, 6);

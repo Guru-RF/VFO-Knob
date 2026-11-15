@@ -46,6 +46,9 @@ bool hfp_try_hold(void);
 /* Off: a call that came due meanwhile goes out a second later. */
 void hfp_hold(bool on);
 /* The device's audio is open: a headset's call, or a speaker's stream. */
+/* Radio mode (radio.c): no headset nor speaker is called, and the one
+ * connected is let go; off, the remembered one is called again. */
+void hfp_radio(bool on);
 bool hfp_audio_open(void);
 
 #endif /* HFP_H */

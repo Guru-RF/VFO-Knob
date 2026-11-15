@@ -43,10 +43,12 @@
  * and HELLO's SPEAKERS; 4 a speaker's own volume -- AVRCP's absolute volume:
  * CMD_AV_VOLUME, AUDIO_DN_FULL, HELLO's AV_VOLUME, and the state's av
  * fields, appended; 5 the device's battery, as it reports it: the state's
- * batt fields, appended. Each side only logs the other's: neither ever
+ * batt fields, appended; 6 a radio's serial link instead of a device:
+ * HELLO's RADIO, CMD_RADIO, EVT_RADIO, RS_DATA and RS_ACK, the found
+ * device's BTL_SVC_RADIO. Each side only logs the other's: neither ever
  * refuses a peer for it, and each ignores the types and the flag bits it
  * does not know, and the bytes past the end of a structure it knows. */
-#define BTL_PROTO       5
+#define BTL_PROTO       6
 
 enum {
     /* either way */
@@ -71,6 +73,7 @@ enum {
                                   most), and every 5 s while a speaker takes it. The companion
                                   keeps it, and sets each speaker that takes it as it comes; the
                                   same value again is no news -- only a reminder, for one lost */
+    BTL_CMD_RADIO    = 0x1A,   /* btl_radio_cmd_t: a radio's serial link instead of a device (protocol 6) */
 
     /* companion -> knob */
     BTL_EVT_FOUND    = 0x20,   /* btl_found_t: a device the scan found */
@@ -79,6 +82,7 @@ enum {
     BTL_EVT_BUTTON   = 0x23,   /* u8 BTL_BTN_*: a headset's button, as it says it */
     BTL_EVT_VOLUME   = 0x24,   /* u8 speaker, u8 mic: the headset's own change */
     BTL_EVT_LOG      = 0x25,   /* text: the companion's log, for the knob's */
+    BTL_EVT_RADIO    = 0x26,   /* btl_radio_state_t: after each CMD_RADIO, and as the link changes */
 
     /* audio */
     BTL_AUDIO_DN     = 0x30,   /* knob -> headset's ear */
@@ -88,6 +92,14 @@ enum {
                                   it to that speaker only, and drops it for anything else -- a
                                   headset, a speaker it no longer sets -- rather than play it
                                   at full level there */
+
+    /* A radio's serial stream, either way: the bytes of an RFCOMM link to a
+     * radio, as bt_link_stream.h carries them -- each byte once, in order,
+     * whatever a frame lost on the wire costs. conn is the link's number in
+     * EVT_RADIO: a frame of another is dropped. */
+    BTL_RS_DATA      = 0x50,   /* u8 conn, u32 offset LE, then 1..BTL_RS_CHUNK bytes from there */
+    BTL_RS_ACK       = 0x51,   /* u8 conn, u32 next LE: all before it taken; u16 room LE: and as
+                                  many after it as the receiver takes now */
 
     /* The second chip's own firmware (companion/main/upd.c). Frozen once a
      * knob ships: only new types, new flag bits, or fields appended at the end
@@ -122,8 +134,13 @@ enum {
  * volume when the knob says (CMD_AV_VOLUME), and takes AUDIO_DN_FULL. The
  * knob's: it sends both to a speaker that takes them. Without it on either
  * side, a speaker's own controls set its volume and the knob scales what it
- * sends, as before: a companion never sets a speaker's volume unasked. */
-enum { BTL_HELLO_ASK = 1, BTL_HELLO_UPDATE = 2, BTL_HELLO_SPEAKERS = 4, BTL_HELLO_AV_VOLUME = 8 };
+ * sends, as before: a companion never sets a speaker's volume unasked.
+ *
+ * RADIO, the companion's: it carries a radio's serial link (CMD_RADIO). A
+ * knob whose firmware reaches its radio so has a second chip without it
+ * updated first. */
+enum { BTL_HELLO_ASK = 1, BTL_HELLO_UPDATE = 2, BTL_HELLO_SPEAKERS = 4, BTL_HELLO_AV_VOLUME = 8,
+       BTL_HELLO_RADIO = 16 };
 
 /* What the device's link is doing: a headset's hands-free link, a speaker's
  * A2DP. */
@@ -145,7 +162,9 @@ enum {
 };
 /* A device's services, as the companion knows them: from the list its scan
  * answer (EIR) carries -- KNOWN when that list was the complete one. */
-enum { BTL_SVC_HFP = 1, BTL_SVC_HSP = 2, BTL_SVC_A2DP = 4, BTL_SVC_AVRCP = 8, BTL_SVC_KNOWN = 0x80 };
+enum { BTL_SVC_HFP = 1, BTL_SVC_HSP = 2, BTL_SVC_A2DP = 4, BTL_SVC_AVRCP = 8,
+       BTL_SVC_RADIO = 0x10,   /* CMD_RADIO's service UUID among its 128-bit ones (protocol 6) */
+       BTL_SVC_KNOWN = 0x80 };
 
 /* A speaker's own volume -- AVRCP's absolute volume (1.4 on), its source
  * setting the speaker's own amplifier -- in the state's av. */
@@ -229,6 +248,64 @@ typedef struct __attribute__((packed)) {
     uint8_t  kind_why;         /* BTL_KWHY_* */
     uint8_t  svc;              /* BTL_SVC_* */
 } btl_found_t;                 /* 46 */
+
+/* ---- a radio's serial link (protocol 6) ---------------------------------
+ *
+ * The knob's firmware for a radio it reaches over Bluetooth (openx6bt): an
+ * RFCOMM link from the second chip to a service of the radio's, found by its
+ * class UUID through SDP, whose bytes go both ways as RS_DATA. While the
+ * knob has radio mode on, the second chip calls no headset nor speaker, and
+ * lets go of the one it has.
+ *
+ * OPEN asks for one link: the channel through SDP -- the one given, should
+ * SDP not say -- then the link, pairing first if need be (Just Works, for
+ * this radio only). EVT_RADIO says how it went. Once closed, from either end
+ * or by the air, it stays closed until the next OPEN: the knob owns the
+ * retrying. */
+enum {
+    BTL_RADIO_OFF = 0,         /* no radio: headsets and speakers as before; any link closed */
+    BTL_RADIO_ON,              /* radio mode, no link yet: uuid is what a scan marks BTL_SVC_RADIO */
+    BTL_RADIO_OPEN,            /* radio mode, and a link to bda's service uuid */
+    BTL_RADIO_CLOSE,           /* the link closed; radio mode stays */
+};
+typedef struct __attribute__((packed)) {
+    uint8_t  op;               /* BTL_RADIO_* */
+    uint8_t  bda[6];           /* OPEN: the radio */
+    uint8_t  uuid[16];         /* ON, OPEN: the service's class UUID, as written (most significant byte first) */
+    uint8_t  scn;              /* OPEN: its RFCOMM channel, should SDP not say; 0 none */
+} btl_radio_cmd_t;             /* 24 */
+
+/* EVT_RADIO's state. */
+enum {
+    BTL_RS_IDLE = 0,           /* no link */
+    BTL_RS_LOOKING,            /* asking the radio's SDP for the channel */
+    BTL_RS_CONNECTING,         /* pairing if need be, and opening the channel */
+    BTL_RS_OPEN,               /* RS_DATA flows, numbered conn */
+};
+/* Why the last link ended, or never opened. */
+enum {
+    BTL_RSWHY_NONE = 0,
+    BTL_RSWHY_KNOB,            /* the knob's CLOSE or OFF */
+    BTL_RSWHY_REMOTE,          /* closed from the radio's end, or by the air */
+    BTL_RSWHY_NO_SERVICE,      /* its SDP has no such service, and no channel was given */
+    BTL_RSWHY_SDP,             /* its SDP did not answer: away, or switched off (err) */
+    BTL_RSWHY_REFUSED,         /* the channel would not open: not paired, refused, or away (err) */
+    BTL_RSWHY_OVERFLOW,        /* more came from the radio than the knob could take */
+    BTL_RSWHY_BUSY,            /* the stack had no room for it (err) */
+};
+typedef struct __attribute__((packed)) {
+    uint8_t  mode;             /* radio mode on */
+    uint8_t  state;            /* BTL_RS_* */
+    uint8_t  conn;             /* the link's number, 1-255, while OPEN -- and the last one's after */
+    uint8_t  bda[6];           /* the radio OPEN named, or zeros */
+    uint8_t  scn;              /* the channel, once known */
+    uint8_t  why;              /* BTL_RSWHY_*, the last link's */
+    int16_t  err;              /* the stack's status with it */
+    uint16_t opens;            /* links opened since the chip started */
+    uint32_t to_radio, from_radio;   /* bytes, since the chip started */
+} btl_radio_state_t;           /* 23 */
+
+#define BTL_RS_CHUNK (BTL_MAX_PAYLOAD - 5)  /* RS_DATA's bytes, at most */
 
 /* ---- the second chip's own firmware ------------------------------------
  *
@@ -320,6 +397,7 @@ _Static_assert(4 + BTL_UPD_CHUNK == BTL_MAX_PAYLOAD, "DATA fills a frame");
  * bytes, one before 4 the state's first 50, one before 5 its first 53, and
  * one from it on finds zeros past what an older side sent. */
 _Static_assert(sizeof(btl_state_t) == 55 && sizeof(btl_found_t) == 46, "appended only");
+_Static_assert(sizeof(btl_radio_cmd_t) == 24 && sizeof(btl_radio_state_t) == 23, "appended only");
 
 /* CRC-16/CCITT-FALSE. */
 static inline uint16_t btl_crc16(uint16_t crc, const uint8_t *p, size_t n)

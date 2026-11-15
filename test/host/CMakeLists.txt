@@ -186,6 +186,15 @@ target_link_libraries(test_bt_known PRIVATE bt_known)
 target_compile_options(test_bt_known PRIVATE -Wall -Wextra)
 add_test(NAME test_bt_known COMMAND test_bt_known)
 
+# A radio's byte stream between the two chips
+# (components/bt_link/include/bt_link_stream.h, both chips' code): every byte
+# once and in order through a wire that loses, doubles and delays frames,
+# never past the receiver's room.
+add_executable(test_bt_stream src/test_bt_stream.c)
+target_include_directories(test_bt_stream PRIVATE ${BTLINK}/include)
+target_compile_options(test_bt_stream PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME test_bt_stream COMMAND test_bt_stream)
+
 # The jack's level (components/audio/jack_level.c): pure C -- its steps and
 # gains, the block it holds back, and a loud passage turned down ahead of it
 # rather than clipped, both ears alike.

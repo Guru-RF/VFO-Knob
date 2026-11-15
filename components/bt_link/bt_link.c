@@ -213,8 +213,11 @@ static void send_audio(void)
     send(BTL_CMD_AUDIO, a, sizeof a);
 }
 
+static void radio_push(void);
+
 static void push_config(void)
 {
+    radio_push();
     send_audio();
     const uint8_t m = s_mic;
     send(BTL_CMD_MIC, &m, 1);
@@ -1108,6 +1111,276 @@ static bool upd_quick(void)
     return U.ph == U_BEGIN || U.ph == U_SEND || U.ph == U_END;
 }
 
+#if VFO_BT_RADIO
+/* ---- a radio's serial link (bt_link.h) ----------------------------------
+ *
+ * Its streams' rings in PSRAM, everything here under s_rmx: the link's task
+ * hears the second chip, the WebSocket's task reads, the client's tasks
+ * write. Nothing waits under it but the UART's ring, a frame's worth. */
+#include "bt_link_stream.h"
+
+#define RS_RING (1 << 14)         /* each way */
+
+static SemaphoreHandle_t s_rmx;
+static btl_rs_tx_t       s_rs_tx; /* to the radio */
+static btl_rs_rx_t       s_rs_rx; /* from it */
+static struct {
+    bool              mode;       /* radio mode asked */
+    uint8_t           uuid[16];
+    btl_radio_state_t st;         /* as the second chip last said */
+    uint32_t          reports;    /* its EVT_RADIOs heard */
+    uint8_t           conn;       /* the link the streams are for: 0 none open */
+    uint8_t           closed;     /* ...the last one closed here: a report of it open, sent
+                                     before the CLOSE got there, does not bring it back */
+} s_r;
+static void (*volatile s_radio_cb)(void);
+
+#define RLOCK()   xSemaphoreTake(s_rmx, portMAX_DELAY)
+#define RUNLOCK() xSemaphoreGive(s_rmx)
+
+static bool rs_send(void *ctx, uint8_t type, const void *p, uint16_t n)
+{
+    (void)ctx;
+    return send(type, p, n);
+}
+
+static void radio_poke(void)
+{
+    void (*cb)(void) = s_radio_cb;
+    if (cb) cb();
+}
+
+/* Radio mode to the second chip: as asked, after each of its hellos. */
+static void radio_push(void)
+{
+    if (!s_rmx) return;
+    btl_radio_cmd_t c = { .op = BTL_RADIO_ON };
+    RLOCK();
+    const bool mode = s_r.mode;
+    memcpy(c.uuid, s_r.uuid, 16);
+    RUNLOCK();
+    if (mode) send(BTL_CMD_RADIO, &c, sizeof c);
+}
+
+/* The link gone, however: the streams with it. (s_rmx.) */
+static void radio_down_locked(void)
+{
+    s_r.conn = 0;
+    if (s_r.st.state != BTL_RS_IDLE) {
+        s_r.st.state = BTL_RS_IDLE;
+        s_r.reports++;
+    }
+}
+
+static void radio_gone(void)
+{
+    if (!s_rmx) return;
+    RLOCK();
+    radio_down_locked();
+    RUNLOCK();
+    radio_poke();
+}
+
+static const char *rs_state_str(uint8_t st)
+{
+    switch (st) {
+    case BTL_RS_IDLE:       return "closed";
+    case BTL_RS_LOOKING:    return "looking for the radio's service";
+    case BTL_RS_CONNECTING: return "connecting";
+    case BTL_RS_OPEN:       return "open";
+    default:                return "?";
+    }
+}
+
+static void radio_on_state(const uint8_t *p, uint16_t n)
+{
+    if (!s_rmx) return;
+    btl_radio_state_t st = { 0 };
+    memcpy(&st, p, n < sizeof st ? n : sizeof st);
+    RLOCK();
+    const uint8_t was = s_r.st.state;
+    s_r.st = st;
+    s_r.reports++;
+    if (st.state == BTL_RS_OPEN && st.conn != s_r.conn && st.conn != s_r.closed) {
+        /* A new link: both streams from 0. */
+        s_r.conn = st.conn;
+        btl_rs_tx_reset(&s_rs_tx);
+        btl_rs_rx_reset(&s_rs_rx);
+    } else if (st.state != BTL_RS_OPEN) {
+        s_r.conn = 0;
+    }
+    RUNLOCK();
+    if (st.state != was)
+        ESP_LOGI(TAG, "radio link %u: %s%s%s", st.conn, rs_state_str(st.state),
+                 st.state == BTL_RS_IDLE && st.why ? ", why " : "",
+                 st.state == BTL_RS_IDLE && st.why ? (st.why == BTL_RSWHY_KNOB ? "closed here"
+                                                     : st.why == BTL_RSWHY_REMOTE ? "the radio or the air"
+                                                     : st.why == BTL_RSWHY_NO_SERVICE ? "no such service"
+                                                     : st.why == BTL_RSWHY_SDP ? "no answer"
+                                                     : st.why == BTL_RSWHY_REFUSED ? "refused or away"
+                                                     : st.why == BTL_RSWHY_OVERFLOW ? "overflow"
+                                                     : "busy") : "");
+    radio_poke();
+}
+
+static void radio_on_data(uint8_t type, const uint8_t *p, uint16_t n)
+{
+    if (!s_rmx) return;
+    RLOCK();
+    if (type == BTL_RS_DATA) {
+        uint8_t  conn;
+        uint32_t off;
+        if (btl_rs_parse_data(p, n, &conn, &off) && conn && conn == s_r.conn)
+            btl_rs_rx_data(&s_rs_rx, off, p + 5, n - 5u);
+    } else {
+        uint8_t  conn;
+        uint32_t next;
+        uint16_t room;
+        if (btl_rs_parse_ack(p, n, &conn, &next, &room) && conn && conn == s_r.conn) {
+            const int64_t now = esp_timer_get_time();
+            btl_rs_tx_ack(&s_rs_tx, next, room, now);
+            btl_rs_tx_pump(&s_rs_tx, s_r.conn, now, rs_send, NULL);   /* the room it made */
+        }
+    }
+    RUNLOCK();
+    if (type == BTL_RS_DATA) radio_poke();
+}
+
+/* The link's task, every pass: what is owed each way -- acknowledgements,
+ * and what is to be sent again. */
+static void radio_pass(int64_t now)
+{
+    if (!s_rmx) return;
+    RLOCK();
+    if (s_r.conn) {
+        btl_rs_rx_pump(&s_rs_rx, s_r.conn, now, rs_send, NULL);
+        btl_rs_tx_pump(&s_rs_tx, s_r.conn, now, rs_send, NULL);
+    }
+    RUNLOCK();
+}
+
+static bool radio_quick(void) { return s_rmx && s_r.conn; }
+
+void bt_link_radio_mode(const uint8_t uuid[16])
+{
+    if (!s_rmx) {
+        s_rmx = xSemaphoreCreateMutex();
+        s_rs_tx.buf = heap_caps_malloc(RS_RING, MALLOC_CAP_SPIRAM);
+        s_rs_rx.buf = heap_caps_malloc(RS_RING, MALLOC_CAP_SPIRAM);
+        s_rs_tx.cap = s_rs_rx.cap = RS_RING;
+        if (!s_rmx || !s_rs_tx.buf || !s_rs_rx.buf) {
+            ESP_LOGE(TAG, "no memory for the radio's link");
+            return;
+        }
+    }
+    RLOCK();
+    s_r.mode = true;
+    memcpy(s_r.uuid, uuid, 16);
+    RUNLOCK();
+    radio_push();
+}
+
+bool bt_link_radio_can(void)
+{
+    taskENTER_CRITICAL(&s_lock);
+    const bool can = s_st.companion && (s_st.flags & BTL_HELLO_RADIO);
+    taskEXIT_CRITICAL(&s_lock);
+    return can && s_rmx;
+}
+
+uint32_t bt_link_radio_open(const uint8_t bda[6], uint8_t scn)
+{
+    if (!bt_link_radio_can()) return 0;
+    btl_radio_cmd_t c = { .op = BTL_RADIO_OPEN, .scn = scn };
+    memcpy(c.bda, bda, 6);
+    RLOCK();
+    memcpy(c.uuid, s_r.uuid, 16);
+    const uint32_t reports = s_r.reports;
+    RUNLOCK();
+    send(BTL_CMD_RADIO, &c, sizeof c);
+    return reports + 1;
+}
+
+void bt_link_radio_close(void)
+{
+    if (!s_rmx) return;
+    const btl_radio_cmd_t c = { .op = BTL_RADIO_CLOSE };
+    RLOCK();
+    if (s_r.conn) s_r.closed = s_r.conn;
+    s_r.conn = 0;                     /* nothing more on it from here */
+    RUNLOCK();
+    send(BTL_CMD_RADIO, &c, sizeof c);
+}
+
+void bt_link_radio_state(btl_radio_state_t *st, uint32_t *reports, uint8_t *conn)
+{
+    if (!s_rmx) {
+        if (st) memset(st, 0, sizeof *st);
+        if (reports) *reports = 0;
+        if (conn) *conn = 0;
+        return;
+    }
+    RLOCK();
+    if (st) *st = s_r.st;
+    if (reports) *reports = s_r.reports;
+    if (conn) *conn = s_r.conn;
+    RUNLOCK();
+}
+
+size_t bt_link_radio_write(uint8_t conn, const void *p, size_t n)
+{
+    if (!s_rmx || !conn) return 0;
+    RLOCK();
+    size_t took = 0;
+    if (conn == s_r.conn) {
+        took = btl_rs_tx_put(&s_rs_tx, p, (uint32_t)n);
+        btl_rs_tx_pump(&s_rs_tx, conn, esp_timer_get_time(), rs_send, NULL);
+    }
+    RUNLOCK();
+    return took;
+}
+
+size_t bt_link_radio_room(uint8_t conn)
+{
+    if (!s_rmx || !conn) return 0;
+    RLOCK();
+    const size_t room = conn == s_r.conn ? btl_rs_tx_free(&s_rs_tx) : 0;
+    RUNLOCK();
+    return room;
+}
+
+size_t bt_link_radio_read(uint8_t conn, void *out, size_t max)
+{
+    if (!s_rmx || !conn) return 0;
+    RLOCK();
+    const size_t n = conn == s_r.conn ? btl_rs_rx_read(&s_rs_rx, out, (uint32_t)max) : 0;
+    RUNLOCK();
+    return n;
+}
+
+void bt_link_radio_set_cb(void (*cb)(void)) { s_radio_cb = cb; }
+
+void bt_link_radio_stats(uint32_t *resends, uint32_t *gaps, uint32_t *dups)
+{
+    if (!s_rmx) {
+        *resends = *gaps = *dups = 0;
+        return;
+    }
+    RLOCK();
+    *resends = s_rs_tx.resends;
+    *gaps    = s_rs_rx.gaps;
+    *dups    = s_rs_rx.dups;
+    RUNLOCK();
+}
+#else
+static void radio_push(void) {}
+static void radio_gone(void) {}
+static void radio_on_state(const uint8_t *p, uint16_t n) { (void)p; (void)n; }
+static void radio_on_data(uint8_t type, const uint8_t *p, uint16_t n) { (void)type; (void)p; (void)n; }
+static void radio_pass(int64_t now) { (void)now; }
+static bool radio_quick(void) { return false; }
+#endif
+
 static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
 {
     const int64_t now = esp_timer_get_time();
@@ -1131,13 +1404,16 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
         /* The knob's VOLUME, for a speaker's own: said again (av_pass). */
         s_av.sent = 0xFF;
         taskEXIT_CRITICAL(&s_lock);
-        if (first || ask) ESP_LOGI(TAG, "the companion %s: protocol %u, %s%s%s%s", ask ? "started" : "answers",
+        if (first || ask) ESP_LOGI(TAG, "the companion %s: protocol %u, %s%s%s%s%s", ask ? "started" : "answers",
                                    n ? p[0] : 0, v, (flags & BTL_HELLO_UPDATE) ? ", takes updates" : "",
                                    (flags & BTL_HELLO_SPEAKERS) ? ", plays to speakers" : "",
-                                   (flags & BTL_HELLO_AV_VOLUME) ? ", sets their volume" : "");
+                                   (flags & BTL_HELLO_AV_VOLUME) ? ", sets their volume" : "",
+                                   (flags & BTL_HELLO_RADIO) ? ", carries a radio's link" : "");
         if (ask) {
             hello(false);
             upd_chip_started(now);
+            /* Restarted: a radio's link it had is gone with it. */
+            radio_gone();
         }
         push_config();
         break;
@@ -1201,6 +1477,13 @@ static void on_frame(uint8_t type, const uint8_t *p, uint16_t n)
             s_st.up_frames++;
         }
         break;
+    case BTL_EVT_RADIO:
+        radio_on_state(p, n);
+        break;
+    case BTL_RS_DATA:
+    case BTL_RS_ACK:
+        radio_on_data(type, p, n);
+        break;
     case BTL_UPD_STATUS:
         on_status(p, n);
         break;
@@ -1245,7 +1528,9 @@ static void link_task(void *arg)
     int64_t t_hello = 0, t_ping = 0;
     uint32_t seq = 0;
     for (;;) {
-        const int n = uart_read_bytes(LINK_UART, chunk, 512, pdMS_TO_TICKS(upd_quick() ? 2 : 20));
+        /* An update's ACKs, or a radio's stream: no frame's tail left
+         * waiting on the wire's timeout. */
+        const int n = uart_read_bytes(LINK_UART, chunk, 512, pdMS_TO_TICKS(upd_quick() ? 2 : radio_quick() ? 5 : 20));
         for (int i = 0; i < n; i++)
             if (btl_rx_put(s_rx, chunk[i])) on_frame(s_rx->type, s_rx->buf, s_rx->len);
         const int64_t now = esp_timer_get_time();
@@ -1286,7 +1571,9 @@ static void link_task(void *arg)
             static const btl_state_t none;
             device(&none);
             if (upd_quick()) stopped(BT_UPD_WHY_GONE, true, now);
+            radio_gone();
         }
+        radio_pass(now);
         av_pass(now);
         upd_pass(now);
     }

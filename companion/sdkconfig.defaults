@@ -31,6 +31,11 @@ CONFIG_BT_HFP_WBS_ENABLE=y
 # bring an OBEX client along.
 CONFIG_BT_A2DP_ENABLE=y
 CONFIG_BT_AVRCP_CT_COVER_ART_ENABLED=n
+# A radio's serial link (main/radio.c): an RFCOMM link to a service of the
+# radio's, its channel asked of the radio's SDP by the service's class UUID --
+# the knob's firmware for an OpenX6X00 radio over Bluetooth.
+CONFIG_BT_SPP_ENABLED=y
+CONFIG_BT_SDP_COMMON_ENABLED=y
 
 # The knob updates this chip over the UART (main/upd.c). The bootloader is
 # written once, at the bench, never over the link (CMakeLists.txt refuses a

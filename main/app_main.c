@@ -103,6 +103,10 @@
 #if VFO_RADIO_WEBSDR
 #include "wsdr.h"
 #endif
+/* The openx6bt firmware's: the radio's service over Bluetooth. */
+#if VFO_BT_RADIO
+#include "ws_bt.h"
+#endif
 #include "esp_timer.h"
 #include "driver/usb_serial_jtag.h"
 #include "hal/usb_serial_jtag_ll.h"
@@ -157,6 +161,8 @@ static void firmware_line(char *out, size_t cap)
 {
 #if VFO_RADIO_ICOM
     const char *name = "Icom";
+#elif VFO_RADIO_OPENX6BT
+    const char *name = "OpenX6X00 BT";
 #elif VFO_RADIO_OPENX6X00
     const char *name = "OpenX6X00";
 #elif VFO_RADIO_JUPITERSDR
@@ -1072,6 +1078,19 @@ static bool audio_busy(void)
 #else
     return radio_on_air();
 #endif
+}
+
+/* The second chip busy: as audio_busy(), and on the openx6bt firmware while
+ * the radio's link through it is open -- an update of it ends there, with
+ * its restart. Updated at boot, before the link, or while the radio is off. */
+static bool comp_busy(void)
+{
+#if VFO_BT_RADIO
+    btl_radio_state_t st;
+    bt_link_radio_state(&st, NULL, NULL);
+    if (st.state == BTL_RS_OPEN) return true;
+#endif
+    return audio_busy();
 }
 
 static bool s_wipe;     /* provisioning's mark: the SD card waits to be emptied, settings and all */
@@ -2467,6 +2486,66 @@ static bool host_answers(const char *ip, uint16_t port, int timeout_ms)
 }
 #endif
 
+/* Only now is WiFi worth its memory. Started once, whichever way it comes
+ * up: a second start would register the driver and its handlers again. */
+static void wifi_start_once(void)
+{
+    if (s_wifi_started) return;
+    s_wifi_started = true;
+    esp_err_t werr = net_prov_wifi_start();
+    if (werr != ESP_OK) {
+        ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",
+                 esp_err_to_name(werr));
+        /* Said on the glass, or the face just shows NO LINK for ever. */
+        ui_setup_show("NO WIFI", "The knob's WiFi\nwould not start.\nRestart the knob.");
+    }
+}
+
+#if VFO_BT_RADIO
+/* How long the radio waits, from boot, for a known WiFi network: the boot's
+ * update check goes first when one is in reach. */
+#define BT_WIFI_WAIT_US (15 * 1000 * 1000)
+
+/* The radio chosen -- its Bluetooth address, on the page or found here. With
+ * none, the knob looks for one: a scan every few seconds, and the first
+ * device that lists OpenX6X00's TCI service is taken, and kept. Its service
+ * is listed while the radio is in its pairing window (Settings > Bluetooth,
+ * Pairing): opened there, the knob finds the radio and pairs with it. */
+static bool bt_radio_chosen(const vfo_cfg_t *cfg)
+{
+    static int64_t t_scan;
+    static bool    said;
+    if (cfg->radio_host[0]) return true;
+    if (!bt_link_radio_can()) return false;
+    if (!said) {
+        said = true;
+        ESP_LOGW(TAG, "  no radio chosen: looking for one in its pairing window");
+    }
+    EXT_RAM_BSS_ATTR static btl_found_t f[12];
+    const int n = bt_link_found(f, 12);
+    for (int i = 0; i < n; i++) {
+        if (!(f[i].svc & BTL_SVC_RADIO)) continue;
+        EXT_RAM_BSS_ATTR static vfo_cfg_t c;
+        c = *cfg;
+        snprintf(c.radio_host, sizeof c.radio_host, "%02x:%02x:%02x:%02x:%02x:%02x", f[i].bda[0], f[i].bda[1],
+                 f[i].bda[2], f[i].bda[3], f[i].bda[4], f[i].bda[5]);
+        ESP_LOGI(TAG, "  found %.32s (%s), with OpenX6X00's TCI: the radio from now on", f[i].name,
+                 c.radio_host);
+        if (net_prov_save_cfg(&c) != ESP_OK) {
+            ESP_LOGE(TAG, "  ...could not be kept: looked for again");
+            return false;
+        }
+        return true;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (!t_scan || now - t_scan > 12 * 1000 * 1000) {
+        t_scan = now;
+        bt_link_scan(10);
+    }
+    return false;
+}
+#endif
+
 /* Picks the transport for the radio link, cable first.
  *
  * The cable is preferred because it is the whole point of the USB build: the
@@ -2499,6 +2578,20 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     if (atomic_load(&s_cable) != CABLE_NONE &&
         esp_timer_get_time() < USB_GRACE_US) return NULL;
 #endif
+#if VFO_BT_RADIO
+    /* The radio over Bluetooth: WiFi is for the page and the updates, and
+     * started as ever -- waited for a little, the boot's update check going
+     * first on it, but never needed. */
+    if (cfg->ssid[0] && !s_wifi_started) {
+        wifi_start_once();
+        return NULL;
+    }
+    if (cfg->ssid[0] && !net_prov_is_connected() && esp_timer_get_time() < BT_WIFI_WAIT_US) return NULL;
+    if (!bt_radio_chosen(cfg)) return NULL;
+    strlcpy(ip, cfg->radio_host, iplen);
+    ESP_LOGI(TAG, "--- transport: Bluetooth (%s)%s ---", ip, net_prov_is_connected() ? ", WiFi for the page" : "");
+    return ip;
+#endif
     /* No network configured, nothing to join: the radio would only retry an
      * empty SSID every five seconds, on memory the board is short of. The
      * screen says what to do instead. */
@@ -2506,14 +2599,7 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
     /* Only now is WiFi worth its memory. Started once, whichever way it comes
      * up: a second start would register the driver and its handlers again. */
     if (!s_wifi_started) {
-        s_wifi_started = true;
-        esp_err_t werr = net_prov_wifi_start();
-        if (werr != ESP_OK) {
-            ESP_LOGE(TAG, "wifi     FAILED: %s -- continuing offline",
-                     esp_err_to_name(werr));
-            /* Said on the glass, or the face just shows NO LINK for ever. */
-            ui_setup_show("NO WIFI", "The knob's WiFi\nwould not start.\nRestart the knob.");
-        }
+        wifi_start_once();
         return NULL;                       /* give it a moment to associate */
     }
     if (!net_prov_is_connected()) return NULL;
@@ -3131,6 +3217,13 @@ RADIO_ONLY_FN static bool wifi_setup(void)
 
     net_prov_tick();
     bool cable = s_on_usb;
+#if VFO_BT_RADIO
+    /* A radio chosen, the knob does without WiFi: joined when one is in
+     * reach, for the page and the updates, but never asked for on the glass
+     * -- as a cable is. Until then its setup is up as on every firmware, and
+     * the knob looks for the radio meanwhile (bt_radio_chosen). */
+    cable = cable || net_prov_cfg()->radio_host[0];
+#endif
 #if CONFIG_VFO_USB_NET
     /* A computer on the cable is the way -- or, until it is due, may be. */
     cable = cable || usb_net_host_present();
@@ -3158,9 +3251,14 @@ RADIO_ONLY_FN static bool wifi_setup(void)
         done_at = 0;
         ESP_LOGW(TAG, "%s: WiFi setup on the knob's own network, " WIFI_SETUP_AP,
                  none ? "no WiFi network known" : "none of the knob's WiFi networks in reach");
+#if VFO_BT_RADIO
+        /* The radio is found without WiFi: in its pairing window. */
+        ui_setup_show("FIND RADIO", "Open Pairing in the\nradio's Bluetooth\nsettings. For WiFi,\njoin " WIFI_SETUP_AP "\nwith your phone.");
+#else
         ui_setup_show("WIFI SETUP", none
             ? "Join the WiFi network\n" WIFI_SETUP_AP "\nwith your phone, then\nchoose your network on\nthe page that opens."
             : "None of its networks\nis in reach. Join\n" WIFI_SETUP_AP " with your\nphone to add one,\nor wait: it keeps looking.");
+#endif
         return true;
     }
     if (cable) {
@@ -3463,7 +3561,7 @@ static void second_chip(bool idle, bool session)
     EXT_RAM_BSS_ATTR static int64_t spaced;         /* s_comp_fetched_at before it */
     EXT_RAM_BSS_ATTR static int64_t quiet_since;    /* idle, with no over or call, since; 0: not now */
     const int64_t now  = esp_timer_get_time();
-    const bool    busy = audio_busy();
+    const bool    busy = comp_busy();
     bt_link_update_allow(s_boot_ok && now >= 60 * 1000000LL && idle && !busy && !ota_writing());
     if (!idle || busy)     quiet_since = 0;
     else if (!quiet_since) quiet_since = now;
@@ -3587,6 +3685,10 @@ RADIO_ONLY_FN static void net_task(void *arg)
                 }
             }
         }
+#if VFO_BT_RADIO
+        /* No radio chosen: looked for, the WiFi setup up or not. */
+        if (!started) (void)bt_radio_chosen(cfg);
+#endif
         if (wifi_setup()) {
             vTaskDelay(pdMS_TO_TICKS(250));
             continue;
@@ -3621,7 +3723,13 @@ RADIO_ONLY_FN static void net_task(void *arg)
              * this restart: the hourly check finds one there when the
              * computer forwards for the knob, and a yes is never dropped. */
             static bool update_checked;
-            if (host && (!via_usb || s_update_accepted) && !update_checked) {
+#if VFO_BT_RADIO
+            /* The radio's way is Bluetooth: the server's only on WiFi. */
+            const bool server_way = net_prov_is_connected();
+#else
+            const bool server_way = true;
+#endif
+            if (host && server_way && (!via_usb || s_update_accepted) && !update_checked) {
                 update_checked = true;
                 boot_update_check();
             }
@@ -4365,7 +4473,15 @@ void app_main(void)
          * firmware steps aside for an over, or a call, and for this chip's
          * own update; what the knob remembers of the last is read back. */
         bring_up("bt link", bt_link_init);
-        bt_link_update_busy_cb(audio_busy);
+#if VFO_BT_RADIO
+        /* ...or, here, the radio's link: OpenX6X00's TCI over RFCOMM, through
+         * the second chip, which then calls no headset. */
+        {
+            static const uint8_t uuid[16] = WS_BT_OPENX6X00_UUID;
+            bt_link_radio_mode(uuid);
+        }
+#endif
+        bt_link_update_busy_cb(comp_busy);
         ota_set_flash_hook(second_chip_step_aside);
         comp_record_load();
 #endif

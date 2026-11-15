@@ -32,14 +32,54 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#if VFO_BT_RADIO
+#include "esp_app_desc.h"
+#include "esp_event_base.h"
+#include "ws_bt.h"
+#else
 #include "esp_websocket_client.h"
 #include "lwip/sockets.h"
+#endif
 #include "net_prov.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ptt_fsm.h"
 #include "tci_parse.h"
 #include "vfo_tune.h"
+
+/* The WebSocket: esp_websocket_client's over TCP, or the openx6bt firmware's
+ * over the radio's Bluetooth serial link (ws_bt.h), whose calls and events
+ * are the same shape. */
+#if VFO_BT_RADIO
+typedef ws_bt_handle_t     ws_handle_t;
+typedef ws_bt_event_data_t ws_event_data_t;
+#define WS_EV_CONNECTED    WS_BT_EVENT_CONNECTED
+#define WS_EV_DATA         WS_BT_EVENT_DATA
+#define WS_EV_DISCONNECTED WS_BT_EVENT_DISCONNECTED
+#define WS_EV_CLOSED       WS_BT_EVENT_CLOSED
+#define WS_EV_FINISH       WS_BT_EVENT_FINISH
+#define ws_start           ws_bt_start
+#define ws_stop            ws_bt_stop
+#define ws_close           ws_bt_close
+#define ws_destroy         ws_bt_destroy
+#define ws_send_text       ws_bt_send_text
+#define ws_send_bin        ws_bt_send_bin
+#else
+typedef esp_websocket_client_handle_t ws_handle_t;
+typedef esp_websocket_event_data_t    ws_event_data_t;
+#define WS_EV_CONNECTED    WEBSOCKET_EVENT_CONNECTED
+#define WS_EV_DATA         WEBSOCKET_EVENT_DATA
+#define WS_EV_DISCONNECTED WEBSOCKET_EVENT_DISCONNECTED
+#define WS_EV_CLOSED       WEBSOCKET_EVENT_CLOSED
+#define WS_EV_FINISH       WEBSOCKET_EVENT_FINISH
+#define WS_EV_ERROR        WEBSOCKET_EVENT_ERROR
+#define ws_start           esp_websocket_client_start
+#define ws_stop            esp_websocket_client_stop
+#define ws_close           esp_websocket_client_close
+#define ws_destroy         esp_websocket_client_destroy
+#define ws_send_text       esp_websocket_client_send_text
+#define ws_send_bin        esp_websocket_client_send_bin
+#endif
 
 static const char *TAG = "tci";
 
@@ -110,7 +150,7 @@ typedef struct {
 
 static state_t     S;
 static portMUX_TYPE S_LOCK = portMUX_INITIALIZER_UNLOCKED;
-static esp_websocket_client_handle_t s_ws;
+static ws_handle_t s_ws;
 static char        s_rx[RX_CAP];
 static size_t      s_rx_len;
 static int64_t     s_greet_deadline_us;
@@ -131,7 +171,9 @@ static size_t      s_aud_len;
 static uint8_t    *s_txa;
 /* The TCI connection's socket, found on connect; -1 while there is none. */
 static int         s_fd = -1;
+#if !VFO_BT_RADIO
 static uint16_t    s_port;
+#endif
 static uint32_t    s_backoff_ms = 250;
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -272,11 +314,11 @@ static void ptt_dispatch(const ptt_out_t *o)
 
     if (o->close_socket) {
         ESP_LOGW(TAG, "PTT ladder rung 2: closing the socket");
-        esp_websocket_client_close(s_ws, pdMS_TO_TICKS(300));
+        ws_close(s_ws, pdMS_TO_TICKS(300));
     }
     if (o->destroy_socket) {
         ESP_LOGE(TAG, "PTT ladder rung 3: destroying the transport");
-        esp_websocket_client_stop(s_ws);
+        ws_stop(s_ws);
     }
     if (o->restart) {
         ESP_LOGE(TAG, "PTT ladder rung 4: rebooting to guarantee an unkey");
@@ -566,6 +608,12 @@ static void consume(const char *data, size_t len)
     }
 }
 
+#if VFO_BT_RADIO
+/* A TX_AUDIO frame goes at once: the link to the second chip has room for it
+ * whole. Its room is the second chip's, as it last said: what the radio's
+ * RFCOMM link takes. */
+static bool socket_has_room(void) { return ws_bt_has_room(s_ws, TXA_BYTES); }
+#else
 /* The client keeps its socket to itself, so find it: the connection whose
  * peer is the TCI port and whose own end is ephemeral. Checking our end rules
  * out a browser on the configuration page that happens to connect from a
@@ -599,6 +647,7 @@ static bool socket_has_room(void)
     struct timeval now = { 0 };
     return select(s_fd + 1, NULL, &w, NULL, &now) > 0;
 }
+#endif
 
 #if VFO_RADIO_OPENX6X00 || VFO_RADIO_JUPITERSDR
 /* The mic ring's level, from what goes out: neither server has a mic meter to
@@ -649,8 +698,7 @@ static void send_tx_frame(uint32_t receiver, int n)
 #endif
 
     const int64_t t0 = esp_timer_get_time();
-    const int sent = esp_websocket_client_send_bin(s_ws, (const char *)s_txa,
-                                                   (int)bytes, pdMS_TO_TICKS(50));
+    const int sent = ws_send_bin(s_ws, (const char *)s_txa, (int)bytes, pdMS_TO_TICKS(50));
     const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
     if (us > S.txa_max_us) S.txa_max_us = us;
     if (sent == (int)bytes) S.txa_sent++;
@@ -749,22 +797,24 @@ static void link_lost(void)
 static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)base;
-    esp_websocket_event_data_t *e = data;
+    ws_event_data_t *e = data;
 
     switch (id) {
-    case WEBSOCKET_EVENT_CONNECTED:
+    case WS_EV_CONNECTED:
         S.connects++;
         S.link = RADIO_LINK_GREETING;
         s_retry_at_us = 0;
         s_rx_len = 0;
         s_greet_deadline_us = esp_timer_get_time() + GREET_TMO_MS * 1000;
+#if !VFO_BT_RADIO
         s_fd = find_tci_socket();
         if (s_fd < 0)
             ESP_LOGW(TAG, "TCI socket not found; TX audio sends may block");
+#endif
         ESP_LOGI(TAG, "connected, awaiting greeting");
         break;
 
-    case WEBSOCKET_EVENT_DATA:
+    case WS_EV_DATA:
         if (e->op_code == 0x0A) {                       /* pong */
             S.last_pong_us = esp_timer_get_time();
             break;
@@ -804,12 +854,17 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (e->data_len > 0) consume(e->data_ptr, e->data_len);
         break;
 
-    case WEBSOCKET_EVENT_DISCONNECTED:
-    case WEBSOCKET_EVENT_CLOSED:
+    case WS_EV_DISCONNECTED:
+    case WS_EV_CLOSED:
+#if VFO_BT_RADIO
+        /* Why, for the page: the radio's close says it in its frame, the
+         * link's end only here. */
+        if (ws_bt_why(s_ws)[0]) strlcpy(S.last_close, ws_bt_why(s_ws), sizeof S.last_close);
+#endif
         link_lost();
         break;
 
-    case WEBSOCKET_EVENT_FINISH:
+    case WS_EV_FINISH:
         /* The client's task has ended. DISCONNECTED or CLOSED has usually said
          * so already, but not when a close is cut short: if the handshake
          * overruns its timeout, esp_websocket_client_close() stops the task
@@ -820,9 +875,11 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (S.link != RADIO_LINK_DOWN) link_lost();
         break;
 
-    case WEBSOCKET_EVENT_ERROR:
+#ifdef WS_EV_ERROR
+    case WS_EV_ERROR:
         ESP_LOGW(TAG, "websocket error");
         break;
+#endif
     default:
         break;
     }
@@ -861,7 +918,7 @@ static void send_cmd(const char *fmt, ...)
     int n = vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     if (n <= 0 || !s_ws) return;
-    esp_websocket_client_send_text(s_ws, buf, n, pdMS_TO_TICKS(200));
+    ws_send_text(s_ws, buf, n, pdMS_TO_TICKS(200));
     S.sends++;
 }
 
@@ -878,8 +935,8 @@ static void tx_task(void *arg)
         if (s_retry_at_us && esp_timer_get_time() >= s_retry_at_us) {
             s_retry_at_us = 0;
             S.link = RADIO_LINK_CONNECTING;
-            esp_websocket_client_stop(s_ws);          /* idempotent */
-            if (esp_websocket_client_start(s_ws) != ESP_OK) {
+            ws_stop(s_ws);                            /* idempotent */
+            if (ws_start(s_ws) != ESP_OK) {
                 s_backoff_ms = s_backoff_ms < 8000 ? s_backoff_ms * 2 : 8000;
                 s_retry_at_us = esp_timer_get_time() + (int64_t)s_backoff_ms * 1000;
             } else {
@@ -895,7 +952,7 @@ static void tx_task(void *arg)
         if (S.link == RADIO_LINK_GREETING &&
             esp_timer_get_time() > s_greet_deadline_us) {
             ESP_LOGW(TAG, "no greeting within %d ms, reconnecting", GREET_TMO_MS);
-            esp_websocket_client_close(s_ws, pdMS_TO_TICKS(200));
+            ws_close(s_ws, pdMS_TO_TICKS(200));
             continue;
         }
         /* --- PTT: intents, deadlines and the ladder --------------------- */
@@ -1279,6 +1336,7 @@ void radio_get_status(radio_status_t *o)
 #endif
 }
 
+#if !VFO_BT_RADIO
 /* How much of a WebSocket receive buffer internal RAM can spare. */
 static int ws_buffer_size(void)
 {
@@ -1287,6 +1345,7 @@ static int ws_buffer_size(void)
     if (big > 24000) return 4096;
     return 2048;
 }
+#endif
 
 const char *radio_link_name(void) { return "TCI"; }
 
@@ -1295,10 +1354,31 @@ esp_err_t radio_start(const char *host, uint16_t port,
 {
     (void)user; (void)pass;       /* AetherSDR's TCI server has no login, nor Zeus SDR's */
     char uri[96];
+#if VFO_BT_RADIO
+    /* The radio's Bluetooth address, as the page keeps it. */
+    uint8_t bda[6];
+    unsigned b[6];
+    if (!host || sscanf(host, "%2x:%2x:%2x:%2x:%2x:%2x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6) {
+        ESP_LOGE(TAG, "no radio chosen yet: find it on the configuration page");
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (int i = 0; i < 6; i++) bda[i] = (uint8_t)b[i];
+    /* The port is the RFCOMM channel, for a radio whose SDP finds none. */
+    const uint8_t scn = port >= 1 && port <= 30 ? (uint8_t)port : WS_BT_OPENX6X00_SCN;
+    snprintf(uri, sizeof uri, "bt://%s/ channel %u if SDP finds none", host, scn);
+#else
     snprintf(uri, sizeof uri, "ws://%s:%u/", host, (unsigned)port);
     s_port = port;
+#endif
 
     memset(&S, 0, sizeof S);
+#if VFO_BT_RADIO
+    /* No receive audio over Bluetooth: the radio's own speaker plays it, and
+     * the RFCOMM link has no room for it beside the rest -- asked for, it
+     * overran the second chip within half a second (2026-11-13, an X6200).
+     * Never asked; TX audio still answers the radio's TX_CHRONO. */
+    S.audio_blocked = true;
+#endif
     tune_init(&S.tune, 14074000, 100);
     accel_init(&S.accel);
     ptt_fsm_init(&S.ptt);
@@ -1311,6 +1391,32 @@ esp_err_t radio_start(const char *host, uint16_t port,
     if (!s_txa) s_txa = heap_caps_malloc(TXA_BYTES, MALLOC_CAP_SPIRAM);
     s_aud_len = 0;
 
+#if VFO_BT_RADIO
+    /* OpenX6X00's TCI over Bluetooth, through the second chip: the same
+     * WebSocket and the same TCI, the TCP connection an RFCOMM one. Its
+     * channel through SDP; the upgrade with no Origin, and our name as its
+     * User-Agent. The link, pairing included, may take its while: a radio
+     * paged, and a pairing in the radio's window. */
+    static char ua[48];
+    snprintf(ua, sizeof ua, "VFO-Knob BT/%s", esp_app_get_description()->version);
+    const ws_bt_config_t cfg = {
+        .host                 = "x6100.local",
+        .path                 = "/",
+        .user_agent           = ua,
+        .connect_timeout_ms   = 20000,
+        .ping_interval_sec    = 2,     /* as over WiFi: PTT's freshness, and the radio's 5 s gate */
+        .pingpong_timeout_sec = 8,
+        .task_prio            = 6,
+        .task_stack           = 6144,
+        .task_core            = 0,
+    };
+    ws_bt_config_t c2 = cfg;
+    memcpy(c2.bda, bda, 6);
+    c2.scn = scn;
+    s_ws = ws_bt_init(&c2);
+    ESP_RETURN_ON_FALSE(s_ws, ESP_FAIL, TAG, "ws init");
+    esp_err_t err = ws_bt_register_events(s_ws, ws_event, NULL);
+#else
     esp_websocket_client_config_t cfg = {
         .uri                    = uri,
         /* We own reconnect. Two reasons: the close REASON string is the
@@ -1348,6 +1454,7 @@ esp_err_t radio_start(const char *host, uint16_t port,
     ESP_RETURN_ON_FALSE(s_ws, ESP_FAIL, TAG, "ws init");
     esp_err_t err = esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY,
                                                   ws_event, NULL);
+#endif
     /* Set the state BEFORE starting. esp_websocket_client_start() launches the
      * connection on its own task, and over the USB cable the handshake and the
      * TCI greeting can both land before this function reaches its next few
@@ -1358,13 +1465,13 @@ esp_err_t radio_start(const char *host, uint16_t port,
      * WiFi the handshake was always slower than these instructions, so it
      * never showed. */
     S.link = RADIO_LINK_CONNECTING;
-    if (err == ESP_OK) err = esp_websocket_client_start(s_ws);
+    if (err == ESP_OK) err = ws_start(s_ws);
     if (err != ESP_OK) {
         /* Destroy the handle before returning. Leaving it allocated leaked an
          * entire client per attempt, and because the caller retries every 2 s
          * the device walked itself down to 23 bytes of internal RAM and stayed
          * there -- a far worse failure than the one being retried. */
-        esp_websocket_client_destroy(s_ws);
+        ws_destroy(s_ws);
         s_ws = NULL;
         S.link = RADIO_LINK_DOWN;
         ESP_LOGE(TAG, "websocket start failed: %s", esp_err_to_name(err));
@@ -1383,8 +1490,8 @@ esp_err_t radio_start(const char *host, uint16_t port,
                       "refusing to run receive-only",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        esp_websocket_client_stop(s_ws);
-        esp_websocket_client_destroy(s_ws);
+        ws_stop(s_ws);
+        ws_destroy(s_ws);
         s_ws = NULL;
         S.link = RADIO_LINK_DOWN;
         return ESP_ERR_NO_MEM;

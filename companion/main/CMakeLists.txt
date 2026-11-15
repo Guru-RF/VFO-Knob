@@ -8,7 +8,7 @@
 # drops.
 set(bluedroid "$ENV{IDF_PATH}/components/bt/host/bluedroid")
 idf_component_register(
-    SRCS "main.c" "link.c" "hfp.c" "rs.c" "air.c" "upd.c" "a2dp.c" "kind.c" "batt.c"
+    SRCS "main.c" "link.c" "hfp.c" "rs.c" "air.c" "upd.c" "a2dp.c" "kind.c" "batt.c" "radio.c"
     INCLUDE_DIRS "." "../../components/bt_link/include"
     PRIV_INCLUDE_DIRS "$ENV{IDF_PATH}/components/bt/common/include"
                       "$ENV{IDF_PATH}/components/bt/common/osi/include"
@@ -46,6 +46,10 @@ idf_component_register(
 # And the stack's reader of a remote control's answers (called from
 # btc_avrc.c, the function in avrc_pars_ct.c): a speaker's INTERIM answer,
 # its volume as it stands, which the stack drops, a2dp.c hears.
+#
+# Through radio.c: the answer to each pairing's IO capability request
+# (called from bta_dm_act.c, the function in bta_dm_co.c) -- General Bonding
+# asked of the radio, which otherwise keeps the knob's key in memory only.
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=bta_ag_sco_co_in_data"
                                                  "-Wl,--wrap=bta_ag_sco_co_open"
                                                  "-Wl,--wrap=bta_ag_sco_co_close"
@@ -60,4 +64,5 @@ target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=bta_ag_sco_co_in_da
                                                  "-Wl,--wrap=btc_a2dp_sink_reset_decoder"
                                                  "-Wl,--wrap=btc_a2dp_sink_reg_data_cb"
                                                  "-Wl,--wrap=btc_a2dp_sink_enque_buf"
-                                                 "-Wl,--wrap=AVRC_ParsResponse")
+                                                 "-Wl,--wrap=AVRC_ParsResponse"
+                                                 "-Wl,--wrap=bta_dm_co_io_req")

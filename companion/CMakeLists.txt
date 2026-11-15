@@ -60,3 +60,9 @@ if(NOT CONFIG_BT_A2DP_ENABLE)
     message(FATAL_ERROR "this build directory's sdkconfig predates speakers (no CONFIG_BT_A2DP_ENABLE) -- "
                         "delete it (defaults only seed a new one)")
 endif()
+# Nor one made before radios: built without SPP or SDP, a firmware that tells
+# the knob it carries a radio's link (main.c's hello) would have none to give.
+if(NOT CONFIG_BT_SPP_ENABLED OR NOT CONFIG_BT_SDP_COMMON_ENABLED)
+    message(FATAL_ERROR "this build directory's sdkconfig predates radios (no CONFIG_BT_SPP_ENABLED or "
+                        "CONFIG_BT_SDP_COMMON_ENABLED) -- delete it (defaults only seed a new one)")
+endif()
