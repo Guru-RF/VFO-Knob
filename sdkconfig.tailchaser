@@ -1,0 +1,26 @@
+# The tailchaser firmware: TailChaser repeaters through their API, over the
+# LAN, the internet or a tailnet (MicroLink, components/microlink).
+# Tailscale's home DERP region: Amsterdam, nearest the knob's owners.
+# MicroLink's own rollback (ml_ota.c) reads the OTA state from flash on the
+# tasks whose stacks are in PSRAM -- an assert at Tailscale's start -- and
+# would roll the knob back whenever the tailnet is out of reach. The knob
+# confirms an image itself (net: boot considered healthy).
+CONFIG_ML_OTA_ROLLBACK=n
+CONFIG_ML_DERP_REGION=14
+# MicroLink's own logs at warnings: every TCP request through the tunnel
+# would otherwise log three lines.
+CONFIG_ML_LOG_LEVEL_WARN=y
+# No subnet router, no config page, no cellular, no OTA of its own.
+CONFIG_ML_SUBNET_ROUTER=n
+CONFIG_ML_ENABLE_CONFIG_HTTPD=n
+CONFIG_ML_ENABLE_CELLULAR=n
+CONFIG_ML_ENABLE_NET_SWITCH=n
+# A home tailnet: a few peers. Map buffers in PSRAM, smaller than the
+# defaults' half a megabyte each.
+CONFIG_ML_MAX_PEERS=16
+CONFIG_ML_H2_BUFFER_SIZE_KB=128
+CONFIG_ML_JSON_BUFFER_SIZE_KB=128
+CONFIG_MBEDTLS_HARDWARE_AES=n
+# MicroLink's sockets (control, DERP, DISCO, STUN) beside the requests -- two
+# readers and a block, three at once -- the web page and the log.
+CONFIG_LWIP_MAX_SOCKETS=20

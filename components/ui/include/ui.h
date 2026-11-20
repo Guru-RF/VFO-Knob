@@ -142,8 +142,10 @@ typedef struct {
     char     talker[16], talker_info[32], last_talker[16];
     uint32_t talker_ms;
     bool     tg_locked, muted;
+    bool     spk_muted;       /* TailChaser: its audio muted, for every repeater */
     float    rx_level_db;
     char     server[40];
+    char     where[24];       /* TailChaser: "simplex 2/2" on the link's line */
     int32_t  rit_hz;
     float    smeter_dbm;
     float    tx_mic_dbm, tx_fwd_w, tx_peak_w, tx_swr, tx_alc;
@@ -206,7 +208,9 @@ enum { UI_MEM_OFF = 0, UI_MEM_READING, UI_MEM_READY, UI_MEM_EMPTY };
  * on or off: the noise blanker, the wideband one, noise reduction, the
  * automatic notch and the audio peak filter. */
 enum { UI_ACT_NONE = 0, UI_ACT_TUNE, UI_ACT_ATU, UI_ACT_MEM,
-       UI_ACT_NB, UI_ACT_WNB, UI_ACT_NR, UI_ACT_ANF, UI_ACT_APF };
+       UI_ACT_NB, UI_ACT_WNB, UI_ACT_NR, UI_ACT_ANF, UI_ACT_APF,
+       /* TailChaser's menu, held on the slab: the repeater's blocks */
+       UI_ACT_BLOCK_RX, UI_ACT_BLOCK_TX, UI_ACT_SPK_MUTE };
 enum { UI_DSP_NB = 1, UI_DSP_NR = 2, UI_DSP_ANF = 4, UI_DSP_APF = 8, UI_DSP_WNB = 16 };
 /* An item's name, as the menu shows it ("NR"). */
 const char *ui_act_name(uint8_t action);

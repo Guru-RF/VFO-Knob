@@ -1215,7 +1215,7 @@ static esp_err_t wifi_post_h(httpd_req_t *r)
     return send_json(r, "{\"ok\":true}");
 }
 
-#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_KIWI
+#if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_KIWI && !VFO_RADIO_TAILCHASER
 /* ------------------------------------------------------------- the radios
  *
  * The radios the knob knows, one in use (see net_prov.h):
@@ -2033,10 +2033,10 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  * Behind the page's login like everything here. Nothing that transmits:
  * neither PTT nor a tune cycle, on the page or in the API, and no setting at
  * all while the radio is on the air. Not for the setup firmware, which has
- * no radio, nor svxconnect's reflector, nor the clock, the weather or the WiFi
- * Test. */
+ * no radio, nor svxconnect's reflector, nor the clock, the weather, the WiFi
+ * Test or TailChaser. */
 #define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_CLOCK && \
-                    !VFO_RADIO_WEATHER && !VFO_RADIO_WIFITEST)
+                    !VFO_RADIO_WEATHER && !VFO_RADIO_WIFITEST && !VFO_RADIO_TAILCHASER)
 
 /* ------------------------------------------ Bluetooth headset or speaker */
 

@@ -18,6 +18,9 @@ const kv_ns_def_t KV_NS[] = {
     { .name = "flex", .flags = KVF_FROZEN, .identity = L("uuid") },
     { .name = "phone", .flags = KVF_FROZEN },
     { .name = "icom", .flags = KVF_FROZEN },
+    /* TailChaser: the repeaters with their API keys merged as one list, and
+     * the knob's own Tailscale keys. */
+    { .name = "tchaser", .group = L("nodes", "key0", "key1", "key2", "key3", "key4", "key5", "key6", "key7") },
 #if VFO_KV_TEST
     { .name = "kvtest" },                 /* kv_test.c's writer: a test build's only */
 #endif

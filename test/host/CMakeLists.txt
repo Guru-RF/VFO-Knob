@@ -242,6 +242,65 @@ target_link_libraries(test_wifitest PRIVATE vfo_core)
 target_compile_options(test_wifitest PRIVATE -Wall -Wextra)
 add_test(NAME test_wifitest COMMAND test_wifitest)
 
+# The TailChaser firmware's API without the network
+# (components/tailchaser_client/tc_proto.c): a node's status as TailChaser
+# writes it -- a transmit site with its receive site inside, a simplex node,
+# a receive site not answering -- the block, errors, the S-meter, HTTP
+# answers whole and cut short, the addresses the page takes. cJSON is
+# ESP-IDF's, as the knob has it.
+set(TAILCHASER ${CMAKE_CURRENT_SOURCE_DIR}/../../components/tailchaser_client)
+if(NOT CJSON_DIR)
+    foreach(_idf "$ENV{IDF_PATH}" "$ENV{HOME}/esp/esp-idf")
+        if(NOT CJSON_DIR AND _idf AND EXISTS "${_idf}/components/json/cJSON/cJSON.c")
+            set(CJSON_DIR "${_idf}/components/json/cJSON")
+        endif()
+    endforeach()
+endif()
+if(CJSON_DIR)
+    if(NOT TARGET cjson_host)
+        add_library(cjson_host STATIC ${CJSON_DIR}/cJSON.c)
+        target_include_directories(cjson_host PUBLIC ${CJSON_DIR})
+    endif()
+    add_library(tc_proto STATIC ${TAILCHASER}/tc_proto.c)
+    target_include_directories(tc_proto PUBLIC ${TAILCHASER})
+    target_link_libraries(tc_proto PUBLIC cjson_host m)
+    target_compile_options(tc_proto PRIVATE -Wall -Wextra)
+    add_executable(test_tc_proto src/test_tc_proto.c)
+    target_link_libraries(test_tc_proto PRIVATE tc_proto)
+    target_compile_options(test_tc_proto PRIVATE -Wall -Wextra)
+    add_test(NAME test_tc_proto COMMAND test_tc_proto)
+
+    # The client itself (tailchaser_client.c, tc_http.c, tc_web.c) on the PC
+    # -- its task, its HTTP over the PC's sockets, a tailnet of shim_tc's,
+    # its web endpoints on the shim's server -- against tools/
+    # mock_tailchaser.py: repeaters set on the page, the status on the face,
+    # the dial, blocks asked and done, refused keys, a node gone and back,
+    # the tailnet, and no key in the log or on the page.
+    add_executable(tailchaser_host
+        src/tailchaser_host.c
+        shim/shim.c
+        shim/shim_httpd.c
+        shim_tc/tc_ts_host.c
+        ${TAILCHASER}/tailchaser_client.c
+        ${TAILCHASER}/tc_http.c
+        ${TAILCHASER}/tc_web.c
+        ${TAILCHASER}/tc_audio.c)
+    # shim_tc first, for its esp_netif.h and esp_mac.h.
+    target_include_directories(tailchaser_host PRIVATE shim_tc shim ${TAILCHASER}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../components/radio/include)
+    target_compile_definitions(tailchaser_host PRIVATE _GNU_SOURCE VFO_RADIO_TAILCHASER=1)
+    target_link_libraries(tailchaser_host PRIVATE tc_proto vfo_core Threads::Threads m)
+    target_compile_options(tailchaser_host PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME tailchaser_client
+                 COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_tailchaser_client.py
+                         --host $<TARGET_FILE:tailchaser_host>
+                         --mock ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_tailchaser.py)
+        set_tests_properties(tailchaser_client PROPERTIES TIMEOUT 300 LABELS mock)
+    endif()
+endif()
+
 # The Clock firmware's alarms (components/vfo_core/src/alarm.c): due at
 # their minute on their days, the next one over midnight and the week's end,
 # the dial's days and the face's words.

@@ -19,6 +19,8 @@ static inline void kv_close(kv_handle_t h) { nvs_close(h); }
 #define kv_set_u8   nvs_set_u8
 #define kv_get_i8   nvs_get_i8
 #define kv_set_i8   nvs_set_i8
+#define kv_get_u16  nvs_get_u16
+#define kv_set_u16  nvs_set_u16
 #define kv_get_u32  nvs_get_u32
 #define kv_set_u32  nvs_set_u32
 #define kv_get_i32  nvs_get_i32

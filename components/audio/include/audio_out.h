@@ -25,7 +25,8 @@
  * load against 48 kHz; the server accepts only 8/12/24/48. */
 /* The radios stream 24 kHz. The svxconnect firmware runs at SvxLink's own
  * 16 kHz, so the reflector's Opus needs no resampling either way. */
-#if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE
+/* TailChaser's repeaters send their audio at 16 kHz too. */
+#if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE || VFO_RADIO_TAILCHASER
 #define AUDIO_RATE_HZ   16000
 #else
 #define AUDIO_RATE_HZ   24000

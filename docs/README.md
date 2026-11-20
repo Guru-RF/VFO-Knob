@@ -22,6 +22,7 @@ website as they are — plain Markdown, and SVG pictures beside each page.
 | [Clock](clock.md) | `vfo-knob-clock` — a clock for the shack: local time on the hands, UTC on a 24-hour ring, four faces on the dial, ten alarms |
 | [Weather](weather.md) | `vfo-knob-weather` — a weather station for one place, from Open-Meteo: now, the next 24 hours, the next 5 days |
 | [WiFi Test](wifitest.md) | `vfo-knob-wifitest` — for a knob whose links drop: the WiFi network measured, its signal, every drop and why, pings to the router, the radio and the internet, the channels round it, and a report to paste |
+| [TailChaser](tailchaser.md) | `vfo-knob-tailchaser` — a remote for TailChaser repeaters, over the LAN, the internet or your tailnet: who is talking and their signal, what the repeater transmits on the jack or a speaker, its receiver and transmitter blocked from the knob |
 | [The screensaver](screensaver.md) | every firmware's — Matrix rain, an analog or a digital clock, the frequency drifting — then dimmed, then dark, each after the minutes set |
 | [A Bluetooth headset or speaker](headset.md) | the companion firmware on the knob's second chip — a headset as the knob's ear, microphone and PTT, or a speaker as its ear, on every firmware with sound — all but setup, EpiBeam, ADS-B Radar, Weather and WiFi Test; the Clock's alarms ring in it |
 

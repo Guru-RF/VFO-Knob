@@ -1738,6 +1738,201 @@ static void runs(const char *dir)
     knob_radio(dir, "aether");
 #endif
 }
+#elif VFO_RADIO_TAILCHASER
+/* TailChaser's face, SVXConnect's on a repeater: its callsign, output and
+ * tone, the talkgroup; RX and TX where the lock and the mute are, green open,
+ * red blocked, grey with no repeater read; the slab the repeater's
+ * transmitter -- STANDBY, TX BLOCKED, TX on the red slab with who it
+ * repeats and why; the arc its receiver's S-meter, the thin line outside it
+ * the voice it transmits; on the link's row the volume and the speaker that
+ * mutes every repeater, and no microphone. */
+#define SYM_MIC   "\xEF\x84\xB0"                 /* ui.c's */
+#define SYM_MUTED "\xEF\x9A\xA9"
+#define SYM_SOUND "\xEF\x80\xA8"
+static int ink_of_label(const char *text)
+{
+    lv_obj_t *l = label_from(lv_screen_active(), text);
+    return l ? colour_is(lv_obj_get_style_text_color(l, LV_PART_MAIN)) : -1;
+}
+static void tc_base(void)
+{
+    base();
+    st.reflector = true;
+    st.mode = "fm";
+    st.tg = 8;
+    strcpy(st.tg_name, "ON0ORA");
+    strcpy(st.server, "438.800 -7.6 T131.8");
+    st.rx_level_db = -120.0f;
+    st.smeter_dbm = -127.0f;
+    st.spk_muted = false;
+    st.may_key = false;
+    st.rx_only = true;                  /* as tailchaser_client says: it keys nothing */
+    strcpy(st.where, "transmitter 1/2");
+}
+/* The clock under STANDBY shows the wall clock's second, or the one before
+ * (its timer runs four times a second). */
+static bool tc_clock_shown(void)
+{
+    struct tm lt;
+    char now[12], before[12];
+    if (!wallclock_now(&lt, NULL, NULL)) return shown("--:--:--");
+    snprintf(now, sizeof now, "%02d:%02d:%02d", lt.tm_hour, lt.tm_min, lt.tm_sec);
+    const time_t t = mktime(&lt) - 1;
+    struct tm b;
+    localtime_r(&t, &b);
+    snprintf(before, sizeof before, "%02d:%02d:%02d", b.tm_hour, b.tm_min, b.tm_sec);
+    return shown(now) || shown(before);
+}
+static void runs(const char *dir)
+{
+    where = "TailChaser: a repeater at rest";
+    tc_base(); run(6000);            /* the peaks of the zeroed start fallen */
+    CHECK(shown("RX") && shown("TX"));
+    CHECK(shown("ON0ORA"));
+    CHECK(shown("438.800 -7.6 T131.8"));
+    CHECK(shown("STANDBY"));
+    CHECK(shown("transmitter 1/2"));
+    CHECK(tc_clock_shown());
+    run(1000);
+    CHECK(tc_clock_shown());
+    CHECK(label_from(lv_screen_active(), LV_SYMBOL_VOLUME_MID) && !label_from(lv_screen_active(), SYM_MIC));
+    CHECK(shown(SYM_SOUND));
+    picture(dir, "tc-rest");
+    CHECK(ink_of_label("RX") == IS_GREEN && ink_of_label("TX") == IS_GREEN);
+
+    where = "TailChaser: a talker on the talkgroup, the repeater keyed";
+    st.tg = 206; strcpy(st.talker, "ON4ABC"); strcpy(st.talker_info, "talkgroup audio");
+    st.tx = true; st.rx_level_db = -9.0f; run(1500);
+    CHECK(shown("ON4ABC"));
+    CHECK(shown("talkgroup audio"));
+    CHECK(shown("TX"));
+    picture(dir, "tc-talker-tx");
+
+    where = "TailChaser: a voice on the input";
+    st.tx = false; st.tg = 8; strcpy(st.talker, "LOCAL"); strcpy(st.talker_info, "S9+10");
+    st.smeter_dbm = -65.4f; st.rx_level_db = -120.0f; run(1500);
+    CHECK(shown("LOCAL") && shown("S9+10"));
+    picture(dir, "tc-local");
+
+    where = "TailChaser: the voice repeated, the speaker muted";
+    st.tx = true; st.rx_level_db = -14.0f; st.spk_muted = true; run(1500);
+    CHECK(shown(SYM_MUTED) && !shown(SYM_SOUND));
+    picture(dir, "tc-repeated-muted");
+    st.tx = false; st.spk_muted = false; st.smeter_dbm = -127.0f;
+
+    where = "TailChaser: the receiver blocked, the transmitter blocked";
+    st.talker[0] = st.talker_info[0] = 0; st.rx_level_db = -120.0f; st.smeter_dbm = -127.0f;
+    st.tg_locked = true; st.muted = true; run(1500);
+    CHECK(shown("TX BLOCKED"));
+    CHECK(ink_of_label("RX") == IS_RED && ink_of_label("TX") == IS_RED);
+    picture(dir, "tc-blocked");
+
+    where = "TailChaser: a tap on the volume opens its panel";
+    tc_base(); run(300); quiet();
+    tap_at(180 + 42, 222, 80); settle();
+    CHECK(ui_edit_active() && shown("VOLUME"));
+    picture(dir, "tc-volume");
+    tap_at(30, 180, 80); settle();
+    CHECK(!ui_edit_active());
+    after();
+
+    where = "TailChaser: a tap on the speaker mutes every repeater, at once on the face";
+    tc_base(); run(300); quiet();
+    tap_at(180 + 104, 222, 80); run(20);
+    {
+        ui_commit_t c;
+        CHECK(commit(&c) && c.action == UI_ACT_SPK_MUTE && c.on);
+    }
+    CHECK(!ui_edit_active());
+    run(200);
+    CHECK(shown(SYM_MUTED));                     /* before the status says so */
+    where = "...a second tap before the status has it: on again";
+    tap_at(180 + 104, 222, 80); run(20);
+    {
+        ui_commit_t c;
+        CHECK(commit(&c) && c.action == UI_ACT_SPK_MUTE && !c.on);
+    }
+    run(200);
+    CHECK(shown(SYM_SOUND));
+    where = "...then the status's word";
+    st.spk_muted = true; run(1800);
+    CHECK(shown(SYM_MUTED));
+    tap_at(180 + 104, 222, 80); run(20);
+    {
+        ui_commit_t c;
+        CHECK(commit(&c) && c.action == UI_ACT_SPK_MUTE && !c.on);
+    }
+    st.spk_muted = false; run(1800);
+    CHECK(shown(SYM_SOUND));
+    after();
+
+    where = "TailChaser: RX and TX only show the blocks: a tap on either does nothing";
+    tc_base(); run(300); quiet();
+    tap_at(180 - 76, 122, 80); settle();
+    CHECK(!ui_take_lock_tap() && !ui_edit_active());
+    tap_at(180 + 76, 122, 80); settle();
+    CHECK(!ui_take_mute_tap() && !ui_edit_active());
+    after();
+
+    where = "TailChaser: a tap on STANDBY is nothing; held, the repeater's blocks";
+    tc_base(); run(300); quiet();
+    tap_at(180, 290, 80); settle();
+    CHECK(!ui_edit_active() && !ui_take_slab_hold());
+    down(180, 290); run(700);
+    CHECK(ui_edit_active() && ui_take_slab_hold());
+    up(); run(SEEN); run(60);
+    CHECK(ui_edit_active());                     /* the finger's lift closes nothing */
+    CHECK(shown("RX OPEN"));
+    picture(dir, "tc-menu");
+    ui_edit_rotate(1); run(30);
+    CHECK(shown("TX OPEN"));
+    tap_at(PANEL_X, PANEL_Y, 80); run(20);
+    {
+        ui_commit_t c;
+        CHECK(commit(&c) && c.action == UI_ACT_BLOCK_TX && c.on);
+    }
+    CHECK(ui_edit_active() && shown("TX BLOCKED"));  /* in place, as asked */
+    st.muted = true; run(300);
+    tap_at(PANEL_X, PANEL_Y, 80); run(20);
+    {
+        ui_commit_t c;
+        CHECK(commit(&c) && c.action == UI_ACT_BLOCK_TX && !c.on);
+    }
+    tap_at(30, 180, 80); settle();               /* beside the panel: it goes */
+    CHECK(!ui_edit_active());
+    after();
+
+    where = "TailChaser: the slab held with the repeater keyed: the blocks too";
+    tc_base(); st.tx = true; run(300); quiet();
+    down(180, 290); run(700);
+    CHECK(ui_edit_active() && shown("RX OPEN"));
+    up(); run(SEEN);
+    tap_at(30, 180, 80); settle();
+    after();
+
+    where = "TailChaser: the repeater's name held three seconds: the firmware picker";
+    tc_base(); run(300); quiet();
+    tap_at(180, 160, 80); settle();
+    CHECK(!ui_edit_active() && !ui_take_picker_request());
+    down(180, 160); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+    CHECK(!ui_edit_active());
+    after();
+
+    where = "TailChaser: no wall clock yet: dashes";
+    tc_base(); clock_set = false; run(600);
+    CHECK(shown("--:--:--"));
+    clock_set = true; run(600);
+    CHECK(tc_clock_shown());
+
+    where = "TailChaser: nothing read";
+    tc_base(); st.link_ok = false; st.tg = 0; strcpy(st.tg_name, "on0ora-tx"); strcpy(st.server, "no answer");
+    run(1500);
+    CHECK(shown("----") && shown("no answer"));
+    CHECK(ink_of_label("RX") == IS_OTHER && ink_of_label("TX") == IS_OTHER);
+    picture(dir, "tc-down");
+}
 #elif VFO_RADIO_PHONE
 /* The telephone's slab, the call's: CALL, ----, NO SERVICE, ENDED; HANG UP
  * on the red slab; a call ringing in, DECLINE red with a headset -- or,
@@ -4193,6 +4388,16 @@ static uint16_t dial[W * H], saver_fb[W * H];
  * is only checked to be back, not to be the picture it was. */
 #if VFO_RADIO_ADSB || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST
 #define SAME_DIAL() (memcmp(saver_fb, fb, sizeof fb) != 0)
+#elif VFO_RADIO_TAILCHASER
+/* TailChaser's clock under the slab ticks on meanwhile: the rest of the dial
+ * exactly as it was, the clock's rows (PTT_TOP + 66, 20 px type) aside. */
+static bool same_but_clock(const uint16_t *a, const uint16_t *b)
+{
+    for (int y = 0; y < H; y++)
+        if ((y < 300 || y >= 330) && memcmp(a + y * W, b + y * W, W * sizeof *a)) return false;
+    return true;
+}
+#define SAME_DIAL() same_but_clock(dial, fb)
 #else
 #define SAME_DIAL() (!memcmp(dial, fb, sizeof fb))
 #endif

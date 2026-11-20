@@ -147,6 +147,20 @@ network protocols as well as Icom's: a reference for those clients.
 
 ## Firmware
 
+- [ ] **The time on the screensavers** (asked 2026-11-20, not for now): HH:MM
+      over every screensaver (the Matrix rain and the others), from the knob's
+      wall clock in the owner's zone, as TailChaser's face shows HH:MM:SS under
+      its slab -- dim, and nothing drawn before the time is known.
+- [ ] **TailChaser, further** (vfo-knob-tailchaser, first released in
+      1.27.0):
+      - [ ] a simplex node's own input heard: TailChaser's `/monitor/rx` is
+            the receiver's audio, squelch or not, so it would be played only
+            while the status says a voice is on the input (asked 2026-11-20,
+            not decided);
+      - [ ] a block set from the knob on a repeater on the air (so far only
+            against tools/mock_tailchaser.py);
+      - [ ] the Tailscale library (components/microlink, MicroLink 2.3.0) is
+            a beta: its updates, and a knob left on its tailnet for weeks.
 - [ ] **The WiFi Test, further** (vfo-knob-wifitest, first released in
       1.26.0): what its pings may miss.
       - [ ] a radio's load: an audio stream's worth of traffic, as TCI's

@@ -45,6 +45,20 @@
 #define DEFAULT_PORT 5300            /* SvxLink's reflector port */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_TAILCHASER
+/* Unused: the repeaters and their keys are the tailchaser client's own
+ * ("tchaser" namespace). Keys of its own, so it never writes another
+ * firmware's. */
+#define KEY_HOST     "tchost"
+#define KEY_RLIST    "tclist"
+#define KEY_RSEL     "tcsel"
+#define KEY_PORT     "tcport"
+#define KEY_USER     "tcuser"
+#define KEY_PASS     "tcpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 8080
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_PHONE
 /* Unused: the telephone's SIP account is the phone client's own ("phone"
  * namespace). Keys of its own, so it never writes another firmware's. */

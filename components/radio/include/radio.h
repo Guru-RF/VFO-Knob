@@ -187,8 +187,12 @@ typedef struct {
     uint8_t    n_fav;
     uint8_t    n_missed;       /* calls missed, not yet looked at */
     bool       muted;          /* nothing heard */
+    bool       spk_muted;      /* TailChaser: the repeaters' audio muted (muted
+                                * is its transmitter's block there) */
     float      rx_level_db;    /* the received audio, dBFS */
     char       server[40];     /* the reflector, as the face names it */
+    char       where[24];      /* TailChaser: the repeater's role and place on
+                                * the dial ("simplex 2/2"), or the link's state */
     float      smeter_dbm;
     float      tx_mic_dbm, tx_fwd_w, tx_swr, tx_alc;
     float      tx_peak_w;

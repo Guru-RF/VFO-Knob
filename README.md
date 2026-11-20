@@ -105,6 +105,14 @@ point gave, pings to the router, your radio and the internet, and the
 networks round it. After an hour or more it says in a few words what is
 wrong, and its report goes into a problem report. See [WiFi Test](#wifi-test).
 
+With the **TailChaser** firmware the knob is a remote for
+[TailChaser](https://github.com/Guru-RF/TailChaser) repeaters, over their
+API: on the LAN, over the internet, or over your own tailnet (Tailscale) from
+anywhere. A repeater a detent, every one read all the time; who is talking
+and their signal; what the repeater transmits on the jack or a Bluetooth
+speaker; its receiver and transmitter blocked from the knob. See
+[TailChaser](#tailchaser).
+
 ---
 
 ## Reporting a problem
@@ -811,6 +819,26 @@ more where the links drop, read what it says, and paste its report into a
 | **A tap** | Anywhere: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list, and from there to the radio's firmware, its settings as they were. |
 | **Kept** | The hosts, across a restart; the counts start again with each start. No screensaver and never dark until set. No PTT, no swipes, no audio and no Bluetooth. |
 
+## TailChaser
+
+The TailChaser firmware (`vfo-knob-tailchaser`) is a remote for
+[TailChaser](https://github.com/Guru-RF/TailChaser) repeaters, over their
+API, on SVXConnect's face. The knob itself never transmits. Step by step:
+[the TailChaser guide](docs/tailchaser.md).
+
+<p align="center">
+  <img src="docs/tailchaser/03-talkgroup.svg" width="320" alt="The TailChaser face: ON4ABC on TG 206 sent by ON0ORA, on the air, its voice on the gold line outside the S-meter">
+</p>
+
+| | |
+|---|---|
+| **The repeaters** | Up to eight, each by its address and API key, made in the node's admin portal: a read key watches, a control key may also block. On the LAN, over the internet, or over your own tailnet: the knob joins it as a device of its own, with an auth key or a login, and finds the repeaters by their names. |
+| **The dial** | A repeater a detent, every one read all the time, so a turn shows the next at once. A repeater that becomes busy is shown by itself, once the one shown has been quiet and the knob left alone for 20 s (set on the page; 0: only the dial). |
+| **The face** | The repeater's receiver on the S-meter, in S-points on its own scale; who is talking: the talkgroup's talker as long as the repeater sends the over, **LOCAL** for a voice on its input, **CARRIER** for a signal with no voice, or who spoke last; the talkgroup; the name, output, shift and tone; **RX** and **TX**, the blocks; the transmitter on the slab, **TX** in red while it is keyed; the local time under it. |
+| **Listening** | What the repeater shown transmits, once its `[status] monitor = true`: on the jack, a Bluetooth headset or speaker, its level the thin gold line outside the S-meter. The volume is the knob's; the speaker beside it mutes every repeater. |
+| **Blocking** | Hold **STANDBY**: the repeater's receiver or transmitter blocked, or opened again, a tap each. A block stays on the repeater until it is released, on the knob, the page or the repeater's admin portal. |
+| **Kept** | The repeaters, their names and keys (never shown again), the hold, the muted speaker, the volume and the repeater shown, across a restart. |
+
 ## A Bluetooth headset
 
 The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
@@ -993,7 +1021,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather` and `vfo-knob-wifitest` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather`, `vfo-knob-wifitest` and `vfo-knob-tailchaser` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice

@@ -79,8 +79,9 @@ LV_FONT_DECLARE(font_hack_46);
 #define SYM_MIC_OFF "\xEF\x84\xB1"                  /* U+F131, struck through */
 
 /* SVXConnect's look -- its palette, its level arc, the reflector's face --
- * for the svxconnect firmware, and the telephone that wears it. */
-#define SVX_LOOK (VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE)
+ * for the svxconnect firmware, and the telephone and TailChaser that wear
+ * it. */
+#define SVX_LOOK (VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE || VFO_RADIO_TAILCHASER)
 
 /* The knob's lock: LOCK on the address card. Then the glass and the dial do
  * nothing, and nothing keys -- on the air the slab still unkeys -- with a
@@ -375,6 +376,20 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #else
 #define PHONE_FACE 0
 #endif
+/* The tailchaser firmware's: SVXConnect's face on a TailChaser repeater --
+ * its callsign where the talkgroup's name is, its output and shift under it,
+ * the talkgroup its link is on. Where the lock and the mute are, RX and TX:
+ * the receiver's and the transmitter's blocks, green open, red blocked, a
+ * set from the menu held on the slab (tailchaser_client.c). The slab is the
+ * repeater's transmitter. The arc is the receiver's S-meter, on the radios'
+ * scale (S9 at 0.6) in SvxConnect's colours; the thin line outside it the
+ * voice the repeater transmits, as the knob plays it. On the link's row,
+ * the knob's volume and a speaker that mutes every repeater; no microphone. */
+#if VFO_RADIO_TAILCHASER
+#define TC_FACE 1
+#else
+#define TC_FACE 0
+#endif
 /* The epibeam firmware's: a compass for an array's beam, over a face it
  * leaves unseen (see "EpiBeam" below). */
 #if VFO_RADIO_EPIBEAM
@@ -604,8 +619,23 @@ static bool          s_ask_restarts;     /* a yes restarts first: see ui.h */
 static volatile uint32_t s_turned_at;    /* when a turn said that yes */
 #define TURN_SPENT_MS 2000   /* ...and the turns after it tune nothing either */
 static lv_obj_t *s_dbm, *s_rit, *s_vol, *s_mic, *s_warn;
-#if VFO_HAS_SDR
-static lv_obj_t *s_sdr_arc;
+#if VFO_HAS_SDR || TC_FACE
+static lv_obj_t *s_sdr_arc;          /* TailChaser's: the voice it transmits */
+#endif
+#if TC_FACE
+static lv_obj_t *s_tc_spk;           /* the speaker: every repeater muted, or not */
+static bool      s_spk_want;         /* what a tap asked, shown till the status has it */
+static uint32_t  s_spk_tapped;
+#define SPK_SHOW_MS 1500
+static void set_text(lv_obj_t *o, const char *s);
+static void set_text_color(lv_obj_t *o, lv_color_t c);
+/* The voice line's scale: -60 to 0 dBFS, as SVXConnect's arc. */
+static float voice_frac(float db)
+{
+    if (db < -60.0f) db = -60.0f;
+    if (db > 0.0f)   db = 0.0f;
+    return (db + 60.0f) / 60.0f;
+}
 #endif
 static lv_obj_t *s_agc_cap, *s_agc_val, *s_gain_cap, *s_gain_val;
 /* A receiver's slab: the nearest spot or voice, what and where it is, and
@@ -741,7 +771,7 @@ static peak_led_t s_swr_led, s_pwr_led, s_mic_led;
 #if !NAMED_RX
 static peak_led_t s_sig_led;         /* the S-meter's */
 #endif
-#if VFO_HAS_SDR
+#if VFO_HAS_SDR || TC_FACE
 static peak_led_t s_sdr_led;         /* the web SDR's, on its thin line */
 #endif
 
@@ -982,6 +1012,17 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
     {  -73.0f,  -53.0f, 0x00FF00 },   /* S9 to +20  */
     {  -53.0f,  -33.0f, 0x00FF00 },   /* +20 to +40 */
     {  -33.0f,  -13.0f, 0x00FF00 },   /* +40 to +60 */
+#elif TC_FACE
+    /* TailChaser's receiver: an S-meter, the radios' scale, in SvxConnect's
+     * meter colours -- green to S9, yellow over it, red past +40. */
+    { -127.0f, -121.0f, 0x1B5E2E },   /* S0 to S1   */
+    { -121.0f, -109.0f, 0x237A3B },   /* S1 to S3   */
+    { -109.0f,  -97.0f, 0x2EA043 },   /* S3 to S5   */
+    {  -97.0f,  -85.0f, 0x35B35A },   /* S5 to S7   */
+    {  -85.0f,  -73.0f, 0x9DBD3B },   /* S7 to S9   */
+    {  -73.0f,  -53.0f, 0xD8C43A },   /* S9 to +20  */
+    {  -53.0f,  -33.0f, 0xE08C33 },   /* +20 to +40 */
+    {  -33.0f,  -13.0f, 0xD13B3B },   /* +40 to +60 */
 #elif SVX_LOOK
     /* Not an S-meter: the audio level, -60 to 0 dBFS, in SvxConnect's meter
      * colours -- green, then yellow from -12 dB, red in the last 3. */
@@ -1007,7 +1048,7 @@ static const struct { float from, to; uint32_t rgb; } RXZONES[RX_ZONES] = {
 
 /* Every boundary gets a notch, which means every printed tick gets one -- the
  * ends excepted, since they are the ends. */
-#if SVX_LOOK
+#if SVX_LOOK && !TC_FACE
 static const float RXNOTCH[] = { -48.0f, -36.0f, -24.0f, -18.0f, -12.0f,
                                   -6.0f, -3.0f };
 #elif OWRX_FACE
@@ -1084,7 +1125,8 @@ static uint32_t s_menu_tapped;
 
 const char *ui_act_name(uint8_t action)
 {
-    static const char *NAME[] = { "", "TUNE", "ATU", "MEM", "NB", "WNB", "NR", "ANF", "APF" };
+    static const char *NAME[] = { "", "TUNE", "ATU", "MEM", "NB", "WNB", "NR", "ANF", "APF",
+                                  "BLOCK RX", "BLOCK TX" };
     return action < sizeof NAME / sizeof NAME[0] ? NAME[action] : "";
 }
 
@@ -1101,12 +1143,16 @@ static uint8_t act_dsp(uint8_t a)
     }
 }
 
-static bool act_switch(uint8_t a) { return a == UI_ACT_MEM || act_dsp(a); }
+static bool act_block(uint8_t a)  { return a == UI_ACT_BLOCK_RX || a == UI_ACT_BLOCK_TX; }
+static bool act_switch(uint8_t a) { return a == UI_ACT_MEM || act_dsp(a) || act_block(a); }
 
 /* The switches that are on, as the radio says. */
 static uint16_t menu_lit(const ui_state_t *st)
 {
     uint16_t m = st->atu_mem ? 1u << UI_ACT_MEM : 0;
+    /* TailChaser's blocks: lit is blocked. */
+    if (TC_FACE && st->tg_locked) m |= 1u << UI_ACT_BLOCK_RX;
+    if (TC_FACE && st->muted)     m |= 1u << UI_ACT_BLOCK_TX;
     for (uint8_t a = UI_ACT_NB; a <= UI_ACT_APF; a++)
         if (st->dsp_on & act_dsp(a)) m |= (uint16_t)(1u << a);
     return m;
@@ -1119,6 +1165,12 @@ static int menu_build(const ui_state_t *st)
     static const uint8_t DSP[] = { UI_ACT_NB, UI_ACT_WNB, UI_ACT_NR, UI_ACT_ANF, UI_ACT_APF };
     const bool cw = st->mode && !strncasecmp(st->mode, "cw", 2);
     s_menu_n = 0;
+    if (TC_FACE) {
+        /* The repeater's receiver and transmitter, and nothing of a radio's. */
+        s_menu[s_menu_n++] = UI_ACT_BLOCK_RX;
+        s_menu[s_menu_n++] = UI_ACT_BLOCK_TX;
+        return s_menu_n;
+    }
     if (st->has_tune) s_menu[s_menu_n++] = UI_ACT_TUNE;
     if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_ATU;
     if (st->has_atu)  s_menu[s_menu_n++] = UI_ACT_MEM;
@@ -1490,6 +1542,7 @@ static lv_point_t    s_slab_pt;
 static uint32_t      s_slab_wait;    /* a release, waiting to be a tap: when; 0 none */
 static bool          s_slab_wait_key;/* ...and keying if it is */
 static bool          s_slab_finger;  /* the antennas came up under a finger still down */
+static bool          s_press_tcm;    /* TailChaser: a press on the slab, towards its menu */
 static volatile bool s_slab_hold;    /* the antennas came up under it: the buzz is owed */
 RADIO_ONLY static float s_meter_disp = -127.0f;
 static lv_display_t *s_disp;
@@ -1539,7 +1592,7 @@ static float s_m_lo = -108.0f, s_m_hi = 0.0f;
 #endif
 static float smeter_frac(float dbm)
 {
-#if SVX_LOOK
+#if SVX_LOOK && !TC_FACE
     /* The reflector face's arc is the audio level: -60 to 0 dBFS, evenly. */
     if (dbm < -60.0f) dbm = -60.0f;
     if (dbm > 0.0f)   dbm = 0.0f;
@@ -1832,6 +1885,15 @@ static void edit_render(void)
     case ED_MENU: {
         const uint8_t a = s_menu[s_edit_idx];
         title = act_dsp(a) ? "DSP" : "MENU";
+        if (act_block(a)) {
+            /* TailChaser: the repeater it is for, and how the block stands --
+             * green open, red blocked, as the row's RX and TX. */
+            const bool on = s_menu_lit >> a & 1;
+            title = s_last.tg_name[0] ? s_last.tg_name : "REPEATER";
+            snprintf(v, sizeof v, "%s %s", a == UI_ACT_BLOCK_RX ? "RX" : "TX", on ? "BLOCKED" : "OPEN");
+            vcolor = on ? C_DANGER : C_GREEN;
+            break;
+        }
         /* The switches -- the tuner's memories, the DSP -- light when they
          * are on, as SmartSDR's buttons do, and are dimmed when off; a tap
          * turns them the other way. */
@@ -6434,6 +6496,9 @@ static void tap(lv_point_t p, uint32_t held)
     /* The lock left of the talkgroup, the mute right of it: toggles, with or
      * without a link. */
     if (p.y >= 104 && p.y < 140) {
+        /* TailChaser's RX and TX there only show the blocks: they are set
+         * in the menu held on the slab, where a stray tap cannot. */
+        if (TC_FACE) return;
         if (p.x < CX - 38) { if (!PHONE_FACE) s_lock_tap = true; return; }
         if (p.x > CX + 38) { s_mute_tap = true; return; }
     }
@@ -6493,6 +6558,26 @@ static void tap(lv_point_t p, uint32_t held)
         if (UBER_FACE && s_nspots > 0) edit_open(ED_SPOT, &s_last);
         return;
     }
+#if TC_FACE
+    /* TailChaser's row: the link's state | volume | the speaker (before the
+     * receiver's below: its status says rx_only). */
+    if (p.y >= 208 && p.y < PTT_TOP) {
+        if (p.x > CX + 74) {
+            const bool shown = lv_tick_elaps(s_spk_tapped) < SPK_SHOW_MS ? s_spk_want : s_last.spk_muted;
+            s_spk_want   = !shown;
+            s_spk_tapped = tick_mark(lv_tick_get());
+            memset(&s_commit, 0, sizeof s_commit);
+            s_commit.action = UI_ACT_SPK_MUTE;
+            s_commit.on     = s_spk_want;
+            s_have_commit   = true;
+            set_text(s_tc_spk, s_spk_want ? SYM_MUTED : SYM_SOUND);
+            set_text_color(s_tc_spk, s_spk_want ? C_DANGER : C_TEXT2);
+        } else if (p.x > CX + 12) {
+            edit_open(ED_VOL, &s_last);
+        }
+        return;
+    }
+#endif
     /* step | volume, on a receiver */
     if ((RX_FACE || s_last.rx_only) && p.y >= 208 && p.y < PTT_TOP) {
         if (p.x > CX) edit_open(ED_VOL, &s_last);
@@ -6521,6 +6606,23 @@ static void pressing_cb(lv_event_t *e)
      * come up meanwhile too, which keep the antennas shut. */
     if (s_press_ant && held >= ANT_HOLD_MS) s_ptt_armed = false;
     if (s_edit != ED_NONE || s_asking) return;
+#if TC_FACE
+    /* TailChaser: held on the slab, the repeater's blocks -- on the air too,
+     * when a transmitter that should not be is what one wants them for. */
+    if (s_press_tcm && held >= ANT_HOLD_MS) {
+        lv_point_t q = s_press_pt;
+        lv_indev_t *indev = lv_indev_active();
+        if (indev) lv_indev_get_point(indev, &q);
+        if (s_gestured || !s_last.link_ok) {
+            s_press_tcm = false;
+        } else if (in_place(q, s_press_pt)) {
+            s_press_tcm = false;
+            s_slab_hold = true;              /* the motor says so: ui_take_slab_hold() */
+            edit_open(ED_MENU, &s_last);
+            return;
+        }
+    }
+#endif
     if (s_press_ant && held >= ANT_HOLD_MS) {
         lv_point_t q = s_press_pt;
         lv_indev_t *indev = lv_indev_active();
@@ -6573,6 +6675,7 @@ static void release_cb(lv_event_t *e)
                  s_press_picker ? " (towards the picker)" : "", (unsigned)held);
     s_press_picker = false;
     s_press_card   = false;
+    s_press_tcm    = false;
     /* A press on the PTT slab in receive: a tap keys, a swipe does not --
      * and, with the antennas a hold away, a release may be the glass's. */
     if (s_ptt_armed || s_press_ant) {
@@ -6780,9 +6883,11 @@ static void touch_cb(lv_event_t *e)
                      (addresses_up() && (shown_at(s_netinfo, p) || shown_at(s_warn_panel, p)));
     s_press_card   = false;
 #else
-    /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS. */
-    s_press_picker = addresses_up() &&
-                     (p.y < 104 || shown_at(s_netinfo, p) || shown_at(s_warn_panel, p));
+    /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS.
+     * On TailChaser's face also the repeater's name, held as long. */
+    s_press_picker = (addresses_up() &&
+                      (p.y < 104 || shown_at(s_netinfo, p) || shown_at(s_warn_panel, p))) ||
+                     (TC_FACE && s_edit == ED_NONE && !s_asking && shown_at(s_mem_big, p));
     /* Or, with them not up yet, on the S-meter: see NETINFO_HOLD_MS. */
     s_press_card = p.y < 104 && !s_press_picker && !aux_spot(p);
 #endif
@@ -6895,6 +7000,12 @@ static void touch_cb(lv_event_t *e)
      * while an editor is open, when a tap there accepts the edit. With no
      * link the slab would arm a transmitter we cannot reach. */
     if (!RX_FACE && !GEAR_FACE && p.y >= PTT_TOP && s_edit == ED_NONE && s_last.link_ok) {
+#if TC_FACE
+        /* TailChaser keys nothing: held, the slab brings the repeater's
+         * blocks (pressing_cb); a tap there is nothing. */
+        s_press_tcm = true;
+        return;
+#endif
         /* One tap, one toggle. A light touch can flicker -- press, release,
          * press within a single tap -- and on a toggle each extra press
          * undoes the one before: keyed and unkeyed in one tap, which reads as
@@ -7081,7 +7192,7 @@ static void add_rx_notches(void)
 static void add_ticks(void)
 {
     static const struct { float dbm; uint8_t len; uint8_t kind; } TICKS[] = {
-#if SVX_LOOK
+#if SVX_LOOK && !TC_FACE
         { -48, 6, 0 }, { -36, 6, 0 }, { -24, 6, 0 }, { -18, 6, 0 },
         { -12, 11, 1 },                        /* -12 dBFS -- where yellow starts */
         { -6, 6, 2 }, { -3, 6, 2 }, { 0, 9, 2 },
@@ -7115,8 +7226,38 @@ static void add_ticks(void)
         lv_obj_set_style_line_color(ln,
             TICKS[i].kind == 1 ? C_TEXT2 : TICKS[i].kind == 2 ? C_WARN : C_LABEL, 0);
         lv_obj_set_style_line_rounded(ln, true, 0);
+#if TC_FACE
+        /* TailChaser's S-points, numbered just inside their ticks, as the
+         * repeater's own status page names them: 1 to 9, then +20 to +60. */
+        static const char *const SNUM[] = { "1", "3", "5", "7", "9", "+20", "+40", "+60" };
+        _Static_assert(sizeof SNUM / sizeof SNUM[0] == sizeof TICKS / sizeof TICKS[0], "a number a tick");
+        const int rl = r0 - (TICKS[i].dbm > -73.0f ? 15 : 9);
+        lv_obj_t *nl = lv_label_create(s_rx_ticks);
+        lv_obj_set_style_text_font(nl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(nl, TICKS[i].kind == 1 ? C_TEXT2 : TICKS[i].kind == 2 ? C_WARN : C_LABEL, 0);
+        lv_label_set_text(nl, SNUM[i]);
+        lv_obj_align(nl, LV_ALIGN_CENTER, (int32_t)lroundf(rl * c), (int32_t)lroundf(rl * sn));
+#endif
     }
 }
+
+#if TC_FACE
+/* TailChaser's clock, under the slab's word: the local time to the second,
+ * as the knob's wall clock has it -- dashes until the internet has told it.
+ * Not drawn while nobody sees the face. */
+static lv_obj_t *s_tc_clock;
+static void set_text(lv_obj_t *o, const char *s);
+static void tc_clock_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (screen_hidden()) return;
+    struct tm lt;
+    char b[12];
+    if (wallclock_now(&lt, NULL, NULL)) snprintf(b, sizeof b, "%02d:%02d:%02d", lt.tm_hour, lt.tm_min, lt.tm_sec);
+    else                                 snprintf(b, sizeof b, "--:--:--");
+    set_text(s_tc_clock, b);
+}
+#endif
 
 static void build(void)
 {
@@ -7152,6 +7293,12 @@ static void build(void)
     lv_obj_set_style_arc_width(s_ring, 4, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_ring, C_BG, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_ring, 0, LV_PART_INDICATOR);
+#if TC_FACE
+    /* TailChaser's voice line runs just inside it, over the meter, and the
+     * repeater keyed is when that line moves: the ring only below, where no
+     * arc is -- the red slab says the rest (the user, 2026-11-20). */
+    lv_arc_set_bg_angles(s_ring, (ARC_ROT + ARC_SPAN) % 360, ARC_ROT);
+#endif
     /* Hidden in receive, not drawn in the background's colour: an invisible
      * ring the size of the glass was still drawn under every redraw. */
     lv_obj_add_flag(s_ring, LV_OBJ_FLAG_HIDDEN);
@@ -7213,10 +7360,12 @@ static void build(void)
         s_rx_val[z]  = 0;
     }
 #endif /* NAMED_RX: the S-meter in one object */
-#if VFO_HAS_SDR
+#if VFO_HAS_SDR || TC_FACE
     /* A web SDR's S-meter: a thin line just outside the radio's, on its
      * scale, in the SDR's blue -- clear of the notches and the ticks, and
-     * over the hairline, which only shows in transmit, when this does not. */
+     * over the hairline, which only shows in transmit, when this does not.
+     * TailChaser's is the voice its repeater transmits, in gold, always
+     * there. */
     s_sdr_arc = lv_arc_create(s_scr);
     lv_obj_set_size(s_sdr_arc, SDR_R * 2, SDR_R * 2);
     lv_obj_center(s_sdr_arc);
@@ -7229,10 +7378,10 @@ static void build(void)
     lv_obj_set_style_arc_width(s_sdr_arc, 4, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_sdr_arc, C_SUBTLE, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_sdr_arc, 4, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_sdr_arc, C_SDR, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_sdr_arc, TC_FACE ? C_ACCENT : C_SDR, LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(s_sdr_arc, false, LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(s_sdr_arc, false, LV_PART_INDICATOR);
-    lv_obj_add_flag(s_sdr_arc, LV_OBJ_FLAG_HIDDEN);
+    if (!TC_FACE) lv_obj_add_flag(s_sdr_arc, LV_OBJ_FLAG_HIDDEN);
 #endif
     s_rx_ticks = mkgroup();
     s_tx_ticks = mkgroup();
@@ -7342,11 +7491,12 @@ static void build(void)
         led_show(&s_swr_led, false);
         led_show(&s_pwr_led, false);
         led_show(&s_mic_led, false);
-#if VFO_HAS_SDR
-        /* The web SDR's line holds its peak the same way. */
-        static const uint32_t sdr[1] = { SDR_HEX };
+#if VFO_HAS_SDR || TC_FACE
+        /* The web SDR's line holds its peak the same way; TailChaser's
+         * voice's, in white. */
+        static const uint32_t sdr[1] = { TC_FACE ? 0xFFFFFF : SDR_HEX };
         led_build(&s_sdr_led, ARC_ROT, ARC_SPAN, SDR_R, 4, false, sdr, 1);
-        led_show(&s_sdr_led, false);
+        led_show(&s_sdr_led, TC_FACE);
 #endif
     }
 
@@ -7403,6 +7553,12 @@ static void build(void)
      * above belongs to the talker, whose callsign needs all of its width. */
     s_lock_icon = mklabel(&font_svx_icons_24, C_LABEL, CX - 76, 122, SYM_UNLOCK);
     s_mute_icon = mklabel(&font_svx_icons_24, C_LABEL, CX + 76, 122, SYM_SOUND);
+#if TC_FACE
+    lv_obj_set_style_text_font(s_lock_icon, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_mute_icon, &lv_font_montserrat_20, 0);
+    lv_label_set_text(s_lock_icon, "RX");
+    lv_label_set_text(s_mute_icon, "TX");
+#endif
 #if PHONE_FACE
     /* The row's middle is a number -- +32475123456 is 160 px wide -- and
      * there is no lock: the mute moves out of its way, inside the ticks. */
@@ -7468,6 +7624,12 @@ static void build(void)
                          LV_SYMBOL_VOLUME_MID " 40");
     s_mic      = mklabel(&font_mic_14,           C_TEXT2,  CX + 104, 222,
                          SYM_MIC " 100");
+#if TC_FACE
+    /* Nothing to say: the microphone's place is the speaker's, which mutes
+     * every repeater -- a tap each way. */
+    lv_obj_add_flag(s_mic, LV_OBJ_FLAG_HIDDEN);
+    s_tc_spk = mklabel(&font_svx_icons_24, C_TEXT2, CX + 104, 221, SYM_SOUND);
+#endif
     if (RX_FACE) {
         /* A receiver has no RIT to set and no microphone: the step and the
          * volume share the row. */
@@ -7506,6 +7668,10 @@ static void build(void)
     lv_obj_set_style_text_align(s_ptt_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_all(s_ptt_lbl, 0, 0);
     lv_obj_set_pos(s_ptt_lbl, PTT_LEFT, PTT_TOP + 14);
+#if TC_FACE
+    s_tc_clock = mklabel(&lv_font_montserrat_20, C_TEXT2, CX, PTT_TOP + 66, "--:--:--");
+    lv_timer_create(tc_clock_cb, 250, NULL);
+#endif
     lv_obj_remove_flag(s_ptt_lbl, LV_OBJ_FLAG_CLICKABLE);
     if (!RX_FACE && !PHONE_FACE) {
         /* The boom arm as the PTT, and the headset come with it down: a red
@@ -8850,7 +9016,7 @@ void ui_update(const ui_state_t *st)
          * reflector under it. */
         if (st->tg_name[0])  snprintf(big, sizeof big, "%s", st->tg_name);
         else if (st->tg)     snprintf(big, sizeof big, "TG %lu", (unsigned long)st->tg);
-        else                 snprintf(big, sizeof big, "MONITOR");
+        else                 snprintf(big, sizeof big, TC_FACE ? "NO REPEATERS" : "MONITOR");
         snprintf(small, sizeof small, "%s", st->server);
 #else
         mem_texts(st, big, sizeof big, small, sizeof small);
@@ -8974,13 +9140,21 @@ void ui_update(const ui_state_t *st)
     else        snprintf(tb, sizeof tb, "TG --");
     set_text(s_mode, tb);
     set_text_color(s_mode, C_ACCENT);
-    set_text(s_step_lbl, st->link_ok ? "connected" : st->connecting ? "connecting"
-                                                                  : "disconnected");
+    /* TailChaser's says which repeater: its role, its place on the dial. */
+    set_text(s_step_lbl, TC_FACE && st->where[0] ? st->where
+                         : st->link_ok ? "connected" : st->connecting ? "connecting" : "disconnected");
     set_text_color(s_step_lbl, st->link_ok ? C_GREEN : st->connecting ? C_WARN : C_DANGER);
+#if TC_FACE
+    /* The blocks: green open, red blocked, grey while the repeater is not
+     * being read. */
+    set_text_color(s_lock_icon, !st->link_ok ? C_DISABLED : st->tg_locked ? C_DANGER : C_GREEN);
+    set_text_color(s_mute_icon, !st->link_ok ? C_DISABLED : st->muted ? C_DANGER : C_GREEN);
+#else
     set_text(s_lock_icon, st->tg_locked ? SYM_LOCK : SYM_UNLOCK);
     set_text_color(s_lock_icon, st->tg_locked ? C_WARN : C_LABEL);
     set_text(s_mute_icon, st->muted ? SYM_MUTED : SYM_SOUND);
     set_text_color(s_mute_icon, st->muted ? C_DANGER : C_LABEL);
+#endif
 #else
     if (mem && (st->mem_band || st->mem_all)) {
         /* The IC-9700's group is its band; a FlexRadio's memories have none. */
@@ -9092,6 +9266,13 @@ void ui_update(const ui_state_t *st)
     set_text(s_vol, tb);
     snprintf(tb, sizeof tb, SYM_MIC " %u", (unsigned)s_micgain);
     set_text(s_mic, tb);
+#if TC_FACE
+    {
+        const bool m = lv_tick_elaps(s_spk_tapped) < SPK_SHOW_MS ? s_spk_want : st->spk_muted;
+        set_text(s_tc_spk, m ? SYM_MUTED : SYM_SOUND);
+        set_text_color(s_tc_spk, m ? C_DANGER : C_TEXT2);
+    }
+#endif
 
     if (st->warn && st->warn[0] && !s_asking && s_edit == ED_NONE) {
         if (strcmp(lv_label_get_text(s_warn), st->warn) != 0) {
@@ -9130,7 +9311,13 @@ void ui_update(const ui_state_t *st)
     vu_set(&s_vu[0], live ? st->rx_level_db : -90.0f);
     vu_set(&s_vu[1], live ? st->tx_mic_dbm : -90.0f);
 #else
-#if REFLECTOR_FACE
+#if TC_FACE
+    /* The receiver's signal, always: the repeater's transmitter keyed is not
+     * the knob's microphone. No signal is S0 itself, not the bar's tail
+     * creeping towards it -- else a sliver and the peak stay lit there. */
+    release(&s_meter_disp, st->smeter_dbm);
+    if (s_meter_disp < -126.5f) s_meter_disp = -127.0f;
+#elif REFLECTOR_FACE
     /* The whole arc is the audio: what is heard in receive, the microphone in
      * transmit. */
     release(&s_meter_disp, st->tx ? st->tx_mic_dbm : st->rx_level_db);
@@ -9171,6 +9358,23 @@ void ui_update(const ui_state_t *st)
         lv_arc_set_value(s_rx_zone[z], v);
     }
 #endif /* NAMED_RX: the S-meter in one object */
+#if TC_FACE
+    /* The voice the repeater transmits, as played: the thin line, its peak
+     * held a second and falling at 30 dB/s, as the web SDRs' is. */
+    {
+        static float   s_vo_disp = -120.0f;
+        static peak_t  s_vo_pk = { .v = -120.0f };
+        static int16_t s_vo_val = -1;
+        release(&s_vo_disp, st->rx_level_db);
+        const float pk = peak_hold(&s_vo_pk, s_vo_disp, 30.0f);
+        led_set(&s_sdr_led, pk > -60.0f ? voice_frac(pk) : 0.0f, 0);
+        const int16_t v = (int16_t)(voice_frac(s_vo_disp) * 1000.0f);
+        if (v != s_vo_val) {                /* only what changed: see s_rx_val */
+            s_vo_val = v;
+            lv_arc_set_value(s_sdr_arc, v);
+        }
+    }
+#endif
 #endif /* PHONE_FACE: the whole arc */
 #if PHONE_FACE
     /* The call's time under the arc, and what it is doing. */
@@ -9207,7 +9411,13 @@ void ui_update(const ui_state_t *st)
     {
         char who[40];
         const unsigned secs = (unsigned)(st->talker_ms / 1000u);
-        if (st->tx) {
+        if (st->tx && TC_FACE) {
+            /* The repeater on the air: who it repeats, and why it is keyed. */
+            set_text(s_srd, st->talker[0] ? st->talker : "ON AIR");
+            set_text(s_dbm, st->talker_info);
+            set_text_color(s_srd, C_TX_TEXT);
+            set_text_color(s_dbm, C_TX_TEXT);
+        } else if (st->tx) {
             snprintf(who, sizeof who, "%d dB", (int)sig_pk);
             set_text(s_srd, who);
             set_text(s_dbm, "microphone");
@@ -9509,6 +9719,14 @@ void ui_update(const ui_state_t *st)
         }
 #if RX_FACE
         call_place();
+#endif
+    } else if (TC_FACE) {
+        /* The repeater's transmitter: TX while it is keyed -- the slab red
+         * with it -- and whether it may be. */
+        set_text_cut(s_ptt_lbl, s_ptt_lbl_shown, sizeof s_ptt_lbl_shown,
+                     !st->link_ok ? "----" : st->tx ? "TX" : st->muted ? "TX BLOCKED" : "STANDBY");
+#if TC_FACE
+        set_text_color(s_tc_clock, st->tx ? C_TX_TEXT : C_TEXT2);
 #endif
     } else if (st->rx_only)
         /* A receiver: the slab says so, dimmed, and keys nothing. */

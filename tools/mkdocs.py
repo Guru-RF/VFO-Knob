@@ -2933,12 +2933,132 @@ def saver_pictures():
     return out
 
 
+# --- the TailChaser firmware ------------------------------------------------------
+# ui.c TC_FACE: SVXConnect's face, its arc an S-meter on the radios' scale
+# (S9 at 0.6) in SvxConnect's meter colours, numbered inside its ticks; the
+# voice the repeater transmits a thin gold line outside it (SDR_R, -60 to 0
+# dBFS); RX and TX, the blocks, where the lock and the mute are; the link's
+# row "transmitter 1/2", the volume and the speaker that mutes them all; the
+# slab the repeater's transmitter, the time under it.
+TC_ZONES = [(-127, -121, "#1B5E2E"), (-121, -109, "#237A3B"), (-109, -97, "#2EA043"),
+            (-97, -85, "#35B35A"), (-85, -73, "#9DBD3B"), (-73, -53, "#D8C43A"),
+            (-53, -33, "#E08C33"), (-33, -13, "#D13B3B")]
+TC_SNUM = [(-121, 6, "1"), (-109, 6, "3"), (-97, 6, "5"), (-85, 6, "7"), (-73, 11, "9"),
+           (-53, 6, "+20"), (-33, 6, "+40"), (-13, 9, "+60")]
+
+
+def tc_face(dbm=-127, voice=None, talker="--", info="", info_colour=None, rx="open", tx="open",
+            tg="TG 8", name="ON0ORA", line="438.800 -7.6 T131.8", where="transmitter 1/2",
+            where_colour=None, vol="40", muted=False, slab=None, clock="14:32:07", on_air=False):
+    """TailChaser's face at a reading: `dbm` the receiver's signal, `voice`
+    the level of what it transmits (dBFS, None: nothing), `rx`/`tx` "open",
+    "blocked" or "unread", `on_air` the repeater keyed."""
+    md.use_palette("svxconnect")
+    a = lambda d: md.ARC_ROT + md.smeter_frac(d) * md.ARC_SPAN      # noqa: E731
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG_TX if on_air else md.BG}"/>',
+         f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, md.RC)}" fill="none" '
+         f'stroke="{md.SUBTLE}" stroke-width="{md.BAND}"/>']
+    for lo, hi, col in TC_ZONES:
+        if dbm > lo:
+            s.append(md.block(a(lo), a(min(dbm, hi)), col))
+    for d in md.RXNOTCH:
+        s.append(md.notch(a(d)))
+    for d, ln, num in TC_SNUM:
+        kind = 1 if d == -73 else (2 if d > -73 else 0)
+        col = md.TEXT2 if kind == 1 else (md.WARN if kind == 2 else md.LABEL)
+        s.append(md.tick(a(d), ln, col, 3 if kind == 1 else 2))
+        r0 = md.ARC_R0 - 15 - ln
+        x, y = md.pt(a(d), r0 - (15 if d > -73 else 9))
+        s.append(md.text(x, y + 5, num, 14, col))
+    # The voice line, outside the meter: its track, then the level in gold.
+    s.append(f'<path d="{md.arc_path(md.ARC_ROT, md.ARC_ROT + md.ARC_SPAN, 174)}" fill="none" '
+             f'stroke="{md.SUBTLE}" stroke-width="4"/>')
+    if voice is not None and voice > -60:
+        f = max(0.0, min(1.0, (voice + 60) / 60))
+        s.append(md.block(md.ARC_ROT, md.ARC_ROT + f * md.ARC_SPAN, md.ACCENT, r=174, band=4))
+        s.append(md.block(md.ARC_ROT + f * md.ARC_SPAN, md.ARC_ROT + f * md.ARC_SPAN + 2, "#FFFFFF",
+                          r=174, band=4))
+    talk_colour = md.TX_TEXT if on_air else md.TEXT
+    s += [md.text(180, 83, esc(talker), 20, talk_colour, 700),
+          md.text(180, 103, esc(info), 14, md.TX_TEXT if on_air else (info_colour or md.GREEN))]
+    pill = {"open": md.GREEN, "blocked": md.DANGER, "unread": md.DISABLED}
+    s += [md.text(104, 129, "RX", 20, pill[rx]), md.text(180, 129, tg, 20, md.ACCENT),
+          md.text(256, 129, "TX", 20, pill[tx]),
+          md.text(180, 170, esc(name), 28, md.TEXT, 600),
+          md.text(180, 203, esc(line), 20, md.TEXT2),
+          md.text(124, 227, esc(where), 20, where_colour or md.GREEN),
+          md.icon_readout(222, 227, md.speaker, vol, md.TEXT2),
+          (mr.sound_muted(284, 221, md.DANGER) if muted else mr.sound_on(284, 221, md.TEXT2))]
+    if on_air:
+        s += [md.ptt_slab(md.TX_RED, slab or "TX", "#FFFFFF"),
+              f'<path d="{md.arc_path(md.ARC_ROT + md.ARC_SPAN, md.ARC_ROT + 360, 176)}" fill="none" '
+              f'stroke="{md.TX_RED}" stroke-width="4"/>']
+    else:
+        s.append(md.ptt_slab(md.BG1, slab or "STANDBY", md.TEXT2))
+    s.append(md.text(180, md.PTT_TOP + 66 + 7, clock, 20, "#FFFFFF" if on_air else md.TEXT2))
+    return "".join(s)
+
+
+def tailchaser_pictures():
+    f = tc_face()
+    left = [(64, 64, "S-meter · hold: addresses"), (88, 122, "RX block"),
+            (74, 222, "which repeater"), (112, 300, "transmitter · hold: blocks")]
+    right = [(226, 77, "who is talking"), (198, 98, "talkgroup, S-points or why"),
+             (214, 123, "its talkgroup"), (272, 122, "TX block"), (288, 162, "its name · hold: firmwares"),
+             (242, 197, "output, shift, tone"), (244, 222, "volume"), (306, 222, "speaker: all muted"),
+             (300, 40, "the voice it transmits")]
+    out = {}
+    talk = dict(dbm=-127, voice=-14, talker="ON4ABC", info="TG 206", tg="TG 206", on_air=True)
+    out["01-face"] = callouts("tc-01", "The TailChaser firmware's face",
+                              tc_face(dbm=-85, voice=-18, talker="LOCAL", info="S7"), left, right)
+    out["02-turn"] = knob("tc-02", "Turn: the next repeater",
+                          tc_face(name="ON0ORA-S", line="145.450 T131.8", where="simplex 2/2"),
+                          turn(), "turn: the next repeater, one a detent")
+    out["03-talkgroup"] = knob("tc-03", "A talker on the talkgroup, on the air",
+                               tc_face(**{**talk, "info": "talkgroup audio"}), "",
+                               "the talkgroup's talker, as long as the repeater sends the over")
+    out["04-local"] = knob("tc-04", "A voice on the repeater's input",
+                           tc_face(dbm=-65, voice=-12, talker="LOCAL", info="S9+10", on_air=True), "",
+                           "LOCAL: a voice on its input, its signal on the S-meter")
+    out["05-last"] = knob("tc-05", "Quiet: who spoke last",
+                          tc_face(talker="ON4ABC", info="12s ago", info_colour=md.LABEL)
+                          .replace(md.text(180, 83, "ON4ABC", 20, md.TEXT, 700),
+                                   md.text(180, 83, "ON4ABC", 20, md.LABEL, 700)), "",
+                          "quiet: who spoke last, and how long ago")
+    out["06-blocks"] = knob("tc-06", "Held STANDBY: the blocks",
+                            tc_face() + editor("ON0ORA", "RX OPEN", 48, colour=md.GREEN), hold_slab(),
+                            "hold STANDBY  ·  turn: RX or TX  ·  a tap blocks or opens it")
+    out["07-blocked"] = knob("tc-07", "The transmitter blocked",
+                             tc_face(tx="blocked", slab="TX BLOCKED"), "",
+                             "TX in red, TX BLOCKED on the slab: the repeater keys nothing")
+    out["08-volume"] = knob("tc-08", "The volume", tc_face() + editor("VOLUME", "40"), tap(222, 222),
+                            "tap the volume  ·  turn  ·  tap to accept")
+    out["09-muted"] = knob("tc-09", "Every repeater muted", tc_face(muted=True), tap(284, 221),
+                           "tap the speaker: every repeater muted, and kept so")
+    out["10-speaker"] = knob("tc-10", "A Bluetooth speaker playing the repeater",
+                             tc_face().replace(md.ptt_slab(md.BG1, "STANDBY", md.TEXT2),
+                                               md.headset_slab("STANDBY", speaker=True)), "",
+                             "a Bluetooth speaker: its sign at the slab's right end")
+    out["11-nolink"] = knob("tc-11", "A repeater that does not answer",
+                            tc_face(name="on0ora-tx", line="no answer", where="transmitter 1/2",
+                                    where_colour=md.WARN, rx="unread", tx="unread", tg="TG --", slab="----")
+                            + warning("NO LINK", "TailChaser"), "",
+                            "NO LINK: the one shown has not answered for 5 s")
+    md.use_palette("svxconnect")
+    out["12-battery"] = knob("tc-12", "On its own battery: the knob's charge over who is talking",
+                             tc_face() + md.knob_battery(85), "",
+                             "its charge, by the quarter  ·  none on USB power")
+    lock_pictures(out, 13, "tc", "svxconnect", "TailChaser", tc_face(), keys=False)
+    return out
+
+
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
              "jupitersdr": jupitersdr_pictures, "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
              "epibeam": epibeam_pictures, "adsb": adsb_pictures, "clock": clock_pictures,
-             "weather": weather_pictures, "wifitest": wifitest_pictures, "screensaver": saver_pictures,
+             "weather": weather_pictures, "wifitest": wifitest_pictures, "tailchaser": tailchaser_pictures,
+             "screensaver": saver_pictures,
              "headset": headset_pictures}
 
 

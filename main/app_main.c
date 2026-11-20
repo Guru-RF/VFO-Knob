@@ -40,6 +40,9 @@
 #if VFO_RADIO_WIFITEST
 #include "wifitest_client.h"
 #endif
+#if VFO_RADIO_TAILCHASER
+#include "tailchaser_client.h"
+#endif
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "sd_cache.h"
@@ -195,6 +198,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "Weather";
 #elif VFO_RADIO_WIFITEST
     const char *name = "WiFi Test";
+#elif VFO_RADIO_TAILCHASER
+    const char *name = "TailChaser";
 #else
     const char *name = "AetherSDR";
 #endif
@@ -221,7 +226,7 @@ static volatile bool s_in_call;   /* calling, ringing or talking: the dial is th
 static volatile bool s_fill_stop, s_fill_running;
 
 #if !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_KIWI && !VFO_RADIO_OWRX && \
-    !VFO_RADIO_WEBSDR
+    !VFO_RADIO_WEBSDR && !VFO_RADIO_TAILCHASER
 /* Another radio, chosen with a swipe up: in use from the next boot, and the
  * knob restarts into it at once -- the clients have no restart path. Never
  * while transmitting. The boot is confirmed first: a restart inside its first
@@ -1386,6 +1391,20 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "menu -> tuner memories %s", c.on ? "on" : "off");
                 radio_atu_memories(c.on);
                 break;
+            case UI_ACT_BLOCK_RX:           /* TailChaser: the repeater's receiver */
+                ESP_LOGI(TAG, "menu -> receiver %s", c.on ? "blocked" : "open");
+                radio_tg_lock(c.on);
+                break;
+            case UI_ACT_BLOCK_TX:           /* ...and its transmitter */
+                ESP_LOGI(TAG, "menu -> transmitter %s", c.on ? "blocked" : "open");
+                radio_mute(c.on);
+                break;
+#if VFO_RADIO_TAILCHASER
+            case UI_ACT_SPK_MUTE:           /* TailChaser's audio, every repeater's */
+                ESP_LOGI(TAG, "speaker -> %s", c.on ? "muted" : "on");
+                tc_set_audio_mute(c.on);
+                break;
+#endif
             default:
                 if (c.dsp) {
                     ESP_LOGI(TAG, "menu -> %s %s", ui_act_name(c.action), c.on ? "on" : "off");
@@ -1467,7 +1486,7 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "band -> %u", (unsigned)c.band);
                 refused |= !wsdr_band_choose(c.band);
             }
-#elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
+#elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_TAILCHASER
             if (c.have_radio) switch_radio(c.radio);
 #endif
             if (refused)      haptic(12);   /* triple click: refused */
@@ -2139,6 +2158,7 @@ static void ui_task(void *arg)
             .talker_ms     = st.talker_ms,
             .tg_locked     = st.tg_locked,
             .muted         = st.muted,
+            .spk_muted     = st.spk_muted,
             .rx_level_db   = st.rx_level_db,
             .rit_hz        = st.rit_hz,
             .smeter_dbm    = st.smeter_dbm,
@@ -2183,6 +2203,7 @@ static void ui_task(void *arg)
         strlcpy(u.talker_info, st.talker_info, sizeof u.talker_info);
         strlcpy(u.last_talker, st.last_talker, sizeof u.last_talker);
         strlcpy(u.server, st.server, sizeof u.server);
+        strlcpy(u.where, st.where, sizeof u.where);
         /* A telephone's call (the phone firmware; zeros on the others). */
         u.call    = st.call;
         u.call_ms = st.call_ms;
@@ -2384,7 +2405,7 @@ static void ui_task(void *arg)
             u.radio_sel       = (int8_t)wsdr_rx_active();
             for (int i = 0; i < u.n_radios; i++) wsdr_rx_label(i, u.radio_name[i], sizeof u.radio_name[i]);
         }
-#elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE
+#elif !VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_TAILCHASER
         /* The radios to choose from with a swipe up: not over the cable,
          * which reaches one computer or one radio. */
         {
@@ -2666,6 +2687,11 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * its hosts and the internet itself. */
     strlcpy(ip, "WIFITEST", iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (WiFi Test) ---");
+#elif VFO_RADIO_TAILCHASER
+    /* The repeaters are the configuration page's TailChaser section: the
+     * client reaches them itself, over the LAN, the internet or a tailnet. */
+    strlcpy(ip, "TAILCHASER", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (TailChaser) ---");
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -2889,6 +2915,7 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "clock",      "Clock",      false },
     { "weather",    "Weather",    false },
     { "wifitest",   "WiFi Test",  false },
+    { "tailchaser", "TailChaser", false },
 };
 
 static void setup_wifi_page(void)

@@ -590,7 +590,7 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
   <p class="note" id="btrxnote" hidden>Put the headset<span class="btspk"> or speaker</span> in pairing mode,
      <b class="btfind">Find headsets</b>, and tap it in the list. The knob remembers it, and
      calls it whenever it is switched on, as a phone does. While it is
-     connected, the receiver's audio plays in it as well as on the jack.
+     connected, the <span class="notc">receiver's</span><span class="tconly">repeater's</span> audio plays in it as well as on the jack.
      <span class="btspk">A speaker plays the receiver the same way, a fifth of a
      second or so behind the jack. One that takes its volume from what plays to
      it &mdash; most do &mdash; turns itself to the knob's VOLUME, and its own
@@ -684,6 +684,76 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      reflector's live feed (an enhanced reflector's)</label>
   <p class="note">Station and talkgroup changes apply when saved: the knob logs
      in again.</p>
+</section>
+
+<section id="tcsec" hidden>
+  <h2>TailChaser</h2>
+  <div id="tcrows"></div>
+  <div id="tcblock" hidden>
+    <button id="tcbrx" class="ghost">Block the receiver</button>
+    <button id="tcbtx" class="ghost">Block the transmitter</button>
+    <p class="note">A block stays on the repeater, through restarts and power cuts,
+       until it is released, here, on the knob (hold STANDBY: RX and TX, a tap
+       each) or in the repeater's own admin portal. Blocking needs a <b>control</b> key; a read key
+       only watches.</p>
+  </div>
+  <h3>Repeaters</h3>
+  <p class="note">The dial steps through them, one a detent, in this order. Each is a TailChaser node: a
+     transmitter, a duplex or a simplex node (a split repeater is read at its
+     transmit site). Its address as the knob reaches it: a name on your tailnet
+     such as <code>on0ora-tx</code>, an IP address, or a name the DNS knows; with
+     <code>:port</code> when its status page is not on 8080. The API key is made in
+     the node's admin portal (<code>http://&lt;node&gt;:8080/admin</code>, API keys).
+     The name is what the knob shows for it (16 characters at most), such as
+     <code>ON0ORA-S</code> for a simplex node beside the repeater; left empty, its
+     callsign.</p>
+  <div id="tcnodes"></div>
+  <button id="tcadd" class="ghost">Add a repeater</button>
+  <div class="grid">
+    <div><label>Show the busy one after (seconds; 0: only the dial)</label>
+         <input id="tchold" type="number" min="0" max="3600" step="1" inputmode="numeric" placeholder="20"></div>
+  </div>
+  <p class="note">The knob reads every repeater all the time, so a turn of the dial
+     shows the next at once. When one becomes busy &mdash; a talker on its
+     talkgroup, or a voice on its input &mdash; the knob goes to it by itself, once
+     the one shown has been quiet, and the knob left alone, for this long; an
+     announcement or a carrier with no voice is not busy. While the one shown is
+     busy it stays, so two repeaters answering each other are not bounced
+     between. 0: it stays where the dial put it.</p>
+  <p class="note">The knob plays the repeater it shows &mdash; what that repeater
+     transmits &mdash; on the jack and a Bluetooth headset or speaker, once the
+     repeater lets it listen: <code>[status] monitor = true</code> in its
+     <code>tailchaser.conf</code>. The speaker on the face's bottom row mutes every
+     repeater, and stays so through restarts; the volume beside it is the knob's own
+     (Audio, below). The thin line outside the S-meter is that audio's level.</p>
+  <h3>Tailscale</h3>
+  <label class="chk"><input type="checkbox" id="tcts"> Reach the repeaters over my
+     tailnet (Tailscale)</label>
+  <div class="grid">
+    <div><label>Auth key (empty: log in from this page)</label><div class="pw"><input id="tcauth"
+         type="password" autocomplete="new-password" placeholder="not set"><button type="button"
+         class="show">Show</button></div></div>
+    <div><label>The knob's name on the tailnet</label>
+         <input id="tcname" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="tcclear"> Clear the auth key</label>
+  <p class="note">The knob joins your tailnet as a device of its own, as a phone
+     or a laptop does, and finds the repeaters there by their names. Without an
+     auth key, it shows a login address here after the restart: open it and log
+     in to Tailscale to add the knob. Or make an auth key on Tailscale's
+     <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" rel="noopener">Keys
+     page</a> (Generate auth key, Reusable left off) and paste it here.</p>
+  <p class="note">Once the knob shows on the tailnet, turn off its key expiry,
+     or it has to log in again after half a year: on the
+     <a href="https://login.tailscale.com/admin/machines" target="_blank" rel="noopener">Machines
+     page</a>, click the knob, then <b>Machine settings</b> (the gear, top
+     right) and <b>Disable key expiry</b>. Tailscale is started once a boot: a
+     change to it takes a restart.</p>
+  <button id="tcsave">Save</button>
+  <button id="tcforget" class="ghost">Forget this knob's Tailscale identity</button>
+  <p class="note">The API keys and the auth key are kept on the knob, never shown
+     again, and leave it only in the requests to the repeaters and to
+     Tailscale.</p>
 </section>
 
 <section id="phonesec" hidden>
@@ -820,7 +890,8 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      microphone and a Bluetooth headset's each have their gain: the dial
      turns the one in use.</p>
   <p class="note" id="volnote" hidden>The volume takes effect immediately. A receiver's
-     firmware has no microphone to set.</p>
+     firmware has no microphone to set<span class="tconly">, nor has TailChaser's: the
+     knob listens to the repeaters and keys none</span>.</p>
   <div class="grid">
     <div><label for="ss">Screensaver</label>
          <select id="ss"><option value="1">Matrix rain</option>
@@ -1168,9 +1239,10 @@ async function load(){
   CLOCK = c.radio === 'clock';            /* a clock: no radio; its alarms' sound alone */
   WX = c.radio === 'weather';             /* Open-Meteo's forecast: no radio, no audio */
   WT = c.radio === 'wifitest';            /* the WiFi network measured: no radio, no audio */
+  TC = c.radio === 'tailchaser';          /* TailChaser repeaters: their API, the one shown heard */
   SCREEN = EPI || ADSB || CLOCK || WX || WT;
   /* The setup firmware has no radio: it installs one of the others. */
-  $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || SCREEN;
+  $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || SCREEN || TC;
   $('episec').hidden = !EPI; $('beamn').value = String(c.beamn ?? 4);
   $('adsbsec').hidden = !ADSB;
   if (ADSB) adsbLoad();
@@ -1178,6 +1250,10 @@ async function load(){
   if (WX) wxLoad();
   $('wtsec').hidden = !WT;
   if (WT) wtStart();
+  $('tcsec').hidden = !TC;
+  for (const e of document.querySelectorAll('.tconly')) e.hidden = !TC;
+  for (const e of document.querySelectorAll('.notc')) e.hidden = TC;
+  if (TC && !tcLoaded) { document.documentElement.style.setProperty('--accent','#e5a823'); tcLoad(); }
   $('alsec').hidden = !CLOCK;
   if (CLOCK) alLoad();
   /* EpiBeam, the radar, the clock and the weather play nothing: of Audio, only the screen's settings. */
@@ -1220,7 +1296,8 @@ async function load(){
   $('myip').textContent = 'my IP ' + myIp;
   $('hostusb').hidden = lan || SVX || flex || k4 || uber || WEBRX || ox || js || !(c.client && c.client_usb);
   /* A list of radios, one in use, for all but the reflector's firmware. */
-  LIST = !SVX && c.radio !== 'setup' && !KIWI && !SCREEN && !OB; LAN = lan; UBER = uber; K4 = k4; RXONLY = uber || KIWI || WEBRX;
+  LIST = !SVX && c.radio !== 'setup' && !KIWI && !SCREEN && !TC && !OB; LAN = lan; UBER = uber; K4 = k4;
+  RXONLY = uber || KIWI || WEBRX || TC;   /* TailChaser's knob listens, and keys nothing */
   /* A receiver's firmware has no microphone: no gain to set for one. */
   $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY || SCREEN; $('volnote').hidden = !RXONLY || SCREEN;
   HOSTLBL = flex || k4 ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
@@ -2061,6 +2138,7 @@ function pwHint(d,x){
 /* ---- the phone firmware: its SIP account, a call, the favourites ---- */
 let PHONE=false, phoneLoaded=false, FAVS=[];
 let EPI=false;                          /* the EpiBeam firmware's page */
+let TC=false, tcLoaded=false, TCN=[];     /* the tailchaser firmware's page; its repeaters' rows */
 let ADSB=false, CLOCK=false, WX=false, WT=false, SCREEN=false; /* ADS-B Radar's, the Clock's, the Weather's, the WiFi Test's; any, a face with no radio */
 
 /* ---- ADS-B Radar: the radar's middle, its feed, what it shows ---- */
@@ -2436,6 +2514,123 @@ async function svxSave(){
   const r=await fetch('/api/svx',{method:'POST',body:b});
   return r.ok ? '' : await r.text();
 }
+/* ---- the tailchaser firmware: its repeaters, Tailscale, what it sees ---- */
+async function tcLoad(){
+  tcLoaded=true;
+  let a; try{ a=await (await fetch('/api/tailchaser',{cache:'no-store'})).json() }catch(e){ return }
+  TCN=(a.nodes||[]).map((n,i)=>({addr:n.addr,name:n.name||'',key:'',had:n.key,was:i}));
+  if(!TCN.length) TCN.push({addr:'',name:'',key:'',had:false,was:-1});
+  tcNodes();
+  $('tcts').checked=!!a.ts; $('tcclear').checked=false; $('tcauth').value='';
+  $('tcauth').placeholder=a.tsauth?'unchanged':'not set';
+  $('tcname').value=a.tsname||''; $('tcname').placeholder=a.tsdefault||'';
+  $('tchold').value=a.hold??20;
+  tcShow(a.state);
+}
+function tcNodes(){
+  $('tcnodes').innerHTML=TCN.map((n,i)=>`<div class="grid" data-i="${i}">
+    <div><label>Repeater ${i+1}: address</label><input class="tca" value="${esc(n.addr).replace(/"/g,'&quot;')}"
+         autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="on0ora-tx"></div>
+    <div><label>Name on the knob</label><input class="tcm" value="${esc(n.name).replace(/"/g,'&quot;')}"
+         maxlength="16" autocomplete="off" spellcheck="false" placeholder="its callsign"></div>
+    <div><label>API key</label><div class="pw"><input class="tck" type="password" autocomplete="new-password"
+         placeholder="${n.had?'unchanged':'tc_\u2026'}"><button type="button" class="tcdel ghost">Remove</button></div></div>
+    </div>`).join('');
+  for(const g of $('tcnodes').querySelectorAll('.grid')){
+    const i=+g.dataset.i;
+    g.querySelector('.tca').oninput=e=>TCN[i].addr=e.target.value;
+    g.querySelector('.tcm').oninput=e=>TCN[i].name=e.target.value;
+    g.querySelector('.tck').oninput=e=>TCN[i].key=e.target.value;
+    g.querySelector('.tcdel').onclick=()=>{ TCN.splice(i,1); tcNodes() };
+  }
+  $('tcadd').disabled=TCN.length>=8;
+}
+$('tcadd').onclick=()=>{ if(TCN.length<8){ TCN.push({addr:'',name:'',key:'',had:false,was:-1}); tcNodes() } };
+function tcShow(s){
+  if(!s) return;
+  const yes=(b,t,f)=>b?t:f;
+  let h=row('Now',esc(s.phase||'\u2014'));
+  if(s.live){
+    h+=row('Repeater',esc(s.name)+(s.freq?' \u00b7 '+esc(s.freq):'')+' \u00b7 '+esc(s.role)
+           +(s.version?' '+esc(s.version):'')+' \u00b7 up '+Math.round(s.uptime/3600)+' h');
+    h+=row('Receiver',(s.block_rx?'<b style="color:var(--bad)">BLOCKED</b> \u00b7 ':'')
+           +(s.open?'a voice':s.cos?'a carrier, held back':'quiet')+(s.smeter?' \u00b7 '+esc(s.smeter):'')
+           +(s.cos?' \u00b7 '+s.level.toFixed(1)+' dBFS':'')
+           +(s.rx_site===false?' \u00b7 <b style="color:var(--bad)">the receive site is not connected</b>':''));
+    h+=row('Transmitter',(s.block_tx?'<b style="color:var(--bad)">BLOCKED</b> \u00b7 ':'')
+           +(s.tx?'on the air'+(s.tx_why?': '+esc(s.tx_why):''):'standby'));
+    h+=row('Talkgroup',s.link_up?'TG '+s.tg+(s.home_tg&&s.home_tg!==s.tg?' (home '+s.home_tg+')':'')
+           +' on '+esc(s.reflector)+(s.talker?' \u00b7 '+esc(s.talker)+' talking':s.last?' \u00b7 last: '+esc(s.last):'')
+           :'not connected');
+  }
+  if(s.audio){
+    const a=s.audio, on=a.state==='listening';
+    h+=row('Audio',(a.muted?'<b style="color:var(--bad)">muted</b> on the knob \u00b7 ':'')
+           +(on?'<span class="pill up">listening</span>'
+               :a.state==='off on the repeater'?'its listening is off: <code>[status] monitor = true</code> on the repeater'
+               :esc(a.state))
+           +(on&&a.level>-119?' \u00b7 '+a.level.toFixed(1)+' dBFS':''));
+  }
+  if(s.node) h+=row('Reached at',esc(s.node)+(s.addr?' ('+esc(s.addr)+')':'')+(s.tailnet?' through the tailnet'
+           +(s.path==='direct'?', directly':s.path==='relay'?', through a Tailscale relay (DERP): no direct path, so slower and stalls more':''):''));
+  if(s.ts && s.ts.held)
+    h+=row('Tailscale','<b style="color:var(--bad)">left off</b>: it stopped the knob twice as it started. '
+           +'Save below to try it again (the knob restarts).');
+  else if(s.ts && s.ts.state!=='off'){
+    let t=esc(s.ts.state);
+    if(s.ts.state==='connected') t+=' as '+esc(s.ts.ip)+', '+s.ts.peers+' devices on the tailnet';
+    if(s.ts.login) t+=': <a href="'+esc(s.ts.login).replace(/"/g,'&quot;')+'" target="_blank" rel="noopener">log in to Tailscale</a>';
+    h+=row('Tailscale',t);
+  }
+  $('tcrows').innerHTML=h;
+  $('tcblock').hidden=!s.live;
+  $('tcbrx').textContent=s.block_rx?'Open the receiver':'Block the receiver';
+  $('tcbtx').textContent=s.block_tx?'Open the transmitter':'Block the transmitter';
+  $('tcbrx').dataset.on=s.block_rx?'0':'1'; $('tcbtx').dataset.on=s.block_tx?'0':'1';
+  $('tcbrx').dataset.name=$('tcbtx').dataset.name=s.name||'the repeater';
+}
+async function tcPoll(){
+  if(!TC||document.hidden) return;
+  try{ tcShow(await (await fetch('/api/tailchaser/state',{cache:'no-store'})).json()) }catch(e){}
+}
+for(const [id,w] of [['tcbrx','rx'],['tcbtx','tx']]) $(id).onclick=async()=>{
+  const b=$(id), on=b.dataset.on==='1', what=w==='rx'?'receiver':'transmitter';
+  if(!confirm((on?'Block':'Open')+' the '+what+' of '+b.dataset.name+'?'+(on?' It stays blocked until it is opened again.':''))) return;
+  const f=new URLSearchParams(); f.append(w,on?'1':'0');
+  try{ await fetch('/api/tailchaser/block',{method:'POST',body:f}) }catch(e){}
+  setTimeout(tcPoll,1500);
+};
+$('tcsave').onclick=async()=>{
+  const b=new URLSearchParams(); let k=0;
+  for(const n of TCN){
+    if(!n.addr.trim()) continue;
+    b.append('a'+k,n.addr.trim()); b.append('m'+k,(n.name||'').trim()); b.append('w'+k,String(n.was));
+    if(n.key.trim()) b.append('k'+k,n.key.trim());
+    k++;
+  }
+  b.append('n',String(k)); b.append('ts',$('tcts').checked?'1':'0');
+  if($('tcauth').value.trim()) b.append('tsauth',$('tcauth').value.trim());
+  if($('tcclear').checked) b.append('tsclear','1');
+  b.append('tsname',$('tcname').value.trim());
+  b.append('hold',$('tchold').value.trim());
+  let r; try{ r=await (await fetch('/api/tailchaser',{method:'POST',body:b})).json() }catch(e){ r={} }
+  say(r.ok?'Saved.':'Could not save: '+(r.why||'the knob did not answer'),!!r.ok);
+  if(r.ok){
+    tcLoad();
+    if(r.restart && confirm('Tailscale changes at a restart. Restart the knob now?')){
+      try{ await fetch('/api/reboot',{method:'POST'}) }catch(e){}
+    }
+  }
+};
+$('tcforget').onclick=async()=>{
+  if(!confirm("Forget this knob's Tailscale identity? After the restart it joins the tailnet as a new device, and the old one can be removed in Tailscale's admin console.")) return;
+  try{ await fetch('/api/tailchaser/forget',{method:'POST'}) }catch(e){}
+  if(confirm('Restart the knob now?')){ try{ await fetch('/api/reboot',{method:'POST'}) }catch(e){} }
+};
+for(const b of document.querySelectorAll('#tcsec .grid button.show')) b.onclick=()=>{
+  const i=b.previousElementSibling; i.type=i.type==='password'?'text':'password';
+  b.textContent=i.type==='password'?'Show':'Hide' };
+
 function say(t,ok){ $('msg').textContent=t; $('msg').style.color=ok?'var(--ok)':'var(--bad)' }
 $('enroll').onclick=async()=>{
   const e=await svxSave();
@@ -2665,6 +2860,7 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'clock',     name:'Clock (the knob as a clock)'},
               {id:'weather',   name:'Weather (Open-Meteo\'s forecast)'},
               {id:'wifitest',  name:'WiFi Test (what the WiFi network does, for links that drop)'},
+              {id:'tailchaser',name:'TailChaser (watch, hear and block TailChaser repeaters)'},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;
@@ -2755,7 +2951,7 @@ load().catch(()=>{}).then(()=>{
   if(PWFORCE) return;                  /* nothing else answers until it is set */
   webCheck().then(ota).catch(()=>{});
   setInterval(ota,2000); setInterval(svxPoll,2000);
-  setInterval(phonePoll,2000); setInterval(googlePoll,3000);
+  setInterval(phonePoll,2000); setInterval(googlePoll,3000); setInterval(tcPoll,1000);
 });
 </script>
 </body></html>

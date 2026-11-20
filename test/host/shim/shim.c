@@ -425,6 +425,8 @@ esp_err_t nvs_get_i8(nvs_handle_t h, const char *k, int8_t *o)             { ret
 esp_err_t nvs_set_i8(nvs_handle_t h, const char *k, int8_t v)              { return nv_set(h, k, '1', &v, 1); }
 esp_err_t nvs_get_u32(nvs_handle_t h, const char *k, uint32_t *o)          { return nv_get(h, k, '4', o, NULL, 4); }
 esp_err_t nvs_set_u32(nvs_handle_t h, const char *k, uint32_t v)           { return nv_set(h, k, '4', &v, 4); }
+esp_err_t nvs_get_u16(nvs_handle_t h, const char *k, uint16_t *o)          { return nv_get(h, k, '2', o, NULL, 2); }
+esp_err_t nvs_set_u16(nvs_handle_t h, const char *k, uint16_t v)           { return nv_set(h, k, '2', &v, 2); }
 esp_err_t nvs_get_u8(nvs_handle_t h, const char *k, uint8_t *o)            { return nv_get(h, k, 'u', o, NULL, 1); }
 esp_err_t nvs_set_u8(nvs_handle_t h, const char *k, uint8_t v)             { return nv_set(h, k, 'u', &v, 1); }
 esp_err_t nvs_get_i32(nvs_handle_t h, const char *k, int32_t *o)           { return nv_get(h, k, 'i', o, NULL, 4); }
@@ -661,6 +663,9 @@ bool audio_out_feed_pcm16(const int16_t *p, size_t n, uint8_t ch)
     pthread_mutex_unlock(&s_am);
     return ok;
 }
+
+/* The pre-roll let go: here the player plays from the first frame. */
+void audio_out_kick(void) {}
 
 void audio_out_flush(void)
 {
