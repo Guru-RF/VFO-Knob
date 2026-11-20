@@ -142,7 +142,8 @@ history.
 The knob plays what the repeater it shows transmits: on the jack, and on a
 Bluetooth headset or speaker. Only the one shown is played, and turning to
 another plays that one. A simplex node does not transmit what it receives,
-so the stations on its input are shown, not heard.
+so the stations on its input are shown, not heard: its own status page's
+**Listen** card plays its receiver.
 
 Tap the volume to set it: turn, and tap to accept.
 
