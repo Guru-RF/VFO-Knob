@@ -3324,9 +3324,14 @@ static void canvas_cover_cb(lv_event_t *e)
  * the nearest labelled with their callsign and level; an emergency red, a
  * type on the page's list gold, and either called out at the top. A tap on
  * one: its card, with its route from adsbdb. The sweep goes round over it
- * all, as on a radar's screen, unless the page turns it off. At the foot
- * the feed's state, and the gear: a tap, the address card; held
- * PICKER_HOLD_MS, the firmware picker -- as on EpiBeam.
+ * all, as on a radar's screen, unless the page turns it off. Near the foot
+ * the gear: a tap, the address card; held PICKER_HOLD_MS, the firmware
+ * picker -- as on EpiBeam; under it the feed's state. The gear stands off
+ * the rim, where the glass may not feel a finger, and everything from its
+ * middle down to the rim is the gear's. A hold anywhere else on the
+ * radar brings the card too, as the S-meter does on a radio's face, and
+ * with the card up a hold of PICKER_HOLD_MS anywhere the picker: the way
+ * back to the setup firmware does not hang on one spot of the glass.
  *
  * Three pictures, RGB565 in PSRAM: the map's, drawn again only when the range
  * or the page changes it; the scene's, a hidden canvas -- the map copied, and
@@ -3351,9 +3356,10 @@ static void canvas_cover_cb(lv_event_t *e)
 #define AD_FIXED      6                   /* the boxes every label keeps out of */
 #define AD_SETTLE_MS  600                 /* the dial at rest so long: the range taken */
 #define AD_TAP_R      24                  /* px from an aircraft a tap may land */
-#define AD_GEAR_Y     (CY + 146)
-#define AD_GEAR_R     26                  /* px from the gear's middle a tap may land */
-#define AD_FOOT_Y     (CY + 106)          /* the feed's state */
+#define AD_GEAR_Y     (CY + 102)          /* off the rim: at CY + 146, until 1.27.0, it did not answer */
+#define AD_GEAR_R     30                  /* px from the gear's middle a tap may land */
+#define AD_GEAR_W     80                  /* ...or below it, this far either side, to the rim */
+#define AD_FOOT_Y     (CY + 136)          /* the feed's state, under the gear */
 #define AD_BANNER_Y   62                  /* an alert, under the battery's row */
 #define AD_SWEEP_MS   50
 #define AD_SWEEP_STEP 5                   /* degrees a tick: 3.6 s a turn */
@@ -3753,7 +3759,7 @@ static void ad_draw_scene(void)
     ad_banner();
     int nb = 0, labelled = 0;
     boxes[nb++] = s_ad_plate;
-    boxes[nb++] = (lv_area_t){ CX - 80, AD_FOOT_Y - 10, CX + 80, AD_W - 1 };   /* the feed's state, the gear */
+    boxes[nb++] = (lv_area_t){ CX - 80, AD_GEAR_Y - 24, CX + 80, AD_W - 1 };   /* the gear, the feed's state */
     if (s_ad_alert_up)
         boxes[nb++] = (lv_area_t){ CX - 125, AD_BANNER_Y - 2, CX + 125, AD_BANNER_Y + 26 };
     ad_layer_t l;
@@ -4267,6 +4273,11 @@ static void adsb_build(void)
     s_ad_range = ad_label(s_ad, &lv_font_montserrat_20, lv_color_hex(AD_TEXT));
     lv_obj_align(s_ad_range, LV_ALIGN_TOP_MID, 0, 12);
     s_ad_foot = ad_label(s_ad, &lv_font_montserrat_14, C_LABEL);
+    /* On the radar's own ground: the map's dots and lines run under it. */
+    lv_obj_set_style_bg_color(s_ad_foot, lv_color_hex(AD_BG), 0);
+    lv_obj_set_style_bg_opa(s_ad_foot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_ad_foot, 6, 0);
+    lv_obj_set_style_pad_hor(s_ad_foot, 6, 0);
     lv_obj_align(s_ad_foot, LV_ALIGN_CENTER, 0, AD_FOOT_Y - CY);
 
     /* No middle set yet: what to do about it, in the middle. */
@@ -4359,10 +4370,12 @@ static void adsb_tick(void)
     atomic_store(&s_ad_taken, s_ad_cfg.range);
 }
 
+/* The gear, or anywhere under its middle to the rim: the feed's state, and
+ * a finger aimed at the gear that the glass places low. */
 static bool adsb_gear_at(lv_point_t p)
 {
     const int32_t dx = p.x - CX, dy = p.y - AD_GEAR_Y;
-    return dx * dx + dy * dy <= AD_GEAR_R * AD_GEAR_R;
+    return dx * dx + dy * dy <= AD_GEAR_R * AD_GEAR_R || (dy >= 0 && LV_ABS(dx) <= AD_GEAR_W);
 }
 
 /* A tap: the aircraft under it, its card; the card itself, or nothing near,
@@ -6882,6 +6895,13 @@ static void touch_cb(lv_event_t *e)
     s_press_picker = gear_at(p) ||
                      (addresses_up() && (shown_at(s_netinfo, p) || shown_at(s_warn_panel, p)));
     s_press_card   = false;
+#if ADSB_FACE
+    /* The radar: held anywhere, the card, as on a radio's S-meter; with it
+     * up, held anywhere, the picker -- not only on the gear, which by the
+     * rim did not answer on a knob (2026-11-21). */
+    if (addresses_up()) s_press_picker = true;
+    else                s_press_card   = !s_press_picker;
+#endif
 #else
     /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS.
      * On TailChaser's face also the repeater's name, held as long. */
@@ -6952,8 +6972,10 @@ static void touch_cb(lv_event_t *e)
             s_press_tap = true;                  /* see release_cb, tap() */
             return;
         }
-        s_press_card = !GEAR_FACE && p.y < 104 && !s_press_picker;
-        if (!s_press_card && !s_press_picker) klock_nudge();
+        /* The radar's hold anywhere, as above: the card, with UNLOCK -- and
+         * the padlock still nudged, a tap on an aircraft being refused. */
+        s_press_card = (ADSB_FACE ? s_press_card : !GEAR_FACE && p.y < 104) && !s_press_picker;
+        if ((ADSB_FACE || !s_press_card) && !s_press_picker) klock_nudge();
         return;
     }
 #endif

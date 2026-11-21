@@ -3781,11 +3781,13 @@ static void runs(const char *dir)
  * at either end, taken once the knob has rested; an emergency and a type on
  * the page's list called out at the top and buzzed once; a tap on an
  * aircraft its card with the route, on the card away; the sweep, still under
- * a card; the filter; the gear, its card and the picker; locked, no card of
- * an aircraft; the knob's battery and the padlock clear of the map.
- * Pictures of each. */
-#define GEAR_X 180                       /* ui.c AD_GEAR_Y: CY + 146 */
-#define GEAR_Y 326
+ * a card; the filter; the gear, its card and the picker -- the rim under it
+ * the gear's too, and a hold anywhere the card; locked, no card of an
+ * aircraft; the knob's battery and the padlock clear of the map. Pictures
+ * of each. */
+#define GEAR_X 180                       /* ui.c AD_GEAR_Y: CY + 102 */
+#define GEAR_Y 282
+#define RIM_Y  332                       /* under it, by the rim: 1.27.0's gear was at 326 */
 #define AD_R   172                       /* ui.c: the radar's edge */
 #define LAT0   50.9014                   /* EBBR */
 #define LON0   4.4844
@@ -4076,19 +4078,61 @@ static void runs(const char *dir)
     CHECK(shown(foot) && label_from(lv_screen_active(), "EMERGENCY"));
     (void)ui_take_adsb_alert();
 
+    where = "the gear off the rim, the feed's state under it, inside the glass";
+    {
+        lv_obj_t *fl = label_from(lv_screen_active(), foot);
+        box_t k;
+        int room = 0;
+        CHECK(fl && ink_of(fl, &k, &room));
+        if (fl && ink_of(fl, &k, &room)) {
+            CHECK(in_glass(&k) && k.y1 > GEAR_Y + 20);
+            printf("  %-62s ink %d-%d, %d-%d  %2d px clear\n", where, k.x1, k.x2, k.y1, k.y2, room);
+        }
+    }
+
     where = "the gear: a tap, the card and its click; again, away";
     tap_at(GEAR_X, GEAR_Y, 80); run(30);
     CHECK(label_from(lv_screen_active(), "ADS-B Radar 1.22.0") && ui_take_card_shown());
     picture(dir, "adsb-gear");
     tap_at(GEAR_X, GEAR_Y, 80); run(30);
     CHECK(!label_from(lv_screen_active(), "ADS-B Radar 1.22.0"));
+    where = "...a tap by the rim under it, and on the feed's state: the gear's too";
+    tap_at(GEAR_X, RIM_Y, 80); run(30);
+    CHECK(label_from(lv_screen_active(), "ADS-B Radar 1.22.0") && ui_take_card_shown());
+    tap_at(GEAR_X - 40, 316, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), "ADS-B Radar 1.22.0"));
     where = "...held three seconds: the firmware picker asked for, and no card";
     down(GEAR_X, GEAR_Y); run(3100);
     CHECK(ui_take_picker_request());
     up(); run(SEEN); run(60);
     CHECK(!label_from(lv_screen_active(), "ADS-B Radar 1.22.0"));
+    where = "...held three seconds by the rim: the picker as well";
+    down(GEAR_X, RIM_Y); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+
+    where = "a hold on the radar, on an aircraft even: the card and its click, not the aircraft's";
+    {
+        int x, y;
+        sky_xy(sky_find("UAE183"), &x, &y);
+        down(x, y); run(700);
+        CHECK(label_from(lv_screen_active(), "ADS-B Radar 1.22.0") && ui_take_card_shown());
+        up(); run(SEEN); run(60);
+        CHECK(label_from(lv_screen_active(), "ADS-B Radar 1.22.0") && !ui_adsb_card_callsign(cs, sizeof cs));
+        CHECK(!ui_take_picker_request());
+        where = "...with the card up, held three seconds anywhere: the firmware picker";
+        down(90, 150); run(3100);
+        CHECK(ui_take_picker_request());
+        up(); run(SEEN); run(60);
+        CHECK(!label_from(lv_screen_active(), "ADS-B Radar 1.22.0"));
+        where = "...a tap is still an aircraft's card, not the address card";
+        sky_tap("UAE183");
+        CHECK(ui_adsb_card_callsign(cs, sizeof cs) && !label_from(lv_screen_active(), "ADS-B Radar 1.22.0"));
+        tap_at(W / 2, H / 2, 80); run(60);
+        CHECK(!ui_adsb_card_callsign(cs, sizeof cs));
+    }
     where = "...no PTT, nor a swipe that does anything";
-    tap_at(W / 2, 290, 80);
+    tap_at(W / 2 + 110, 280, 80);         /* where a slab would be, clear of the gear */
     swipe(340, 180, 140, 180); run(60);
     swipe(180, 20, 180, 220); run(60);
     CHECK(!ptt() && !ui_edit_active());
@@ -4113,6 +4157,11 @@ static void runs(const char *dir)
         }
     }
     picture(dir, "adsb-locked");
+    where = "...a hold anywhere on the radar brings the card, and UNLOCK on it";
+    down(90, 150); run(700);
+    CHECK(shown("UNLOCK") && ui_take_card_shown());
+    up(); run(SEEN); run(10500);
+    CHECK(!shown("UNLOCK"));
     where = "...the gear still brings the card, and UNLOCK on it";
     tap_at(GEAR_X, GEAR_Y, 80); run(700);
     CHECK(shown("UNLOCK"));

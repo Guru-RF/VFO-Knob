@@ -137,6 +137,12 @@ To install another radio's firmware, go back to the list from the knob itself.
 
    ![REBOOTING into update mode](setup/13-rebooting.svg)
 
+A firmware with no S-meter on its face asks it another way. On EpiBeam and
+ADS-B Radar, hold the gear at the foot of the face for three seconds; ADS-B
+Radar also takes the two holds above anywhere on its radar (see
+[its guide](adsb.md#back-to-the-firmware-picker)). On the Clock, the Weather
+and WiFi Test, hold anywhere on the glass for three seconds.
+
 With something wrong — **NO LINK**, say, on a knob with another radio's
 firmware — the warning panel shows the addresses in the card's place: hold
 that until the knob buzzes. Without the setup firmware on its SD card it needs

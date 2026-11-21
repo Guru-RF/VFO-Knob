@@ -1736,8 +1736,8 @@ def epibeam_pictures():
 # --- the ADS-B Radar firmware --------------------------------------------------------
 
 AD_R = 172                                # ui.c AD_R: the radar's edge
-AD_GEAR_Y = 180 + 146                     # ui.c AD_GEAR_Y
-AD_FOOT_Y = 180 + 106                     # ui.c AD_FOOT_Y: the feed's state
+AD_GEAR_Y = 180 + 102                     # ui.c AD_GEAR_Y: off the rim
+AD_FOOT_Y = 180 + 136                     # ui.c AD_FOOT_Y: the feed's state, under the gear
 AD_BANNER_Y = 62                          # ui.c AD_BANNER_Y
 AD_BG, AD_RING, AD_RING_HALF, AD_AXIS = "#030806", "#0E3A1C", "#16582C", "#0A2614"
 AD_TICK, AD_COAST, AD_BORDER, AD_APT = "#2E8C4A", "#2A7088", "#1D4A58", "#5FA36A"
@@ -1911,7 +1911,7 @@ def radar_face(range_i=4, sky=AD_SKY, show="", types=("A400",), emergency=True, 
 
     # The banner: an emergency first, else a type on the list; how many more.
     alerts = [p for p in planes if p[8]] + [p for p in planes if not p[8] and p[3] in types]
-    boxes = [plate, (100, AD_FOOT_Y - 10, 260, 359)]
+    boxes = [plate, (100, AD_GEAR_Y - 24, 260, 359)]
     over = ""
     if banner and alerts and sel is None:
         b = alerts[0]
@@ -1986,7 +1986,9 @@ def radar_face(range_i=4, sky=AD_SKY, show="", types=("A400",), emergency=True, 
                  f'fill="{AD_BG}"/></g>')
     s.append(md.text(180, 12 + 17, esc(rng), 20, AD_TEXT))
     foot = feed if (nopos or not ok) else f"{feed}  \u2022  {len(planes)}"
-    s.append(centred(180, AD_FOOT_Y, foot, 14, md.LABEL if ok and not nopos else md.WARN))
+    fw = montserrat(14).width(foot) + 12
+    s.append(f'<rect x="{180 - fw / 2:.1f}" y="{AD_FOOT_Y - 8}" width="{fw}" height="16" rx="6" fill="{AD_BG}"/>'
+             + centred(180, AD_FOOT_Y, foot, 14, md.LABEL if ok and not nopos else md.WARN))
     if nopos:
         s.append(centred(180, 180 - 24, "NO LOCATION", 20, md.WARN))
         s.append(lines(180, 180 + 14, "Set the radar's middle\non the configuration page", 14, md.TEXT2, 17))
@@ -2016,8 +2018,8 @@ def adsb_pictures():
     md.use_palette("svxconnect")         # ADS-B Radar wears the setup firmware's ink and gold
     f = radar_face()
     left = [(144, 22, "the range  \u00b7  turn the dial"), (104, 73, "an alert, called out"),
-            (101, 235, "an emergency, ringed"), (116, 286, "the feed  \u00b7  aircraft shown"),
-            (160, AD_GEAR_Y, "the gear")]
+            (101, 235, "an emergency, ringed"), (160, AD_GEAR_Y, "the gear"),
+            (136, AD_FOOT_Y, "the feed  \u00b7  aircraft shown")]
     right = [(257, 88, "the sweep"), (240, 114, "half the range, on its ring"),
              (231, 171, "an aircraft: callsign, level"), (333, 176, "the compass"),
              (200, AD_GEAR_Y, "tap: card \u00b7 hold 3 s: picker")]
@@ -2045,10 +2047,17 @@ def adsb_pictures():
     out["07-card"] = knob("adsb-07", "The gear: the address card, for the configuration page",
                           f + acard + lock_pill(False), tap(180, AD_GEAR_Y),
                           "tap the gear: the address card  \u00b7  again: away")
+    picker = dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
+                                               "tap to cancel; WiFi is kept")
     out["08-picker"] = knob("adsb-08", "The gear held three seconds: back to the setup firmware?",
-                            dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
-                                                              "tap to cancel; WiFi is kept"),
-                            tap(180, AD_GEAR_Y, ring=24), "hold the gear 3 s until it buzzes, then turn")
+                            picker, tap(180, AD_GEAR_Y, ring=24), "hold the gear 3 s until it buzzes, then turn")
+    # The other way to the card and the picker: a hold anywhere on the radar.
+    out["12-hold"] = knob("adsb-12", "Held anywhere on the radar: the address card",
+                          f + acard + lock_pill(False), tap(110, 300, ring=24),
+                          "hold a finger on the radar until it clicks: the card")
+    out["13-hold-picker"] = knob("adsb-13", "The card up, held three seconds: back to the setup firmware?",
+                                 picker, tap(110, 300, ring=24),
+                                 "the card up: hold 3 s until it buzzes, then turn")
     # The knob's own battery and the padlock under the range, on the plate.
     out["09-battery"] = knob("adsb-09", "On its own battery: the knob's charge under the range",
                              f + md.battery_glyph(md.KNOB_BATT_X, 37 + 18, 85, md.battery_colour(85)),

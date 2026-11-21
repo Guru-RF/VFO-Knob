@@ -24,7 +24,8 @@ or to your own receiver.
 Out of the box the middle is Brussels Airport, **EBBR**, and the aircraft
 come from **adsb.fi**: once the knob is on WiFi, the radar shows what flies
 round Brussels. To make it yours, open the knob's configuration page: tap
-the gear for the address card, and browse to the address on it. The user is
+the gear for the address card (or hold a finger anywhere on the radar until
+the knob clicks), and browse to the address on it. The user is
 `admin` and the password `admin`. The page first asks for a password of the
 knob's own, 8 to 32 characters, and shows nothing else until it has one.
 Under **Radar**:
@@ -57,11 +58,13 @@ Bluetooth for this firmware: the knob has no sound to give here.
 | **The aircraft** | tap: its card | arrows along their track, labelled nearest first where there is room |
 | **The banner** | — | an emergency, or a type on your list: what, and which; **+2** for more |
 | **The sweep** | — | goes round every 3.6 s, as on a radar's screen |
-| **The feed** | — | where the aircraft come from, and how many are on the radar; what went wrong, in amber |
 | **The gear** | tap: the address card · hold 3 s: the firmware picker | see [The gear](#the-gear) |
+| **The feed** | — | under the gear: where the aircraft come from, and how many are on the radar; what went wrong, in amber |
 | **Battery** | — | the knob's own, under the range, while it runs on it |
 
 There is no PTT, and no swipe does anything: the whole glass is the radar's.
+A finger held anywhere on it brings the address card, as the S-meter does on
+a radio's face: see [Back to the firmware picker](#back-to-the-firmware-picker).
 
 ## The range
 
@@ -161,6 +164,10 @@ range.
 
 ## The gear
 
+The gear sits at the foot of the radar, over the feed's line. Everything
+from its middle down to the rim answers as the gear does, the feed's line
+too, so a finger aimed at it low still finds it.
+
 **Tap the gear**: the address card, with the firmware and its version, the
 knob's power, and its addresses for the configuration page. Tap the gear
 again, or the card itself, and it goes; on its own it goes after ten
@@ -174,6 +181,35 @@ firmware's list, to install another firmware. A tap, or ten seconds of
 nothing, says no.
 
 ![Hold the gear three seconds: FIRMWARE?](adsb/08-picker.svg)
+
+## Back to the firmware picker
+
+To install another firmware, go back to the setup firmware's list. ADS-B
+Radar has no S-meter to hold, as a radio's face has; either of these does
+the same:
+
+- **The gear.** Hold it for three seconds, until the knob buzzes.
+- **Anywhere on the radar**, in two holds:
+  1. Hold a finger on the radar, anywhere, until the knob clicks: the
+     address card comes up. A hold is not a tap: no aircraft's card opens,
+     even with the finger on one. Let go.
+
+     ![Held anywhere on the radar: the address card](adsb/12-hold.svg)
+
+  2. With the card up, hold a finger anywhere again, for three seconds,
+     until the knob buzzes.
+
+     ![The card up, held three seconds: FIRMWARE?](adsb/13-hold-picker.svg)
+
+Either way the knob asks **FIRMWARE?**. **Turn the knob** for yes: it
+restarts into the setup firmware's list, the WiFi settings kept, and you
+choose the next firmware there. A tap, or ten seconds of nothing, says no,
+and the radar stays. The radar's settings are kept for when you come back.
+See [Back to the setup firmware](setup.md#back-to-the-setup-firmware-from-any-radios)
+for what the restart does.
+
+From a computer or a phone, the configuration page's **Firmware** section
+installs another firmware as well, without the list.
 
 ## On its own battery
 
@@ -192,8 +228,9 @@ knob is locked.
 ![The address card's LOCK](adsb/10-lock.svg)
 
 Locked, the padlock shows under the range. The dial and a tap on an aircraft
-then do nothing, and the range stays where it is. The gear still brings the
-card, with **UNLOCK** on it. A restart unlocks the knob too.
+then do nothing, and the range stays where it is. The gear, or a finger held
+anywhere on the radar, still brings the card, with **UNLOCK** on it. A
+restart unlocks the knob too.
 
 ![Locked: the padlock under the range](adsb/11-locked.svg)
 

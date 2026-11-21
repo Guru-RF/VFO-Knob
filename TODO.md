@@ -147,6 +147,15 @@ network protocols as well as Icom's: a reference for those clients.
 
 ## Firmware
 
+- [ ] **AIS**, a firmware of its own (asked 2026-11-21): the ships round
+      you, as ADS-B Radar shows the aircraft (vfo-knob-adsb, its face and
+      code the start). On the radar, each vessel an arrow along its course,
+      its name and speed beside it; a tap, its card (MMSI, call sign, type,
+      destination, length). Sources to weigh: a public AIS feed on the
+      internet, and a receiver of the owner's own (AIS-catcher or an
+      NMEA-over-TCP/UDP AIVDM stream). A sea's map: coasts, the harbours.
+      The way back to the firmware picker as on ADS-B Radar: the gear, or
+      a hold anywhere on the radar.
 - [ ] **The time on the screensavers** (asked 2026-11-20, not for now): HH:MM
       over every screensaver (the Matrix rain and the others), from the knob's
       wall clock in the owner's zone, as TailChaser's face shows HH:MM:SS under
