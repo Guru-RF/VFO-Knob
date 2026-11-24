@@ -36,6 +36,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/inet.h"
 #include "lwip/sockets.h"
 #include "kvstore.h"
 
@@ -50,12 +51,14 @@
 #include "reflector/nodeinfo.h"
 #include "tg/tgmanager.h"
 
+#include "svx_auth.h"
 #include "svx_client.h"
 #include "svx_feed.h"
 #include "svx_net.h"
 #include "svx_pki.h"
 #include "svx_portal.h"
 #include "svx_udp.h"
+#include "svx_v2.h"
 
 static const char *TAG = "svx";
 
@@ -96,6 +99,8 @@ typedef enum {
 EXT_RAM_BSS_ATTR static struct {
     svx_settings_t set;
     svx_config  cfg;
+    bool        v2;                 /* protocol 2: callsign and password, in the clear */
+    bool        denied;             /* ...and the reflector said "access denied" */
     char        host[64];
     uint16_t    port;
     char        server[72];         /* host:port after the SRV lookup */
@@ -178,6 +183,7 @@ static void settings_load(svx_settings_t *s)
     s->agc = true;
     s->tx_timeout_s = 120;
     s->feed = true;
+    s->proto = 3;
 
     kv_handle_t h;
     if (kv_open(NS, &h) != ESP_OK) return;
@@ -198,11 +204,15 @@ static void settings_load(svx_settings_t *s)
     if (kv_get_u8(h, "agc", &b) == ESP_OK)     s->agc = b;
     if (kv_get_u16(h, "txto", &w) == ESP_OK)   s->tx_timeout_s = w;
     if (kv_get_u8(h, "feed", &b) == ESP_OK)    s->feed = b;
+    if (kv_get_u8(h, "proto", &b) == ESP_OK && (b == 2 || b == 3)) s->proto = b;
+    kv_str(h, "pass", s->pass, sizeof s->pass, "");
     kv_close(h);
 }
 
-/* The fifteen reach the medium together; the page waits until they have. */
-static esp_err_t settings_store(const svx_settings_t *s)
+/* The seventeen reach the medium together; the page waits until they have.
+ * `scrub`: the password changed or went, so the old one also leaves the
+ * frozen NVS copy and every copy on the card. */
+static esp_err_t settings_store(const svx_settings_t *s, bool scrub)
 {
     kv_handle_t h;
     esp_err_t e = kv_open(NS, &h);
@@ -223,8 +233,10 @@ static esp_err_t settings_store(const svx_settings_t *s)
     if (e == ESP_OK) e = kv_set_u8(h, "agc", s->agc);
     if (e == ESP_OK) e = kv_set_u16(h, "txto", s->tx_timeout_s);
     if (e == ESP_OK) e = kv_set_u8(h, "feed", s->feed);
+    if (e == ESP_OK) e = kv_set_u8(h, "proto", s->proto);
+    if (e == ESP_OK) e = s->pass[0] ? kv_set_str(h, "pass", s->pass) : kv_erase_key(h, "pass");
     kv_edit_end(h);
-    if (e == ESP_OK) e = kv_commit_wait(h, 3000);
+    if (e == ESP_OK) e = scrub ? kv_scrub_wait(h, 5000) : kv_commit_wait(h, 3000);
     kv_close(h);
     return e == ESP_ERR_TIMEOUT ? ESP_OK : e;
 }
@@ -297,12 +309,27 @@ esp_err_t svx_settings_set(const svx_settings_t *in, const char **why)
         *why = "talkgroups are numbers, each with up to three '+' for priority";
         return ESP_ERR_INVALID_ARG;
     }
+    if (s.proto != 2 && s.proto != 3) {
+        *why = "the protocol is 2 or 3";
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s.pass[0] && !svx_pass_ok(s.pass)) {
+        *why = "a password is 1 to 64 printable characters, with no space at either end";
+        return ESP_ERR_INVALID_ARG;
+    }
     if ((s.lat[0] && fabs(strtod(s.lat, NULL)) > 90.0) ||
         (s.lon[0] && fabs(strtod(s.lon, NULL)) > 180.0)) {
         *why = "latitude is -90 to 90, longitude -180 to 180";
         return ESP_ERR_INVALID_ARG;
     }
-    esp_err_t e = settings_store(&s);
+    svx_settings_t *old = malloc(sizeof *old);
+    if (!old) { *why = "no memory"; return ESP_ERR_NO_MEM; }
+    settings_load(old);
+    const bool scrub = old->pass[0] && strcmp(old->pass, s.pass) != 0;
+    memset(old, 0, sizeof *old);
+    free(old);
+    esp_err_t e = settings_store(&s, scrub);
+    memset(s.pass, 0, sizeof s.pass);
     if (e != ESP_OK) { *why = "could not be stored"; return e; }
     s_reload = true;
     return ESP_OK;
@@ -926,6 +953,28 @@ static end_t handshake(bool present)
     return END_NONE;
 }
 
+/* Protocol 2: greeting, challenge, the password's digest, ServerInfo -- all
+ * in the clear (svx_v2.c). END_NONE when logged in, with the audio channel up. */
+static end_t handshake_v2(void)
+{
+    char *json = malloc(1024);
+    if (!json) { set_why("no memory"); return END_FAILED; }
+    nodeinfo_build_json(json, 1024, &C.cfg);
+    svx_v2_result_t r;
+    const int k = svx_v2_login(&C.link, &C.udp, C.cfg.callsign, C.set.pass, json,
+                               C.frame, FRAME_CAP, STEP_MS, &r);
+    free(json);
+    C.denied = r.denied;
+    if (k != 0) {
+        set_why("%s", r.why);
+        return END_FAILED;
+    }
+    C.nodes = r.nodes;
+    ESP_LOGI(TAG, "client %u, %d nodes online%s; protocol 2: audio in the clear", r.client_id,
+             r.nodes, r.opus ? "" : ", no Opus offered");
+    return END_NONE;
+}
+
 /* ------------------------------------------------------------ the session */
 
 static end_t on_tcp(uint16_t type, const uint8_t *p, size_t len, uint64_t t)
@@ -975,9 +1024,10 @@ static end_t on_tcp(uint16_t type, const uint8_t *p, size_t len, uint64_t t)
         set_why("the reflector wants an older protocol");
         return END_FAILED;
     case MSG_CLIENT_CSR_REQUEST:
-        send_csr();
+        if (!C.v2) send_csr();               /* protocol 2 has no certificate */
         break;
     case MSG_CLIENT_CERT:
+        if (C.v2) break;
         /* A renewal, pushed by the reflector at two thirds of the old one's
          * life. It ignores the rest of this session once it has sent it. */
         ESP_LOGI(TAG, "the reflector sent a new certificate");
@@ -1016,9 +1066,12 @@ static end_t session(void)
     P.connects++;
     set_phase("connected");
     set_link(RADIO_LINK_READY, C.host);
-    svx_pki_set_pending(false, time(NULL));     /* logged in: nothing to ask */
+    if (!C.v2) svx_pki_set_pending(false, time(NULL));     /* logged in: nothing to ask */
     tgm_after_connect(&C.tgm);
-    if (C.set.feed) svx_feed_start(C.host);     /* where the talkers are, if it can say */
+    /* Where the talkers are, if it can say: an enhanced reflector's, by its
+     * name -- an address has none. */
+    struct in_addr lit;
+    if (C.set.feed && !(C.v2 && inet_aton(C.host, &lit))) svx_feed_start(C.host);
 
     end_t end = END_NONE;
     while (end == END_NONE) {
@@ -1131,8 +1184,8 @@ static end_t attempt(bool present)
         return END_FAILED;
     }
     set_link(RADIO_LINK_GREETING, NULL);
-    set_phase(present ? "logging in" : "asking for a certificate");
-    end_t end = handshake(present);
+    set_phase(C.v2 || present ? "logging in" : "asking for a certificate");
+    end_t end = C.v2 ? handshake_v2() : handshake(present);
     if (end == END_NONE) end = session();
     svx_udp_close(&C.udp);
     svx_link_close(&C.link);
@@ -1164,10 +1217,14 @@ static void load_all(void)
 {
     settings_load(&C.set);
     if (!C.set.feed) svx_feed_stop();
+    C.v2 = C.set.proto == 2;
     cfg_build();
     tgm_start();
-    ESP_LOGI(TAG, "station %s, reflector %s, %d switchable and %d monitored talkgroups",
+    /* Never the password: only whether there is one. */
+    ESP_LOGI(TAG, "station %s, reflector %s, %s, %d switchable and %d monitored talkgroups",
              C.cfg.callsign[0] ? C.cfg.callsign : "(no callsign)", C.host,
+             !C.v2 ? "protocol 3 (certificate)"
+                   : C.set.pass[0] ? "protocol 2 (a password set)" : "protocol 2 (no password)",
              C.cfg.n_switchable, C.cfg.n_monitored);
 }
 
@@ -1209,6 +1266,36 @@ static void svx_task(void *arg)
         if (svx_portal_due()) {
             set_phase("reading the talkgroup names");
             if (svx_portal_fetch(C.host) && !C.set.sw[0] && !C.set.mon[0]) load_all();
+        }
+
+        /* Protocol 2: the password is the login, no certificate. */
+        if (C.v2) {
+            s_enroll_start = false;
+            if (!C.set.pass[0]) {
+                set_link(RADIO_LINK_DOWN, "no password");
+                set_phase("no password: set it on the web page");
+                idle_wait(now_ms() + 1000);
+                continue;
+            }
+            if (now_ms() < C.t_retry) {
+                idle_wait(C.t_retry);
+                continue;
+            }
+            C.denied = false;
+            const end_t end = attempt(false);
+            uint32_t delay_ms = 0;
+            if (end != END_RELOAD) {
+                delay_ms = BACKOFF_S[MIN(C.backoff, (int)(sizeof BACKOFF_S / sizeof BACKOFF_S[0]) - 1)] * 1000u;
+                C.backoff++;
+            }
+            /* Refused: a wrong password does not mend itself, and a reflector
+             * may bar an address that keeps failing -- the longest wait. A
+             * login of ours it still holds is gone by then. */
+            if (end != END_RELOAD && C.denied) delay_ms = MAX(delay_ms, 60000u);
+            C.t_retry = now_ms() + delay_ms;
+            set_link(RADIO_LINK_DOWN, C.host);
+            if (delay_ms) set_phase("disconnected; again in %lu s", (unsigned long)(delay_ms / 1000));
+            continue;
         }
 
         /* The certificate: present one that works; ask for one if asked to,

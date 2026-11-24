@@ -4,7 +4,10 @@
 [SvxLink](https://www.svxlink.org/) reflector — no radio at all: the knob's
 microphone and the jack are the station. It speaks the reflector's protocol 3.0,
 with the reflector's own TLS and a client certificate, and Opus audio both
-ways. It is a port of [SVXConnect-CLI](https://github.com/Guru-RF/SVXConnect-CLI)'s
+ways — or, for a reflector that still logs stations in that way, the older
+protocol 2.0, with a callsign and a password
+([below](#a-reflector-with-passwords-protocol-2)). It is a port of
+[SVXConnect-CLI](https://github.com/Guru-RF/SVXConnect-CLI)'s
 reflector client, in [SVXConnect](https://svxconnect.app/)'s colours.
 
 The pictures are the knob's own screens, drawn from the firmware's texts and
@@ -29,6 +32,34 @@ characters, and shows nothing else until it has one.
    that card does not answer (**NO SD CARD**) the knob makes no new key, until
    you choose **Carry on without the SD card** on the configuration page.
 
+## A reflector with passwords (protocol 2)
+
+Some reflectors have no certificates: their sysop gives each station a
+callsign and a password instead — SvxLink's protocol 2.0. For one of those:
+
+1. Set the **reflector** as its sysop gives it — often an address and a port,
+   `192.0.2.10` and `5300`, say.
+2. Under **Station**, choose **Login: Protocol 2: callsign and password**, and
+   give the callsign and the password exactly as the sysop wrote them. There
+   is no certificate to ask for, and no email address.
+3. Press **Save**. The knob logs in again at once — a new reflector takes its
+   next boot — and the page's **Login** section says *protocol 2, a password
+   set*.
+
+The password stays on the knob, kept with its other settings (on the SD card,
+with one in it). The configuration page never shows it again — only whether
+one is set; type a new one to change it, or tick **Clear the password**. The
+knob never sends the password itself either: it answers the reflector's
+challenge with an HMAC-SHA1 of it.
+
+Everything after the login goes in the clear, though, the audio too: anyone
+on the way between the knob and the reflector can listen in, or tell what was
+said when. Choose protocol 3 wherever the reflector has it.
+
+When the reflector says **access denied**, the callsign is not one it knows,
+the password is not that callsign's, or the callsign is logged in already
+from somewhere else.
+
 ## The face
 
 The radio face, read differently:
@@ -49,8 +80,10 @@ The radio face, read differently:
 
 Unplugged, the knob runs on its own battery and shows its charge at the top
 of the arc, over who is talking, as a phone does — on the air too. On USB
-power the charge cannot be read, and none shows. The address card says which:
-**battery 85 %**, or **on USB power**.
+power the charge cannot be read: a knob that has run on its battery shows a
+green bolt there instead, as the cable charges it, and one that never has
+shows nothing. The address card says which: **battery 85 %**, or **on USB
+power**.
 
 ![On its own battery: the knob's charge over who is talking](svxconnect/05-battery.svg)
 
@@ -109,6 +142,11 @@ changes no talkgroup, a tap or a swipe opens nothing, and nothing keys: not
 the slab, nor a headset's button or its boom arm. Unkeying is never locked: on
 the air, a tap on the slab or the headset's button still unkeys. The padlock
 goes red for a moment when it refuses something.
+
+To lock the rest and keep the PTT, tick **The lock leaves the PTT** under
+**Audio** on the configuration page. Locked, the slab, a headset's button and
+its boom arm then key and unkey as unlocked, while a turn, a tap elsewhere
+and a swipe stay locked, and a hold on the slab opens no antennas.
 
 To unlock, hold the arc again and tap **UNLOCK**. With no link it is over the
 warning. A restart unlocks too.

@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "svx_auth.h"
 
 typedef struct {
     char     call[32];          /* ON6URE-KNOB: the login, and the certificate's CN */
@@ -24,11 +25,14 @@ typedef struct {
     bool     agc;               /* level the microphone before Opus */
     uint16_t tx_timeout_s;      /* 0 = none */
     bool     feed;              /* follow an enhanced reflector's feed, for where talkers are */
+    uint8_t  proto;             /* 3: a certificate and TLS (the default); 2: callsign and password */
+    char     pass[SVX_PASS_MAX + 1];   /* protocol 2's password: never logged, never sent back */
 } svx_settings_t;
 
 void      svx_settings_get(svx_settings_t *s);
 /* Checked, stored, and applied: the client logs in again with them. Returns
- * ESP_ERR_INVALID_ARG, with a reason, for a setting that cannot work. */
+ * ESP_ERR_INVALID_ARG, with a reason, for a setting that cannot work. An
+ * empty `pass` is no password. */
 esp_err_t svx_settings_set(const svx_settings_t *s, const char **why);
 
 /* The certificate request: `start` makes the key if there is none, the request

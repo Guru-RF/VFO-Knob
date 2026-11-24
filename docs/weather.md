@@ -138,8 +138,10 @@ nothing, says no.
 
 Unplugged, the knob shows its charge under the time, as a phone does: full
 to empty by the quarter, green from half its charge up, yellow under that,
-red at a fifth and below. On USB power the charge cannot be read, and none
-shows. The address card says which: **battery 85 %**, or **on USB power**.
+red at a fifth and below. On USB power the charge cannot be read: a knob
+that has run on its battery shows a green bolt there instead, as the cable
+charges it, and one that never has shows nothing. The address card says
+which: **battery 85 %**, or **on USB power**.
 
 ![On its own battery](weather/08-battery.svg)
 

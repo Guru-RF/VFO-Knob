@@ -12,6 +12,12 @@
  *     spin fast, stop, and land on 14074003 Hz, and the digits below your step
  *     flicker forever. Re-latching the anchor on every step change is what
  *     makes the inactive digits sit still.
+ *
+ *     From a MHz step up (TUNE_KEEP_FROM_HZ) the grid is the hertz instead:
+ *     the digits under the step stay as they were, as a radio's MHz key
+ *     leaves its kHz -- 145.500 at 10 MHz goes to 155.500, not to 150.000
+ *     (GitHub #28). Those digits are a frequency to keep; under a kHz step
+ *     they are the drift the grid is there to clear.
  */
 #ifndef VFO_TUNE_H
 #define VFO_TUNE_H
@@ -25,6 +31,7 @@
 
 #define TUNE_MAX_STEP_EFF_HZ   25000   /* per detent */
 #define TUNE_MAX_RATE_HZ_PER_S 600000  /* a violent flick must not cross 3 bands */
+#define TUNE_KEEP_FROM_HZ      1000000 /* from this step up, the digits under it stay */
 
 typedef struct {
     float    v_detents;        /* EWMA, detents/second */
@@ -51,7 +58,8 @@ typedef struct {
 
 void tune_init(tune_t *t, int64_t f, int32_t step_hz);
 
-/* Re-latch the anchor onto the new grid. f_display is unchanged. */
+/* Re-latch the anchor onto the new grid; from TUNE_KEEP_FROM_HZ up there is
+ * none to latch onto, and the frequency stays exactly as it is. */
 void tune_set_step(tune_t *t, int32_t new_step_hz);
 
 /* Adopt an externally-authoritative frequency (greeting, or a remote change). */

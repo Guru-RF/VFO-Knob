@@ -697,7 +697,7 @@ def setup_pictures():
     out["15-battery"] = knob("setup-15", "On its own battery: the knob's charge over the title",
                              setup_screen("FIRMWARE", "Turn to your radio,\nthen tap to install.",
                                           chooser("INSTALL", f"SVXConnect {VERSION}")) + md.knob_battery(85),
-                             "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "", "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     # The settings' SD card (components/kvstore), on a radio's face: the card
     # that holds them does not answer, or answers wrong (app_main.c ui_task).
     icom = radio_face()
@@ -853,7 +853,7 @@ def icom_pictures():
     md.use_palette("icom")
     out["24-battery"] = knob("icom-24", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     # The IC-9700 on 2 m, beyond what any web SDR covers.
     out["25-sdr-out"] = knob("icom-25", "The IC-9700 on 2 m: the web SDR cannot reach it",
                              face("icom", **dict(R, dbm=-91, band="2m", mode="USB", digits="144300" "00"),
@@ -917,7 +917,7 @@ def multiflex_pictures():
     md.use_palette("multiflex")
     out["17-battery"] = knob("flex-17", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     # 6 m, beyond a KiwiSDR's 30 MHz.
     out["18-sdr-out"] = knob("flex-18", "6 m: the KiwiSDR beside it cannot reach it",
                              face("multiflex", **dict(R, dbm=-91, band="6m", digits=" 50150" "00"),
@@ -961,7 +961,7 @@ def aethersdr_pictures():
     md.use_palette("aethersdr")
     out["08-battery"] = knob("aether-08", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     lock_pictures(out, 9, "aether", "aethersdr", "AetherSDR", f)
     # The DSP from the right (ui.c menu_build), as AetherSDR offers it: off, dimmed.
     md.use_palette("aethersdr")
@@ -998,7 +998,7 @@ def openx6x00_pictures():
     md.use_palette("openx6x00")
     out["07-battery"] = knob("ox-07", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     # An X6200's two receive bands after 6 m (ui.c BANDS), where OpenX6X00
     # opens them: FM broadcast in wide FM, the airband in AM.
     out["08-x6200"] = knob("ox-08", "An X6200: FM broadcast and the airband, after 6 m",
@@ -1036,7 +1036,7 @@ def jupitersdr_pictures():
     md.use_palette("jupitersdr")
     out["07-battery"] = knob("js-07", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  ·  none on USB power")
+                             "unplugged: its charge, by the quarter  ·  a bolt on USB")
     lock_pictures(out, 8, "js", "jupitersdr", "JupiterSDR", f)
     return out
 
@@ -1070,7 +1070,7 @@ def svxconnect_pictures():
     # who is talking -- and on the air too, the arc being the audio's then.
     out["05-battery"] = knob("svx-05", "On its own battery: the knob's charge over who is talking",
                              reflector() + md.knob_battery(85), "",
-                             "its charge, by the quarter  \u00b7  on the air too  \u00b7  none on USB power")
+                             "its charge, by the quarter  \u00b7  on the air too  \u00b7  a bolt on USB")
     lock_pictures(out, 6, "svx", "svxconnect", "SVXConnect", reflector())
     return out
 
@@ -1155,7 +1155,7 @@ def phone_pictures():
     # between the meters' tops.
     out["16-battery"] = knob("tel-16", "On its own battery: the knob's charge between the meters",
                              telephone() + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     lock_pictures(out, 17, "tel", "phone", "Telephone", telephone(), keys=False)
     return out
 
@@ -1391,7 +1391,7 @@ def ubersdr_pictures():
     # The knob's own battery, while it runs on it (ui.c knob_batt_show).
     out["20-battery"] = knob("uber-20", "On its own battery: the knob's charge at the top of the arc",
                              uber_face() + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     # 6 m on an UberSDR that covers it, beyond the KiwiSDR's 30 MHz.
     out["23-kiwi-out"] = knob("uber-23", "6 m: the KiwiSDR beside it cannot reach it",
                               uber_face(dbm=-97, snr=12, band="6m", digits=" 50150" "00", kiwi_note="can't reach",
@@ -1630,7 +1630,7 @@ def kiwi_pictures():
     md.use_palette("kiwi")
     out["21-battery"] = knob("kiwi-21", "On its own battery: the knob's charge at the top of the arc",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     lock_pictures(out, 22, "kiwi", "kiwi", "Kiwi888", f, keys=False)
     return out
 
@@ -1722,7 +1722,7 @@ def epibeam_pictures():
     # inside the ring, over the array -- on the ring it sat on N.
     out["07-battery"] = knob("epi-07", "On its own battery: the knob's charge inside the ring",
                              f + md.battery_glyph(md.KNOB_BATT_X, BEAM_BATT_Y + 18, 85, md.battery_colour(85)),
-                             "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "", "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     out["08-lock"] = knob("epi-08", "The address card's LOCK", f + card + lock_pill(False), tap(252, 84),
                           "tap the gear for the card  \u00b7  tap LOCK")
     # The padlock level with the battery's row (ui.c KLOCK_BADGE_Y), 26 px
@@ -2061,7 +2061,7 @@ def adsb_pictures():
     # The knob's own battery and the padlock under the range, on the plate.
     out["09-battery"] = knob("adsb-09", "On its own battery: the knob's charge under the range",
                              f + md.battery_glyph(md.KNOB_BATT_X, 37 + 18, 85, md.battery_colour(85)),
-                             "", "unplugged: its charge, by the quarter  \u00b7  none on USB power")
+                             "", "unplugged: its charge, by the quarter  \u00b7  a bolt on USB")
     out["10-lock"] = knob("adsb-10", "The address card's LOCK", f + acard + lock_pill(False), tap(252, 84),
                           "tap the gear for the card  \u00b7  tap LOCK")
     out["11-locked"] = knob("adsb-11", "Locked: the padlock under the range",
@@ -2622,7 +2622,7 @@ def weather_pictures():
                             tap(180, 300, ring=24), "hold anywhere 3 s until it buzzes, then turn")
     out["08-battery"] = knob("wx-08", "On its own battery: the knob's charge under the time",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  ·  none on USB power")
+                             "unplugged: its charge, by the quarter  ·  a bolt on USB")
     out["09-lock"] = knob("wx-09", "The address card's LOCK", f + card + lock_pill(False), tap(252, 84),
                           "tap for the card  ·  tap LOCK")
     out["10-locked"] = knob("wx-10", "Locked: the padlock under the time",
@@ -2847,7 +2847,7 @@ def wifitest_pictures():
                             tap(180, 300, ring=24), "hold anywhere 3 s until it buzzes, then turn")
     out["11-battery"] = knob("wt-11", "On its own battery: the knob's charge under the page's name",
                              f + md.knob_battery(85), "",
-                             "unplugged: its charge, by the quarter  ·  none on USB power")
+                             "unplugged: its charge, by the quarter  ·  a bolt on USB")
     out["12-lock"] = knob("wt-12", "The address card's LOCK", f + card + lock_pill(False), tap(252, 84),
                           "tap for the card  ·  tap LOCK")
     out["13-locked"] = knob("wt-13", "Locked: the padlock under the page's name",
@@ -3056,7 +3056,7 @@ def tailchaser_pictures():
     md.use_palette("svxconnect")
     out["12-battery"] = knob("tc-12", "On its own battery: the knob's charge over who is talking",
                              tc_face() + md.knob_battery(85), "",
-                             "its charge, by the quarter  ·  none on USB power")
+                             "its charge, by the quarter  ·  a bolt on USB")
     lock_pictures(out, 13, "tc", "svxconnect", "TailChaser", tc_face(), keys=False)
     return out
 

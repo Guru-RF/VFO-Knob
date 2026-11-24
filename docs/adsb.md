@@ -215,8 +215,10 @@ installs another firmware as well, without the list.
 
 Unplugged, the knob shows its charge under the range, as a phone does: full
 to empty by the quarter, green from half its charge up, yellow under that,
-red at a fifth and below. On USB power the charge cannot be read, and none
-shows. The map leaves the top clear for it.
+red at a fifth and below. On USB power the charge cannot be read: a knob
+that has run on its battery shows a green bolt there instead, as the cable
+charges it, and one that never has shows nothing. The map leaves the top
+clear for it.
 
 ![On its own battery: the knob's charge under the range](adsb/09-battery.svg)
 

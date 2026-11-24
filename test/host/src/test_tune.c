@@ -110,6 +110,39 @@ static void test_assign(void)
     CHECK_EQ(t.f_display, 14074000);      /* re-latches on the next step change */
 }
 
+static void test_big_steps(void)
+{
+    /* GitHub #28: the 1, 10 and 100 MHz and 1 GHz digits step their own size
+     * and leave the digits under them as they were. */
+    CASE("MHz steps keep the digits under them");
+    tune_t t; tune_init(&t, 145500000, 10000000);
+    CHECK_EQ(t.f_display, 145500000);
+    tune_apply(&t, 1, 1, 100, LO, 3000000000LL);
+    CHECK_EQ(t.f_display, 155500000);
+    tune_apply(&t, -2, 1, 100, LO, 3000000000LL);
+    CHECK_EQ(t.f_display, 135500000);
+
+    tune_set_step(&t, 1000000);                        /* 1 MHz: the kHz stay too */
+    CHECK_EQ(t.f_display, 135500000);
+    tune_apply(&t, 3, 1, 100, LO, 3000000000LL);
+    CHECK_EQ(t.f_display, 138500000);
+
+    tune_assign(&t, 145523470);                         /* the radio's, off any grid */
+    tune_set_step(&t, 100000000);
+    tune_apply(&t, 1, 50, 10, LO, 3000000000LL);       /* a spin: still one step */
+    CHECK_EQ(t.f_display, 245523470);
+    tune_set_step(&t, 1000000000);
+    tune_apply(&t, 1, 1, 100, LO, 3000000000LL);
+    CHECK_EQ(t.f_display, 1245523470);
+    tune_apply(&t, 2, 1, 100, LO, 3000000000LL);       /* past the top: clamped */
+    CHECK_EQ(t.f_display, 3000000000LL);
+
+    /* ...and under a MHz the grid is still kept. */
+    tune_assign(&t, 145523470);
+    tune_set_step(&t, 100000);
+    CHECK_EQ(t.f_display, 145500000);
+}
+
 T_MAIN({
     test_quantise();
     test_anchor_invariant();
@@ -117,4 +150,5 @@ T_MAIN({
     test_accel_hysteresis();
     test_clamps();
     test_assign();
+    test_big_steps();
 })

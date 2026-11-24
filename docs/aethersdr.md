@@ -120,8 +120,8 @@ down the cable.
 | **Band** | the band editor | the band's own frequency, on a tap on the panel |
 | **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, SAM, FM, NFM, DIGU, DIGL, RTTY |
 | **Filter** | the filter editor | its width, on the side of the carrier the mode uses |
-| **Frequency** | a digit: the tuning step | the underlined digit is the step |
-| **Step, RIT** | RIT: its editor | RIT in amber when set |
+| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 MHz up the digits under it stay as they are |
+| **Step, RIT** | RIT: its editor, 10 Hz a detent, the first onto the 10 Hz grid | RIT in amber when set |
 | **Volume, mic gain** | their editors | the knob's own levels |
 | **PTT** | key, and key off | see [Transmitting](#transmitting) |
 
@@ -141,8 +141,9 @@ AetherSDR has said which it has, the swipe opens nothing.
 
 Unplugged, the knob runs on its own battery and shows its charge at the top
 of the arc, as a phone does — on every firmware's face. On USB power the
-charge cannot be read, and none shows. The address card says which:
-**battery 85 %**, or **on USB power**.
+charge cannot be read: a knob that has run on its battery shows a green bolt
+there instead, as the cable charges it, and one that never has shows
+nothing. The address card says which: **battery 85 %**, or **on USB power**.
 
 ![On its own battery: the knob's charge at the top of the arc](aethersdr/08-battery.svg)
 
@@ -203,6 +204,11 @@ headset's button or its boom arm. Unkeying is never locked: on the air, a tap
 on the slab or the headset's button still unkeys. The padlock goes red for a
 moment when it refuses something. A question the knob asks still takes its
 answer.
+
+To lock the rest and keep the PTT, tick **The lock leaves the PTT** under
+**Audio** on the configuration page. Locked, the slab, a headset's button and
+its boom arm then key and unkey as unlocked, while a turn, a tap elsewhere
+and a swipe stay locked, and a hold on the slab opens no antennas.
 
 To unlock, hold the S-meter again and tap **UNLOCK**. With no link it is over
 the warning. A restart unlocks too.

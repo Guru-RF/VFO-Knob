@@ -59,11 +59,14 @@ int64_t tune_quantise(int64_t f, int32_t step_hz)
     return q * s;
 }
 
+/* The grid a step keeps f on: its own under a MHz, the hertz from there up. */
+static int32_t grid_of(int32_t step_hz) { return step_hz >= TUNE_KEEP_FROM_HZ ? 1 : step_hz; }
+
 void tune_init(tune_t *t, int64_t f, int32_t step_hz)
 {
     if (!t) return;
     t->step_hz    = step_hz > 0 ? step_hz : 1;
-    t->f_anchor   = tune_quantise(f, t->step_hz);
+    t->f_anchor   = tune_quantise(f, grid_of(t->step_hz));
     t->step_units = 0;
     t->f_display  = t->f_anchor;
 }
@@ -72,7 +75,7 @@ void tune_set_step(tune_t *t, int32_t new_step_hz)
 {
     if (!t || new_step_hz <= 0) return;
     t->step_hz    = new_step_hz;
-    t->f_anchor   = tune_quantise(t->f_display, new_step_hz);
+    t->f_anchor   = tune_quantise(t->f_display, grid_of(new_step_hz));
     t->step_units = 0;
     t->f_display  = t->f_anchor;
 }
@@ -80,7 +83,7 @@ void tune_set_step(tune_t *t, int32_t new_step_hz)
 void tune_assign(tune_t *t, int64_t f)
 {
     if (!t) return;
-    t->f_anchor   = tune_quantise(f, t->step_hz);
+    t->f_anchor   = tune_quantise(f, grid_of(t->step_hz));
     t->step_units = 0;
     t->f_display  = f;
     /* f_display is the authoritative remote value even if it is off-grid; the

@@ -532,17 +532,21 @@ static inline uint32_t tick_mark(uint32_t t) { return t ? t : UINT32_MAX; }
 #endif
 
 #define N_DIG 8
+/* What a tap on each digit steps, its own place: from 1 MHz up the digits
+ * under it stay as they are (vfo_tune.h, TUNE_KEEP_FROM_HZ). Every MHz digit
+ * stepped 1 MHz once, and the 10 and 100 MHz ones were shown as "1 MHz"
+ * (GitHub #28). */
 static const int DIG_STEP[N_DIG] = {
-    1000000, 1000000, 1000000, 100000, 10000, 1000, 100, 10,
+    100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10,
 };
 /* From 1 GHz up (the IC-R8600's 3 GHz) the same eight digits read MMMM.kkk.h:
  * a MHz digit more, and the 10 Hz digit gone. */
 static const int DIG_STEP_GHZ[N_DIG] = {
-    1000000, 1000000, 1000000, 1000000, 100000, 10000, 1000, 100,
+    1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100,
 };
 /* ...and from 10 GHz (the IC-905's 3 cm, icom firmware) the first of them
- * reads "10": every MHz place steps 1 MHz, so the two share a label, and the
- * 100 Hz digit QO-100's SSB needs stays. */
+ * reads "10": it steps 1 GHz, as from 1 GHz, and the 100 Hz digit QO-100's
+ * SSB needs stays. */
 
 static lv_obj_t *s_scr, *s_dig[N_DIG], *s_sep[2], *s_underline;
 static lv_obj_t *s_band, *s_mode, *s_filt, *s_step_lbl, *s_srd;
@@ -2597,6 +2601,14 @@ static void edit_rotate_now(int32_t detents)
         break;
     }
     case ED_RIT:
+        /* On the 10 Hz grid: a radio's own dial sets its RIT to the hertz,
+         * and from -21 Hz steps of 10 went -11, -1, +9 and never reached 0
+         * (GitHub #29). The first detent goes to the grid, that way. */
+        if (s_edit_rit % 10 && detents) {
+            const int32_t below = s_edit_rit - ((s_edit_rit % 10 + 10) % 10);
+            s_edit_rit = detents > 0 ? below + 10 : below;
+            detents += detents > 0 ? -1 : 1;
+        }
         s_edit_rit += detents * 10;
         if (s_edit_rit >  9990) s_edit_rit =  9990;
         if (s_edit_rit < -9990) s_edit_rit = -9990;
@@ -6950,7 +6962,11 @@ static void touch_cb(lv_event_t *e)
      * picker's hold; and on the air the slab still unkeys, once the finger
      * has been off it a moment, as it always does (app_main.c makes any PTT
      * tap an unkey while locked, never a key). */
-    if (s_knob_locked) {
+    /* ...but where the page says the lock leaves the PTT (GitHub #9), a press
+     * on the slab is a press on the slab, as unlocked: it keys and unkeys,
+     * and opens no antennas (below). */
+    const bool slab_free = !RX_FACE && !PHONE_FACE && p.y >= PTT_TOP && net_prov_lock_ptt();
+    if (s_knob_locked && !slab_free) {
         s_slab_wait = 0;
         if (!RX_FACE && !PHONE_FACE && p.y >= PTT_TOP && s_last.keyed) {
             if (lv_tick_elaps(s_released_at) >= PTT_REARM_MS) s_ptt_tap = true;
@@ -6995,7 +7011,7 @@ static void touch_cb(lv_event_t *e)
             s_pressed_at = s_slab_at;
             s_press_pt   = s_slab_pt;
             s_ptt_armed  = s_slab_wait_key;
-            s_press_ant  = true;
+            s_press_ant  = !ui_locked();         /* locked, the antennas stay shut */
             note("slab: the finger back after %u ms, the same press", (unsigned)up);
         } else {
             note("slab: a touch at %d,%d %u ms after the lift: no tap, nothing",
@@ -7055,7 +7071,7 @@ static void touch_cb(lv_event_t *e)
         /* Held, it opens the antennas where the radio has a choice of them
          * (pressing_cb) -- a receiver's too, which has nothing to key. Not
          * the telephone's slab: that is the call's. */
-        s_press_ant = !PHONE_FACE && s_last.n_ant > 0;
+        s_press_ant = !PHONE_FACE && s_last.n_ant > 0 && !ui_locked();
         s_slab_at   = s_pressed_at;
         s_slab_pt   = p;
         /* A receiver has nothing to key. With a headset connected the glass
@@ -8278,12 +8294,15 @@ esp_err_t ui_init(void)
 RADIO_ONLY static const char *step_name(int32_t hz)
 {
     switch (hz) {
-    case 10:      return "10 Hz";
-    case 100:     return "100 Hz";
-    case 1000:    return "1 kHz";
-    case 10000:   return "10 kHz";
-    case 100000:  return "100 kHz";
-    case 1000000: return "1 MHz";
+    case 10:         return "10 Hz";
+    case 100:        return "100 Hz";
+    case 1000:       return "1 kHz";
+    case 10000:      return "10 kHz";
+    case 100000:     return "100 kHz";
+    case 1000000:    return "1 MHz";
+    case 10000000:   return "10 MHz";
+    case 100000000:  return "100 MHz";
+    case 1000000000: return "1 GHz";
     }
     return "-";
 }
@@ -8882,13 +8901,26 @@ static void headset_slab(const ui_state_t *st)
 static void knob_batt_show(const ui_state_t *st)
 {
     /* Over the clock's 12 only once it is low: a clock is looked at for the
-     * time, and the card says the knob's power. */
-    const bool on = st->knob_batt && st->knob_pct <= (CLOCK_FACE ? BATT_LOW : 100) &&
+     * time, and the card says the knob's power. On USB, a knob that has run
+     * on its battery shows a bolt in its place, green: charging (GitHub
+     * #30). How full it is the knob cannot know there -- the rail is the
+     * cable's -- nor when it is: the bolt says it is on the cable, which
+     * charges it. Not over the clock's 12 either. */
+    const bool charging = st->knob_charging && !CLOCK_FACE;
+    const bool on = (charging || (st->knob_batt && st->knob_pct <= (CLOCK_FACE ? BATT_LOW : 100))) &&
                     (REFLECTOR_FACE || !st->tx);
     vis(s_knob_batt, on);
     if (!on) return;
-    set_text(s_knob_batt, batt_symbol(st->knob_pct));
-    set_text_color(s_knob_batt, batt_colour(st->knob_pct));
+    /* The bolt is narrower than the batteries' 25 px, and taller -- 21 rows
+     * of ink to their 13: centred the same, a row lower, clear of the arc. */
+    static int8_t was = -1;
+    if (was != (int8_t)charging) {
+        was = (int8_t)charging;
+        const int32_t bolt_w = (int32_t)lv_font_get_glyph_width(&lv_font_montserrat_20, 0xF0E7, 0);
+        lv_obj_set_pos(s_knob_batt, charging ? CX - bolt_w / 2 : KNOB_BATT_X, KNOB_BATT_Y + (charging ? 1 : 0));
+    }
+    set_text(s_knob_batt, charging ? LV_SYMBOL_CHARGE : batt_symbol(st->knob_pct));
+    set_text_color(s_knob_batt, charging ? C_BATT_OK : batt_colour(st->knob_pct));
 }
 
 /* The padlock while locked, at the top of the arc -- left of the knob's own
@@ -9090,8 +9122,12 @@ void ui_update(const ui_state_t *st)
         int step = dig_steps()[s_active_dig];
         dig_place(lay);
         if (lay && step < 100) s_step_req = step = 100;
+        int at = -1;
         for (int i = N_DIG - 1; i >= 0; i--)
-            if (dig_steps()[i] == step) { s_active_dig = i; break; }
+            if (dig_steps()[i] == step) { at = i; break; }
+        /* 1 GHz, back under it: the 100 MHz digit, the biggest there. */
+        if (at < 0) s_step_req = dig_steps()[at = 0];
+        s_active_dig = at;
     }
     int mhz = (int)(f / 1000000);
     int khz = (int)((f / 1000) % 1000);
@@ -9118,8 +9154,11 @@ void ui_update(const ui_state_t *st)
         const char *txt = (i < lead) ? "" : b;
         if (strcmp(lv_label_get_text(s_dig[i]), txt) != 0)
             lv_label_set_text(s_dig[i], txt);
+        /* Under a kHz step the digits below it roll to the grid; from a MHz
+         * step up they stay (vfo_tune.h). */
+        const bool rolls = i > s_active_dig && dig_steps()[s_active_dig] < 1000000;
         lv_color_t c = (i == s_active_dig) ? C_ACCENT_HI
-                     : (i > s_active_dig)  ? C_TEXT2     /* these will roll */
+                     : rolls               ? C_TEXT2     /* these will roll */
                                            : C_TEXT;
         set_text_color(s_dig[i], st->tx ? C_TX_TEXT : c);
     }

@@ -217,6 +217,19 @@ static bool s_wifi_started;
 /* The radio is a receiver (radio_status_t.rx_only), as of the last status:
  * nothing on the knob keys it. */
 static bool s_rx_only;
+
+/* The face's lock, as the PTT sees it: locked, nothing keys, unless the page
+ * says the lock leaves the PTT (GitHub #9) -- then the slab, a headset's
+ * button and its boom arm key as unlocked. The telephone's slab is its
+ * calls', and its lock stays whole. */
+static bool ptt_locked(void)
+{
+#if VFO_RADIO_PHONE
+    return ui_locked();
+#else
+    return ui_locked() && !net_prov_lock_ptt();
+#endif
+}
 #if VFO_RADIO_PHONE
 static bool s_call_ringing;       /* the telephone rings: buzzed, with the ring */
 static volatile bool s_in_call;   /* calling, ringing or talking: the dial is the volume */
@@ -1593,7 +1606,7 @@ static void ui_task(void *arg)
              * telephone's hangs up -- and keys nothing: ui.c sends a tap
              * then only on the air, and a key that ended meanwhile is no
              * reason to start another. */
-            if (ui_locked()) {
+            if (ptt_locked()) {
 #if VFO_RADIO_PHONE
                 const bool live = s_in_call;  /* the telephone's slab hangs up */
 #else
@@ -1694,12 +1707,12 @@ static void ui_task(void *arg)
          * the knob says so, with a radio refusal's three clicks. Unkeying is
          * never refused. */
         if (bt_link_take_ptt() && !s_rx_only) {
-            if (ui_locked() && !radio_on_air()) {
+            if (ptt_locked() && !radio_on_air()) {
                 /* Locked: the button unkeys, and keys nothing. */
                 ESP_LOGW(TAG, "headset PTT refused: the knob is locked");
                 ui_lock_nudge();
                 haptic(12);                 /* triple click: refused */
-            } else if (ui_locked()) {
+            } else if (ptt_locked()) {
                 ESP_LOGI(TAG, "headset PTT, locked: unkey");
                 radio_ptt_unkey();
                 haptic(26);
@@ -1730,7 +1743,7 @@ static void ui_task(void *arg)
             if (!conn || !boom) armed = false;
             else if (!live)     armed = true;
             if (boom && conn && live != was_live) {
-                if (live && armed && !radio_on_air() && !s_rx_only && ui_locked()) {
+                if (live && armed && !radio_on_air() && !s_rx_only && ptt_locked()) {
                     /* Locked: down keys nothing -- nor does unlocking with it
                      * down; it goes up, and down again. */
                     ESP_LOGW(TAG, "boom down: not keyed, the knob is locked");
@@ -2478,6 +2491,13 @@ static void ui_task(void *arg)
             }
             u.knob_batt = pw.src == KNOB_PWR_BATTERY && pw.pct >= 0;
             u.knob_pct  = u.knob_batt ? (uint8_t)pw.pct : 0;
+            /* Once on its battery, a knob has one: on USB from then on it
+             * charges, and the face says so (GitHub #30). */
+            if (pw.src == KNOB_PWR_BATTERY && !net_prov_has_battery()) {
+                net_prov_save_has_battery();
+                ESP_LOGI(TAG, "[PWR] this knob has a battery: on USB it shows charging from now on");
+            }
+            u.knob_charging = pw.src == KNOB_PWR_USB && net_prov_has_battery();
         }
         ui_update(&u);
     }

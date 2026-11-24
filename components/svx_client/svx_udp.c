@@ -88,8 +88,70 @@ int svx_udp_rx_key(svx_udp_t *u, const uint8_t iv4[4], const uint8_t key[16])
     return u->keyed_rx ? 0 : -1;
 }
 
+void svx_udp_plain(svx_udp_t *u, uint16_t client_id)
+{
+    u->plain     = true;
+    u->client_id = client_id;
+    u->tx_seq    = 0;
+    u->have_high = false;
+    u->keyed_tx  = u->keyed_rx = true;   /* nothing to key: ready */
+}
+
+static int send_plain(svx_udp_t *u, uint16_t type, const uint8_t *body, size_t len)
+{
+    size_t n = 0;
+    if (proto_build_udp_v2(s_wire, sizeof s_wire, &n, type, u->client_id, u->tx_seq, body, len) != 0)
+        return -1;
+    struct sockaddr_in to = { .sin_family = AF_INET, .sin_port = htons(u->port),
+                              .sin_addr.s_addr = u->addr };
+    if (sendto(u->fd, s_wire, n, 0, (struct sockaddr *)&to, sizeof to) < 0) {
+        u->n_tx_fail++;
+        return -1;
+    }
+    u->tx_seq++;                         /* the reflector expects each one next */
+    u->n_tx++;
+    u->t_tx = ms_now();
+    return 0;
+}
+
+/* One datagram from the reflector, protocol 2: 1, or 0 for none. */
+static int recv_plain(svx_udp_t *u, uint16_t *type, const uint8_t **body, size_t *len, int *gap)
+{
+    while (u->fd >= 0) {
+        struct sockaddr_in from;
+        socklen_t fl = sizeof from;
+        int k = recvfrom(u->fd, s_wire, sizeof s_wire, 0, (struct sockaddr *)&from, &fl);
+        if (k < 0) return 0;                 /* nothing more waiting */
+        /* In the clear: only the reflector's own address is believed. */
+        if (from.sin_addr.s_addr != u->addr || ntohs(from.sin_port) != u->port) {
+            u->n_auth_fail++;
+            continue;
+        }
+        uint16_t t, id, seq;
+        if (proto_parse_udp_v2(s_wire, (size_t)k, &t, &id, &seq, body, len) != 0) continue;
+        /* The reflector's seq counts its datagrams to us: one behind the last
+         * is late or repeated, one ahead says how many went missing. */
+        int g = 0;
+        if (u->have_high) {
+            const uint16_t d = (uint16_t)(seq - (uint16_t)(u->rx_high + 1));
+            if (d > 0x7FFF) { u->n_replayed++; continue; }
+            g = d > 16 ? 16 : (int)d;
+        }
+        u->have_high = true;
+        u->rx_high   = seq;
+        u->n_lost   += (uint32_t)g;
+        u->n_rx++;
+        u->t_rx = ms_now();
+        *type = t;
+        *gap = g;
+        return 1;
+    }
+    return 0;
+}
+
 int svx_udp_send(svx_udp_t *u, uint16_t type, const uint8_t *body, size_t len)
 {
+    if (u->fd >= 0 && u->plain) return send_plain(u, type, body, len);
     if (u->fd < 0 || !u->keyed_tx) return -1;
     size_t n = 0;
     if (proto_build_udp_plaintext(s_pt, sizeof s_pt, &n, type, body, len) != 0) return -1;
@@ -129,6 +191,7 @@ int svx_udp_send(svx_udp_t *u, uint16_t type, const uint8_t *body, size_t len)
 int svx_udp_recv(svx_udp_t *u, uint16_t *type, const uint8_t **body, size_t *len,
                  int *gap)
 {
+    if (u->plain) return recv_plain(u, type, body, len, gap);
     while (u->fd >= 0) {
         int k = recv(u->fd, s_wire, sizeof s_wire, 0);
         if (k < 0) return 0;                 /* nothing more waiting */

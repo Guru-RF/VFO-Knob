@@ -96,7 +96,8 @@ internet; dashes until it has been told.
 
 Unplugged, the knob runs on its own battery and shows its charge at the top
 of the arc, over who is talking, as a phone does. On USB power the charge
-cannot be read, and none shows.
+cannot be read: a knob that has run on its battery shows a green bolt there
+instead, as the cable charges it, and one that never has shows nothing.
 
 ![On its own battery: the knob's charge over who is talking](tailchaser/12-battery.svg)
 

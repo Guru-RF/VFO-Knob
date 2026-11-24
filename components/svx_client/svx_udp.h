@@ -13,6 +13,11 @@
  *
  * Plaintext: [u16 type][u16 length][opus] for audio, [u16 type][body] for
  * everything else.
+ *
+ * Protocol 2 (svx_udp_plain()) has none of that: [u16 type][u16 client_id]
+ * [u16 seq] and the body, in the clear. Anyone can send such a datagram, so
+ * only the reflector's own address and port are listened to, and a seq
+ * behind the last one is dropped.
  */
 #pragma once
 
@@ -35,6 +40,8 @@ typedef struct {
     bool      sent_initial;
     bool      have_high;
     uint32_t  rx_high;
+    bool      plain;           /* protocol 2: no encryption */
+    uint16_t  tx_seq;          /* ...its counters, wrapping */
     /* counters, for the log */
     uint32_t  n_rx, n_auth_fail, n_replayed, n_lost, n_tx, n_tx_fail;
     int64_t   t_tx, t_rx;      /* last send, last authenticated receive (ms) */
@@ -52,6 +59,10 @@ void svx_udp_make_tx_key(svx_udp_t *u, uint16_t client_id);
  * (shared-key mode with client id 0 would reuse nonces). */
 int svx_udp_rx_shared(svx_udp_t *u);
 int svx_udp_rx_key(svx_udp_t *u, const uint8_t iv4[4], const uint8_t key[16]);
+
+/* Protocol 2: in the clear, with the client id from ServerInfo. Ready both
+ * ways at once. */
+void svx_udp_plain(svx_udp_t *u, uint16_t client_id);
 
 /* Encrypt and send one message. 0, or -1 if it could not go. */
 int svx_udp_send(svx_udp_t *u, uint16_t type, const uint8_t *body, size_t len);

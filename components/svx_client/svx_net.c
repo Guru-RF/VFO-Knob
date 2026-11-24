@@ -300,9 +300,26 @@ int svx_link_next(svx_link_t *l, uint16_t *type, uint8_t **payload, size_t *len)
     }
 }
 
+/* Protocol 2's: what the socket has, as it is. */
+static int pump_plain(svx_link_t *l)
+{
+    if (l->consume) {
+        memmove(l->in, l->in + l->consume, l->in_len - l->consume);
+        l->in_len -= l->consume;
+        l->consume = 0;
+    }
+    while (l->in_len < IN_CAP) {
+        const int k = recv(l->fd, l->in + l->in_len, IN_CAP - l->in_len, 0);
+        if (k > 0) { l->in_len += (size_t)k; continue; }
+        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+        return -1;                           /* closed, or failed */
+    }
+    return 0;
+}
+
 int svx_link_pump(svx_link_t *l)
 {
-    if (!l->tls) return 0;
+    if (!l->tls) return l->plain ? pump_plain(l) : 0;
     if (l->consume) {
         memmove(l->in, l->in + l->consume, l->in_len - l->consume);
         l->in_len -= l->consume;

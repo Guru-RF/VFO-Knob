@@ -242,7 +242,8 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
   <p class="note" id="svxnote" hidden>The reflector's name, as SvxLink knows it:
      its SRV record says which host and port to use (<b>be.svx.link</b> is
      <b>reflector.be.svx.link:5300</b>). The port counts only for a name
-     without one. Changes here apply on the knob's next boot.</p>
+     without one; a protocol 2 reflector is often given as an address and a
+     port. Changes here apply on the knob's next boot.</p>
 </section>
 
 <section id="episec" hidden>
@@ -642,11 +643,29 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
 
 <section id="svxstation" hidden>
   <h2>Station</h2>
+  <label for="sproto">Login</label>
+  <select id="sproto">
+    <option value="3">Protocol 3: a certificate the reflector signs</option>
+    <option value="2">Protocol 2: callsign and password</option>
+  </select>
   <div class="grid">
     <div><label>Callsign</label><input id="scall" autocomplete="off"
          placeholder="ON6URE-KNOB"></div>
-    <div><label>Email address, for the certificate</label><input id="semail"
+    <div id="semailbox"><label>Email address, for the certificate</label><input id="semail"
          type="email" autocomplete="off"></div>
+    <div id="spassbox" hidden><label>Password</label><div class="pw"><input id="spass"
+         type="password" autocomplete="new-password" autocapitalize="none" autocorrect="off"
+         spellcheck="false" placeholder="not set"><button type="button" class="show"
+         data-for="spass">Show</button></div></div>
+  </div>
+  <div id="svxv2" hidden>
+    <label class="chk"><input type="checkbox" id="spassclear"> Clear the password</label>
+    <p class="note">For a reflector that still logs stations in the older way:
+       its sysop gives the callsign and its password. The password never leaves
+       the knob &mdash; the knob answers the reflector's challenge with it &mdash;
+       and this page shows only whether one is set. Everything after the login
+       goes in the clear, the audio too: anyone on the way can listen in. Use
+       protocol 3 wherever the reflector has it.</p>
   </div>
   <label>Location, for the reflector's map and node list</label><input id="sloc">
   <div class="grid">
@@ -826,17 +845,17 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
 </section>
 
 <section id="svxcert" hidden>
-  <h2>Certificate</h2>
+  <h2 id="svxcerth">Certificate</h2>
   <div id="certrows"></div>
   <button id="enroll">Request certificate</button>
   <button id="unenroll" class="ghost" hidden>Stop asking</button>
   <button id="csrdl" class="ghost" hidden>Download the request</button>
-  <p class="note">The reflector knows a station by a certificate it signs. The
+  <p class="note" id="svxcertnote">The reflector knows a station by a certificate it signs. The
      request goes with the callsign and email above; the knob makes its key
      first, which takes up to a minute. Some reflectors sign at once, others
      wait for their sysop, and the knob keeps asking until the certificate
      arrives. It renews by itself.</p>
-  <details><summary class="note" style="cursor:pointer">Delete the key</summary>
+  <details id="svxforget"><summary class="note" style="cursor:pointer">Delete the key</summary>
     <p class="note">The reflector ties the callsign to this key. With a new key
        the sysop has to remove the old certificate before signing again.</p>
     <button id="forget" class="ghost">Delete key and certificate</button>
@@ -892,6 +911,11 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
   <p class="note" id="volnote" hidden>The volume takes effect immediately. A receiver's
      firmware has no microphone to set<span class="tconly">, nor has TailChaser's: the
      knob listens to the repeaters and keys none</span>.</p>
+  <label class="chk" id="lockpttrow"><input type="checkbox" id="lockptt"> The lock leaves the PTT</label>
+  <p class="note" id="lockpttnote">Locked from the face (hold the S-meter, tap <b>LOCK</b>), a turn
+     tunes nothing and a tap opens nothing. Ticked, the slab, a headset's button and its boom arm
+     still key and unkey; not ticked, nothing keys, and the slab and the button only unkey. From
+     the next press.</p>
   <div class="grid">
     <div><label for="ss">Screensaver</label>
          <select id="ss"><option value="1">Matrix rain</option>
@@ -1206,7 +1230,7 @@ async function load(){
   $('ss').value=String(c.ss??1); $('ssa').value=c.ssa??1; $('ssd').value=c.ssd??1; $('ssb').value=c.ssb??1;
   $('h24').value=c.h24===false?'0':'1'; tzLoad(c.tz||'Europe/Brussels');
   $('ckface').value=String(c.ckface ?? 0); $('cksec').value=c.cksec===false?'0':'1';
-  $('jack').value=String(c.jack??0); $('txmic').value=String(c.txmic??0); $('sattrk').value=String(c.sattrk??0); $('bright').value=c.bright??80; $('turn').value=String(c.turn??0);
+  $('jack').value=String(c.jack??0); $('txmic').value=String(c.txmic??0); $('sattrk').value=String(c.sattrk??0); $('bright').value=c.bright??80; $('turn').value=String(c.turn??0); $('lockptt').checked=!!c.lockptt;
   FWROOT=c.fwroot||''; RADIO=c.radio||'aethersdr'; radios();
   /* The address this browser reaches the knob from. Over the cable that is the
      USB link's own 10.55.42.2 -- found automatically there, and unreachable
@@ -1300,6 +1324,7 @@ async function load(){
   RXONLY = uber || KIWI || WEBRX || TC;   /* TailChaser's knob listens, and keys nothing */
   /* A receiver's firmware has no microphone: no gain to set for one. */
   $('microw').hidden = $('michrow').hidden = $('micnote').hidden = RXONLY || SCREEN; $('volnote').hidden = !RXONLY || SCREEN;
+  $('lockpttrow').hidden = $('lockpttnote').hidden = RXONLY || SCREEN || PHONE || c.radio === 'setup';
   HOSTLBL = flex || k4 ? "The radio's IP address" : uber ? 'Address (https://\u2026, or http://\u2026)'
           : WEBRX ? 'Address (http://\u2026, or https://\u2026)' : 'Host (IP, or a name ending .local)';
   $('rsingle').hidden = LIST || OB; $('obsec').hidden = !OB;
@@ -2484,23 +2509,38 @@ async function svxLoad(){
   let s; try{ s=await (await fetch('/api/svx')).json() }catch(e){ return }
   for(const k in SVXF) $(SVXF[k]).value=s[k];
   for(const k in SVXB) $(SVXB[k]).checked=!!s[k];
-  svxShow(s);
+  $('sproto').value = s.proto===2 ? '2' : '3';
+  $('spass').value=''; $('spassclear').checked=false;
+  svxProto(); svxShow(s);
 }
+/* Protocol 2 logs in with a password: no certificate, no email for one. */
+function svxProto(){
+  const v2 = $('sproto').value==='2';
+  $('spassbox').hidden = $('svxv2').hidden = !v2;
+  $('semailbox').hidden = v2;
+  $('svxcerth').textContent = v2 ? 'Login' : 'Certificate';
+  $('svxcertnote').hidden = $('svxforget').hidden = v2;
+}
+$('sproto').onchange=svxProto;
 function svxShow(s){
   const c=s.cert, day=t=>t?new Date(t*1000).toISOString().slice(0,10):'\u2014';
   const good=['valid','valid, renewal due','expiring','not yet valid'].includes(c.state);
+  const v2 = s.proto===2;
+  $('spass').placeholder = s.pass_set ? 'a password set' : 'not set';
   $('certrows').innerHTML =
       row('Now', esc(s.phase||'\u2014'))
     + (s.why ? row('Last problem', esc(s.why)) : '')
     + (s.server ? row('Reflector', esc(s.server)+(s.up&&s.nodes?` \u00b7 ${s.nodes} nodes`:'')) : '')
-    + row('Certificate', esc(c.state)+(c.cn?' \u00b7 '+esc(c.cn):''))
-    + (c.until ? row('Valid', `${day(c.from)} to ${day(c.until)}`) : '')
-    + (c.pending ? row('Request', 'with the reflector'+(c.requested?' since '+day(c.requested):'')
-                   +' \u2014 the knob keeps asking') : '')
-    + (s.clock ? '' : row('Clock', 'not set yet'));
-  $('enroll').hidden = c.pending || good;
-  $('unenroll').hidden = !c.pending;
-  $('csrdl').hidden = !c.csr;
+    + (v2 ? row('Login', 'protocol 2, '+(s.pass_set?'a password set':'no password')
+                +' \u2014 audio in the clear')
+          : row('Certificate', esc(c.state)+(c.cn?' \u00b7 '+esc(c.cn):''))
+          + (c.until ? row('Valid', `${day(c.from)} to ${day(c.until)}`) : '')
+          + (c.pending ? row('Request', 'with the reflector'+(c.requested?' since '+day(c.requested):'')
+                         +' \u2014 the knob keeps asking') : ''))
+    + (s.clock || v2 ? '' : row('Clock', 'not set yet'));
+  $('enroll').hidden = v2 || c.pending || good;
+  $('unenroll').hidden = v2 || !c.pending;
+  $('csrdl').hidden = v2 || !c.csr;
 }
 async function svxPoll(){
   if(!SVX) return;
@@ -2511,7 +2551,12 @@ async function svxSave(){
   for(const k in SVXF) b.append(k,$(SVXF[k]).value.trim());
   b.set('call',$('scall').value.trim().toUpperCase());
   for(const k in SVXB) b.append(k,$(SVXB[k]).checked?'1':'0');
+  b.append('proto',$('sproto').value);
+  /* The password only when one is typed: none sent keeps the knob's. */
+  if($('spass').value) b.append('pass',$('spass').value);
+  if($('spassclear').checked) b.append('passclear','1');
   const r=await fetch('/api/svx',{method:'POST',body:b});
+  if(r.ok){ $('spass').value=''; $('spassclear').checked=false; svxPoll(); }
   return r.ok ? '' : await r.text();
 }
 /* ---- the tailchaser firmware: its repeaters, Tailscale, what it sees ---- */
@@ -2683,6 +2728,7 @@ $('save').onclick=async()=>{
     b.append('ruser',$('ruser').value);
     if($('rpass').value) b.append('rpass',$('rpass').value);
   }
+  if(!$('lockpttrow').hidden) b.append('lockptt',$('lockptt').checked?'1':'0');
   if($('webpass').value) b.append('webpass',$('webpass').value);
   const r=await fetch('/api/config',{method:'POST',body:b});
   if(r.ok) VOLEDIT=false;

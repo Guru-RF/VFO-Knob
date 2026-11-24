@@ -794,10 +794,30 @@ static void link_lost(void)
     ESP_LOGW(TAG, "link down%s%s", S.last_close[0] ? ": " : "", S.last_close);
 }
 
+/* The WebSocket task's rest. It is the only reader of the socket and it
+ * runs on core 0 at priority 6, so while frames keep coming it never
+ * blocks: a burst from the server -- over the USB cable it arrives as fast
+ * as the computer sends it -- kept it working for five seconds straight, and
+ * the task watchdog restarted the knob mid-over, IDLE0 starved (GitHub #24:
+ * websocket_task 56% and tiT 10% of core 0 in the dump's last [CPU] line).
+ * So every REST_EVERY_MS it steps aside for a tick, whatever is queued: 1 ms
+ * in 100, well inside the ring's pre-roll. */
+#define REST_EVERY_MS 100
+
+static void ws_rest(void)
+{
+    static int64_t s_rested_us;
+    const int64_t now = esp_timer_get_time();
+    if (now - s_rested_us < REST_EVERY_MS * 1000) return;
+    vTaskDelay(1);
+    s_rested_us = esp_timer_get_time();
+}
+
 static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)base;
     ws_event_data_t *e = data;
+    ws_rest();
 
     switch (id) {
     case WS_EV_CONNECTED:

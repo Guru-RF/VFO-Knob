@@ -88,22 +88,24 @@ Until the radio answers, the knob says so, with its own addresses:
 | **Band** | the band editor | the band's own frequency, on a tap on the panel — only the bands the radio has: on the IC-9700 2 m, 70 cm and 23 cm; on the IC-7300MK2 HF to 4 m; on the IC-905 2 m to 3 cm |
 | **Mode** | the mode editor | USB, LSB, CW, CW-R, AM, FM, RTTY, DIGU, DIGL — on the IC-R8600 WFM in place of DIGU and DIGL |
 | **Filter** | the filter editor | the radio's FIL1, FIL2, FIL3 |
-| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 GHz up the digits read MMMM.kkk.h, and from 10 GHz (the IC-905's 3 cm) the first of them reads 10: 10368.200.0 |
-| **Step, RIT** | RIT: its editor | RIT in amber when set; none on the IC-R8600 |
+| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 MHz up the digits under it stay as they are; from 1 GHz up the digits read MMMM.kkk.h, and from 10 GHz (the IC-905's 3 cm) the first of them reads 10: 10368.200.0 |
+| **Step, RIT** | RIT: its editor, 10 Hz a detent, the first onto the 10 Hz grid | RIT in amber when set; none on the IC-R8600 |
 | **Volume, mic gain** | their editors | the knob's own levels; the IC-R8600 has only the volume |
 | **PTT** | key, and key off; on the IC-7610, hold: the antenna | see [Transmitting](#transmitting) and [the antennas](#main-sub-and-the-antennas-ic-7610); on the IC-705 and the IC-9700 a held press keys as it lifts; on the IC-R8600 **RECEIVER**, nothing to key — hold: the antenna |
 
 Unplugged, the knob runs on its own battery and shows its charge at the top
 of the arc, as a phone does — on every firmware's face. On USB power the
-charge cannot be read, and none shows. The address card says which:
-**battery 85 %**, or **on USB power**.
+charge cannot be read: a knob that has run on its battery shows a green bolt
+there instead, as the cable charges it, and one that never has shows
+nothing. The address card says which: **battery 85 %**, or **on USB power**.
 
 ![On its own battery: the knob's charge at the top of the arc](icom/24-battery.svg)
 
 ## Tuning
 
 Turn the knob to tune: a slow turn moves a step at a time, a flick crosses a
-band. Tap a digit to tune by that decade.
+band. Tap a digit to tune by that decade. From the 1 MHz digit up, the
+digits under it stay as they are: at the 10 MHz digit, 145.500 goes to 155.500.
 
 ![Turn to tune, tap a digit for its step](icom/03-tune.svg)
 
@@ -398,6 +400,11 @@ headset's button or its boom arm. Unkeying is never locked: on the air, a tap
 on the slab or the headset's button still unkeys. The padlock goes red for a
 moment when it refuses something. A question the knob asks still takes its
 answer.
+
+To lock the rest and keep the PTT, tick **The lock leaves the PTT** under
+**Audio** on the configuration page. Locked, the slab, a headset's button and
+its boom arm then key and unkey as unlocked, while a turn, a tap elsewhere
+and a swipe stay locked, and a hold on the slab opens no antennas.
 
 To unlock, hold the S-meter again and tap **UNLOCK**. With no link it is over
 the warning. A restart unlocks too.

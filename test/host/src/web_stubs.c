@@ -78,6 +78,9 @@ void net_prov_save_tx_mic(uint8_t src) { if (src <= 1) s_tx_mic = src; }
 static uint8_t s_sat_track;
 uint8_t net_prov_sat_track(void) { return s_sat_track; }
 void net_prov_save_sat_track(uint8_t track) { if (track <= 2) s_sat_track = track; }
+static bool s_lock_ptt;
+bool net_prov_lock_ptt(void) { return s_lock_ptt; }
+void net_prov_save_lock_ptt(bool keys) { s_lock_ptt = keys; }
 static bool s_turned;
 bool net_prov_turned(void) { return s_turned; }
 void net_prov_save_turned(bool turned) { s_turned = turned; }

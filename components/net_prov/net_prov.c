@@ -318,6 +318,8 @@ static uint8_t  s_beam_dir;         /* ...and the one the beam was left on, 0 = 
 static uint8_t  s_jack_db;          /* the jack's level above the VOLUME, dB */
 static uint8_t  s_tx_mic;           /* NET_TX_*: what AetherSDR or an Icom transmits with */
 static uint8_t  s_sat_track;        /* NET_SAT_*: the IC-9700's uplink, on a turn */
+static bool     s_lock_ptt;         /* the face's lock leaves the PTT */
+static bool     s_has_batt;         /* this knob has run on its battery */
 #if VFO_RADIO_ADSB
 /* ADS-B Radar's radar: in PSRAM, as large as it is beside the rest. */
 EXT_RAM_BSS_ATTR static net_adsb_t s_adsb;
@@ -836,6 +838,8 @@ void net_prov_load_settings(void)
     if (kv_get_u8(h, "jackdb", &v) == ESP_OK && v <= NET_PROV_JACK_DB_MAX && v % 3 == 0) s_jack_db = v;
     if (kv_get_u8(h, "txmic", &v) == ESP_OK && v <= NET_TX_RADIO) s_tx_mic = v;
     if (kv_get_u8(h, "sattrk", &v) == ESP_OK && v <= NET_SAT_REVERSE) s_sat_track = v;
+    if (kv_get_u8(h, "lockptt", &v) == ESP_OK && v <= 1) s_lock_ptt = v;
+    if (kv_get_u8(h, "hasbatt", &v) == ESP_OK && v == 1) s_has_batt = true;
 #if VFO_RADIO_ADSB
     adsb_load(h);
 #endif
@@ -1534,6 +1538,26 @@ void net_prov_save_sat_track(uint8_t track)
     if (track > NET_SAT_REVERSE || track == s_sat_track) return;
     s_sat_track = track;
     kv_set_u8(kv(), "sattrk", track);
+    kv_commit_now(kv());
+}
+
+bool net_prov_lock_ptt(void) { return s_lock_ptt; }
+
+bool net_prov_has_battery(void) { return s_has_batt; }
+
+void net_prov_save_has_battery(void)
+{
+    if (s_has_batt) return;
+    s_has_batt = true;
+    kv_set_u8(kv(), "hasbatt", 1);
+    kv_commit_now(kv());                 /* never blocks (kvstore.h) */
+}
+
+void net_prov_save_lock_ptt(bool keys)
+{
+    if (keys == s_lock_ptt) return;
+    s_lock_ptt = keys;
+    kv_set_u8(kv(), "lockptt", keys);
     kv_commit_now(kv());
 }
 

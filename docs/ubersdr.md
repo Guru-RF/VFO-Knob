@@ -66,7 +66,7 @@ the warning, as the dial names it ([another receiver](#another-receiver)).
 | **Band** | the band editor | 160 m to 10 m, each band's own frequency |
 | **Mode** | the mode editor | USB, LSB, CWU, CWL, AM, SAM, FM, NFM, UberSDR's own names |
 | **Filter** | the filter editor | its width, by mode: 1.8 to 5 kHz for a sideband, 100 Hz to 1 kHz in CW, 4 to 12 kHz in AM, 10 to 16 kHz in FM |
-| **Frequency** | a digit: the tuning step | the underlined digit is the step |
+| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 MHz up the digits under it stay as they are |
 | **Step, volume** | volume: its editor | the knob's own level |
 | **The spot or voice** | all of them, on the dial | the one nearest the dial: green while it is heard, white when you are on it, grey beside it; under it where and what it is, and how many there are on the band |
 | **Time left** | — | a guest's, at the slab's left end: whole minutes, or from a hundred on in hours, **1 h 40**; in the last five the seconds too, in amber, red in the last one; only where the receiver limits a guest ([a guest's time](#a-guests-time)) |
@@ -88,8 +88,9 @@ knob says **FILTERS FULL** and goes back to what is running.
 
 Unplugged, the knob runs on its own battery and shows its charge at the top
 of the arc, as a phone does; an SSTV picture covers it. On USB power the
-charge cannot be read, and none shows. The address card says which:
-**battery 85 %**, or **on USB power**.
+charge cannot be read: a knob that has run on its battery shows a green bolt
+there instead, as the cable charges it, and one that never has shows
+nothing. The address card says which: **battery 85 %**, or **on USB power**.
 
 ![On its own battery: the knob's charge at the top of the arc](ubersdr/20-battery.svg)
 

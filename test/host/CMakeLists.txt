@@ -322,6 +322,24 @@ target_compile_options(test_tgmanager PRIVATE -Wall -Wextra
                        "-DESP_LOG_LEVEL_LOCAL(l,t,...)=((void)(l),(void)(t))")
 add_test(NAME test_tgmanager COMMAND test_tgmanager)
 
+# SVXConnect's SvxLink protocol 2 (GitHub #27): the login's messages and
+# datagrams (svx/common/proto.c), the password's HMAC-SHA1 (svx_auth.c, on
+# the knob's mbedTLS) against RFC 2202 and a digest Python computes, and the
+# plain audio channel (svx_udp.c) over the PC's loopback.
+if(MBEDTLS_DIR)
+    set(SVXC ${CMAKE_CURRENT_SOURCE_DIR}/../../components/svx_client)
+    add_executable(test_svx_v2 src/test_svx_v2.c ${SVX}/common/proto.c ${SVX}/common/util.c
+                   ${SVXC}/svx_auth.c ${SVXC}/svx_udp.c shim/shim.c)
+    target_include_directories(test_svx_v2 PRIVATE ${SVX} ${SVX}/common ${SVXC}
+                               ${CMAKE_CURRENT_SOURCE_DIR}/shim)
+    target_link_libraries(test_svx_v2 PRIVATE mbedtls_host Threads::Threads m)
+    target_compile_definitions(test_svx_v2 PRIVATE
+                               ESP_LOG_ERROR=1 ESP_LOG_WARN=2 ESP_LOG_INFO=3 ESP_LOG_DEBUG=4)
+    target_compile_options(test_svx_v2 PRIVATE -Wall -Wextra
+                           "-DESP_LOG_LEVEL_LOCAL(l,t,...)=((void)(l),(void)(t))")
+    add_test(NAME test_svx_v2 COMMAND test_svx_v2)
+endif()
+
 # KiwiSDR's protocol, the plain-C part (components/kiwi_proto/kiwi_proto.c).
 set(KIWI ${CMAKE_CURRENT_SOURCE_DIR}/../../components/kiwi_proto)
 add_library(kiwi_proto STATIC ${KIWI}/kiwi_proto.c)

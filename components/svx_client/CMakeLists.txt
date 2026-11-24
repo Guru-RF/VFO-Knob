@@ -1,10 +1,12 @@
 # An SvxLink reflector over WiFi: the svxconnect firmware's implementation of
 # radio.h (VFO_RADIO=svxconnect). A port of SVXConnect-CLI's reflector client:
 # svx/ holds the CLI's own protocol, talkgroup manager, node info and codec,
-# laid out as in its source tree; the rest is the knob's side of them.
+# laid out as in its source tree; the rest is the knob's side of them. Two
+# logins: protocol 3, a certificate and TLS (svx_pki.c), and protocol 2, the
+# older callsign and password (svx_auth.c, svx_v2.c), in the clear.
 idf_component_register(
     SRCS "svx_client.c" "svx_net.c" "svx_udp.c" "svx_pki.c" "svx_portal.c" "svx_feed.c"
-         "svx_web.c"
+         "svx_web.c" "svx_auth.c" "svx_v2.c"
          "svx/common/proto.c" "svx/common/util.c" "svx/audio/codec.c"
          "svx/tg/tgmanager.c" "svx/reflector/nodeinfo.c"
     PRIV_INCLUDE_DIRS "svx" "svx/common" "svx/audio"

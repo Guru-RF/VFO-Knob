@@ -42,6 +42,25 @@
 #define PROTO_MAJOR 3
 #define PROTO_MINOR 0
 
+/* Protocol 2, the one before certificates: a reflector's [USERS] and
+ * [PASSWORDS], everything in the clear (SvxLink's ReflectorMsg.h, and
+ * SVXConnect for Android's CallPassword profiles).
+ *
+ *   TCP: MsgProtoVer 2.0 -> MsgAuthChallenge [u16 20][20 random bytes]
+ *        -> MsgAuthResponse [string callsign][u16 20][HMAC-SHA1 digest]
+ *        -> MsgAuthOk, MsgServerInfo -> MsgNodeInfo with the JSON alone.
+ *        The digest is keyed with the password's bytes, over the challenge:
+ *        the password itself never goes over the network.
+ *   UDP: [u16 type][u16 client_id][u16 seq], then the body -- audio's
+ *        [u16 len][opus] as in v3 -- no encryption. The reflector knows the
+ *        client by the id and the address of its TCP connection; seq counts
+ *        each side's datagrams, wrapping at 16 bits.
+ */
+#define PROTO_V2_MAJOR 2
+#define PROTO_V2_MINOR 0
+#define SVX_CHALLENGE_LEN 20
+#define SVX_UDP_V2_HDR     6
+
 #define SVX_DEFAULT_PORT 5300
 
 /* Timers, in milliseconds. */
@@ -92,6 +111,9 @@ const char *proto_msg_name(uint16_t type);
  * buffer is too small; *out_len receives the total byte count. */
 
 int proto_build_proto_ver     (uint8_t *buf, size_t cap, size_t *out_len);
+/* MsgProtoVer at another version: protocol 2's login. */
+int proto_build_proto_ver_at  (uint8_t *buf, size_t cap, size_t *out_len,
+                               uint16_t major, uint16_t minor);
 int proto_build_ca_bundle_req (uint8_t *buf, size_t cap, size_t *out_len);
 int proto_build_start_enc_req (uint8_t *buf, size_t cap, size_t *out_len);
 int proto_build_heartbeat     (uint8_t *buf, size_t cap, size_t *out_len);
@@ -100,6 +122,13 @@ int proto_build_client_csr    (uint8_t *buf, size_t cap, size_t *out_len,
                                const char *csr_pem, size_t csr_pem_len);
 int proto_build_auth_response (uint8_t *buf, size_t cap, size_t *out_len,
                                const char *callsign, const uint8_t digest[20]);
+/* Protocol 2's: the digest as a vector, its u16 length ahead of it, the way
+ * SvxLink's Async::Msg packs one. */
+int proto_build_auth_response_v2(uint8_t *buf, size_t cap, size_t *out_len,
+                                 const char *callsign, const uint8_t digest[20]);
+/* Protocol 2's MsgNodeInfo: the JSON alone, no UDP key. */
+int proto_build_node_info_v2  (uint8_t *buf, size_t cap, size_t *out_len,
+                               const char *json, size_t json_len);
 int proto_build_node_info     (uint8_t *buf, size_t cap, size_t *out_len,
                                const uint8_t *iv_rand, size_t iv_len,
                                const uint8_t *key,     size_t key_len,
@@ -123,6 +152,11 @@ int proto_parse_server_info(const uint8_t *payload, size_t len,
                             uint16_t *out_client_id,
                             int      *out_node_count,
                             int      *out_have_opus);
+
+/* MsgAuthChallenge: [u16 20][20 bytes]. 0 with the challenge, -1 if it is
+ * not 20 bytes. */
+int proto_parse_auth_challenge(const uint8_t *payload, size_t len,
+                               uint8_t out[SVX_CHALLENGE_LEN]);
 
 /* MsgProtoVerDowngrade — the server refuses 3.0 and names what it wants. */
 int proto_parse_proto_ver_downgrade(const uint8_t *payload, size_t len,
@@ -166,5 +200,17 @@ int proto_build_udp_plaintext(uint8_t *buf, size_t cap, size_t *out_len,
 int proto_parse_udp_plaintext(const uint8_t *pt, size_t len,
                               uint16_t *out_type,
                               const uint8_t **out_body, size_t *out_body_len);
+
+/* ---- UDP, protocol 2 ----
+ * The whole datagram: [u16 type][u16 client_id][u16 seq] and the body as
+ * proto_build_udp_plaintext() has it after its type. */
+int proto_build_udp_v2(uint8_t *buf, size_t cap, size_t *out_len,
+                       uint16_t type, uint16_t client_id, uint16_t seq,
+                       const uint8_t *body, size_t body_len);
+/* A received datagram: its type, client id and seq, and the body as
+ * proto_parse_udp_plaintext() gives it. */
+int proto_parse_udp_v2(const uint8_t *dg, size_t len,
+                       uint16_t *out_type, uint16_t *out_client_id, uint16_t *out_seq,
+                       const uint8_t **out_body, size_t *out_body_len);
 
 #endif

@@ -87,7 +87,7 @@ the page is easy to find. Until a receiver answers, the knob says why:
 | **Band** | the band editor | 160 m to 10 m, and 6 m on a Web-888 |
 | **Mode** | the mode editor | USB, LSB, CW, AM, SAM, SAL, SAU, NBFM: the receivers' own names |
 | **Filter** | the filter editor | its width, by mode |
-| **Frequency** | a digit: the tuning step | the underlined digit is the step |
+| **Frequency** | a digit: the tuning step | the underlined digit is the step; from 1 MHz up the digits under it stay as they are |
 | **Step, volume** | volume: its editor | the knob's own level |
 | **The receiver** | the receivers | its name; under it its antenna, or its model and address (the model alone where the name is the address); under that where it is, or *connecting...* |
 
@@ -125,8 +125,9 @@ strong signal overloads the receiver's ADC, its reading turns red with
 
 Unplugged, the knob runs on its own battery and shows its charge at the top
 of the arc, as a phone does — on every firmware's face. On USB power the
-charge cannot be read, and none shows. The address card says which:
-**battery 85 %**, or **on USB power**.
+charge cannot be read: a knob that has run on its battery shows a green bolt
+there instead, as the cable charges it, and one that never has shows
+nothing. The address card says which: **battery 85 %**, or **on USB power**.
 
 ![On its own battery: the knob's charge at the top of the arc](kiwi/21-battery.svg)
 

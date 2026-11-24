@@ -26,6 +26,7 @@ typedef struct {
     uint32_t  addr;                 /* the reflector, network order */
     uint16_t  port;
     bool      tls;
+    bool      plain;                /* protocol 2: no TLS ever, read as it comes */
     bool      tls_ready;            /* contexts initialised: free them */
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config  conf;
@@ -53,8 +54,9 @@ void svx_link_close(svx_link_t *l);
 int svx_link_frame(svx_link_t *l, uint16_t *type, uint8_t **payload, size_t *len,
                    int timeout_ms);
 
-/* After TLS: reads what has arrived without waiting. Returns -1 if the
- * connection closed, else 0. Frames are then taken with svx_link_next(). */
+/* After TLS -- or, with `plain` set, protocol 2's connection in the clear:
+ * reads what has arrived without waiting. Returns -1 if the connection
+ * closed, else 0. Frames are then taken with svx_link_next(). */
 int svx_link_pump(svx_link_t *l);
 /* A frame already read, if there is a whole one: 1, else 0; -1 if the peer
  * sent one too large to be real. */

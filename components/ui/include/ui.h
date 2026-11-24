@@ -176,6 +176,7 @@ typedef struct {
      * none on a radio's face on the air, where the transmit scale is. */
     bool     knob_batt;
     uint8_t  knob_pct;
+    bool     knob_charging;  /* on USB, a knob that has run on its battery: charging */
     /* A receiver (the IC-R8600): the slab says RECEIVER and keys nothing; a
      * headset on it just listens. */
     bool     rx_only;

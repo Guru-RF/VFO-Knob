@@ -90,6 +90,9 @@ static esp_err_t svx_get(httpd_req_t *r)
            (unsigned long)s->default_tg, s->lock_on_start ? "true" : "false",
            s->linger_s, s->idle_s, s->roger ? "true" : "false",
            s->agc ? "true" : "false", s->tx_timeout_s, s->feed ? "true" : "false");
+    /* Protocol 2's password: whether there is one, never what it is. */
+    jb_raw(&j, "\"proto\":%u,\"pass_set\":%s,", s->proto, s->pass[0] ? "true" : "false");
+    memset(s->pass, 0, sizeof s->pass);
     jb_str(&j, "phase", st.phase);
     jb_str(&j, "why", st.why);
     jb_str(&j, "server", st.server);
@@ -153,6 +156,7 @@ static bool field(const char *body, const char *key, char *out, size_t cap)
         }
         out[o] = 0;
     }
+    memset(raw, 0, 800);                 /* it may have held the password */
     free(raw);
     return ok;
 }
@@ -205,9 +209,22 @@ static esp_err_t svx_post(httpd_req_t *r)
     field_bool(body, "roger", &s->roger);
     field_bool(body, "agc",   &s->agc);
     field_bool(body, "feed",  &s->feed);
+    if (field_ul(body, "proto", &v))  s->proto = (uint8_t)(v == 2 ? 2 : v == 3 ? 3 : 0);
+    /* The password: a new one replaces it, none sent keeps it, passclear
+     * takes it away. One longer than the field is refused, not cut. */
+    char pass[SVX_PASS_MAX + 2] = "";
+    bool clear = false;
+    if (field(body, "pass", pass, sizeof pass) && pass[0]) strlcpy(s->pass, pass, sizeof s->pass);
+    const bool too_long = strlen(pass) > SVX_PASS_MAX;
+    field_bool(body, "passclear", &clear);
+    if (clear) s->pass[0] = 0;
+    memset(pass, 0, sizeof pass);
+    memset(body, 0, strlen(body));
     free(body);
     const char *why = NULL;
-    esp_err_t e = svx_settings_set(s, &why);
+    esp_err_t e = too_long ? ESP_ERR_INVALID_ARG : svx_settings_set(s, &why);
+    if (too_long) why = "a password is at most 64 characters";
+    memset(s->pass, 0, sizeof s->pass);
     free(s);
     return reply(r, e, why);
 }

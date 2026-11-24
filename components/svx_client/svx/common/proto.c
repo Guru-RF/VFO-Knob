@@ -107,6 +107,15 @@ int proto_build_proto_ver(uint8_t *buf, size_t cap, size_t *out_len) {
     return frame_end(buf, off, out_len);
 }
 
+int proto_build_proto_ver_at(uint8_t *buf, size_t cap, size_t *out_len,
+                             uint16_t major, uint16_t minor) {
+    size_t off; if (frame_begin(buf, cap, &off) < 0) return -1;
+    if (put_u16(buf, cap, &off, MSG_PROTO_VER)) return -1;
+    if (put_u16(buf, cap, &off, major))         return -1;
+    if (put_u16(buf, cap, &off, minor))         return -1;
+    return frame_end(buf, off, out_len);
+}
+
 int proto_build_ca_bundle_req(uint8_t *buf, size_t cap, size_t *out_len) {
     size_t off; if (frame_begin(buf, cap, &off) < 0) return -1;
     if (put_u16(buf, cap, &off, MSG_CA_BUNDLE_REQUEST)) return -1;
@@ -145,6 +154,24 @@ int proto_build_auth_response(uint8_t *buf, size_t cap, size_t *out_len,
     if (put_u16(buf, cap, &off, MSG_AUTH_RESPONSE)) return -1;
     if (put_string(buf, cap, &off, callsign, strlen(callsign))) return -1;
     if (put_bytes(buf, cap, &off, digest, 20)) return -1;
+    return frame_end(buf, off, out_len);
+}
+
+int proto_build_auth_response_v2(uint8_t *buf, size_t cap, size_t *out_len,
+                                 const char *callsign, const uint8_t digest[20]) {
+    size_t off; if (frame_begin(buf, cap, &off) < 0) return -1;
+    if (put_u16(buf, cap, &off, MSG_AUTH_RESPONSE)) return -1;
+    if (put_string(buf, cap, &off, callsign, strlen(callsign))) return -1;
+    if (put_u16(buf, cap, &off, 20)) return -1;            /* the vector's count */
+    if (put_bytes(buf, cap, &off, digest, 20)) return -1;
+    return frame_end(buf, off, out_len);
+}
+
+int proto_build_node_info_v2(uint8_t *buf, size_t cap, size_t *out_len,
+                             const char *json, size_t json_len) {
+    size_t off; if (frame_begin(buf, cap, &off) < 0) return -1;
+    if (put_u16(buf, cap, &off, MSG_NODE_INFO)) return -1;
+    if (put_string(buf, cap, &off, json, json_len)) return -1;
     return frame_end(buf, off, out_len);
 }
 
@@ -215,6 +242,16 @@ int proto_parse_server_info(const uint8_t *payload, size_t len,
         if (get_string(payload, len, &off, codec, sizeof(codec)) != 0) return 0;
         if (str_ieq(codec, "OPUS") && out_have_opus) *out_have_opus = 1;
     }
+    return 0;
+}
+
+int proto_parse_auth_challenge(const uint8_t *payload, size_t len,
+                               uint8_t out[SVX_CHALLENGE_LEN]) {
+    /* type(2) [u16 count][count bytes] */
+    if (len < 4) return -1;
+    if (be_get_u16(payload + 2) != SVX_CHALLENGE_LEN) return -1;
+    if (len < 4 + SVX_CHALLENGE_LEN) return -1;
+    memcpy(out, payload + 4, SVX_CHALLENGE_LEN);
     return 0;
 }
 
@@ -333,5 +370,45 @@ int proto_parse_udp_plaintext(const uint8_t *pt, size_t len,
     }
     if (out_body)     *out_body     = pt + 2;
     if (out_body_len) *out_body_len = len - 2;
+    return 0;
+}
+
+/* --------------------------------------------------- UDP, protocol 2 */
+
+int proto_build_udp_v2(uint8_t *buf, size_t cap, size_t *out_len,
+                       uint16_t type, uint16_t client_id, uint16_t seq,
+                       const uint8_t *body, size_t body_len) {
+    size_t off = 0;
+    if (put_u16(buf, cap, &off, type) < 0) return -1;
+    if (put_u16(buf, cap, &off, client_id) < 0) return -1;
+    if (put_u16(buf, cap, &off, seq) < 0) return -1;
+    /* Audio carries its own length here too; every other type does not. */
+    if (type == UDP_MSG_AUDIO) {
+        if (body_len > 0xFFFF) return -1;
+        if (put_u16(buf, cap, &off, (uint16_t)body_len) < 0) return -1;
+    }
+    if (body_len > 0 && put_bytes(buf, cap, &off, body, body_len) < 0) return -1;
+    *out_len = off;
+    return 0;
+}
+
+int proto_parse_udp_v2(const uint8_t *dg, size_t len,
+                       uint16_t *out_type, uint16_t *out_client_id, uint16_t *out_seq,
+                       const uint8_t **out_body, size_t *out_body_len) {
+    if (len < SVX_UDP_V2_HDR) return -1;
+    if (out_client_id) *out_client_id = be_get_u16(dg + 2);
+    if (out_seq)       *out_seq       = be_get_u16(dg + 4);
+    const uint16_t type = be_get_u16(dg);
+    if (out_type) *out_type = type;
+    if (type == UDP_MSG_AUDIO) {
+        if (len < SVX_UDP_V2_HDR + 2) return -1;
+        const uint16_t n = be_get_u16(dg + SVX_UDP_V2_HDR);
+        if ((size_t)SVX_UDP_V2_HDR + 2 + n > len) return -1;
+        if (out_body)     *out_body     = dg + SVX_UDP_V2_HDR + 2;
+        if (out_body_len) *out_body_len = n;
+        return 0;
+    }
+    if (out_body)     *out_body     = dg + SVX_UDP_V2_HDR;
+    if (out_body_len) *out_body_len = len - SVX_UDP_V2_HDR;
     return 0;
 }

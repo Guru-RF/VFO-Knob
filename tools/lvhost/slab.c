@@ -167,6 +167,9 @@ static bool    ck_sec = true;
 uint8_t net_prov_clock_face(void) { return ck_face; }
 bool net_prov_clock_seconds(void) { return ck_sec; }
 void net_prov_save_clock(uint8_t face, bool seconds) { ck_face = face; ck_sec = seconds; }
+/* The page's "The lock leaves the PTT" (GitHub #9). */
+static bool lock_ptt;
+bool net_prov_lock_ptt(void) { return lock_ptt; }
 
 /* splash.c's: no splash here, and no update screen. */
 void ui_splash_start(void) {}
@@ -911,6 +914,21 @@ SOME static void lock_sweep(const char *dir, const char *face)
     down(SLAB_X, SLAB_Y); run(900); up(); run(SEEN); settle();
     CHECK(!ptt() && !buzz() && !ui_edit_active());
 #if LOCK_KEYS
+    where = "...the lock leaving the PTT: a tap keys; a hold opens no antennas, and keys as it lifts";
+    lock_ptt = true; quiet();
+    tap_at(SLAB_X, SLAB_Y, 80); run(KEY_LATEST);
+    CHECK(ptt() && padlock() && padlock_colour() == IS_YELLOW);
+    settle(); quiet();
+    down(SLAB_X, SLAB_Y); run(900);
+    CHECK(!ui_edit_active() && !buzz());
+    up(); run(SEEN);
+    CHECK(ptt());
+    settle(); quiet();
+    where = "...and the rest still locked: a tap on the frequency opens nothing";
+    tap_at(PANEL_X, PANEL_Y, 80);
+    CHECK(!ui_edit_active() && padlock_colour() == IS_RED);
+    run(900);
+    lock_ptt = false; quiet();
     where = "...on the air: a tap on the slab unkeys";
     st.keyed = true; run(400); quiet();
     tap_at(SLAB_X, SLAB_Y, 80); run(60);
@@ -1700,6 +1718,91 @@ static void runs(const char *dir)
     st.knob_batt = true; st.knob_pct = 85; run(60);
     knob_levels(dir);
     st.knob_batt = false; run(60);
+
+    ic7610(); settle(); quiet();
+    where = "IC-9700 (#28): each MHz digit steps its own place, and says so";
+    {
+        /* The digits' middles, as ui.c dig_place() lays them: 28 px each, a
+         * 12 px separator after the 1 MHz and the 1 kHz digits. */
+        static const int X0[8] = { 70, 98, 126, 166, 194, 222, 262, 290 };
+        static const struct { int dig; int32_t hz; const char *says; } D[] = {
+            { 0, 100000000, "100 MHz" }, { 1, 10000000, "10 MHz" }, { 2, 1000000, "1 MHz" },
+            { 3, 100000, "100 kHz" },   { 7, 10, "10 Hz" },
+        };
+        st.freq_hz = 145500000; run(60);
+        for (size_t i = 0; i < sizeof D / sizeof *D; i++) {
+            tap_at(X0[D[i].dig], 176, 60);
+            const int32_t req = ui_take_step_request();
+            CHECK(req == D[i].hz);
+            st.step_hz = req; run(60);
+            CHECK(shown(D[i].says));
+            printf("  digit %d: %s\n", D[i].dig, D[i].says);
+        }
+        tap_at(X0[0], 176, 60); st.step_hz = ui_take_step_request(); run(60);
+        picture(dir, "icom-step-100mhz");
+        where = "IC-9700 (#28): over 1 GHz the first digit steps 1 GHz; back under it, 100 MHz";
+        st.freq_hz = 1296200000; run(60);
+        (void)ui_take_step_request();
+        tap_at(X0[0], 176, 60);
+        CHECK((st.step_hz = ui_take_step_request()) == 1000000000);
+        run(60);
+        CHECK(shown("1 GHz"));
+        picture(dir, "icom-step-1ghz");
+        st.freq_hz = 145500000; run(60);
+        CHECK(ui_take_step_request() == 100000000);
+        st.freq_hz = 14074000; run(60);
+        tap_at(X0[5], 176, 60);                          /* back to 1 kHz, as a knob starts */
+        CHECK((st.step_hz = ui_take_step_request()) == 1000);
+        run(60);
+    }
+    settle(); quiet();
+
+    where = "IC-9700 (#29): RIT from -21 Hz, a turn up: to the grid, then 10 Hz a detent, to 0";
+    st.rit_hz = -21; run(60);
+    tap_at(150, 220, 60);
+    CHECK(ui_edit_active() && shown("RIT"));
+    ui_edit_rotate(1); run(30);
+    CHECK(shown("-20 Hz"));
+    ui_edit_rotate(2); run(30);
+    CHECK(shown("+0 Hz"));
+    picture(dir, "icom-rit-zero");
+    tap_at(PANEL_X, PANEL_Y, 80); run(20);
+    CHECK(commit(&c) && c.have_rit && c.rit_hz == 0);
+    where = "IC-9700 (#29): ...and from +21, down: +20, then +10";
+    st.rit_hz = 21; run(60);
+    tap_at(150, 220, 60);
+    ui_edit_rotate(-1); run(30);
+    CHECK(shown("+20 Hz"));
+    ui_edit_rotate(-1); run(30);
+    CHECK(shown("+10 Hz"));
+    tap_at(PANEL_X, PANEL_Y, 80); run(20);
+    CHECK(commit(&c) && c.rit_hz == 10);
+    st.rit_hz = 0; settle(); quiet();
+
+    where = "IC-9700 (#30): on USB, a knob with a battery: the bolt, green, centred";
+    st.knob_batt = false; st.knob_charging = true; run(60);
+    {
+        lv_obj_t *b = label_from(lv_screen_active(), LV_SYMBOL_CHARGE);
+        CHECK(b != NULL);
+        box_t k;
+        int   room = 0;
+        if (b && ink_of(b, &k, &room)) {
+            CHECK(abs(k.x1 + k.x2 - W) <= 1);
+            CHECK(k.y1 >= KNOB_INK_TOP && k.y2 <= KNOB_INK_FOOT && room >= ROOM);
+            CHECK(colour_is(lv_obj_get_style_text_color(b, LV_PART_MAIN)) == IS_GREEN);
+            printf("  the bolt: ink %d-%d, %d-%d, %d px clear\n", k.x1, k.x2, k.y1, k.y2, room);
+        } else {
+            CHECK(false);
+        }
+        picture(dir, "icom-charging");
+        where = "IC-9700 (#30): ...none on the air; unplugged, the battery in its place";
+        st.tx = true; run(60);
+        CHECK(!label_from(lv_screen_active(), LV_SYMBOL_CHARGE));
+        st.tx = false; st.knob_charging = false; st.knob_batt = true; st.knob_pct = 85; run(60);
+        CHECK(!label_from(lv_screen_active(), LV_SYMBOL_CHARGE));
+        knob_check(dir, NULL);
+        st.knob_batt = false; run(60);
+    }
 
     ic7610(); run(120);
     batt_radio(dir, "icom");

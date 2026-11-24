@@ -68,8 +68,10 @@ name. The arc shows both voices: theirs on the left half, yours on the right.
 
 Unplugged, the knob runs on its own battery and shows its charge at the top
 of the arc, between the meters' tops, as a phone does; the keypad covers it.
-On USB power the charge cannot be read, and none shows. The address card says
-which: **battery 85 %**, or **on USB power**.
+On USB power the charge cannot be read: a knob that has run on its battery
+shows a green bolt there instead, as the cable charges it, and one that never
+has shows nothing. The address card says which: **battery 85 %**, or **on USB
+power**.
 
 ![On its own battery: the knob's charge between the meters](phone/16-battery.svg)
 

@@ -289,6 +289,19 @@ enum { NET_SAT_OFF, NET_SAT_NORMAL, NET_SAT_REVERSE };
 uint8_t  net_prov_sat_track(void);
 void     net_prov_save_sat_track(uint8_t track);
 
+/* The face's lock and the PTT (GitHub #9): locked, nothing keys -- the slab,
+ * a headset's button, its boom arm -- until this says the lock leaves them,
+ * and then they key as unlocked while the rest stays locked. False until
+ * set. Read at each press (ui.c, app_main.c). */
+bool     net_prov_lock_ptt(void);
+void     net_prov_save_lock_ptt(bool keys);
+
+/* This knob has run on its own battery once (GitHub #30): on USB from then on
+ * the face shows it charging. On USB the rail is the cable's, and nothing
+ * else tells a knob with a cell from one without (knob_batt.h). */
+bool     net_prov_has_battery(void);
+void     net_prov_save_has_battery(void);
+
 /* Boot-loop guard. net_prov_boot_count() is incremented on every boot and
  * cleared once the device has been up long enough to be considered healthy;
  * call net_prov_boot_ok() from a timer for that. Three rapid boots in a row
