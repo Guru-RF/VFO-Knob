@@ -33,3 +33,6 @@ firmware/
 # tools/mkrender.py output: regenerated at will, and --photo composites
 # contain other people's photographs.
 docs/marketing/
+
+# Claude Code instructions: local only, never committed.
+CLAUDE.md
