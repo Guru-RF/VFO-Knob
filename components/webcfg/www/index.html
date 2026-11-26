@@ -112,7 +112,17 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
        Bluetooth firmware is older than the one this needs, or it has none. The knob updates it by
        itself, at its next start with WiFi in reach &mdash; or add it from
        <a href="https://vfoknob.com/bluetooth" target="_blank" rel="noopener">vfoknob.com/bluetooth</a>.</p>
-    <p class="note">The knob reaches the radio over Bluetooth, through its second chip: OpenX6X00's
+    <p class="note" id="obnoteic" hidden>The knob reaches the IC-705 over Bluetooth, through its
+       second chip: CI-V on the radio's serial port, with no network in between. It tunes, changes the
+       mode and the filter, shows the meters and keys the PTT; its VOLUME and MIC GAIN are the radio's
+       AF and MIC gain. No audio crosses the link: you talk into the radio's own microphone, or a
+       headset paired with the radio, and hear it there. On the radio, set <b>SET &raquo; Bluetooth Set &raquo;
+       Bluetooth</b> to ON and <b>Data Device Set &raquo; Serialport Function</b> to CI-V, then touch
+       <b>&lt;&lt;Pairing Reception&gt;&gt;</b>: while it waits the radio can be found, and paired
+       &mdash; confirm the passkey it shows. With no radio chosen yet, the knob finds it then by itself;
+       or choose it here, after <b>Find radios</b>. <b>Use</b> and <b>Forget</b> restart the knob. WiFi
+       is for this page and the knob's updates only: the knob works without it.</p>
+    <p class="note" id="obnoteox">The knob reaches the radio over Bluetooth, through its second chip: OpenX6X00's
        TCI, as over WiFi, with no network in between. On the radio, turn TCI on, and open
        <b>Settings &raquo; Bluetooth &raquo; Pairing</b>: for its three minutes the radio can be
        found. With no radio chosen yet, the knob finds it then by itself and pairs; or choose it
@@ -1245,7 +1255,8 @@ async function load(){
   const uber = c.radio === 'ubersdr';     /* a web receiver: an address, and a password maybe */
   const ox = c.radio === 'openx6x00';    /* an X6100 or X6200 on OpenX6X00: TCI, found as x6100.local or x6200.local */
   const js = c.radio === 'jupitersdr';   /* Zeus SDR: TCI, on a computer, by its address */
-  OB = c.radio === 'openx6bt';            /* the same X6100 or X6200 over Bluetooth: found, not addressed */
+  OBI = c.radio === 'icombt';             /* an IC-705 over Bluetooth: CI-V on its serial port */
+  OB = c.radio === 'openx6bt' || OBI;     /* the same X6100 or X6200 over Bluetooth: found, not addressed */
   /* AetherSDR's own microphone, or the knob's (GitHub #19); an Icom's (#23). */
   $('txmicrow').hidden = c.radio !== 'aethersdr' && !icom;
   $('txmicnote').hidden = c.radio !== 'aethersdr';
@@ -1292,7 +1303,7 @@ async function load(){
   $('rtitle').textContent = icom ? 'Icom radios'
                           : SVX ? 'SvxLink reflector' : flex ? 'FlexRadio' : k4 ? 'Elecraft K4' : uber ? 'UberSDR'
                           : OWRX ? 'OpenWebRX receivers' : WSDR ? 'WebSDR receivers'
-                          : ox ? 'OpenX6X00' : OB ? 'OpenX6X00 over Bluetooth' : js ? 'Zeus SDR' : 'AetherSDR';
+                          : ox ? 'OpenX6X00' : OBI ? 'IC-705 over Bluetooth' : OB ? 'OpenX6X00 over Bluetooth' : js ? 'Zeus SDR' : 'AetherSDR';
   $('hostlbl').textContent = SVX ? 'Reflector' : flex || k4 ? "The radio's IP address"
                            : 'Host (IP, or a name ending .local)';
   $('flexnote').hidden = !flex;
@@ -1345,7 +1356,7 @@ async function btLoad(){
      it restarting it, a word on where to get it. */
   const busy0 = s.upd && !['idle','waiting'].includes(s.upd.phase);
   const none = !s.companion && UPTIME>=30 && !busy0;
-  /* The openx6bt firmware's second chip is the radio's link: no headset. */
+  /* The Bluetooth firmwares' second chip is the radio's link: no headset. */
   $('btsec').hidden=OB || (SCREEN && !CLOCK) || (!s.companion && !none); $('btnone').hidden=!none; $('btbody').hidden=!s.companion; BT=s;
   if(OB) obShow(s);
   else if(s.companion) btShow(s);
@@ -1540,8 +1551,9 @@ $('btoff').onclick=()=>btDo('disconnect', '', '');
 $('btboom').onchange=e=>btDo('boom', '', e.target.checked?'The boom arm is the PTT.':'The boom arm is not the PTT.', {on:e.target.checked?1:0});
 $('btforget').onclick=()=>{ if(BT && BT.bda && confirm('Forget '+(BT.name||BT.bda)+'?')) btDo('forget', BT.bda, '') };
 
-/* ---- the openx6bt firmware's radio: an X6100 or X6200, over Bluetooth ---- */
-let OB=false;
+/* ---- the Bluetooth firmwares' radio: an X6100 or X6200 (openx6bt), or an
+   IC-705 (icombt) ---- */
+let OB=false, OBI=false;
 const OB_STATE={open:['up','connected'], looking:['down','looking…'], connecting:['down','connecting…'], closed:['down','not connected']};
 function obShow(s){
   const r=s.radio||{}, can=!!(s.companion && r.can);
@@ -1549,17 +1561,21 @@ function obShow(s){
   const [cls,word]=OB_STATE[r.state]||['down',r.state||'?'];
   const named=(s.found||[]).find(x=>x.bda===r.host);
   $('obrows').innerHTML = row('Radio', r.host ? esc((named&&named.name?named.name+' · ':'')+r.host)+` <span class="pill ${cls}">${word}</span>`
-                                              : 'none chosen yet: open Pairing on the radio')
+                                              : OBI ? 'none chosen yet: touch Pairing Reception on the radio'
+                                                    : 'none chosen yet: open Pairing on the radio')
     + (r.why && r.state==='closed' && r.host ? row('Last', esc(r.why)) : '')
     + (r.state==='open' ? row('Link', `channel ${r.scn} · ${r.to} bytes out, ${r.from} in`
                                        + (r.resends||r.gaps ? ` · the chips' link repaired ${r.resends+r.gaps} times` : '')) : '');
+  $('obnoteic').hidden=!OBI; $('obnoteox').hidden=OBI;
   /* What the last scan found: OpenX6X00's TCI service first, then what is
-     named like one of its radios (its service shows while it pairs). */
-  const like=x=>/^X6[12]00/i.test(x.name||'');
+     named like one of its radios (its service shows while it pairs). An
+     IC-705 lists none: it is named as Icom names its Bluetooth unit. */
+  const like=x=>(OBI ? /^ICOM BT/ : /^X6[12]00/i).test(x.name||'');
   const svc=x=>(x.svc||'').split(',').includes('radio');
-  const list=(s.found||[]).filter(x=>svc(x)||like(x)).sort((a,b)=>svc(b)-svc(a));
+  const list=(s.found||[]).filter(x=>(!OBI && svc(x))||like(x)).sort((a,b)=>svc(b)-svc(a));
   $('obfound').innerHTML = list.map(x=>row(esc(x.name||x.bda),
-      esc(x.bda)+(svc(x)?' <span class="pill up">TCI</span>':' <span class="note">no TCI listed: in its pairing window?</span>')
+      esc(x.bda)+(OBI ? ' <span class="pill up">Icom</span>'
+                      : svc(x)?' <span class="pill up">TCI</span>':' <span class="note">no TCI listed: in its pairing window?</span>')
       +(x.bda===r.host?' · <b>chosen</b>':` <button type="button" class="pill up" data-ob="${esc(x.bda)}">Use</button>`))).join('')
     + (s.scanning ? row('', 'looking…') : '');
   for(const b of $('obfound').querySelectorAll('[data-ob]')) b.onclick=()=>obDo('radio', b.dataset.ob, 'Restarting into it…');
@@ -1575,7 +1591,8 @@ async function obDo(what, bda, say){
   catch(e){ $('obmsg').textContent='The knob did not answer'; return }
   setTimeout(btLoad, 300);
 }
-$('obscan').onclick=()=>obDo('scan', '', 'Looking for ten seconds: open Pairing on the radio first.');
+$('obscan').onclick=()=>obDo('scan', '', OBI ? 'Looking for ten seconds: touch Pairing Reception on the radio first.'
+                                             : 'Looking for ten seconds: open Pairing on the radio first.');
 $('obforget').onclick=()=>{ const h=BT&&BT.radio&&BT.radio.host;
   if(h && confirm('Forget the radio '+h+'? The knob unpairs it, restarts, and looks for one in its pairing window.')) obDo('radio_forget', '', 'Restarting…') };
 

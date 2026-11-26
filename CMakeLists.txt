@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom openx6x00 openx6bt jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather wifitest tailchaser)
+set(_vfo_radios aethersdr icom icombt openx6x00 openx6bt jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather wifitest tailchaser)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -42,6 +42,9 @@ endif()
 # server speaks what AetherSDR serves: the AetherSDR firmware's TCI client,
 # over WiFi. openx6bt is the same radio and the same TCI over Bluetooth: an
 # RFCOMM link from the knob's second chip, the WebSocket over it (ws_bt).
+# icombt is the icom firmware's client for an IC-705 over Bluetooth: CI-V on
+# the radio's serial port (SPP), through the second chip; the PTT keys the
+# radio's own microphone (or the headset paired with it).
 # jupitersdr is the same client for Zeus SDR, whose station engine
 # serves TCI too, on a computer driving an OpenHPSDR radio or a FlexRadio.
 # svxconnect is not a radio but an SvxLink reflector: its client speaks the
@@ -140,6 +143,14 @@ idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND
 # the second chip, which then carries no headset.
 if(VFO_RADIO STREQUAL "openx6bt")
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_OPENX6X00=1" APPEND)
+    idf_build_set_property(COMPILE_DEFINITIONS "VFO_BT_RADIO=1" APPEND)
+endif()
+# icombt is the icom firmware in all but the link, as openx6bt is OpenX6X00's:
+# VFO_RADIO_ICOM as well, and VFO_BT_RADIO -- CI-V over the IC-705's
+# Bluetooth serial port, through the second chip, which then carries no
+# headset. No audio crosses it: an over is the radio's own microphone's.
+if(VFO_RADIO STREQUAL "icombt")
+    idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_ICOM=1" APPEND)
     idf_build_set_property(COMPILE_DEFINITIONS "VFO_BT_RADIO=1" APPEND)
 endif()
 # Web SDRs as a second receiver (components/sdr_rx): for the radios with a

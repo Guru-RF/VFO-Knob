@@ -1,0 +1,15 @@
+# The icombt firmware: an Icom IC-705 over Bluetooth (VFO_RADIO=icombt) -- the
+# icom firmware's client, CI-V on the radio's serial port (SPP) through an
+# RFCOMM link from the knob's second chip instead of the LAN protocol. No
+# audio: the PTT keys the radio's own microphone. WiFi stays, for the page and
+# the updates.
+#
+# Without the USB networking of sdkconfig.usbnet, as icom: the serial console
+# stays on the cable (the website's WiFi page uses it).
+
+# The web page's sockets, the log's, and a browser's.
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# AES in software, as every other firmware: the engine's DMA takes its bounce
+# buffers from internal RAM, and an update's download needs it to spare.
+CONFIG_MBEDTLS_HARDWARE_AES=n

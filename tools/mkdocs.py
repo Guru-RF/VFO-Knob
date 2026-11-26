@@ -860,6 +860,17 @@ def icom_pictures():
                                   sdr_note="can't reach"), "",
                              "the SDR quiet, its line gone  \u00b7  back once the radio is within its range")
     lock_pictures(out, 26, "icom", "icom", "Icom", f)
+    # The icombt firmware: an IC-705 over Bluetooth, found in its Pairing
+    # Reception (main/app_main.c's FIND RADIO); its VOLUME is the radio's AF
+    # gain (app_main's levels, icom_client's radio_set_af_gain).
+    md.use_palette("icom")
+    out["28-bt-find"] = knob("icom-28", "Over Bluetooth: no radio chosen yet",
+                             setup_screen("FIND RADIO", "On the IC-705: SET >\nBluetooth Set >\n"
+                                          "Pairing Reception.\nFor WiFi, join\nVFOKnob\nwith your phone."),
+                             "", "the radio found in Pairing Reception  \u00b7  confirm its passkey")
+    out["29-bt-volume"] = knob("icom-29", "Over Bluetooth, VOLUME is the IC-705's AF gain",
+                               f + editor("VOLUME", "40"), "",
+                               "turn: the radio's AF gain  \u00b7  MIC GAIN: its MIC gain")
     return out
 
 

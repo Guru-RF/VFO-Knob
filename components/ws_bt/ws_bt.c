@@ -1,7 +1,8 @@
 /* A WebSocket client over a radio's Bluetooth serial link: ws_bt.h. */
 #include "ws_bt.h"
 
-#if VFO_BT_RADIO
+/* Not the icombt firmware's: its radio speaks CI-V, not TCI. */
+#if VFO_BT_RADIO && !VFO_RADIO_ICOM
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -625,4 +626,4 @@ esp_err_t ws_bt_destroy(ws_bt_handle_t c)
     heap_caps_free(c);
     return ESP_OK;
 }
-#endif /* VFO_BT_RADIO */
+#endif /* VFO_BT_RADIO && !VFO_RADIO_ICOM */

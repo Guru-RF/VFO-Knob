@@ -252,6 +252,19 @@
 #define DEFAULT_PORT 40001           /* Zeus SDR's TCI server (Tci/TciOptions.cs) */
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_ICOMBT
+/* An IC-705 over Bluetooth: its address is Bluetooth's, so keys of its own --
+ * the WiFi firmware's IC-705.local is no address here. */
+#define KEY_HOST     "ibhost"    /* the radio's Bluetooth address, aa:bb:cc:dd:ee:ff */
+#define KEY_RLIST    "iblist"    /* the radios, one in use: see below */
+#define KEY_RSEL     "ibsel"
+#define KEY_PORT     "ibport"    /* the RFCOMM channel if SDP finds none: 0, SDP's only */
+#define KEY_USER     "ibuser"    /* unused: the serial port has no login */
+#define KEY_PASS     "ibpass"
+#define DEFAULT_HOST ""              /* none chosen: found in Pairing Reception, or on the page */
+#define DEFAULT_PORT 0
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_ICOM
 #define KEY_HOST     "rhost"
 #define KEY_RLIST    "rlist"     /* the radios, one in use: see below */

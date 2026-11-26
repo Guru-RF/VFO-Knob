@@ -35,7 +35,13 @@ IC-9700 on 2 m, 70 cm and 23 cm, and the IC-R8600 receiver, 10 kHz to 3 GHz,
 which it never keys. It also knows the IC-7300MK2, the IC-7760 and the IC-905
 (up to 10 GHz), from wfview's descriptions, not yet tried on the radios
 themselves. The guide says
-how to set each radio up for it: see [the Icom guide](docs/icom.md).
+how to set each radio up for it: see [the Icom guide](docs/icom.md). A second
+firmware, `vfo-knob-icombt` (a beta; its PTT not yet tried on the air), reaches an
+IC-705 over Bluetooth instead, CI-V on the radio's serial port through the
+knob's second chip: tuning, mode, filter, the meters and the PTT, with the
+knob's VOLUME and MIC GAIN as the radio's AF and MIC gain. No audio crosses
+it: you talk into the radio's own microphone, or a headset paired with the
+radio. See [Over Bluetooth](docs/icom.md#over-bluetooth-ic-705).
 
 With an **Elecraft K4**, a beta tried on one radio, it is a remote
 client of the radio over WiFi, as K4remote is, with audio both ways. See
@@ -1028,7 +1034,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather`, `vfo-knob-wifitest` and `vfo-knob-tailchaser` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-icombt`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather`, `vfo-knob-wifitest` and `vfo-knob-tailchaser` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
@@ -1070,6 +1076,14 @@ link has no route to it):
 ```sh
 idf.py -B build_icom -D VFO_RADIO=icom \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.icom" \
+       build flash
+```
+
+Its Bluetooth sibling, an IC-705 over the second chip:
+
+```sh
+idf.py -B build_icombt -D VFO_RADIO=icombt \
+       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.icombt" \
        build flash
 ```
 

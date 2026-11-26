@@ -324,6 +324,16 @@ void radio_tune(void);
 void radio_atu_tune(void);
 /* Whether the tuner recalls a setting it has tuned before (has_atu). */
 void radio_atu_memories(bool on);
+#if VFO_RADIO_ICOMBT
+/* The icombt firmware's: the knob's VOLUME (0-100) is the IC-705's AF gain,
+ * its MIC GAIN (0-200, 100 the knob's unity) the radio's MIC gain (100 its
+ * 50 %). Set only once the radio has said its own; radio_take_levels() gives
+ * them, once, when the radio said them first or was turned at the radio. */
+void radio_set_af_gain(uint8_t volume);
+void radio_set_mic_gain(uint8_t mic);
+bool radio_take_levels(uint8_t *volume, uint8_t *mic);
+#endif
+
 /* RF gain and RF power, 0-100 % (has_levels). */
 void radio_set_rf_gain(uint8_t pct);
 void radio_set_rf_power(uint8_t pct);

@@ -106,8 +106,11 @@
 #if VFO_RADIO_WEBSDR
 #include "wsdr.h"
 #endif
-/* The openx6bt firmware's: the radio's service over Bluetooth. */
-#if VFO_BT_RADIO
+/* The Bluetooth firmwares': the radio's service over Bluetooth -- OpenX6X00's
+ * TCI (openx6bt), or an IC-705's serial port (icombt). */
+#if VFO_BT_RADIO && VFO_RADIO_ICOM
+#include "civ_link.h"
+#elif VFO_BT_RADIO
 #include "ws_bt.h"
 #endif
 #include "esp_timer.h"
@@ -162,7 +165,9 @@ static void haptic(uint8_t effect);
  * firmware a knob runs is the first question about it. */
 static void firmware_line(char *out, size_t cap)
 {
-#if VFO_RADIO_ICOM
+#if VFO_RADIO_ICOMBT
+    const char *name = "Icom BT";
+#elif VFO_RADIO_ICOM
     const char *name = "Icom";
 #elif VFO_RADIO_OPENX6BT
     const char *name = "OpenX6X00 BT";
@@ -1537,8 +1542,26 @@ static void ui_task(void *arg)
              * the page and the save follow, as for a turn of the dial. */
             uint8_t spk_vol;
             if (bt_link_take_volume(&spk_vol)) ui_set_levels(spk_vol, 0xFF);
+#if VFO_RADIO_ICOMBT
+            /* The IC-705's AF and MIC gain are VOLUME and MIC GAIN here: what
+             * the radio says (on a new link, or turned at the radio) is the
+             * face's, and the face's turns go to the radio. */
+            uint8_t r_vol, r_mic;
+            if (radio_take_levels(&r_vol, &r_mic)) {
+                ui_set_levels(r_vol, r_mic);
+                applied_vol = r_vol;
+                applied_mic = r_mic;
+                audio_out_set_volume(r_vol);
+                audio_in_set_gain(r_mic);
+                changed_at = esp_timer_get_time();
+            }
+#endif
             const uint8_t vol = ui_volume(), mic = ui_mic_gain();
             if (vol != applied_vol || mic != applied_mic) {
+#if VFO_RADIO_ICOMBT
+                if (vol != applied_vol) radio_set_af_gain(vol);
+                if (mic != applied_mic) radio_set_mic_gain(mic);
+#endif
                 audio_out_set_volume(vol);
                 audio_in_set_gain(mic);
                 applied_vol = vol;
@@ -2551,7 +2574,21 @@ static void wifi_start_once(void)
  * none, the knob looks for one: a scan every few seconds, and the first
  * device that lists OpenX6X00's TCI service is taken, and kept. Its service
  * is listed while the radio is in its pairing window (Settings > Bluetooth,
- * Pairing): opened there, the knob finds the radio and pairs with it. */
+ * Pairing): opened there, the knob finds the radio and pairs with it. An
+ * IC-705 lists no service of ours in a scan: it is the first device named
+ * as Icom names its Bluetooth unit, "ICOM BT(IC-705)", found while it is in
+ * Pairing Reception (SET > Bluetooth Set). */
+static bool bt_radio_is_ours(const btl_found_t *f)
+{
+#if VFO_RADIO_ICOM
+    /* By its name only: the service is the Serial Port Profile's, which any
+     * phone or GPS may list -- none of them is the radio. */
+    return civ_is_icom_bt_name(f->name);
+#else
+    return f->svc & BTL_SVC_RADIO;
+#endif
+}
+
 static bool bt_radio_chosen(const vfo_cfg_t *cfg)
 {
     static int64_t t_scan;
@@ -2565,13 +2602,12 @@ static bool bt_radio_chosen(const vfo_cfg_t *cfg)
     EXT_RAM_BSS_ATTR static btl_found_t f[12];
     const int n = bt_link_found(f, 12);
     for (int i = 0; i < n; i++) {
-        if (!(f[i].svc & BTL_SVC_RADIO)) continue;
+        if (!bt_radio_is_ours(&f[i])) continue;
         EXT_RAM_BSS_ATTR static vfo_cfg_t c;
         c = *cfg;
         snprintf(c.radio_host, sizeof c.radio_host, "%02x:%02x:%02x:%02x:%02x:%02x", f[i].bda[0], f[i].bda[1],
                  f[i].bda[2], f[i].bda[3], f[i].bda[4], f[i].bda[5]);
-        ESP_LOGI(TAG, "  found %.32s (%s), with OpenX6X00's TCI: the radio from now on", f[i].name,
-                 c.radio_host);
+        ESP_LOGI(TAG, "  found %.32s (%s): the radio from now on", f[i].name, c.radio_host);
         if (net_prov_save_cfg(&c) != ESP_OK) {
             ESP_LOGE(TAG, "  ...could not be kept: looked for again");
             return false;
@@ -3300,7 +3336,11 @@ RADIO_ONLY_FN static bool wifi_setup(void)
                  none ? "no WiFi network known" : "none of the knob's WiFi networks in reach");
 #if VFO_BT_RADIO
         /* The radio is found without WiFi: in its pairing window. */
+#if VFO_RADIO_ICOM
+        ui_setup_show("FIND RADIO", "On the IC-705: SET >\nBluetooth Set >\nPairing Reception.\nFor WiFi, join\n" WIFI_SETUP_AP "\nwith your phone.");
+#else
         ui_setup_show("FIND RADIO", "Open Pairing in the\nradio's Bluetooth\nsettings. For WiFi,\njoin " WIFI_SETUP_AP "\nwith your phone.");
+#endif
 #else
         ui_setup_show("WIFI SETUP", none
             ? "Join the WiFi network\n" WIFI_SETUP_AP "\nwith your phone, then\nchoose your network on\nthe page that opens."
@@ -4521,10 +4561,15 @@ void app_main(void)
          * own update; what the knob remembers of the last is read back. */
         bring_up("bt link", bt_link_init);
 #if VFO_BT_RADIO
-        /* ...or, here, the radio's link: OpenX6X00's TCI over RFCOMM, through
-         * the second chip, which then calls no headset. */
+        /* ...or, here, the radio's link: OpenX6X00's TCI over RFCOMM -- or
+         * an IC-705's serial port, CI-V -- through the second chip, which
+         * then calls no headset. */
         {
+#if VFO_RADIO_ICOM
+            static const uint8_t uuid[16] = CIV_SPP_UUID;
+#else
             static const uint8_t uuid[16] = WS_BT_OPENX6X00_UUID;
+#endif
             bt_link_radio_mode(uuid);
         }
 #endif

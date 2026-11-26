@@ -13,5 +13,6 @@ idf_component_register(
         "src/weather.c"
         "src/alarm.c"
         "src/wifitest.c"
+        "src/civ_link.c"
     INCLUDE_DIRS "include"
 )

@@ -2178,7 +2178,12 @@ static int bt_radio_json(char *j, size_t cap)
     bt_link_radio_stats(&resends, &gaps, &dups);
     static const char *const states[] = { "closed", "looking", "connecting", "open" };
     static const char *const whys[]   = { "", "closed here", "closed by the radio, or out of range",
+#if VFO_RADIO_ICOM
+                                          "no serial port on it: its Bluetooth off?", "no answer",
+                                          "refused: not paired? open Pairing Reception",
+#else
                                           "no TCI over Bluetooth on it", "no answer", "refused, or not there",
+#endif
                                           "the second chip could not keep up", "the second chip was busy" };
     char host[80];
     json_esc(net_prov_cfg()->radio_host, host, sizeof host);
