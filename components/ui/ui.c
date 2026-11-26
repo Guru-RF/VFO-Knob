@@ -292,11 +292,11 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define C_GREEN     lv_color_hex(0x22FF2F)   /* its meter's green          */
 #define PWR_HEX     0x22FF2F
 #define SDR_HEX     0x5CA8FF                 /* its links' blue            */
-#elif SVX_LOOK || VFO_RADIO_SETUP || VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB
+#elif SVX_LOOK || VFO_RADIO_SETUP || VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB || VFO_RADIO_TCTAG
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
  * clients use: green connected, amber (re)connecting, red transmitting.
- * The setup firmware, EpiBeam and ADS-B Radar wear it too: the same ink and gold are the RF.Guru
+ * The setup firmware, EpiBeam, ADS-B Radar and TailChaser Tag wear it too: the same ink and gold are the RF.Guru
  * site's, and its own WiFi page's (webcfg/www/portal.html). */
 #define C_BG        lv_color_hex(0x08090C)   /* ink-950                 */
 #define C_BG1       lv_color_hex(0x13161D)   /* ink-800: the PTT slab   */
@@ -424,6 +424,13 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define WIFITEST_FACE 1
 #else
 #define WIFITEST_FACE 0
+#endif
+/* The TailChaser Tag firmware's: who was heard, over a face it leaves unseen
+ * too (see "TailChaser Tag" below). */
+#if VFO_RADIO_TCTAG
+#define TAG_FACE 1
+#else
+#define TAG_FACE 0
 #endif
 /* A radio's readouts the reflector face has no use for. */
 #define RADIO_ONLY __attribute__((unused))
@@ -6325,18 +6332,502 @@ void ui_wifitest_turn(int32_t detents)
 }
 #endif /* WIFITEST_FACE */
 
+#if TAG_FACE
+/* --- TailChaser Tag: who was heard, through the knob's own microphone -------
+ * The whole glass is the list, an entry at a time, the newest first; the
+ * dial goes back through the older ones and on to the newest, an entry a
+ * detent:
+ *   over all, the state: LISTENING, or ON THE AIR while the newest's tag is
+ *     being heard; under the battery, where in the list the face is;
+ *   the callsign, big; under it LOCAL -- the repeater's own input, or the
+ *     repeater itself -- or NETWORK;
+ *   when it was heard, the day too if not today, and how long ago and for
+ *     how long;
+ *   the tag as the decoder hears it now: the start's match over the last
+ *     frames, how far that start stands out, the level in the tag's band;
+ *   at the foot a microphone and a gear. The microphone: the placement meter
+ *     -- the level in the tag's band against the room's floor, the loudest of
+ *     the last seconds, what to do, the tag's match, the counts -- and a tap
+ *     anywhere, back. Anywhere else: the address card; held PICKER_HOLD_MS,
+ *     the firmware picker, as on the clock.
+ * A new entry brings the face to it and lights the screen. Every
+ * TG_SHIFT_MIN minutes it all moves a pixel round a 3 x 3 square, as the
+ * WiFi Test's. Built over the radio's face, which goes on under it unseen. */
+#define TG_TICK_MS    100
+#define TG_SHIFT_MIN  3
+#define TG_MIC_X      (CX - 40)
+#define TG_GEAR_X     (CX + 40)
+#define TG_ICON_Y     288
+#define TG_MIC_R      38                      /* px from the microphone's middle a tap may land */
+#define TG_ON_AIR_MS  3000                    /* the newest heard this recently: on the air */
+#define TG_LOUD_N     40                      /* the loudest of the last ~10 s, 4 levels a second */
+#define TG_BAR_X      60
+#define TG_BAR_Y      150
+#define TG_BAR_W      240
+#define TG_BAR_H      14
+#define TG_BAR_LO     (-100.0f)
+#define TG_BAR_HI     (-20.0f)
+#define TG_TAG_UNDER  38.0f                   /* the tag under the repeater's speech, dB (TailChaser's) */
+#define TG_CALL_Y     126                     /* the callsign's middle */
+#define TG_CALL_W     330                     /* ...and its room: nine wide letters step down to 28 */
+#define TGC_GOOD      0x3FD26A
+#define TGC_FAIR      0xFFB000
+#define TGC_POOR      0xFF4040
+
+static lv_obj_t   *s_tg, *s_tg_in, *s_tg_main, *s_tg_mp;
+static lv_obj_t   *s_tg_cap, *s_tg_pos, *s_tg_call, *s_tg_kind, *s_tg_time, *s_tg_ago, *s_tg_now;
+static lv_obj_t   *s_tg_mic, *s_tg_gear;
+static lv_obj_t   *s_tg_lvl, *s_tg_unit, *s_tg_track, *s_tg_fill, *s_tg_floor, *s_tg_loud, *s_tg_room;
+static lv_obj_t   *s_tg_say, *s_tg_heard, *s_tg_counts, *s_tg_cpu;
+EXT_RAM_BSS_ATTR static tag_view_t s_tg_d, s_tg_new;   /* the face's, and the one handed over */
+static atomic_bool s_tg_due;
+static atomic_int  s_tg_detents;
+static bool        s_tg_have, s_tg_meter;
+static int         s_tg_at;                   /* the entry shown: 0 the newest */
+static int64_t     s_tg_top_ms;               /* the newest's first_ms and call: a new one comes */
+static char        s_tg_top_call[TAG_CALL_LEN + 1];
+static float       s_tg_loud_v[TG_LOUD_N];
+static int         s_tg_loud_i, s_tg_loud_n;
+static int8_t      s_tg_dx, s_tg_dy;
+static char        s_tg_call_was[TAG_CALL_LEN + 1];
+
+static void set_text(lv_obj_t *o, const char *s);
+static void set_text_color(lv_obj_t *o, lv_color_t c);
+static void vis(lv_obj_t *o, bool on);
+
+static lv_obj_t *tg_label(lv_obj_t *p, const lv_font_t *f, lv_color_t c, int32_t y, int32_t w)
+{
+    lv_obj_t *o = lv_label_create(p);
+    lv_obj_set_style_text_font(o, f, 0);
+    lv_obj_set_style_text_color(o, c, 0);
+    lv_label_set_text(o, "");
+    if (w) {
+        lv_obj_set_size(o, w, lv_font_get_line_height(f));
+        lv_obj_set_style_text_align(o, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(o, LV_LABEL_LONG_DOT);
+    }
+    lv_obj_align(o, LV_ALIGN_TOP_MID, 0, y - lv_font_get_line_height(f) / 2);
+    return o;
+}
+
+static lv_obj_t *tg_box(lv_obj_t *p, int32_t x, int32_t y, int32_t w, int32_t h, lv_color_t c)
+{
+    lv_obj_t *o = lv_obj_create(p);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, w, h);
+    lv_obj_set_style_bg_color(o, c, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    return o;
+}
+
+static void tg_dur(char *s, size_t n, int64_t sec)
+{
+    if (sec < 0) sec = 0;
+    if (sec >= 86400) snprintf(s, n, "%ud %uh", (unsigned)(sec / 86400), (unsigned)(sec / 3600 % 24));
+    else if (sec >= 3600) snprintf(s, n, "%uh %02um", (unsigned)(sec / 3600), (unsigned)(sec / 60 % 60));
+    else if (sec >= 60) snprintf(s, n, "%u min", (unsigned)(sec / 60));
+    else snprintf(s, n, "%u s", (unsigned)sec);
+}
+
+/* How long ago entry e was last heard, and for how long, in seconds: false
+ * when nothing tells (heard before this start, the time not known yet). */
+static bool tg_when(const tag_entry_t *e, int64_t *ago, int64_t *len)
+{
+    const tag_view_t *v = &s_tg_d;
+    if (e->now_start) {
+        *ago = (v->now_ms - e->last_ms) / 1000;
+        *len = (e->last_ms - e->first_ms) / 1000;
+        return true;
+    }
+    if (!v->now_unix || !e->last_unix) return false;
+    *ago = v->now_unix - e->last_unix;
+    *len = e->last_unix - e->first_unix;
+    return true;
+}
+
+/* The callsign, whole: in 48 where it fits, else smaller (fit_text.h), its
+ * middle kept. Set again only when it changes. */
+static void tg_set_call(const char *call)
+{
+    if (!strcmp(s_tg_call_was, call)) return;
+    strlcpy(s_tg_call_was, call, sizeof s_tg_call_was);
+    const lv_font_t *f = fit_text(s_tg_call, call, &lv_font_montserrat_48, TG_CALL_W);
+    lv_obj_align(s_tg_call, LV_ALIGN_TOP_MID, 0, TG_CALL_Y - lv_font_get_line_height(f) / 2);
+}
+
+static bool tg_on_air(void)
+{
+    const tag_entry_t *e = tag_hist_at(&s_tg_d.h, 0);
+    return e && e->now_start && s_tg_d.now_ms - e->last_ms <= TG_ON_AIR_MS;
+}
+
+static float tg_loudest(void)
+{
+    float m = -120.0f;
+    for (int i = 0; i < s_tg_loud_n; i++)
+        if (s_tg_loud_v[i] > m) m = s_tg_loud_v[i];
+    return m;
+}
+
+/* Where the knob is, for the tag: in words, and a colour. The tag is about
+ * TG_TAG_UNDER dB under the repeater's speech, so the loudest of the last
+ * seconds, less that, against the room's floor is how far the tag stands
+ * over what else the microphone hears. Heard clearly, it is said so. */
+static uint32_t tg_advice(float loud, const char **say)
+{
+    const tag_view_t *v = &s_tg_d;
+    const tag_stats_t *st = &v->st;
+    if (!v->listening) { *say = "No microphone"; return TGC_POOR; }
+    if (st->sync_avg >= TAG_SURE_AVG) { *say = "The tag is heard well"; return TGC_GOOD; }
+    if (st->all_dbfs > -3.0f) { *say = "Too loud: a little further"; return TGC_FAIR; }
+    if (loud - st->floor_dbfs < 12.0f) { *say = "Play the repeater near it"; return 0x94A3B8; }
+    const float over = loud - TG_TAG_UNDER - st->floor_dbfs;
+    if (over >= 0.0f) { *say = "A good place"; return TGC_GOOD; }
+    if (over >= -8.0f) { *say = "Fair: a little closer"; return TGC_FAIR; }
+    *say = "Closer to the speaker";
+    return TGC_POOR;
+}
+
+static int32_t tg_bar_x(float dbfs)
+{
+    float f = (dbfs - TG_BAR_LO) / (TG_BAR_HI - TG_BAR_LO);
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    return (int32_t)(f * TG_BAR_W);
+}
+
+static void tg_fill_meter(void)
+{
+    const tag_view_t *v = &s_tg_d;
+    const tag_stats_t *st = &v->st;
+    char b[64];
+    const float loud = tg_loudest();
+    const char *say;
+    const uint32_t c = tg_advice(loud, &say);
+    snprintf(b, sizeof b, "%.0f", (double)st->band_dbfs);
+    set_text(s_tg_lvl, v->listening ? b : "--");
+    lv_obj_set_width(s_tg_fill, tg_bar_x(st->band_dbfs));
+    lv_obj_set_style_bg_color(s_tg_fill, lv_color_hex(c), 0);
+    lv_obj_set_x(s_tg_floor, TG_BAR_X + tg_bar_x(st->floor_dbfs) - 1);
+    lv_obj_set_x(s_tg_loud, TG_BAR_X + tg_bar_x(loud) - 1);
+    snprintf(b, sizeof b, "room %.0f, loudest %.0f dBFS", (double)st->floor_dbfs, (double)loud);
+    set_text(s_tg_room, b);
+    set_text(s_tg_say, say);
+    set_text_color(s_tg_say, lv_color_hex(c));
+    const bool faint = st->sync_db >= TAG_TRY_DB && st->sync_avg >= TAG_TRY_AVG;
+    snprintf(b, sizeof b, "tag %s: %.3f, %.1f dB",
+             st->sync_avg >= TAG_SURE_AVG ? "heard" : faint ? "faint" : "not heard", (double)st->sync_avg,
+             (double)st->sync_db);
+    set_text(s_tg_heard, b);
+    set_text_color(s_tg_heard, st->sync_avg >= TAG_SURE_AVG ? lv_color_hex(TGC_GOOD)
+                               : faint                         ? lv_color_hex(TGC_FAIR)
+                                                               : C_TEXT2);
+    snprintf(b, sizeof b, "tried %u, read %u, CRC bad %u", (unsigned)st->tries, (unsigned)st->readings,
+             (unsigned)st->crc_bad);
+    set_text(s_tg_counts, b);
+    snprintf(b, sizeof b, "decoder %u%%, lost %u", (unsigned)v->cpu, (unsigned)v->lost);
+    set_text(s_tg_cpu, b);
+}
+
+static void tg_fill(void)
+{
+    if (!s_tg_have) return;
+    if (s_tg_meter) {
+        tg_fill_meter();
+        return;
+    }
+    const tag_view_t *v = &s_tg_d;
+    const tag_stats_t *st = &v->st;
+    const int n = tag_hist_count(&v->h);
+    char b[64], d1[16], d2[16];
+    if (!v->listening) {
+        set_text(s_tg_cap, "NO MICROPHONE");
+        set_text_color(s_tg_cap, lv_color_hex(TGC_POOR));
+    } else if (tg_on_air()) {
+        set_text(s_tg_cap, "ON THE AIR");
+        set_text_color(s_tg_cap, lv_color_hex(TGC_GOOD));
+    } else {
+        set_text(s_tg_cap, "LISTENING");
+        set_text_color(s_tg_cap, C_LABEL);
+    }
+    if (n > 1) snprintf(b, sizeof b, "%d / %d", n - s_tg_at, n);
+    else b[0] = 0;
+    set_text(s_tg_pos, b);
+
+    const tag_entry_t *e = tag_hist_at(&v->h, s_tg_at);
+    if (!e) {
+        tg_set_call("");
+        vis(s_tg_kind, false);
+        set_text(s_tg_time, "Nobody heard yet");
+        set_text(s_tg_ago, "a TailChaser repeater, played near");
+        set_text_color(s_tg_ago, C_LABEL);
+    } else {
+        tg_set_call(e->call);
+        set_text_color(s_tg_call, s_tg_at ? C_TEXT2 : C_TEXT);
+        vis(s_tg_kind, true);
+        set_text(s_tg_kind, e->local ? "LOCAL" : "NETWORK");
+        lv_obj_set_style_bg_color(s_tg_kind, e->local ? C_ACCENT : C_SUBTLE, 0);
+        set_text_color(s_tg_kind, e->local ? C_BG : C_TEXT2);
+        /* The time it came, the day too when not today. */
+        struct tm t, now;
+        const time_t f = (time_t)e->first_unix, nu = (time_t)v->now_unix;
+        if (e->first_unix && localtime_r(&f, &t)) {
+            static const char *const MO[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+            const bool today = v->now_unix && localtime_r(&nu, &now) && now.tm_year == t.tm_year &&
+                               now.tm_yday == t.tm_yday;
+            if (today) snprintf(b, sizeof b, "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+            else snprintf(b, sizeof b, "%d %s %02d:%02d", t.tm_mday, MO[t.tm_mon], t.tm_hour, t.tm_min);
+        } else {
+            snprintf(b, sizeof b, "--:--");
+        }
+        set_text(s_tg_time, b);
+        int64_t ago, len;
+        /* An over of one reading has no length to tell. */
+        if (s_tg_at == 0 && tg_on_air()) {
+            const int64_t on = (e->last_ms - e->first_ms) / 1000;
+            tg_dur(d2, sizeof d2, on);
+            if (on > 0) snprintf(b, sizeof b, "on the air for %s", d2);
+            else snprintf(b, sizeof b, "on the air");
+            set_text_color(s_tg_ago, lv_color_hex(TGC_GOOD));
+        } else if (tg_when(e, &ago, &len)) {
+            tg_dur(d1, sizeof d1, ago);
+            tg_dur(d2, sizeof d2, len);
+            if (len > 0) snprintf(b, sizeof b, "%s ago, for %s", d1, d2);
+            else snprintf(b, sizeof b, "%s ago", d1);
+            set_text_color(s_tg_ago, C_TEXT2);
+        } else {
+            b[0] = 0;
+        }
+        set_text(s_tg_ago, b);
+    }
+    /* The tag now, as the decoder hears it. */
+    const bool sure = st->sync_avg >= TAG_SURE_AVG;
+    const bool faint = st->sync_db >= TAG_TRY_DB && st->sync_avg >= TAG_TRY_AVG;
+    snprintf(b, sizeof b, "sync %.3f  %.0f dB  %.0f dBFS", (double)st->sync_avg, (double)st->sync_db,
+             (double)st->band_dbfs);
+    set_text(s_tg_now, v->listening ? b : "");
+    set_text_color(s_tg_now, sure ? lv_color_hex(TGC_GOOD) : faint ? lv_color_hex(TGC_FAIR) : C_LABEL);
+}
+
+static void tg_show_meter(bool on)
+{
+    s_tg_meter = on;
+    vis(s_tg_main, !on);
+    vis(s_tg_mp, on);
+    if (on) {
+        set_text(s_tg_cap, "MICROPHONE");
+        set_text_color(s_tg_cap, C_LABEL);
+        set_text(s_tg_pos, "");
+    }
+    tg_fill();
+}
+
+/* The newest come: a new entry, or the list emptied. */
+static void tg_took(void)
+{
+    const tag_view_t *v = &s_tg_d;
+    if (v->listening) {                       /* without a microphone the levels are nothing, not 0 dBFS */
+        s_tg_loud_v[s_tg_loud_i] = v->st.band_dbfs;
+        s_tg_loud_i = (s_tg_loud_i + 1) % TG_LOUD_N;
+        if (s_tg_loud_n < TG_LOUD_N) s_tg_loud_n++;
+    }
+    const tag_entry_t *e = tag_hist_at(&v->h, 0);
+    const bool first = !s_tg_have;
+    s_tg_have = true;
+    if (!e) {
+        s_tg_top_ms = 0;
+        s_tg_top_call[0] = 0;
+        s_tg_at = 0;
+        return;
+    }
+    if (e->first_ms != s_tg_top_ms || strcmp(e->call, s_tg_top_call)) {
+        s_tg_top_ms = e->first_ms;
+        strlcpy(s_tg_top_call, e->call, sizeof s_tg_top_call);
+        if (!first && e->now_start) {           /* someone new: shown, and the screen lit */
+            s_tg_at = 0;
+            ui_note_activity();
+        }
+    }
+    const int n = tag_hist_count(&v->h);
+    if (s_tg_at >= n) s_tg_at = n ? n - 1 : 0;
+}
+
+static void tg_shift(void)
+{
+    static const int8_t STEP[9][2] = {
+        { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 },
+    };
+    const int i = (int)(lv_tick_get() / 60000u / TG_SHIFT_MIN % 9);
+    if (STEP[i][0] == s_tg_dx && STEP[i][1] == s_tg_dy) return;
+    s_tg_dx = STEP[i][0];
+    s_tg_dy = STEP[i][1];
+    lv_obj_set_pos(s_tg_in, s_tg_dx, s_tg_dy);
+}
+
+static void tg_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    bool redo = false;
+    if (atomic_load(&s_tg_due)) {
+        s_tg_d = s_tg_new;
+        atomic_store(&s_tg_due, false);
+        tg_took();
+        redo = true;
+    }
+    const int d = atomic_exchange(&s_tg_detents, 0);
+    if (d) {
+        /* Back (anticlockwise) to the older, on to the newest; the meter, a
+         * turn closes. */
+        if (s_tg_meter) {
+            tg_show_meter(false);
+        } else {
+            const int n = s_tg_have ? tag_hist_count(&s_tg_d.h) : 0;
+            int at = s_tg_at - d;
+            if (at > n - 1) at = n - 1;
+            if (at < 0) at = 0;
+            s_tg_at = at;
+        }
+        redo = true;
+    }
+    if (screen_hidden()) return;
+    if (redo) tg_fill();
+    tg_shift();
+}
+
+static bool tg_mic_at(lv_point_t p)
+{
+    const int32_t dx = p.x - TG_MIC_X, dy = p.y - TG_ICON_Y;
+    return dx * dx + dy * dy <= TG_MIC_R * TG_MIC_R;
+}
+
+/* A tap: the meter away, or the microphone, the meter. With the card up the
+ * tap is the card's, to put it away. */
+static bool tg_tap(lv_point_t p)
+{
+    if (!s_tg || addresses_up()) return false;
+    if (s_tg_meter) {
+        tg_show_meter(false);
+        return true;
+    }
+    if (!tg_mic_at(p)) return false;
+    tg_show_meter(true);
+    return true;
+}
+
+static lv_obj_t *tg_page(void)
+{
+    lv_obj_t *p = lv_obj_create(s_tg_in);
+    lv_obj_remove_style_all(p);
+    lv_obj_set_size(p, 360, 360);
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    return p;
+}
+
+static void tg_build(void)
+{
+    s_tg = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_tg);
+    lv_obj_set_size(s_tg, 360, 360);
+    lv_obj_set_pos(s_tg, 0, 0);
+    lv_obj_set_style_bg_color(s_tg, C_BG, 0);
+    lv_obj_set_style_bg_opa(s_tg, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_tg, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_tg, LV_OBJ_FLAG_SCROLLABLE);
+    s_tg_in = lv_obj_create(s_tg);
+    lv_obj_remove_style_all(s_tg_in);
+    lv_obj_set_size(s_tg_in, 360, 360);
+    lv_obj_remove_flag(s_tg_in, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_tg_in, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Over both pages the state, above the knob's battery; where in the
+     * list, under it. */
+    s_tg_cap = tg_label(s_tg_in, &lv_font_montserrat_14, C_LABEL, 26, 0);
+    s_tg_pos = tg_label(s_tg_in, &lv_font_montserrat_14, C_LABEL, 68, 0);
+    s_tg_main = tg_page();
+    s_tg_mp = tg_page();
+
+    lv_obj_t *p = s_tg_main;
+    s_tg_call = tg_label(p, &lv_font_montserrat_48, C_TEXT, TG_CALL_Y, 0);
+    s_tg_kind = lv_label_create(p);
+    lv_obj_set_style_text_font(s_tg_kind, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_bg_opa(s_tg_kind, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_tg_kind, 9, 0);
+    lv_obj_set_style_pad_hor(s_tg_kind, 10, 0);
+    lv_obj_set_style_pad_ver(s_tg_kind, 2, 0);
+    lv_label_set_text(s_tg_kind, "");
+    lv_obj_align(s_tg_kind, LV_ALIGN_TOP_MID, 0, 164);
+    s_tg_time = tg_label(p, &lv_font_montserrat_20, C_TEXT2, 210, 300);
+    s_tg_ago = tg_label(p, &lv_font_montserrat_14, C_TEXT2, 236, 290);
+    s_tg_now = tg_label(p, &lv_font_montserrat_14, C_LABEL, 258, 290);
+    s_tg_mic = lv_label_create(p);
+    lv_obj_set_style_text_font(s_tg_mic, &font_btmic_28, 0);
+    lv_obj_set_style_text_color(s_tg_mic, C_TEXT2, 0);
+    lv_label_set_text(s_tg_mic, SYM_MIC);
+    lv_obj_align(s_tg_mic, LV_ALIGN_CENTER, TG_MIC_X - CX, TG_ICON_Y - CY);
+    s_tg_gear = lv_label_create(p);
+    lv_obj_set_style_text_font(s_tg_gear, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_tg_gear, C_TEXT2, 0);
+    lv_label_set_text(s_tg_gear, LV_SYMBOL_SETTINGS);
+    lv_obj_align(s_tg_gear, LV_ALIGN_CENTER, TG_GEAR_X - CX, TG_ICON_Y - CY);
+
+    /* The placement meter. */
+    p = s_tg_mp;
+    s_tg_lvl = tg_label(p, &lv_font_montserrat_48, C_TEXT, 104, 0);
+    s_tg_unit = tg_label(p, &lv_font_montserrat_14, C_LABEL, 136, 0);
+    set_text(s_tg_unit, "dBFS in the tag's band");
+    s_tg_track = tg_box(p, TG_BAR_X, TG_BAR_Y, TG_BAR_W, TG_BAR_H, C_SUBTLE);
+    lv_obj_set_style_radius(s_tg_track, 3, 0);
+    s_tg_fill = tg_box(s_tg_track, 0, 0, 0, TG_BAR_H, lv_color_hex(TGC_GOOD));
+    lv_obj_set_style_radius(s_tg_fill, 3, 0);
+    s_tg_floor = tg_box(p, TG_BAR_X, TG_BAR_Y - 4, 2, TG_BAR_H + 8, C_TEXT2);
+    s_tg_loud = tg_box(p, TG_BAR_X, TG_BAR_Y - 4, 2, TG_BAR_H + 8, C_ACCENT);
+    s_tg_room = tg_label(p, &lv_font_montserrat_14, C_TEXT2, 184, 280);
+    s_tg_say = tg_label(p, &lv_font_montserrat_20, C_TEXT, 212, 300);
+    s_tg_heard = tg_label(p, &lv_font_montserrat_14, C_TEXT2, 242, 290);
+    s_tg_counts = tg_label(p, &lv_font_montserrat_14, C_LABEL, 266, 280);
+    s_tg_cpu = tg_label(p, &lv_font_montserrat_14, C_LABEL, 288, 260);
+
+    vis(s_tg_mp, false);
+    vis(s_tg_kind, false);
+    set_text(s_tg_cap, "LISTENING");
+    set_text(s_tg_time, "Nobody heard yet");
+    lv_timer_create(tg_timer_cb, TG_TICK_MS, NULL);
+}
+
+void ui_tctag_data(const tag_view_t *v)
+{
+    /* Handed over when the face has taken the last: one writer (app_main's
+     * loop), one reader (the timer above). */
+    if (atomic_load(&s_tg_due)) return;
+    s_tg_new = *v;
+    atomic_store(&s_tg_due, true);
+}
+
+void ui_tctag_turn(int32_t detents)
+{
+    if (detents) atomic_fetch_add(&s_tg_detents, (int)detents);
+}
+#endif /* TAG_FACE */
+
 
 /* The faces that own the glass whole, with a gear at their foot for the
  * card and the picker: EpiBeam's compass, ADS-B Radar's radar -- and the
  * clock and the weather, the whole of their glass the gear. */
-#define GEAR_FACE (EPI_FACE || ADSB_FACE || CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE)
+#define GEAR_FACE (EPI_FACE || ADSB_FACE || CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE || TAG_FACE)
 __attribute__((unused)) static bool gear_at(lv_point_t p)
 {
 #if EPI_FACE
     return beam_gear_at(p);
 #elif ADSB_FACE
     return adsb_gear_at(p);
-#elif CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE
+#elif CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE || TAG_FACE
+    /* TailChaser Tag's microphone is the tap's first (tg_tap): a hold there
+     * is the picker's as anywhere. */
     (void)p;
     return true;
 #else
@@ -6383,6 +6874,10 @@ static void tap(lv_point_t p, uint32_t held)
     /* The alarms: one ringing, stopped; the list, open; or the clock's
      * middle, opening it. */
     if (al_tap(p)) return;
+#endif
+#if TAG_FACE
+    /* The microphone: the placement meter; the meter, away. */
+    if (tg_tap(p)) return;
 #endif
 #if GEAR_FACE
     /* The gear: the address card, for the page -- locked too, as the card
@@ -7802,6 +8297,12 @@ static void build(void)
     /* The WiFi Test, the same way: the battery between the page's name and
      * its dots. */
     wt_build();
+    lv_obj_move_foreground(s_knob_batt);
+#endif
+#if TAG_FACE
+    /* TailChaser Tag, the same way: the battery between the state and the
+     * place in the list. */
+    tg_build();
     lv_obj_move_foreground(s_knob_batt);
 #endif
 
@@ -10102,6 +10603,9 @@ void ui_saver_text(char *big, size_t nb, char *small, size_t ns)
 #elif WIFITEST_FACE
     label_copy(s_wt_rssi, big, nb);
     label_copy(s_wt_word, small, ns);
+#elif TAG_FACE
+    label_copy(s_tg_call, big, nb);
+    label_copy(s_tg_kind, small, ns);
 #elif CLOCK_FACE
     /* The time and the day, as the digital face has them. */
     struct tm lt;

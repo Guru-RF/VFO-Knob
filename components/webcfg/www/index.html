@@ -403,6 +403,47 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
   <p class="note" id="wtmsg"></p>
 </section>
 
+<section id="tgsec" hidden>
+  <h2>TailChaser Tag</h2>
+  <p class="note" style="margin-top:0">The knob listens to the room through its own microphone, for
+     the callsign tag a TailChaser repeater hides under its audio: play the repeater near it. Nothing
+     it hears leaves the knob; only the callsigns read are kept, one line an over, the last 100 on
+     the SD card. Tap the microphone on the knob for where to put it.</p>
+  <div id="tgnow"></div>
+  <h2 style="margin-top:16px">Heard</h2>
+  <div id="tglist"></div>
+  <button type="button" class="ghost" id="tgclear">Empty the list</button>
+  <p class="note" id="tgmsg"></p>
+  <h2 style="margin-top:16px">Say who it is</h2>
+  <p class="note" style="margin-top:0">Each new over's callsign said out loud, on the knob's jack and on
+     a Bluetooth speaker paired with it (Bluetooth, below), in a voice made by
+     <a href="https://elevenlabs.io" target="_blank" rel="noopener">ElevenLabs</a>. The callsign goes
+     to them as text, once: the knob keeps the voice they send back on its card. The key is yours, from
+     ElevenLabs' settings (API keys), with Text to Speech allowed; the knob keeps it on its card, never
+     shows it here again, and never logs it.</p>
+  <label class="chk"><input type="checkbox" id="tgsay"> Say each new callsign</label>
+  <div class="grid">
+    <div><label for="tgstyle">How</label>
+      <select id="tgstyle"><option value="0">letter by letter: O, N, six&hellip;</option>
+        <option value="1">phonetic: Oscar November six&hellip;</option></select></div>
+    <div><label for="tgvoice">Voice: its ID at ElevenLabs</label>
+      <input id="tgvoice" maxlength="31" placeholder="JBFqnCBsd6RMkjVDRZzb" autocomplete="off"
+             autocapitalize="none" spellcheck="false"></div>
+  </div>
+  <label for="tgkey">ElevenLabs key</label>
+  <div class="pw"><input id="tgkey" type="password" autocomplete="new-password" placeholder="not set"
+       autocapitalize="none" spellcheck="false"><button type="button" class="show" data-for="tgkey">Show</button></div>
+  <label class="chk"><input type="checkbox" id="tgkeyclear"> Forget the key</label>
+  <button type="button" id="tgsave">Save</button>
+  <div class="grid">
+    <div><label for="tgtry">Try it: a callsign</label>
+      <input id="tgtry" maxlength="9" placeholder="ON4ABC" autocapitalize="characters" autocomplete="off"
+             spellcheck="false"></div>
+    <div><button type="button" class="ghost" id="tgsaynow" style="margin-top:26px">Say it</button></div>
+  </div>
+  <p class="note" id="tgsaymsg"></p>
+</section>
+
 <section id="alsec" hidden>
   <h2>Alarms</h2>
   <div id="alrows"></div>
@@ -1239,8 +1280,9 @@ async function load(){
   CLOCK = c.radio === 'clock';            /* a clock: no radio; its alarms' sound alone */
   WX = c.radio === 'weather';             /* Open-Meteo's forecast: no radio, no audio */
   WT = c.radio === 'wifitest';            /* the WiFi network measured: no radio, no audio */
+  TG = c.radio === 'tctag';               /* a repeater's callsign tag, heard in the room: no radio */
   TC = c.radio === 'tailchaser';          /* TailChaser repeaters: their API, the one shown heard */
-  SCREEN = EPI || ADSB || CLOCK || WX || WT;
+  SCREEN = EPI || ADSB || CLOCK || WX || WT || TG;
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || SCREEN || TC;
   $('episec').hidden = !EPI; $('beamn').value = String(c.beamn ?? 4);
@@ -1250,6 +1292,8 @@ async function load(){
   if (WX) wxLoad();
   $('wtsec').hidden = !WT;
   if (WT) wtStart();
+  $('tgsec').hidden = !TG;
+  if (TG) tgStart();
   $('tcsec').hidden = !TC;
   for (const e of document.querySelectorAll('.tconly')) e.hidden = !TC;
   for (const e of document.querySelectorAll('.notc')) e.hidden = TC;
@@ -2139,7 +2183,7 @@ function pwHint(d,x){
 let PHONE=false, phoneLoaded=false, FAVS=[];
 let EPI=false;                          /* the EpiBeam firmware's page */
 let TC=false, tcLoaded=false, TCN=[];     /* the tailchaser firmware's page; its repeaters' rows */
-let ADSB=false, CLOCK=false, WX=false, WT=false, SCREEN=false; /* ADS-B Radar's, the Clock's, the Weather's, the WiFi Test's; any, a face with no radio */
+let ADSB=false, CLOCK=false, WX=false, WT=false, TG=false, SCREEN=false; /* ADS-B Radar's, the Clock's, the Weather's, the WiFi Test's, TailChaser Tag's; any, a face with no radio */
 
 /* ---- ADS-B Radar: the radar's middle, its feed, what it shows ---- */
 const ADOPT={adapt:1, adcty:2, adswp:4, adgnd:8};    /* net_prov.h NET_ADSB_* */
@@ -2241,6 +2285,69 @@ $('wtrep').onclick=async()=>{
 $('wtcopy').onclick=async()=>{
   try{ await navigator.clipboard.writeText($('wtreport').value); $('wtmsg').textContent='Copied.' }
   catch(e){ $('wtreport').select(); document.execCommand('copy'); $('wtmsg').textContent='Copied.' }
+};
+/* ---- TailChaser Tag: who was heard ---- */
+let tgTimer=0;
+function tgDur(s){ return s>=86400?Math.floor(s/86400)+'d '+Math.floor(s/3600)%24+'h':s>=3600?Math.floor(s/3600)+'h '+String(Math.floor(s/60)%60).padStart(2,'0')+'m'
+                  :s>=60?Math.floor(s/60)+' min':s+' s' }
+async function tgLoad(){
+  let t; try{ const r=await fetch('/api/tctag',{cache:'no-store'}); if(!r.ok) return; t=await r.json() }catch(e){ return }
+  const sure=t.sync_avg>=t.sure_avg, faint=t.sync_db>=t.try_db&&t.sync_avg>=t.try_avg;
+  const sc=sure?'var(--ok)':faint?'var(--accent)':'';
+  $('tgnow').innerHTML=t.listening?
+    row('Listening for',esc(tgDur(t.heard_s))+' <span class="note">(tag format '+t.format+')</span>')+
+    row('Level',`${t.band.toFixed(0)} dBFS in the tag's band <span class="note">(room ${t.floor.toFixed(0)}, all ${t.all.toFixed(0)})</span>`)+
+    row('The tag now',`<span style="color:${sc}">${sure?'heard':faint?'faint':'not heard'}: ${t.sync_avg.toFixed(3)}, ${t.sync_db.toFixed(1)} dB</span>`+
+        (t.holding?' <span class="pill up">on the air</span>':''))+
+    row('Readings',`${t.read} of ${t.tries} tried <span class="note">(CRC bad ${t.crc_bad}; decoder ${t.cpu} % of a core, ${t.lost} lost)</span>`)
+    :row('Listening','<span class="pill down">no microphone</span>');
+  const when=e=>{
+    const d=e.first?new Date(e.first*1000).toLocaleString():'';
+    const ago=e.ago_s!==undefined?e.ago_s:(t.now&&e.last?t.now-e.last:null);
+    const len=e.len_s!==undefined?e.len_s:(e.last&&e.first?e.last-e.first:null);
+    return esc(d)+(ago!==null?' <span class="note">'+esc(tgDur(ago))+' ago, for '+esc(tgDur(len||0))+', '+e.reads+' read</span>':'');
+  };
+  $('tglist').innerHTML=t.list.length?t.list.map(e=>row('<b>'+esc(e.call)+'</b> '+(e.local?'local':'network'),when(e))).join('')
+                                     :row('','nobody heard yet');
+  const y=t.say;
+  if(y){
+    /* The form as the knob has it, once: not over what is being typed. */
+    if(!tgSayShown){
+      tgSayShown=true;
+      $('tgsay').checked=y.on; $('tgstyle').value=y.phonetic?'1':'0';
+      $('tgvoice').value=y.voice==='JBFqnCBsd6RMkjVDRZzb'?'':y.voice;
+    }
+    $('tgkey').placeholder=y.key?'set (kept unless you type another)':'not set';
+    $('tgsaymsg').textContent=`Now: ${y.state}. Since the start: ${y.said} said, ${y.asked} asked of ElevenLabs, ${y.cached} from the card.`;
+  }
+}
+let tgSayShown=false;
+async function tgPost(f,msg){
+  try{ const r=await fetch('/api/tctag',{method:'POST',body:new URLSearchParams(f)});
+       $('tgsaymsg').textContent=r.ok?msg:await r.text() }
+  catch(e){ $('tgsaymsg').textContent='the knob did not answer' }
+}
+$('tgsave').onclick=async()=>{
+  const f={act:'speech',on:$('tgsay').checked?'1':'0',phonetic:$('tgstyle').value,voice:$('tgvoice').value.trim()};
+  const k=$('tgkey').value.trim();
+  if(k) f.key=k;
+  if($('tgkeyclear').checked) f.keyclear='1';
+  await tgPost(f,'Saved.');
+  $('tgkey').value=''; $('tgkeyclear').checked=false;
+  setTimeout(tgLoad,300);
+};
+$('tgsaynow').onclick=async()=>{
+  const c=$('tgtry').value.trim().toUpperCase();
+  if(!c){ $('tgsaymsg').textContent='a callsign to say, first'; return }
+  await tgPost({act:'say',call:c},'Asked: listen to the jack or the speaker.');
+  setTimeout(tgLoad,1500);
+};
+function tgStart(){ tgLoad(); clearInterval(tgTimer); tgTimer=setInterval(()=>{ if(!document.hidden) tgLoad() },2000) }
+$('tgclear').onclick=async()=>{
+  if(!confirm('Empty the list of who was heard, on the knob and its card?')) return;
+  try{ const r=await fetch('/api/tctag',{method:'POST',body:new URLSearchParams({act:'clear'})}); $('tgmsg').textContent=r.ok?'Emptied.':await r.text() }
+  catch(e){ $('tgmsg').textContent='the knob did not answer' }
+  tgLoad();
 };
 /* ---- Weather: where, in what units, how often ---- */
 let WXPLACE='';                         /* the name the place was found by; '' typed */
@@ -2861,6 +2968,7 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'weather',   name:'Weather (Open-Meteo\'s forecast)'},
               {id:'wifitest',  name:'WiFi Test (what the WiFi network does, for links that drop)'},
               {id:'tailchaser',name:'TailChaser (watch, hear and block TailChaser repeaters)'},
+              {id:'tctag',     name:'TailChaser Tag (who a TailChaser repeater heard, by its callsign tag)', beta:true},
               {id:'setup',     name:'Setup: WiFi from a phone, and the firmware picker'}];
 let FWROOT='', RADIO='';
 const rname=id=>(RADIOS.find(r=>r.id===id)||{name:id}).name;

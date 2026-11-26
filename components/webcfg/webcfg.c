@@ -2036,7 +2036,7 @@ static esp_err_t sdr_test_h(httpd_req_t *r)
  * no radio, nor svxconnect's reflector, nor the clock, the weather, the WiFi
  * Test or TailChaser. */
 #define RADIO_PAGE (!VFO_RADIO_SETUP && !VFO_RADIO_SVXCONNECT && !VFO_RADIO_PHONE && !VFO_RADIO_CLOCK && \
-                    !VFO_RADIO_WEATHER && !VFO_RADIO_WIFITEST && !VFO_RADIO_TAILCHASER)
+                    !VFO_RADIO_WEATHER && !VFO_RADIO_WIFITEST && !VFO_RADIO_TAILCHASER && !VFO_RADIO_TCTAG)
 
 /* ------------------------------------------ Bluetooth headset or speaker */
 

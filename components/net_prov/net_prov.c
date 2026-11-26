@@ -59,6 +59,20 @@
 #define DEFAULT_PORT 8080
 #define DEFAULT_USER ""
 #define DEFAULT_PASS ""
+#elif VFO_RADIO_TCTAG
+/* No radio: the room is listened to through the knob's own microphone, and
+ * who was heard is the tctag client's own ("taghist" namespace). Keys of its
+ * own all the same, so it never writes another firmware's. */
+#define KEY_HOST     "tthost"
+#define KEY_RLIST    "ttlist"
+#define KEY_RSEL     "ttsel"
+#define KEY_PORT     "ttport"
+#define KEY_USER     "ttuser"
+#define KEY_PASS     "ttpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 80
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
 #elif VFO_RADIO_PHONE
 /* Unused: the telephone's SIP account is the phone client's own ("phone"
  * namespace). Keys of its own, so it never writes another firmware's. */
@@ -299,8 +313,9 @@ static esp_err_t kv_saved_or(esp_err_t e, const char *what)
 static uint16_t s_ota_hours = 24;   /* automatic update check; 0 = off */
 /* The screensaver after a minute, dimmed a minute later, dark a minute after
  * that. The Clock and the Weather are screens to look at: theirs stays up --
- * and the WiFi Test's, whose face is what it found. */
-#if VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST
+ * and the WiFi Test's, whose face is what it found, and TailChaser Tag's,
+ * whose face is who was heard. */
+#if VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST || VFO_RADIO_TCTAG
 static net_screen_t s_screen = { NET_SAVER_NONE, 0, 0, 0 };
 #else
 static net_screen_t s_screen = { NET_SAVER_MATRIX, 1, 1, 1 };
