@@ -75,7 +75,7 @@ NAMES='{"aethersdr": "AetherSDR", "icom": "Icom", "icombt": "Icom Bluetooth", "o
         "setup": "Setup"}'
 # ...and those of them stamped BETA on the setup firmware's dial (its
 # index.json entry's "beta": true), until they have been tried enough.
-BETA='["epibeam", "k4", "jupitersdr", "openx6bt", "icombt"]'
+BETA='["epibeam", "k4", "jupitersdr", "openx6bt", "icombt", "tctag"]'
 if [ "$RADIO" != companion ] &&
    ! python3 -c 'import json, sys; sys.exit(sys.argv[2] not in json.loads(sys.argv[1]))' "$NAMES" "$RADIO"; then
     echo "$RADIO has no name in NAMES (tools/release.sh): the setup firmware would never offer it" >&2

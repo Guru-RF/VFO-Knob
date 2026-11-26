@@ -3071,6 +3071,119 @@ def tailchaser_pictures():
     lock_pictures(out, 13, "tc", "svxconnect", "TailChaser", tc_face(), keys=False)
     return out
 
+# --- TailChaser Tag (ui.c TAG_FACE): who a TailChaser repeater played near
+# the knob was, read off its callsign tag through the knob's microphone. The
+# setup firmware's ink and gold; the layout is tg_build()'s.
+TG_GOOD, TG_FAIR, TG_POOR = "#3FD26A", "#FFB000", "#FF4040"
+TG_BAR_X, TG_BAR_Y, TG_BAR_W, TG_BAR_H = 60, 150, 240, 14
+
+
+def tg_head(cap, cap_colour=None, pos=""):
+    """Over both pages: the state at 26, where in the list at 68."""
+    return (centred(180, 26, cap, 14, cap_colour or md.LABEL) +
+            (centred(180, 68, pos, 14, md.LABEL) if pos else ""))
+
+
+def tg_icons():
+    """The microphone (the placement meter) and the gear, at the foot."""
+    return (md.microphone28(140, 274, md.TEXT2, bg=md.BG) +
+            gear(220, 288, md.TEXT2).replace(f'fill="{md.BG1}"', f'fill="{md.BG}"'))
+
+
+def tg_face(cap="LISTENING", cap_colour=None, pos="", call="", call_colour=None, local=True,
+            time="", ago="", ago_colour=None, now="", now_colour=None):
+    """The list, at one entry: the callsign, LOCAL or NETWORK, when, and the
+    tag as the decoder hears it now."""
+    md.use_palette("svxconnect")
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>', tg_head(cap, cap_colour, pos)]
+    if call:
+        size = 48 if montserrat(48).width(call) <= 330 else 28
+        s.append(centred(180, 126, call, size, call_colour or md.TEXT))
+        kind = "LOCAL" if local else "NETWORK"
+        f = montserrat(14)
+        w = f.width(kind) + 20
+        h = f.line_height + 4
+        s.append(f'<rect x="{180 - w / 2:.1f}" y="164" width="{w}" height="{h}" rx="9" '
+                 f'fill="{md.ACCENT if local else md.SUBTLE}"/>')
+        s.append(centred(180, 164 + h / 2, kind, 14, md.BG if local else md.TEXT2))
+    else:
+        time = time or "Nobody heard yet"
+        ago = ago or "a TailChaser repeater, played near"
+        ago_colour = ago_colour or md.LABEL
+    s.append(centred(180, 210, time, 20, md.TEXT2))
+    s.append(centred(180, 236, ago, 14, ago_colour or md.TEXT2))
+    if now:
+        s.append(centred(180, 258, now, 14, now_colour or md.LABEL))
+    s.append(tg_icons())
+    return "".join(s)
+
+
+def tg_bar(dbfs):
+    return max(0.0, min(1.0, (dbfs + 100.0) / 80.0)) * TG_BAR_W
+
+
+def tg_meter(cap="LISTENING", cap_colour=None, pos="", level=-50, room=-74, loud=-31,
+             say="The tag is heard well", say_colour=TG_GOOD, heard="tag heard: 0.083, 15.0 dB",
+             heard_colour=TG_GOOD, counts="tried 31, read 14, CRC bad 17", cpu="decoder 24%, lost 0"):
+    """The placement meter: the level in the tag's band against the room's
+    floor (white) and the loudest of the last seconds (gold), what to do."""
+    md.use_palette("svxconnect")
+    x, y, w, h = TG_BAR_X, TG_BAR_Y, TG_BAR_W, TG_BAR_H
+    return "".join([
+        f'<rect x="0" y="0" width="360" height="360" fill="{md.BG}"/>', tg_head(cap, cap_colour, pos),
+        centred(180, 104, f"{level}", 48, md.TEXT),
+        centred(180, 136, "dBFS in the tag's band", 14, md.LABEL),
+        f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="3" fill="{md.SUBTLE}"/>',
+        f'<rect x="{x}" y="{y}" width="{tg_bar(level):.1f}" height="{h}" rx="3" fill="{say_colour}"/>',
+        f'<rect x="{x + tg_bar(room) - 1:.1f}" y="{y - 4}" width="2" height="{h + 8}" fill="{md.TEXT2}"/>',
+        f'<rect x="{x + tg_bar(loud) - 1:.1f}" y="{y - 4}" width="2" height="{h + 8}" fill="{md.ACCENT}"/>',
+        centred(180, 184, f"room {room}, loudest {loud} dBFS", 14, md.TEXT2),
+        centred(180, 212, say, 20, say_colour),
+        centred(180, 242, heard, 14, heard_colour),
+        centred(180, 266, counts, 14, md.LABEL),
+        centred(180, 288, cpu, 14, md.LABEL)])
+
+
+def tctag_pictures():
+    f = tg_face(pos="4 / 4", call="ON0ORA", local=True, time="14:32:07", ago="45 s ago, for 15 s",
+                now="sync 0.006  4 dB  -73 dBFS")
+    left = [(120, 126, "the callsign heard"), (150, 174, "LOCAL or NETWORK"), (110, 210, "when it came"),
+            (110, 236, "how long ago, for how long"), (130, 288, "the placement meter")]
+    right = [(220, 26, "LISTENING or ON THE AIR"), (200, 68, "where in the list"),
+             (250, 258, "the tag as it is heard now"), (232, 288, "the address card")]
+    out = {}
+    out["01-face"] = callouts("tg-01", "The TailChaser Tag firmware's face", f, left, right)
+    out["02-nobody"] = knob("tg-02", "Just started: nobody heard yet",
+                            tg_face(now="sync 0.004  4 dB  -72 dBFS"), "",
+                            "listening  ·  play a TailChaser repeater near the knob")
+    out["03-on-air"] = knob("tg-03", "A callsign being heard",
+                            tg_face("ON THE AIR", TG_GOOD, "5 / 5", "ON4ABC", local=False, time="14:33:20",
+                                    ago="on the air for 12 s", ago_colour=TG_GOOD,
+                                    now="sync 0.081  15 dB  -49 dBFS", now_colour=TG_GOOD), "",
+                            "ON THE AIR: the newest over, its tag heard now")
+    out["04-turn"] = knob("tg-04", "Turn: the older ones",
+                          tg_face(pos="1 / 5", call="LU7YZ", call_colour=md.TEXT2, local=False,
+                                  time="25 Nov 12:31", ago="1d 2h ago, for 50 s",
+                                  now="sync 0.006  4 dB  -73 dBFS"), turn(),
+                          "back through the list, an over a detent  ·  the day when not today")
+    out["05-meter"] = knob("tg-05", "Tap the microphone: where to put the knob",
+                           tg_meter(pos="5 / 5"), "",
+                           "the tag's band against the room (white) and the loudest (gold)")
+    out["06-closer"] = knob("tg-06", "Too far from the speaker",
+                            tg_meter(pos="5 / 5", level=-66, room=-71, loud=-58, say="Closer to the speaker",
+                                     say_colour=TG_POOR, heard="tag not heard: 0.005, 4.0 dB",
+                                     heard_colour=md.TEXT2, counts="tried 12, read 0, CRC bad 12"), "",
+                            "what to do, in a word  ·  a tap anywhere: back to the list")
+    card = address_card(f"TailChaser Tag {VERSION}\n{POWER}\n{ADDRESSES}")
+    out["07-card"] = knob("tg-07", "A tap: the address card, for the configuration page",
+                          f + card + lock_pill(False), tap(220, 288),
+                          "tap anywhere but the microphone: the address card  ·  again: away")
+    out["08-picker"] = knob("tg-08", "Held three seconds: back to the setup firmware?",
+                            dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\n"
+                                                              "tap to cancel; WiFi is kept"),
+                            tap(220, 288, ring=24), "hold anywhere 3 s until it buzzes, then turn")
+    return out
+
 
 FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multiflex_pictures,
              "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
@@ -3078,6 +3191,7 @@ FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multif
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
              "epibeam": epibeam_pictures, "adsb": adsb_pictures, "clock": clock_pictures,
              "weather": weather_pictures, "wifitest": wifitest_pictures, "tailchaser": tailchaser_pictures,
+             "tctag": tctag_pictures,
              "screensaver": saver_pictures,
              "headset": headset_pictures}
 
