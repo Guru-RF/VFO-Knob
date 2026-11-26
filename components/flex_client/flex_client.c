@@ -260,6 +260,14 @@ EXT_RAM_BSS_ATTR static struct {
     uint16_t   over_frames, over_silent;
     int        over_peak;
     uint32_t   enc_us_sum;
+    uint32_t   over_sent0, over_failed0;  /* S.txa_* when the over began */
+    bool       over_dest_said;            /* where its first frame went, logged */
+    /* What the radio says of our transmitter (GitHub #31: keyed, no power):
+     * its `transmit` status, and the interlock's last word while keying. */
+    char       tx_mic_sel[8];
+    int16_t    tx_rfpower, tx_tunepower;  /* -1: not said yet */
+    uint32_t   ilk_who;                   /* tx_client_handle, last seen */
+    char       ilk_state[24], ilk_src[8];
     /* The other stations on the radio, and what this knob is: a station of
      * its own, or the dial for one of them (bound: its handle). The choice
      * holds across reconnects; the question is asked again only when the
@@ -793,7 +801,14 @@ static void on_pan_status(uint32_t id, const char *line)
 
 static void log_refusal(uint32_t missing)
 {
-    if (!missing) { ESP_LOGW(TAG, "PTT REFUSED by the radio, or not confirmed in time"); return; }
+    if (!missing) {
+        ESP_LOGW(TAG, "PTT REFUSED by the radio, or not confirmed in time: interlock %s, "
+                      "tx_client_handle=0x%08lX source=%s (we are 0x%08lX), tx_slice=%d tx_stream=0x%08lX",
+                 C.ilk_state[0] ? C.ilk_state : "(none)", (unsigned long)C.ilk_who,
+                 C.ilk_src[0] ? C.ilk_src : "-", (unsigned long)C.handle, (int)S.tx_slice,
+                 (unsigned long)C.tx_stream);
+        return;
+    }
     if (missing & PERMIT_BAND) ESP_LOGW(TAG, "PTT REFUSED: %s", S.tx_reason);
     else if (missing & PERMIT_TRX)
         ESP_LOGW(TAG, "PTT REFUSED: %s", S.tx && !S.tx_ours ? "another station is transmitting"
@@ -811,6 +826,11 @@ static void over_log(void)
              C.over_frames, C.over_silent,
              C.over_peak ? (int)(20.0f * log10f((float)C.over_peak / 32767.0f)) : -99,
              (unsigned long)(C.enc_us_sum / C.over_frames), (unsigned long)S.txa_max_us);
+    ESP_LOGI(TAG, "over: %lu frames sent, %lu not (stream 0x%08lX); the radio's transmit: "
+                  "mic_selection=%s rfpower=%d tunepower=%d",
+             (unsigned long)(S.txa_sent - C.over_sent0), (unsigned long)(S.txa_failed - C.over_failed0),
+             (unsigned long)C.tx_stream, C.tx_mic_sel[0] ? C.tx_mic_sel : "?",
+             (int)C.tx_rfpower, (int)C.tx_tunepower);
 }
 
 static void ptt_dispatch(const ptt_out_t *o)
@@ -835,6 +855,14 @@ static void ptt_dispatch(const ptt_out_t *o)
             C.over_peak = 0;
             C.enc_us_sum = 0;
             S.txa_max_us = 0;
+            C.over_sent0 = S.txa_sent;
+            C.over_failed0 = S.txa_failed;
+            C.over_dest_said = false;
+            C.ilk_state[0] = C.ilk_src[0] = 0;
+            C.ilk_who = 0;
+            ESP_LOGI(TAG, "xmit 1: tx_stream=0x%08lX tx_slice=%d mic_selection=%s rfpower=%d",
+                     (unsigned long)C.tx_stream, (int)S.tx_slice,
+                     C.tx_mic_sel[0] ? C.tx_mic_sel : "?", (int)C.tx_rfpower);
             /* Dialling for a station, its own microphone is on the air. */
             if (C.own) audio_in_set_active(true);
             cmd(P_XMIT_ON, "xmit 1");
@@ -898,16 +926,23 @@ static void on_interlock(const char *line, uint32_t t)
     kv(line, "source", src, sizeof src);
     const bool on_air = strcmp(st, "TRANSMITTING") == 0;
     const bool keying = S.ptt.state != PTT_IDLE;
+    if (keying) {
+        strlcpy(C.ilk_state, st, sizeof C.ilk_state);
+        strlcpy(C.ilk_src, src, sizeof C.ilk_src);
+        C.ilk_who = who;
+    }
     /* Ours by our handle -- or, while we are keying, by none (the tune
      * carrier and the tuner report none of their own) or by the station we
      * dial for, whose transmitter it is. The same station keyed from its own
      * PTT, with nothing of ours keyed, is not ours: never unkeyed from here. */
-    (void)src;
     const bool ours = on_air && (who == C.handle ||
                                  ((who == 0 || (C.bound && who == C.bound)) && keying));
     if (on_air != S.tx || ours != S.tx_ours)
-        ESP_LOGI(TAG, "radio %s%s", on_air ? "transmitting" : "receiving",
-                 on_air ? (ours ? " (us)" : " (another station)") : "");
+        ESP_LOGI(TAG, "radio %s%s: tx_client_handle=0x%08lX source=%s (we are 0x%08lX%s)",
+                 on_air ? "transmitting" : "receiving",
+                 on_air ? (ours ? " (us)" : " (another station)") : "",
+                 (unsigned long)who, src[0] ? src : "-", (unsigned long)C.handle,
+                 keying ? ", keying" : "");
     S.tx = on_air;
     S.tx_ours = ours;
 
@@ -1424,6 +1459,25 @@ static void antennas_step(void)
     }
 }
 
+/* The transmitter's settings, as the radio tells this station: logged when
+ * they change, never set from here. Where the microphone comes from (PC is
+ * our network stream) and the power, for a radio keyed without RF (#31). */
+static void on_transmit_status(const char *body)
+{
+    char v[8];
+    long n;
+    bool changed = false;
+    if (kv(body, "mic_selection", v, sizeof v) && strcmp(v, C.tx_mic_sel) != 0) {
+        strlcpy(C.tx_mic_sel, v, sizeof C.tx_mic_sel);
+        changed = true;
+    }
+    if (kv_long(body, "rfpower", &n) && n != C.tx_rfpower) { C.tx_rfpower = (int16_t)n; changed = true; }
+    if (kv_long(body, "tunepower", &n) && n != C.tx_tunepower) { C.tx_tunepower = (int16_t)n; changed = true; }
+    if (changed)
+        ESP_LOGI(TAG, "the radio's transmit: mic_selection=%s rfpower=%d tunepower=%d",
+                 C.tx_mic_sel[0] ? C.tx_mic_sel : "?", (int)C.tx_rfpower, (int)C.tx_tunepower);
+}
+
 static void on_status(char *body, uint32_t t)
 {
     if (strncmp(body, "slice ", 6) == 0) {
@@ -1440,6 +1494,8 @@ static void on_status(char *body, uint32_t t)
         on_client_status(body);
     } else if (strncmp(body, "memory ", 7) == 0) {
         on_memory_status(body);
+    } else if (strncmp(body, "transmit ", 9) == 0 && strncmp(body + 9, "band ", 5) != 0) {
+        on_transmit_status(body);
     }
 }
 
@@ -1505,6 +1561,8 @@ static void session_end(const char *why, bool polite)
     C.udp_last = 0;                                   /* the next session's first is no gap */
     C.greeted = C.registered = C.listed = C.creating = C.streams_asked = C.tx_claimed = false;
     C.pan_tamed = C.wf_tamed = false;
+    C.tx_mic_sel[0] = 0;
+    C.tx_rfpower = C.tx_tunepower = -1;
     /* Who is on the radio is listed afresh; what we chose to be is kept. */
     C.registering = C.asking = false;
     C.bound = 0;
@@ -1785,6 +1843,9 @@ static void on_reply(uint32_t seq, uint32_t code, const char *body, uint32_t t)
         return;
     }
     switch (what) {
+    case P_XMIT_ON:
+        ESP_LOGI(TAG, "the radio accepted the key (%08lX)", (unsigned long)code);
+        break;
     case P_GUI:
         if (strlen(body) == 36 && strcmp(body, C.uuid) != 0) {
             strlcpy(C.uuid, body, sizeof C.uuid);    /* the radio chose our id */
@@ -1966,6 +2027,13 @@ static void tx_frame(OpusEncoder *enc)
     struct sockaddr_in to = C.radio;
     if (C.wan) to = C.udp_to;                    /* its public port, by SmartLink */
     else       to.sin_port = htons(TX_PORT);
+    if (!C.over_dest_said) {
+        C.over_dest_said = true;
+        char a[16];
+        inet_ntoa_r(to.sin_addr, a, sizeof a);
+        ESP_LOGI(TAG, "microphone to %s:%u, stream 0x%08lX, %d B Opus%s", a,
+                 (unsigned)ntohs(to.sin_port), (unsigned long)sid, n, C.wan ? " (SmartLink)" : "");
+    }
     if (sendto(fd, pkt, len, 0, (struct sockaddr *)&to, sizeof to) == (int)len) S.txa_sent++;
     else S.txa_failed++;
 }
@@ -2439,6 +2507,7 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
     S.gain_max = 32;
     S.gain_step = 8;
     S.tx_allowed = true;
+    C.tx_rfpower = C.tx_tunepower = -1;
     S.pending_choice = -1;
     S.pending_mem = S.pending_rxant = S.pending_txant = -1;
     C.mem_pos = -1;
