@@ -21,6 +21,11 @@ const kv_ns_def_t KV_NS[] = {
     /* TailChaser: the repeaters with their API keys merged as one list, and
      * the knob's own Tailscale keys. */
     { .name = "tchaser", .group = L("nodes", "key0", "key1", "key2", "key3", "key4", "key5", "key6", "key7") },
+    /* TailChaser Tag: who was heard, as text (vfo_core tag_hist.c). Without
+     * a card it lasts until the restart: a log is no reason to write flash. */
+    { .name = "taghist", .flags = KVF_CACHE },
+    /* ...and its speech: on or off, how, the voice, the owner's ElevenLabs key. */
+    { .name = "tagtts", .group = L("on", "style", "voice", "key") },
 #if VFO_KV_TEST
     { .name = "kvtest" },                 /* kv_test.c's writer: a test build's only */
 #endif

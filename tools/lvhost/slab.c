@@ -4492,6 +4492,311 @@ static void runs(const char *dir)
     st.knob_batt = false; run(60);
     quiet();
 }
+#elif VFO_RADIO_TCTAG
+/* TailChaser Tag's face (ui.c TAG_FACE): who a TailChaser repeater played near
+ * the knob was heard to carry, an entry an over, the newest first. Nobody
+ * yet; someone on the air -- ON THE AIR, how long, the tag's match lit; quiet
+ * -- how long ago and for how long; the dial back through the older ones,
+ * this start's and those from the card -- today's by the time, older by the
+ * day -- and on to the newest, no further either way; someone new while an
+ * older one is shown: the newest, and the screen lit. The microphone: the
+ * placement meter -- the level, the room's floor and the loudest on the bar,
+ * what to do in its colour for each case -- a tap or a turn away; no
+ * microphone said on both pages. Elsewhere a tap the address card, held three
+ * seconds the picker; the knob's battery between the state and the place in
+ * the list; the longest callsign whole. Pictures of each. */
+#define TG_T0 1793800327LL                   /* the harness's wall clock (UTC) at its 0 */
+#define TG_UP 3600000LL                      /* the client's clock then: up an hour */
+static tag_view_t tv;
+
+/* The client's clock (ms since it started) as wall time. */
+static int64_t tg_unix(int64_t ms) { return TG_T0 + (ms - TG_UP) / 1000; }
+
+static void tg_levels(float band, float floor_, float sync_db, float avg)
+{
+    tv.st.band_dbfs = band;
+    tv.st.all_dbfs = band + 2;
+    tv.st.floor_dbfs = floor_;
+    tv.st.sync_db = sync_db;
+    tv.st.sync_now = avg;
+    tv.st.sync_avg = avg;
+}
+
+/* The view handed over at the client's ms, and taken (the face's timer, 100 ms). */
+static void tg_show(int64_t ms)
+{
+    tv.now_ms = ms;
+    tv.now_unix = tg_unix(ms);
+    tv.gen++;
+    ui_tctag_data(&tv);
+    run(150);
+}
+
+/* A reading at ms; and held on the air (its start standing out) to `until`. */
+static void tg_heard(const char *call, bool local, int64_t ms, int64_t until)
+{
+    tag_hist_reading(&tv.h, call, local, true, ms, tg_unix(ms));
+    for (int64_t at = ms + 1000; at <= until; at += 1000) tag_hist_holding(&tv.h, at, tg_unix(at));   /* as each chunk does */
+    tv.st.readings++;
+    tv.st.tries++;
+}
+
+static void tg_ago(char *b, size_t n, int64_t at_unix, bool day)
+{
+    struct tm t;
+    const time_t a = (time_t)at_unix;
+    localtime_r(&a, &t);
+    static const char *const MO[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    if (day) snprintf(b, n, "%d %s %02d:%02d", t.tm_mday, MO[t.tm_mon], t.tm_hour, t.tm_min);
+    else snprintf(b, n, "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+}
+
+static void runs(const char *dir)
+{
+    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);       /* as the page sets it: Brussels */
+    tzset();
+    base();
+    ui_set_netinfo("TailChaser Tag 1.28.0\nUSB power\nUSB   -\nWiFi  192.168.1.40\nsetup  http://192.168.1.40");
+    run(300);
+    quiet();
+    char t[32];
+
+    where = "listening, nobody heard yet";
+    memset(&tv, 0, sizeof tv);
+    tag_hist_init(&tv.h);
+    tv.listening = true;
+    tv.cpu = 24;
+    tg_levels(-72, -74, 4.1f, 0.004f);
+    tg_show(TG_UP - 400000);
+    CHECK(shown("LISTENING") && shown("Nobody heard yet") && shown("a TailChaser repeater, played near"));
+    CHECK(shown("sync 0.004  4 dB  -72 dBFS") && !shown("LOCAL") && !shown("NETWORK"));
+    picture(dir, "tctag-empty");
+
+    where = "two overs from before this start, from the card: today's and yesterday's";
+    {
+        char card[128];
+        snprintf(card, sizeof card, "%lld %lld 4 N LU7YZ\n%lld %lld 6 L ON0ORA\n", TG_T0 - 97200, TG_T0 - 97150,
+                 TG_T0 - 7230, TG_T0 - 7200);
+        CHECK(tag_hist_load(&tv.h, card) == 2);
+    }
+    tg_show(TG_UP - 300000);
+    CHECK(shown("ON0ORA") && shown("LOCAL") && shown("2 / 2"));
+    tg_ago(t, sizeof t, TG_T0 - 7230, false);
+    CHECK(shown(t) && shown("1h 55m ago, for 30 s"));           /* five minutes into this start */
+    CHECK(shown("LISTENING"));
+
+    where = "someone on the air: ON THE AIR, how long, the match lit";
+    tg_levels(-49, -74, 15.2f, 0.081f);
+    tv.st.holding = true;
+    tg_heard("ON4ABC", false, TG_UP - 180000, TG_UP - 168000);
+    tg_show(TG_UP - 167500);
+    CHECK(shown("ON THE AIR") && shown("ON4ABC") && shown("NETWORK") && shown("3 / 3"));
+    CHECK(shown("on the air for 12 s") && shown("sync 0.081  15 dB  -49 dBFS"));
+    tg_ago(t, sizeof t, TG_T0 - 180, false);
+    CHECK(shown(t));
+    picture(dir, "tctag-onair");
+
+    where = "the repeater's own callsign, local: the gold pill";
+    tg_heard("ON0ORA", true, TG_UP - 60000, TG_UP - 45000);
+    tg_show(TG_UP - 44000);
+    CHECK(shown("ON THE AIR") && shown("ON0ORA") && shown("LOCAL") && shown("4 / 4"));
+    picture(dir, "tctag-local");
+
+    where = "quiet: who was heard last, how long ago, for how long";
+    tv.st.holding = false;
+    tg_levels(-73, -74, 4.4f, 0.006f);
+    tg_show(TG_UP);
+    CHECK(shown("LISTENING") && shown("ON0ORA") && shown("45 s ago, for 15 s"));
+    CHECK(shown("sync 0.006  4 dB  -73 dBFS"));
+    picture(dir, "tctag-last");
+
+    where = "the dial back: the one before, greyed, its place in the list";
+    ui_tctag_turn(-1); run(150);
+    CHECK(shown("ON4ABC") && shown("3 / 4") && shown("2 min ago, for 12 s"));
+    picture(dir, "tctag-back");
+    where = "...back to before this start: today's by the time, yesterday's by the day";
+    ui_tctag_turn(-1); run(150);
+    CHECK(shown("ON0ORA") && shown("2 / 4") && shown("2h 00m ago, for 30 s"));
+    ui_tctag_turn(-1); run(150);
+    tg_ago(t, sizeof t, TG_T0 - 97200, true);
+    CHECK(shown("LU7YZ") && shown("1 / 4") && shown(t) && shown("1d 2h ago, for 50 s"));
+    picture(dir, "tctag-yesterday");
+    where = "...no further than the oldest; on to the newest, no further";
+    ui_tctag_turn(-3); run(150);
+    CHECK(shown("LU7YZ") && shown("1 / 4"));
+    ui_tctag_turn(10); run(150);
+    CHECK(shown("ON0ORA") && shown("4 / 4") && shown("45 s ago, for 15 s"));
+
+    where = "someone new while an older one is shown: the newest, the screen lit";
+    ui_tctag_turn(-2); run(150);
+    CHECK(shown("2 / 4"));
+    ui_set_brightness(80);
+    ui_screen_set(&(net_screen_t){ NET_SAVER_NONE, 0, 1, 1 });
+    now_ms += 61000;
+    ui_dim_tick(false);
+    CHECK(backlight == 18);
+    tg_levels(-52, -74, 12.0f, 0.044f);
+    tv.st.holding = true;
+    tg_heard("EA8/ON6UR", false, TG_UP + 20000, TG_UP + 23000);
+    tg_show(TG_UP + 23500);
+    CHECK(shown("EA8/ON6UR") && shown("5 / 5") && shown("ON THE AIR"));
+    CHECK(backlight == 204);
+    ui_screen_set(&(net_screen_t){ NET_SAVER_NONE, 0, 0, 0 });
+    where = "...a long callsign whole in 48, inside the glass";
+    {
+        lv_obj_t *c = label_from(lv_screen_active(), "EA8/ON6UR");
+        CHECK(c != NULL);
+        if (c) {
+            CHECK(lv_obj_get_style_text_font(c, LV_PART_MAIN) == &lv_font_montserrat_48);
+            lv_area_t a;
+            lv_obj_get_coords(c, &a);
+            printf("  EA8/ON6UR: %d px wide, %d-%d\n", (int)lv_area_get_width(&a), (int)a.x1, (int)a.x2);
+            CHECK(a.x1 >= 15 && a.x2 <= W - 15 && abs((a.y1 + a.y2) / 2 - 126) <= 1);
+        }
+    }
+    picture(dir, "tctag-long");
+    where = "...nine wide letters: smaller, whole, the middle where it was";
+    tg_heard("MM0WWW/MM", false, TG_UP + 23600, TG_UP + 23600);
+    tg_show(TG_UP + 23700);
+    {
+        lv_obj_t *c = label_from(lv_screen_active(), "MM0WWW/MM");
+        CHECK(c != NULL);
+        if (c) {
+            CHECK(lv_obj_get_style_text_font(c, LV_PART_MAIN) == &lv_font_montserrat_28);
+            lv_area_t a;
+            lv_obj_get_coords(c, &a);
+            printf("  MM0WWW/MM: %d px wide in 28, %d-%d, %d-%d\n", (int)lv_area_get_width(&a), (int)a.x1, (int)a.x2,
+                   (int)a.y1, (int)a.y2);
+            CHECK(abs((a.y1 + a.y2) / 2 - 126) <= 1);
+        }
+    }
+    CHECK(shown("on the air"));                                /* its first reading: no length yet */
+    picture(dir, "tctag-wide");
+    where = "...and back to 48 for the next";
+    tg_heard("EA8/ON6UR", false, TG_UP + 23800, TG_UP + 23800);
+    tg_show(TG_UP + 23900);
+    CHECK(label_from(lv_screen_active(), "EA8/ON6UR") &&
+          lv_obj_get_style_text_font(label_from(lv_screen_active(), "EA8/ON6UR"), LV_PART_MAIN) == &lv_font_montserrat_48);
+
+    where = "the microphone: the placement meter -- the tag heard well";
+    for (int i = 0; i < 8; i++) {                           /* the last seconds: an over, loud */
+        tg_levels(i < 6 ? -31 - i : -50, -74, 15.0f, 0.083f);
+        tg_show(TG_UP + 24000 + i * 250);
+    }
+    tv.st.tries = 31;
+    tv.st.readings = 14;
+    tv.st.crc_bad = 17;
+    tg_show(TG_UP + 26500);
+    quiet();
+    tap_at(180 - 40, 288, 80); run(150);
+    CHECK(shown("MICROPHONE") && shown("dBFS in the tag's band") && !shown("EA8/ON6UR"));
+    CHECK(shown("-50") && shown("room -74, loudest -31 dBFS") && shown("The tag is heard well"));
+    CHECK(shown("tag heard: 0.083, 15.0 dB") && shown("tried 31, read 14, CRC bad 17"));
+    CHECK(shown("decoder 24%, lost 0"));
+    CHECK(!ui_take_card_shown());
+    picture(dir, "tctag-meter");
+    where = "...a tap anywhere: back";
+    tap_at(250, 120, 80); run(150);
+    CHECK(shown("EA8/ON6UR") && !shown("MICROPHONE") && !ui_take_card_shown());
+
+    where = "...a turn closes it, and moves nothing";
+    tap_at(180 - 40, 288, 80); run(150);
+    CHECK(shown("MICROPHONE"));
+    ui_tctag_turn(-1); run(150);
+    CHECK(!shown("MICROPHONE") && shown("EA8/ON6UR") && shown("7 / 7"));
+
+    where = "...a good place: the speech loud enough for its tag, none heard now";
+    tv.st.holding = false;
+    tg_levels(-73, -74, 4.0f, 0.005f);
+    tg_show(TG_UP + 27000);
+    tap_at(180 - 40, 288, 80); run(150);
+    CHECK(shown("A good place") && shown("tag not heard: 0.005, 4.0 dB"));
+    picture(dir, "tctag-meter-good");
+    tap_at(250, 120, 80); run(150);
+
+    where = "...too far: the loudest 38 dB down lost under the room";
+    memset(&tv.st, 0, sizeof tv.st);
+    for (int i = 0; i < 41; i++) {                          /* the loud ones gone from the last ~10 s */
+        tg_levels(i == 40 ? -58 : -66, -71, 7.5f, 0.009f);
+        tg_show(TG_UP + 40000 + i * 250);
+    }
+    tap_at(180 - 40, 288, 80); run(150);
+    CHECK(shown("Closer to the speaker") && shown("room -71, loudest -58 dBFS"));
+    CHECK(shown("tag faint: 0.009, 7.5 dB"));
+    picture(dir, "tctag-meter-closer");
+    where = "...a little closer";
+    tg_levels(-38, -71, 7.5f, 0.009f);
+    tg_show(TG_UP + 51000);
+    CHECK(shown("Fair: a little closer"));
+    where = "...nothing played near: the loudest is the room";
+    for (int i = 0; i < 41; i++) {
+        tg_levels(-70, -72, 3.0f, 0.003f);
+        tg_show(TG_UP + 52000 + i * 250);
+    }
+    CHECK(shown("Play the repeater near it"));
+    picture(dir, "tctag-meter-quiet");
+    where = "...too loud: further";
+    tv.st.all_dbfs = -1;
+    tg_show(TG_UP + 63000);
+    CHECK(shown("Too loud: a little further"));
+    tap_at(250, 120, 80); run(150);
+
+    where = "no microphone: said on both pages";
+    tv.listening = false;
+    memset(&tv.st, 0, sizeof tv.st);
+    tg_show(TG_UP + 64000);
+    CHECK(shown("NO MICROPHONE") && shown("EA8/ON6UR") && !label_from(lv_screen_active(), "sync "));
+    CHECK(shown("40 s ago"));                                  /* one reading: no length to tell */
+    picture(dir, "tctag-nomic");
+    tap_at(180 - 40, 288, 80); run(150);
+    CHECK(shown("No microphone") && shown("--"));
+    tv.listening = true;
+    tg_levels(-73, -74, 4.4f, 0.006f);
+    tg_show(TG_UP + 64500);
+    where = "...its levels not the loudest after: what was heard before it";
+    CHECK(shown("room -74, loudest -70 dBFS"));
+    tv.listening = false;
+    tg_show(TG_UP + 64600);
+    tap_at(250, 120, 80); run(150);
+    tv.listening = true;
+    tg_levels(-73, -74, 4.4f, 0.006f);
+    tg_show(TG_UP + 65000);
+
+    where = "a tap elsewhere: the address card, and away; held three seconds: the picker";
+    quiet();
+    tap_at(250, 200, 80); run(30);
+    CHECK(label_from(lv_screen_active(), "TailChaser Tag 1.28.0") && ui_take_card_shown());
+    CHECK(!shown("MICROPHONE"));
+    picture(dir, "tctag-card");
+    where = "...with the card up, the microphone's tap is the card's";
+    tap_at(180 - 40, 288, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), "TailChaser Tag 1.28.0") && !shown("MICROPHONE"));
+    down(250, 200); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+    CHECK(!label_from(lv_screen_active(), "TailChaser Tag 1.28.0") && !ptt());
+
+    where = "the knob's battery, between the state and the place in the list";
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    knob_check(dir, "tctag-batt");
+    tap_at(180 - 40, 288, 80); run(150);
+    where = "...and on the meter";
+    knob_check(dir, "tctag-meter-batt");
+    tap_at(250, 120, 80); run(150);
+    st.knob_batt = false; run(60);
+
+    where = "the burn-in: three minutes on, all of it a pixel along";
+    {
+        lv_obj_t *c = label_from(lv_screen_active(), "EA8/ON6UR");
+        lv_area_t a0, a1;
+        lv_obj_get_coords(c, &a0);
+        run(180000);
+        lv_obj_get_coords(c, &a1);
+        CHECK((a1.x1 != a0.x1 || a1.y1 != a0.y1) && abs(a1.x1 - a0.x1) <= 1 && abs(a1.y1 - a0.y1) <= 1);
+    }
+    quiet();
+}
 #endif
 
 /* The backlight (GitHub #14): the page's brightness, lit at once; dimmed
@@ -4538,7 +4843,7 @@ static void brightness(void)
 static uint16_t dial[W * H], saver_fb[W * H];
 /* The radar's sweep moves by itself, and the clock's hands: there the dial
  * is only checked to be back, not to be the picture it was. */
-#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST
+#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST || VFO_RADIO_TCTAG
 #define SAME_DIAL() (memcmp(saver_fb, fb, sizeof fb) != 0)
 #elif VFO_RADIO_TAILCHASER
 /* TailChaser's clock under the slab ticks on meanwhile: the rest of the dial

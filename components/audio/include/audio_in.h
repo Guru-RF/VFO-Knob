@@ -27,6 +27,8 @@
 
 #if VFO_RADIO_SVXCONNECT || VFO_RADIO_PHONE
 #define TX_AUDIO_RATE_HZ 16000     /* SvxLink's rate, and G.722's: see audio_out.h */
+#elif VFO_RADIO_TCTAG
+#define TX_AUDIO_RATE_HZ 16000     /* the callsign tag decoder's (vfo_core tag.h TAG_FS) */
 #else
 #define TX_AUDIO_RATE_HZ 24000
 #endif
@@ -67,6 +69,16 @@ void audio_in_use_ext(bool on);
 bool audio_in_ext(void);
 void audio_in_feed_ext(const int16_t *pcm, size_t n);
 void audio_in_set_ext_hook(void (*hook)(bool active));
+
+/* Listening, not transmitting: the TailChaser Tag firmware reads the room for
+ * the callsign tag under a repeater's audio. The knob's own microphone is on
+ * from this call to the restart, its samples as the element gives them --
+ * the DC taken out, nothing boosted or limited, as the decoder wants them --
+ * and never a headset's. Nothing of it leaves the knob. */
+esp_err_t audio_in_listen(void);
+/* Up to `max` samples as they came, waiting up to wait_ms for the first:
+ * how many (0: none came). Never padded: the decoder counts samples as time. */
+size_t audio_in_listen_read(int16_t *out, size_t max, uint32_t wait_ms);
 
 /* peak: the loudest sample since the previous call, 0..1 of full scale. */
 typedef struct { uint32_t blocks, starved, overruns; float peak; } audio_in_stats_t;

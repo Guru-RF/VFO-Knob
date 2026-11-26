@@ -47,7 +47,7 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
 SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_setup slab_kiwi slab_owrx \
-         slab_websdr slab_epibeam slab_adsb slab_clock slab_weather slab_wifitest slab_tc
+         slab_websdr slab_epibeam slab_adsb slab_clock slab_weather slab_wifitest slab_tc slab_tctag
 all: vu_compare chooser kiwi_face readout clockfaces $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
@@ -157,6 +157,10 @@ slab_weather: slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/weather.c $(wild
 slab_wifitest: slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/wifitest.c $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_WIFITEST=1 slab.c $(UI_SRCS) \
 	    $(ROOT)/components/vfo_core/src/wifitest.c $(FONT_OBJS) $(OBJS) -lm -o $@
+slab_tctag: slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/tag.c $(ROOT)/components/vfo_core/src/tag_hist.c \
+            $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
+	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_TCTAG=1 slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/tag.c \
+	    $(ROOT)/components/vfo_core/src/tag_hist.c $(FONT_OBJS) $(OBJS) -lm -o $@
 slab-check: $(SLABS)
 	mkdir -p $(OUT)
 	for s in $(SLABS); do ./$$s $(OUT) || exit 1; done

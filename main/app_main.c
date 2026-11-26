@@ -40,6 +40,9 @@
 #if VFO_RADIO_WIFITEST
 #include "wifitest_client.h"
 #endif
+#if VFO_RADIO_TCTAG
+#include "tctag_client.h"
+#endif
 #if VFO_RADIO_TAILCHASER
 #include "tailchaser_client.h"
 #endif
@@ -205,6 +208,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "WiFi Test";
 #elif VFO_RADIO_TAILCHASER
     const char *name = "TailChaser";
+#elif VFO_RADIO_TCTAG
+    const char *name = "TailChaser Tag";
 #else
     const char *name = "AetherSDR";
 #endif
@@ -509,6 +514,12 @@ static void encoder_task(void *arg)
         /* The dial goes from page to page: the signal, the pings, the drops,
          * the channels. */
         ui_wifitest_turn(detents);
+        continue;
+#endif
+#if VFO_RADIO_TCTAG
+        /* The dial goes through who was heard: back to the older, on to the
+         * newest. */
+        ui_tctag_turn(detents);
         continue;
 #endif
 #if VFO_RADIO_PHONE
@@ -1861,6 +1872,20 @@ static void ui_task(void *arg)
             }
         }
 #endif
+#if VFO_RADIO_TCTAG
+        /* Who was heard and how the listening goes, to the face, four times
+         * a second: the decoder's own pace. */
+        {
+            static uint32_t said;
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (now_ms - said >= 250) {
+                said = now_ms;
+                EXT_RAM_BSS_ATTR static tag_view_t tv;
+                tctag_view(&tv);
+                ui_tctag_data(&tv);
+            }
+        }
+#endif
 #if VFO_RADIO_WIFITEST
         /* What the test measured, to the face, once a second. */
         {
@@ -2748,6 +2773,11 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * client reaches them itself, over the LAN, the internet or a tailnet. */
     strlcpy(ip, "TAILCHASER", iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (TailChaser) ---");
+#elif VFO_RADIO_TCTAG
+    /* Nothing to connect to: the room is listened to through the knob's
+     * own microphone, the time is SNTP's (wallclock_start). */
+    strlcpy(ip, "TCTAG", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (TailChaser Tag) ---");
 #else
     if (!cfg->radio_host[0]) {
         /* The multiflex firmware has no default: the radio's address is
@@ -2972,6 +3002,7 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "weather",    "Weather",    false },
     { "wifitest",   "WiFi Test",  false },
     { "tailchaser", "TailChaser", false },
+    { "tctag",      "TailChaser Tag", true },
 };
 
 static void setup_wifi_page(void)
@@ -4035,7 +4066,7 @@ RADIO_ONLY_FN static void net_task(void *arg)
             /* The WiFi Test says what it found itself, every 30 s
              * (wifitest_client.c): a radio's line every 2 s, of a radio it
              * has not, would only push its events out of the log's ring. */
-#if VFO_RADIO_WIFITEST
+#if VFO_RADIO_WIFITEST || VFO_RADIO_TCTAG
             const bool radio_line = false;
 #else
             const bool radio_line = true;
