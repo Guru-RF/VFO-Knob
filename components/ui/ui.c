@@ -1113,6 +1113,22 @@ static volatile uint32_t s_klock_nudge_at;
 #define KLOCK_ARM_MS 700
 #define KLOCK_NUDGE_MS 800
 #endif
+/* STANDBY (the icom firmware's, over the network; never icombt's): beside
+ * LOCK, on the card, while the radio says it may be put in standby
+ * (has_standby) and the knob is not locked. The two share the S-meter's
+ * row, each half of it; a tap asks the client, which asks the operator --
+ * KEEP ON or STANDBY -- before the radio goes. */
+#define HAS_STANDBY (HAS_LOCK && VFO_RADIO_ICOM && !VFO_BT_RADIO)
+#if HAS_STANDBY
+static lv_obj_t *s_sby_btn;
+static uint32_t  s_sby_btn_at;
+/* At the row's top edge (y 62) the glass's margin leaves 238 px: LOCK 100,
+ * 8 apart, STANDBY 130 -- the word alone, as the glyph would not fit. */
+#define SBY_LOCK_W  100
+#define SBY_LOCK_DX (-69)             /* LOCK's centre from CX: x 61-160 */
+#define SBY_BTN_W   130
+#define SBY_DX      54                /* STANDBY's: x 169-298 */
+#endif
 
 typedef enum { ED_NONE = 0, ED_BAND, ED_MODE, ED_FILTER, ED_AGC, ED_GAIN,
                ED_GROUP, ED_RIT, ED_VOL, ED_MIC, ED_RX, ED_ANT, ED_MENU,
@@ -2941,6 +2957,23 @@ static void klock_follow(void)
     const bool card = s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN);
     const bool warn = s_warn_panel && !lv_obj_has_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
     const bool on = (card || (s_knob_locked && warn)) && s_edit == ED_NONE && !s_asking;
+#if HAS_STANDBY
+    /* STANDBY with the card, beside LOCK -- not locked, and not with the
+     * warning, which means no link. LOCK takes the row's left half then. */
+    const bool sby = on && card && !s_knob_locked && s_last.has_standby;
+    if (s_sby_btn && sby == lv_obj_has_flag(s_sby_btn, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_set_width(s_klock_btn, sby ? SBY_LOCK_W : KLOCK_BTN_W);
+        lv_obj_align(s_klock_btn, LV_ALIGN_TOP_MID, sby ? SBY_LOCK_DX : 0, KLOCK_BTN_Y);
+        klock_btn_set();
+        if (sby) {
+            lv_obj_remove_flag(s_sby_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_sby_btn);
+            s_sby_btn_at = lv_tick_get();
+        } else {
+            lv_obj_add_flag(s_sby_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+#endif
     if (on == !lv_obj_has_flag(s_klock_btn, LV_OBJ_FLAG_HIDDEN)) return;
     if (on) {
         lv_obj_remove_flag(s_klock_btn, LV_OBJ_FLAG_HIDDEN);
@@ -6859,6 +6892,19 @@ static void tap(lv_point_t p, uint32_t held)
         return;
     }
 #endif
+#if HAS_STANDBY
+    /* STANDBY: the card away, and the client's question in its place. */
+    if (shown_at(s_sby_btn, p)) {
+        if (lv_tick_elaps(s_sby_btn_at) >= KLOCK_ARM_MS && !s_knob_locked) {
+            netinfo_show(false);
+            memset(&s_commit, 0, sizeof s_commit);
+            s_commit.action = UI_ACT_STANDBY;
+            s_have_commit   = true;
+            note("card: standby");
+        }
+        return;
+    }
+#endif
     /* The SSTV viewer: any tap, anywhere, and the dial is back. */
     if (s_sv_open) {
         sv_close();
@@ -8362,6 +8408,26 @@ static void build(void)
     lv_obj_set_style_text_font(s_klock_txt, &lv_font_montserrat_20, 0);
     klock_btn_set();
     lv_obj_add_flag(s_klock_btn, LV_OBJ_FLAG_HIDDEN);
+#if HAS_STANDBY
+    /* ...and STANDBY beside it, in the card's colours as LOCK is. */
+    s_sby_btn = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_sby_btn);
+    lv_obj_set_size(s_sby_btn, SBY_BTN_W, KLOCK_BTN_H);
+    lv_obj_set_style_bg_color(s_sby_btn, C_BG1, 0);
+    lv_obj_set_style_bg_opa(s_sby_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_sby_btn, 2, 0);
+    lv_obj_set_style_border_color(s_sby_btn, C_ACCENT, 0);
+    lv_obj_set_style_radius(s_sby_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_align(s_sby_btn, LV_ALIGN_TOP_MID, SBY_DX, KLOCK_BTN_Y);
+    lv_obj_remove_flag(s_sby_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_sby_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *sby = lv_label_create(s_sby_btn);
+    lv_obj_set_style_text_font(sby, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(sby, C_ACCENT_HI, 0);
+    lv_label_set_text(sby, "STANDBY");
+    lv_obj_center(sby);
+    lv_obj_add_flag(s_sby_btn, LV_OBJ_FLAG_HIDDEN);
+#endif
 
     /* ...and the padlock, while locked: at the top of the arc, beside the
      * knob's battery when that shows (klock_update()). */

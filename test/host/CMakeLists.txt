@@ -77,6 +77,7 @@ add_library(vfo_core STATIC
     ${CORE}/src/alarm.c
     ${CORE}/src/wifitest.c
     ${CORE}/src/civ_link.c
+    ${CORE}/src/icom_power.c
     ${CORE}/src/tag.c
     ${CORE}/src/tag_hist.c
 )
@@ -86,8 +87,10 @@ target_link_libraries(vfo_core PUBLIC m)
 
 enable_testing()
 # test_civ_link: the icombt firmware's CI-V off the IC-705's Bluetooth
-# serial port (components/vfo_core/src/civ_link.c).
-foreach(t test_tci_parse test_echo_ring test_tune test_ptt_fsm fuzz_tci test_civ_link)
+# serial port (components/vfo_core/src/civ_link.c). test_icom_power: the icom
+# firmware waking a radio in standby, and putting it back (icom_power.c).
+foreach(t test_tci_parse test_echo_ring test_tune test_ptt_fsm fuzz_tci test_civ_link
+          test_icom_power)
     add_executable(${t} src/${t}.c)
     target_link_libraries(${t} PRIVATE vfo_core)
     target_compile_options(${t} PRIVATE -Wall -Wextra)

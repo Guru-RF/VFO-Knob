@@ -29,3 +29,7 @@ __attribute__((weak)) void radio_user_activity(void) {}
 /* Nor has a radio a transmit antenna apart from its receive one unless its
  * client says so (n_tx_ant): the FlexRadio's does. */
 __attribute__((weak)) void radio_set_tx_antenna(uint8_t ant) { (void)ant; }
+
+/* Nor can a radio be put in standby from the dial unless its client says so
+ * (has_standby): the Icom network client's can. */
+__attribute__((weak)) void radio_standby(void) {}

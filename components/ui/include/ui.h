@@ -112,6 +112,9 @@ typedef struct {
     /* The receiver's DSP the dial switches (UI_DSP_*, radio.h's RADIO_DSP_*):
      * in the menu of the swipe from the right, lit while on. */
     uint8_t  dsp_has, dsp_on;
+    /* The radio may be put in standby (the icom firmware's, over the
+     * network): STANDBY beside LOCK on the address card. */
+    bool     has_standby;
     /* Web SDRs as a second receiver (components/sdr_rx): a swipe down chooses
      * LOCAL or one of them; while one plays, the radio is heard left and the
      * SDR right, and BALANCE follows POWER on the swipe from the left. */
@@ -211,7 +214,9 @@ enum { UI_MEM_OFF = 0, UI_MEM_READING, UI_MEM_READY, UI_MEM_EMPTY };
 enum { UI_ACT_NONE = 0, UI_ACT_TUNE, UI_ACT_ATU, UI_ACT_MEM,
        UI_ACT_NB, UI_ACT_WNB, UI_ACT_NR, UI_ACT_ANF, UI_ACT_APF,
        /* TailChaser's menu, held on the slab: the repeater's blocks */
-       UI_ACT_BLOCK_RX, UI_ACT_BLOCK_TX, UI_ACT_SPK_MUTE };
+       UI_ACT_BLOCK_RX, UI_ACT_BLOCK_TX, UI_ACT_SPK_MUTE,
+       /* The address card's STANDBY (has_standby): the client asks first */
+       UI_ACT_STANDBY };
 enum { UI_DSP_NB = 1, UI_DSP_NR = 2, UI_DSP_ANF = 4, UI_DSP_APF = 8, UI_DSP_WNB = 16 };
 /* An item's name, as the menu shows it ("NR"). */
 const char *ui_act_name(uint8_t action);

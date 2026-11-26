@@ -34,7 +34,10 @@ firmware runs the IC-7610, with MAIN or SUB and its antennas on a swipe, the
 IC-9700 on 2 m, 70 cm and 23 cm, and the IC-R8600 receiver, 10 kHz to 3 GHz,
 which it never keys. It also knows the IC-7300MK2, the IC-7760 and the IC-905
 (up to 10 GHz), from wfview's descriptions, not yet tried on the radios
-themselves. The guide says
+themselves. A radio on a network cable left in **Standby (for Remote
+Control)** — the IC-7610, IC-9700 or IC-R8600 — is switched on when the knob
+starts, as RS-BA1 does, and the address card can put it back
+there: see [Standby](docs/icom.md#standby-switching-the-radio-on-and-off). The guide says
 how to set each radio up for it: see [the Icom guide](docs/icom.md). A second
 firmware, `vfo-knob-icombt` (a beta; its PTT not yet tried on the air), reaches an
 IC-705 over Bluetooth instead, CI-V on the radio's serial port through the

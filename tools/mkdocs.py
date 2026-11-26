@@ -278,6 +278,20 @@ def lock_pill(locked):
             + icon + md.text(x0 + 26, 91, word, 20, col, 400, anchor="start"))
 
 
+def standby_pills():
+    """The card's row on the icom firmware with STANDBY (ui.c klock_follow,
+    has_standby): LOCK narrowed to 100 x 44 at x 61, STANDBY 130 x 44 at
+    x 169, each word centred in the card's colours."""
+    col, edge = md.ACCENT_HI, md.ACCENT
+    x0 = 111 - (18 + 8 + montserrat(20).width("LOCK")) / 2
+    return (f'<rect x="62" y="63" width="98" height="42" rx="21" fill="{md.BG1}" '
+            f'stroke="{edge}" stroke-width="2"/>'
+            + lock_closed(x0 + 8, 84, col) + md.text(x0 + 26, 91, "LOCK", 20, col, 400, anchor="start")
+            + f'<rect x="170" y="63" width="128" height="42" rx="21" fill="{md.BG1}" '
+            f'stroke="{edge}" stroke-width="2"/>'
+            + md.text(234, 91, "STANDBY", 20, col, 400))
+
+
 def padlock(batt=False):
     """The padlock at the top of the arc while locked (ui.c klock_update), in
     amber, its ink level with the knob's battery's -- left of it when that
@@ -860,6 +874,25 @@ def icom_pictures():
                                   sdr_note="can't reach"), "",
                              "the SDR quiet, its line gone  \u00b7  back once the radio is within its range")
     lock_pictures(out, 26, "icom", "icom", "Icom", f)
+    # Standby (icom_client's power_step, over the network only): STANDBY on
+    # the card beside LOCK, where the radio keeps its network in standby;
+    # the client's question, KEEP ON or STANDBY; left there, POWER ON; and
+    # the radio waking (link_why).
+    md.use_palette("icom")
+    nolink = face("icom", dbm=-127, **{k: v for k, v in R.items() if k != "dbm"})
+    out["30-standby"] = knob("icom-30", "The address card's STANDBY, beside LOCK",
+                             f + address_card(f"Icom {VERSION}\n{POWER}\n{ADDRESSES}")
+                             + standby_pills(), tap(234, 84),
+                             "hold the S-meter for the card  \u00b7  tap STANDBY")
+    out["31-standby-ask"] = knob("icom-31", "KEEP ON or STANDBY: the radio's own question",
+                                 f + chooser("IC-9700", "STANDBY"), turn(),
+                                 "turn: KEEP ON or STANDBY  \u00b7  tap the panel")
+    out["32-power-on"] = knob("icom-32", "In standby: POWER ON wakes it",
+                              nolink + chooser("IC-9700", "POWER ON"), tap(180, 190),
+                              "tap the panel: the radio on, the dial back")
+    out["33-waking"] = knob("icom-33", "WAKING RADIO: the radio coming up",
+                            nolink + warning("WAKING RADIO", "Icom"), "",
+                            "18 01 sent  \u00b7  up to 30 s for the radio to answer")
     # The icombt firmware: an IC-705 over Bluetooth, found in its Pairing
     # Reception (main/app_main.c's FIND RADIO); its VOLUME is the radio's AF
     # gain (app_main's levels, icom_client's radio_set_af_gain).
