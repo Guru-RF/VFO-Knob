@@ -7,7 +7,8 @@ It knows the **IC-705** (its memories, its preamp), the **IC-7610** (MAIN
 and SUB, its antennas and its tuner), the **IC-9700** (2 m, 70 cm and 23 cm,
 each band's power in its own watts) and the **IC-R8600** receiver (10 kHz to
 3 GHz and its three antennas — and nothing to key). Its face wears Icom's
-colours.
+colours. An IC-705 can also be reached over Bluetooth:
+[Over Bluetooth](#over-bluetooth-ic-705).
 
 It also knows three radios it has not yet been tried on, built from wfview's
 descriptions of them: the **IC-7300MK2** (HF, 6 m and 4 m), the **IC-7760**
@@ -335,6 +336,87 @@ you key.
 
 Nothing vibrates on the air — the motor sits beside the microphone and would be
 heard — and the radio's own transmit time-out is the backstop: set it.
+
+## Over Bluetooth (IC-705)
+
+`vfo-knob-icombt` is this firmware for an **IC-705 over Bluetooth** instead of
+the network: the knob's second chip opens the radio's Bluetooth serial port
+(SPP) and speaks CI-V on it, the same commands as over the LAN. No WiFi
+network, no network user and no password are needed — WiFi is only for the
+knob's page and its updates. It is a **beta**.
+
+| Works | Not over Bluetooth |
+|---|---|
+| Tuning, the step, the mode and the filter | Audio: you hear the radio on its own speaker or phones, or a headset paired with the radio |
+| The S-meter, AGC, preamp, RF gain, RIT | The knob's microphone: an over is the radio's own microphone's |
+| Memory mode, V/M, the band | A headset or speaker on the knob: the second chip is the radio's |
+| The PTT, as on the network — not yet tried on the air | The spectrum and waterfall, and a web SDR beside it |
+| **VOLUME** is the radio's AF gain, **MIC GAIN** its MIC gain — not yet tried on a radio | |
+| What the radio reports when you turn its own dial or its AF gain | |
+
+**The PTT** keys the radio as over the network, and the radio transmits from
+its own microphone — or from a Bluetooth headset you paired with the radio
+itself (*Pairing/Connect » Device Search » Search Headset*). Nothing goes on
+the air from the knob's microphone. Set the radio's own time-out timer
+(*SET » Function » Time-Out Timer*). Should the link drop, or the radio fall
+silent, during an over, the knob unkeys at once: it says the unkey again and
+closes the link. Until the radio has said it is receiving, the knob goes on
+owing it the unkey — through a restart too — and says it first on the next
+link. With no link to say it on, the knob restarts, as it does when an unkey
+goes unanswered on the network. A radio out of reach cannot hear it, and whether the IC-705 ends an over
+by itself when the link goes has not yet been tried.
+
+**VOLUME and MIC GAIN.** Turned on the knob, they set the radio's AF gain and
+MIC gain: VOLUME's 0–100 is the AF gain's 0–100 %, and MIC GAIN's 100 (the
+knob's middle) is the radio's 50 %, its default. When the link opens, the knob
+takes the radio's levels, never the other way round, and follows the radio
+when you turn its AF gain there.
+
+**On the radio**, once:
+
+| Where | Set |
+|---|---|
+| *MENU » SET » Bluetooth Set* | **Bluetooth: ON** |
+| *MENU » SET » Bluetooth Set » Data Device Set* | **Serialport Function: CI-V (Echo Back OFF)** — the default |
+| *MENU » SET » Connectors » CI-V* | **CI-V Address: A4**, the default, and **CI-V Transceive: ON** |
+
+**Pairing.** With no radio chosen, the knob shows **FIND RADIO** and looks for
+one. On the radio touch *SET » Bluetooth Set » <<Pairing Reception>>*: while
+it waits, the knob finds it — it is named `ICOM BT(IC-705)` — and asks to pair.
+The radio shows a passkey: touch **CONFIRM**. The knob keeps that radio from
+then on, and its page shows it under **IC-705 over Bluetooth**, with **Find
+radios** to choose another and **Forget this radio** to start again. Both
+restart the knob.
+
+![No radio chosen yet: Pairing Reception on the IC-705](icom/28-bt-find.svg)
+
+**Reconnecting.** Out of range, the radio switched off, or the link dropped:
+the face shows **NO LINK**, and the knob tries again by itself — after a
+second, then waiting longer each time, up to half a minute. The page's
+**Last** line says why the last try failed:
+
+| It says | What to do |
+|---|---|
+| refused: not paired? open Pairing Reception | The radio forgot the knob, or was never paired: pair again as above |
+| the radio did not answer: off, or out of range | Switch it on, or come closer: Bluetooth reaches about 10 m |
+| no serial port on the radio: its Bluetooth off? | *Bluetooth Set » Bluetooth: ON* |
+| no CI-V: Serialport Function not CI-V? | *Data Device Set » Serialport Function: CI-V* |
+
+A CI-V address other than A4 is picked up from the radio's own reports, while
+CI-V Transceive is on.
+
+![Over Bluetooth, VOLUME is the IC-705's AF gain](icom/29-bt-volume.svg)
+
+**Tried on an IC-705**: the pairing with its passkey, the link, the frequency
+and the memories. **Not yet checked** — a log is very welcome:
+
+- the S-meter, the PTT and the levels over Bluetooth;
+- that the knob comes back by itself after the radio is switched off and on;
+- whether the radio drops an over when the link goes.
+
+The spectrum and waterfall are not part of this firmware: Icom documents the
+scope's data for the network and USB only, not for Bluetooth. Over the
+network, use `vfo-knob-icom`.
 
 ## Not yet tried
 

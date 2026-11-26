@@ -47,6 +47,10 @@
 #include "net_prov.h"
 #include "ptt_fsm.h"
 #include "vfo_tune.h"
+#if VFO_BT_RADIO
+#include "bt_link.h"
+#include "civ_link.h"
+#endif
 
 static const char *TAG = "icom";
 
@@ -260,6 +264,51 @@ static modin_saved_t s_modin_left;    /* the record a new session found */
 
 static uint8_t  s_rx[1500];
 static uint8_t *s_txa;              /* one outbound audio packet, PSRAM */
+
+#if VFO_BT_RADIO
+/* ---- the icombt firmware: CI-V over the IC-705's Bluetooth serial port ----
+ *
+ * No LAN session, no audio: the radio's SPP "data device" port carries CI-V
+ * as bytes (SET > Bluetooth Set > Data Device Set > Serialport Function,
+ * "CI-V (Echo Back OFF)", the default), on an RFCOMM link from the knob's
+ * second chip (bt_link.h). What CI-V says is the LAN's own: civ_frame(),
+ * poll_civ() and the rest are shared. The PTT keys the radio (1C 00 01) with
+ * its own microphone, or the headset paired with it: no audio goes over this
+ * link. The knob's VOLUME and MIC GAIN are the radio's AF and MIC gain
+ * (14 01, 14 0B), both ways. */
+#define BT_OPEN_TMO_MS  40000        /* SDP, pairing (a confirm on the radio), the channel */
+#define BT_REASK_MS     2000         /* an OPEN the second chip has not taken: asked again */
+#define BT_GREET_TMO_MS 8000         /* open, but no frequency: not CI-V on the port */
+static struct {
+    uint8_t  bda[6], scn;
+    uint8_t  conn;                   /* the open link's number; 0 none */
+    bool     asked, taken;           /* an OPEN out; the second chip has it */
+    uint32_t base;                   /* the reports' count its answer comes with */
+    uint32_t t_asked, t_start, t_next, t_stale, t_open;
+    uint32_t fails;                  /* in a row: the redial's wait (civ_redial_ms) */
+    civ_rx_t rx;
+    uint8_t  rb[256];
+    bool     keyed;                  /* keyed by us, and the radio has not yet said RX since */
+    /* AF gain, MIC gain (14 01, 14 0B), 0-255: the radio's last word, or the
+     * knob's last set. Under S_LOCK: the UI's task sets them. */
+    uint8_t  af, mic;
+    bool     af_known, mic_known, lv_new;
+    uint32_t t_af_set, t_mic_set;
+    uint32_t t_key;                  /* when the key went out */
+} B;
+/* B.keyed through a restart (the PTT ladder's rung 4 is one): a knob that
+ * keyed the radio and restarted before it heard RX still owes the unkey. */
+#define BT_KEYED_MAGIC 0x4B455944u   /* "KEYD" */
+RTC_NOINIT_ATTR static uint32_t s_bt_keyed;
+
+static void bt_set_keyed(bool on)
+{
+    B.keyed    = on;
+    s_bt_keyed = on ? BT_KEYED_MAGIC : 0;
+}
+#define BT_LV_QUIET_MS 1500          /* after a set, a read in flight is the old level */
+static TaskHandle_t s_task;
+#endif
 
 static inline uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -545,6 +594,16 @@ static void on_refused(uint8_t c, uint8_t sub, uint8_t len)
 
 static void civ_send(const uint8_t *body, size_t n)
 {
+#if VFO_BT_RADIO
+    /* One writer, this task: room checked is room kept. A frame that does
+     * not fit now is dropped, as a lost datagram is on the LAN -- the polls
+     * ask again. */
+    if (!B.conn || !C.civ_open) return;
+    uint8_t      fb[48];
+    const size_t fl = civ_frame_build(fb, sizeof fb, C.civ_addr, CIV_US, body, n);
+    if (!fl || bt_link_radio_room(B.conn) < fl) return;
+    if (bt_link_radio_write(B.conn, fb, fl) != fl) return;
+#else
     if (s_civ.fd < 0 || !C.civ_open) return;
     uint8_t b[0x15 + 32];
     size_t  len = 0x15 + 4 + n + 1;
@@ -558,6 +617,7 @@ static void civ_send(const uint8_t *body, size_t n)
     memcpy(f + 4, body, n);
     f[4 + n] = 0xFD;
     tracked(&s_civ, b, len);
+#endif
     await_push(body, n);
     S.sends++;
 }
@@ -582,6 +642,9 @@ static void civ_later(const uint8_t *body, size_t n)
 
 static void civ_openclose(bool open)
 {
+#if VFO_BT_RADIO
+    (void)open;                          /* a serial port: nothing to open */
+#else
     uint8_t b[PKT_OPENCLOSE] = { 0 };
     hdr(&s_civ, b, sizeof b, 0x00, 0);
     put16le(b + 0x10, 0x01C0);
@@ -589,6 +652,7 @@ static void civ_openclose(bool open)
     put16be(b + 0x13, C.civ_seqb++);
     b[0x15] = open ? 0x04 : 0x00;
     tracked(&s_civ, b, sizeof b);
+#endif
 }
 
 static uint8_t bcd(unsigned v) { return (uint8_t)(((v / 10) % 10) << 4 | (v % 10)); }
@@ -916,6 +980,9 @@ static void log_refusal(uint32_t missing)
 
 static void session_end(bool polite, const char *why);
 static void goodbye(void);
+#if VFO_BT_RADIO
+static void bt_lost(uint32_t t, const char *why);
+#endif
 
 /* The knob's microphone reaches the transmitter only with the radio's
  * modulation input on WLAN. That is switched for our overs alone -- as
@@ -1091,12 +1158,46 @@ static void ptt_dispatch(const ptt_out_t *o)
      * the radio's own, which the knob only keys and leaves as it is set.
      * Taken at each key, so a change on the page is the next over's. */
     if (o->send_key) {
+#if VFO_BT_RADIO
+        /* Over Bluetooth no audio reaches the radio from here: an over is
+         * the radio's own microphone's -- or the headset paired with it --
+         * and its modulation input stays as it is set. */
+        (void)modin_to_wlan;
+        C.tx_own = true;
+        S.tx_mic_dbm = -60.0f;
+        bt_set_keyed(true);
+        B.t_key = now_ms();
+#else
         C.tx_own = net_prov_tx_mic() == NET_TX_RADIO;
         if (!C.tx_own) modin_to_wlan();
         else           S.tx_mic_dbm = -60.0f;      /* the radio's microphone: not heard here */
+#endif
         CIV(0x1C, 0x00, 0x01);
     }
-    if (o->send_unkey) { CIV(0x1C, 0x00, 0x00); modin_restore(); }
+    if (o->send_unkey) {
+        CIV(0x1C, 0x00, 0x00);
+        /* Over Bluetooth B.keyed stays until the radio says RX (1C 00 00
+         * answered): an unkey sent with no link never left the knob. */
+#if !VFO_BT_RADIO
+        modin_restore();
+#endif
+    }
+#if VFO_BT_RADIO
+    /* Rungs 2 and 3 over Bluetooth: no session whose end unkeys the radio.
+     * The unkey said again, three times, then the link closed -- and the
+     * unkey said first thing on the next (bt_opened). */
+    if (o->close_socket) {
+        ESP_LOGW(TAG, "PTT ladder rung 2: the unkey again");
+        for (int i = 0; i < 3 && B.conn; i++) {
+            CIV(0x1C, 0x00, 0x00);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+    if (o->destroy_socket && B.conn) {
+        ESP_LOGE(TAG, "PTT ladder rung 3: closing the link");
+        bt_lost(now_ms(), "PTT ladder");
+    }
+#else
     /* Rungs 2 and 3: the IC-705 stops transmitting when the client that keyed
      * it over the LAN goes away, so ending the session is the stronger unkey. */
     if (o->close_socket) {
@@ -1115,6 +1216,7 @@ static void ptt_dispatch(const ptt_out_t *o)
         ESP_LOGE(TAG, "PTT ladder rung 3: dropping the session");
         session_end(false, "PTT ladder");
     }
+#endif
     if (o->restart) {
         ESP_LOGE(TAG, "PTT ladder rung 4: rebooting to guarantee an unkey");
         esp_restart();
@@ -1148,8 +1250,12 @@ static uint32_t ptt_permit_now(uint32_t t)
     /* Liveness means CI-V answering, not just control pings: a session can
      * keep its pings while the radio has closed its streams, and a key sent
      * into that goes nowhere. */
+#if VFO_BT_RADIO
+    if (B.conn && C.civ_open && t - C.t_civ_rx < CIV_FRESH_MS) p |= PERMIT_PONG_FRESH;
+#else
     if (s_ctl.fd >= 0 && t - s_ctl.t_rx < ALIVE_MS && C.civ_open &&
         t - C.t_civ_rx < CIV_FRESH_MS) p |= PERMIT_PONG_FRESH;
+#endif
     if (t - S.t_last_input_ms >= QUIET_MS) p |= PERMIT_NO_RECONCILE;
     return p;
 }
@@ -1331,6 +1437,14 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
 {
     /* FE FE <to> <from> <cmd> [sub] <data> FD */
     if (n < 6 || f[0] != 0xFE || f[1] != 0xFE || f[n - 1] != 0xFD) return;
+#if VFO_BT_RADIO
+    /* No server names the radio's address here: 0xA4 unless the radio's own
+     * reports (transceive, to 00) say another, before it has answered us. */
+    if (S.link == RADIO_LINK_GREETING && f[2] == 0x00 && f[3] != CIV_US && f[3] != C.civ_addr) {
+        ESP_LOGW(TAG, "the radio reports from CI-V address 0x%02X: using it", f[3]);
+        C.civ_addr = f[3];
+    }
+#endif
     if (f[3] != C.civ_addr) return;                  /* our own, echoed */
     if (f[2] != CIV_US && f[2] != 0x00) return;      /* someone else's */
     const uint8_t  cmd = f[4];
@@ -1443,6 +1557,17 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
             ptt_out_t o;
             if (on != S.tx) ESP_LOGI(TAG, "radio reports %s", on ? "TX" : "RX");
             S.tx = on;
+#if VFO_BT_RADIO
+            /* An RX answer to a read sent before the key is no word on it:
+             * only one well after the key, outside the request, ends it. */
+            if (!on && B.keyed && S.ptt.state != PTT_REQ_ON && t - B.t_key >= 500) bt_set_keyed(false);
+            /* On the air by our key, which the knob no longer holds (the link
+             * went during the over, or the knob restarted): unkeyed. */
+            if (on && B.keyed && S.ptt.state == PTT_IDLE) {
+                ESP_LOGW(TAG, "the radio still transmits on our key: unkeying it");
+                CIV(0x1C, 0x00, 0x00);
+            }
+#endif
             ptt_fsm_event(&S.ptt, on ? PTT_EV_CONFIRM_TRUE : PTT_EV_CONFIRM_FALSE,
                           t, ptt_permit_now(t), &o);
             ptt_dispatch(&o);
@@ -1504,6 +1629,26 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         }
         return;
     case 0x14:                                       /* levels: 0000-0255 */
+#if VFO_BT_RADIO
+        if (bn >= 3 && (b[0] == 0x01 || b[0] == 0x0B)) {
+            const unsigned v = unbcd(b[1]) * 100 + unbcd(b[2]);
+            const uint8_t level = v > 255 ? 255 : (uint8_t)v;
+            uint8_t  *have  = b[0] == 0x01 ? &B.af : &B.mic;
+            bool     *known = b[0] == 0x01 ? &B.af_known : &B.mic_known;
+            uint32_t *set   = b[0] == 0x01 ? &B.t_af_set : &B.t_mic_set;
+            taskENTER_CRITICAL(&S_LOCK);
+            /* Turned at the radio, or first heard: the knob's face follows.
+             * Not just after the knob set it: a read in flight is older. */
+            const bool quiet = now_ms() - *set >= BT_LV_QUIET_MS;
+            if (quiet && (!*known || *have != level)) {
+                *have = level;
+                B.lv_new = true;
+            }
+            *known = true;
+            taskEXIT_CRITICAL(&S_LOCK);
+            return;
+        }
+#endif
         if (bn >= 3 && (b[0] == 0x02 || b[0] == 0x03 || b[0] == 0x0A)) {
             const unsigned v = unbcd(b[1]) * 100 + unbcd(b[2]);
             const uint8_t level = v > 255 ? 255 : (uint8_t)v;
@@ -1684,6 +1829,40 @@ static bool session_begin(uint32_t t)
     return true;
 }
 
+/* The radio is this one: its model's limits and features, and the dial's
+ * memory state under its keys -- from the LAN's capabilities, or over
+ * Bluetooth, where only an IC-705 is. */
+static void model_adopt(const model_t *m)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    S.model = m;
+    S.have_ant = S.have_rx = false;
+    S.pending_rx = S.pending_ant = -1;
+    if (!m->memories) {
+        /* Not in memory mode on a radio without them, whatever the dial
+         * remembers from the last one. */
+        S.mem_mode  = false;
+        S.mem_state = RADIO_MEM_OFF;
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (!m->memories) {
+        C.no_mem = true;
+        C.mem_scan = -1;
+    } else if (s_mem && !s_mem_restored) {
+        /* Back in memory mode if that is where the dial was, on this
+         * radio: the radio is still on the channel, so nothing needs
+         * sending. Once per start, under the model's own keys. */
+        s_mem_restored = true;
+        mem_nvs(false);
+        if (S.mem_mode) {
+            S.mem_state = RADIO_MEM_READING;
+            C.mem_sent  = S.mem_ch;
+        }
+    }
+    if (!m->modin_voice) C.no_modin = true;
+    C.probing = m->probe_voice != 0;
+}
+
 static void on_control(const uint8_t *d, int n, uint32_t t)
 {
     const uint16_t type = get16le(d + 4);
@@ -1734,33 +1913,7 @@ static void on_control(const uint8_t *d, int n, uint32_t t)
                  : !m->rx_only && !m->modin_voice
                              ? " -- its modulation input is not switched: overs carry "
                                "whatever input the radio has selected" : "");
-        taskENTER_CRITICAL(&S_LOCK);
-        S.model = m;
-        S.have_ant = S.have_rx = false;
-        S.pending_rx = S.pending_ant = -1;
-        if (!m->memories) {
-            /* Not in memory mode on a radio without them, whatever the dial
-             * remembers from the last one. */
-            S.mem_mode  = false;
-            S.mem_state = RADIO_MEM_OFF;
-        }
-        taskEXIT_CRITICAL(&S_LOCK);
-        if (!m->memories) {
-            C.no_mem = true;
-            C.mem_scan = -1;
-        } else if (s_mem && !s_mem_restored) {
-            /* Back in memory mode if that is where the dial was, on this
-             * radio: the radio is still on the channel, so nothing needs
-             * sending. Once per start, under the model's own keys. */
-            s_mem_restored = true;
-            mem_nvs(false);
-            if (S.mem_mode) {
-                S.mem_state = RADIO_MEM_READING;
-                C.mem_sent  = S.mem_ch;
-            }
-        }
-        if (!m->modin_voice) C.no_modin = true;
-        C.probing = m->probe_voice != 0;
+        model_adopt(m);
         return;
     }
     if (n == PKT_CONNINFO && type != 0x01) {
@@ -1849,6 +2002,10 @@ static void civ_hello(uint32_t t)
     CIV(0x16, 0x12);              /* AGC */
     CIV(0x16, 0x02);              /* preamp */
     CIV(0x14, 0x02);              /* RF gain */
+#if VFO_BT_RADIO
+    CIV(0x14, 0x01);              /* AF gain: the knob's VOLUME */
+    CIV(0x14, 0x0B);              /* MIC gain: its MIC GAIN */
+#endif
     if (m->squelch) CIV(0x14, 0x03);    /* squelch */
     if (!m->rx_only) {
         CIV(0x14, 0x0A);          /* RF power */
@@ -1859,7 +2016,7 @@ static void civ_hello(uint32_t t)
     if (m->n_ant) CIV(0x12);            /* the antenna */
     /* What a lost session left on the network is put back once the reads
      * below say it is still there (on_modin). */
-    if (m->modin_voice && !C.modin_switched && modin_left_over(m)) {
+    if (m->modin_voice && !C.no_modin && !C.modin_switched && modin_left_over(m)) {
         ESP_LOGW(TAG, "a lost session may have left the modulation inputs on the network: "
                       "%s, data %s, if so", modin_name(s_modin_left.off), modin_name(s_modin_left.d1));
         C.modin_leftover = true;
@@ -2341,6 +2498,10 @@ static void poll_civ(uint32_t t)
                 CIV(0x14, 0x02);
                 if (!m->rx_only) CIV(0x14, 0x0A);
                 if (m->squelch)  CIV(0x14, 0x03);
+#if VFO_BT_RADIO
+                CIV(0x14, 0x01);
+                CIV(0x14, 0x0B);
+#endif
                 break;
             case 8: if (m->tuner) CIV(0x1C, 0x01); break;
             case 9: if (m->sat && !C.no_sat) CIV(0x16, 0x5A); break;
@@ -2402,11 +2563,21 @@ static void ptt_step(uint32_t t)
         ptt_fsm_abort(&S.ptt, (ptt_abort_t)r, t, &o);
         ptt_dispatch(&o);
     }
+#if VFO_BT_RADIO
+    /* Over Bluetooth: the link gone, or CI-V silent, while keyed -- the
+     * ladder at once, as for a radio silent on the network. */
+    if (S.ptt.state == PTT_ON && (!B.conn || t - C.t_civ_rx > 3000)) {
+        ESP_LOGE(TAG, "while keyed: %s", B.conn ? "CI-V silent" : "the link gone");
+        ptt_fsm_abort(&S.ptt, PTT_AB_PONG_STALE, t, &o);
+        ptt_dispatch(&o);
+    }
+#else
     if (S.ptt.state == PTT_ON && s_ctl.fd >= 0 && t - s_ctl.t_rx > 6000) {
         ESP_LOGE(TAG, "radio silent for %lu ms while keyed", (unsigned long)(t - s_ctl.t_rx));
         ptt_fsm_abort(&S.ptt, PTT_AB_PONG_STALE, t, &o);
         ptt_dispatch(&o);
     }
+#endif
     ptt_fsm_event(&S.ptt, PTT_EV_TICK, t, permit, &o);
     ptt_dispatch(&o);
 }
@@ -2527,14 +2698,221 @@ static void on_restart(void)
     vTaskDelay(pdMS_TO_TICKS(150));
 }
 
+#if VFO_BT_RADIO
+/* ------------------------------------------- the link, over Bluetooth */
+
+static const char *bt_why(uint8_t why)
+{
+    switch (why) {
+    case BTL_RSWHY_KNOB:       return "closed here";
+    case BTL_RSWHY_REMOTE:     return "closed by the radio, or out of range";
+    case BTL_RSWHY_NO_SERVICE: return "no serial port on the radio: its Bluetooth off?";
+    case BTL_RSWHY_SDP:        return "the radio did not answer: off, or out of range";
+    case BTL_RSWHY_REFUSED:    return "refused: not paired? open Pairing Reception";
+    case BTL_RSWHY_OVERFLOW:   return "the second chip could not keep up";
+    case BTL_RSWHY_BUSY:       return "the second chip was busy";
+    default:                   return "no link";
+    }
+}
+
+/* The next try after a wait that grows with each failure in a row. */
+static void bt_failed(uint32_t t, const char *why)
+{
+    B.asked = false;
+    B.t_next = t + civ_redial_ms(B.fails);
+    B.fails++;
+    char was[sizeof S.last_close];
+    taskENTER_CRITICAL(&S_LOCK);
+    strlcpy(was, S.last_close, sizeof was);
+    taskEXIT_CRITICAL(&S_LOCK);
+    /* Said once while it keeps failing the same way: a radio switched off
+     * would say it every half minute all day. */
+    if (strcmp(was, why)) ESP_LOGW(TAG, "no link: %s (again in %lu ms)", why, (unsigned long)(B.t_next - t));
+    set_close_reason(why);
+}
+
+/* The link went, or never answered as CI-V: the radio's word goes with it. */
+static void bt_lost(uint32_t t, const char *why)
+{
+    if (B.conn) bt_link_radio_close();
+    B.conn = 0;
+    C.civ_open = false;
+    taskENTER_CRITICAL(&S_LOCK);
+    if (S.link != RADIO_LINK_DOWN && S.link != RADIO_LINK_CONNECTING) S.closes++;
+    S.link = RADIO_LINK_CONNECTING;
+    S.have_freq = false;
+    S.tx = false;
+    taskEXIT_CRITICAL(&S_LOCK);
+    bt_failed(t, why);
+}
+
+static void bt_opened(uint8_t conn, uint8_t scn, uint32_t t)
+{
+    ESP_LOGI(TAG, "link %u open, channel %u: CI-V", conn, scn);
+    B.conn = conn;
+    B.asked = false;
+    B.t_open = t;
+    civ_rx_init(&B.rx);
+    taskENTER_CRITICAL(&S_LOCK);
+    S.connects++;
+    S.link = RADIO_LINK_GREETING;
+    taskEXIT_CRITICAL(&S_LOCK);
+    C.t_session = t;
+    taskENTER_CRITICAL(&S_LOCK);
+    B.af_known = B.mic_known = B.lv_new = false;   /* the radio's, first */
+    B.t_af_set = B.t_mic_set = t - BT_LV_QUIET_MS;
+    taskEXIT_CRITICAL(&S_LOCK);
+    civ_hello(t);
+    /* A link lost between a key and its unkey: the radio may still be on the
+     * air, so its unkey goes first. */
+    if (B.keyed) {
+        ESP_LOGW(TAG, "keyed by us before this link: the unkey first");
+        CIV(0x1C, 0x00, 0x00);
+        CIV(0x1C, 0x00);
+    }
+}
+
+/* Asks the second chip for the link, and follows its answer: as ws_bt's
+ * link_up(), a step a tick. */
+static void bt_dial(uint32_t t)
+{
+    if (!B.asked) {
+        if ((int32_t)(t - B.t_next) < 0) return;
+        if (!bt_link_radio_can()) {
+            bt_failed(t, "the second chip carries no radio's link: its firmware too old?");
+            return;
+        }
+        B.base = bt_link_radio_open(B.bda, B.scn);
+        if (!B.base) {
+            bt_failed(t, "the second chip cannot take it now");
+            return;
+        }
+        B.asked = true;
+        B.taken = false;
+        B.t_asked = B.t_start = t;
+        B.t_stale = 0;
+        return;
+    }
+    btl_radio_state_t st;
+    uint32_t          reports;
+    uint8_t           conn;
+    bt_link_radio_state(&st, &reports, &conn);
+    const bool ours = !memcmp(st.bda, B.bda, 6);
+    if ((int32_t)(reports - B.base) >= 0) {
+        if (st.state == BTL_RS_OPEN && ours && conn && st.conn == conn) {
+            bt_opened(conn, st.scn, t);
+            return;
+        }
+        if (st.state == BTL_RS_OPEN && ours && !conn) {
+            /* Open from before -- this knob restarted, its CLOSE lost: closed
+             * again, and asked afresh. */
+            if (!B.t_stale) B.t_stale = t;
+            if (t - B.t_stale > BT_REASK_MS) {
+                ESP_LOGW(TAG, "link %u still open from before: closing it", st.conn);
+                bt_link_radio_close();
+                B.t_stale = 0;
+                B.taken = false;
+                B.base = reports + 1;
+                B.t_asked = t - BT_REASK_MS / 2;
+            }
+        } else if (st.state != BTL_RS_IDLE && ours) {
+            B.taken = true;
+        } else if (B.taken && st.state == BTL_RS_IDLE) {
+            bt_failed(t, bt_why(st.why));
+            return;
+        }
+    }
+    if (t - B.t_start > BT_OPEN_TMO_MS) {
+        bt_failed(t, B.taken ? "no link within 40 s" : "the second chip did not take the request");
+        return;
+    }
+    if (!B.taken && t - B.t_asked > BT_REASK_MS) {
+        B.base = bt_link_radio_open(B.bda, B.scn);
+        B.t_asked = t;
+    }
+}
+
+static void bt_poke(void)
+{
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
+static void icom_bt_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LOOP_MS));
+        uint32_t t = now_ms();
+        if (!B.conn) {
+            bt_dial(t);
+            ptt_step(t);
+            continue;
+        }
+        btl_radio_state_t st;
+        uint8_t           conn;
+        bt_link_radio_state(&st, NULL, &conn);
+        if (conn != B.conn) {
+            bt_lost(t, st.state == BTL_RS_IDLE ? bt_why(st.why) : "the link went");
+            continue;
+        }
+        /* The bytes into frames, however they came: one ring's worth at most
+         * a pass, so the polls still go out under a flood. */
+        size_t n, took = 0;
+        while (took < 2048 && (n = bt_link_radio_read(B.conn, B.rb, sizeof B.rb)) > 0) {
+            took += n;
+            for (size_t i = 0; i < n; i++) {
+                const size_t fl = civ_rx_byte(&B.rx, B.rb[i]);
+                if (fl) civ_frame(B.rx.buf, fl, now_ms());
+            }
+        }
+        t = now_ms();
+        if (S.link == RADIO_LINK_GREETING && t - B.t_open > BT_GREET_TMO_MS) {
+            bt_lost(t, "no CI-V: Serialport Function not CI-V?");
+            continue;
+        }
+        if (S.link == RADIO_LINK_READY && t - C.t_civ_rx > STREAM_DEAD_MS) {
+            bt_lost(t, "CI-V went silent");
+            continue;
+        }
+        if (S.link == RADIO_LINK_READY && t - S.t_ready_ms > 30000) B.fails = 0;
+
+        ptt_step(t);
+        sat_step(t);
+        if (C.sat_phase == SAT_IDLE) {
+            civ_msg_t m;
+            while (xQueueReceive(s_later, &m, 0) == pdTRUE) civ_send(m.b, m.n);
+            tune_out(t);
+            mem_task(t);
+            rx_ant_task();
+            poll_civ(t);
+        }
+    }
+}
+#endif /* VFO_BT_RADIO */
+
 /* ----------------------------------------------------------------- public */
 
+#if VFO_BT_RADIO
+const char *radio_link_name(void) { return "Bluetooth"; }
+#else
 const char *radio_link_name(void) { return "LAN"; }
+#endif
 
 esp_err_t radio_start(const char *host, uint16_t port, const char *user, const char *pass)
 {
     ESP_RETURN_ON_FALSE(host && user && pass, ESP_ERR_INVALID_ARG, TAG, "args");
+#if VFO_BT_RADIO
+    /* The radio's Bluetooth address, and its channel should SDP not say. */
+    (void)user;
+    (void)pass;
+    if (!civ_bda_parse(host, B.bda)) {
+        ESP_LOGE(TAG, "\"%s\" is no Bluetooth address", host);
+        return ESP_ERR_INVALID_ARG;
+    }
+    B.scn = port >= 1 && port <= 30 ? (uint8_t)port : 0;
+#else
     if (!user[0] || !pass[0]) ESP_LOGW(TAG, "no radio user name or password configured");
+#endif
     strlcpy(C.host, host, sizeof C.host);
     strlcpy(C.user, user, sizeof C.user);
     strlcpy(C.pass, pass, sizeof C.pass);
@@ -2557,6 +2935,28 @@ esp_err_t radio_start(const char *host, uint16_t port, const char *user, const c
 
     s_later = xQueueCreate(16, sizeof(civ_msg_t));
     ESP_RETURN_ON_FALSE(s_later, ESP_ERR_NO_MEM, TAG, "queue");
+#if VFO_BT_RADIO
+    /* Only an IC-705 has this port: its model, and the dial's memory state,
+     * from the start. Its modulation inputs are never switched (no overs). */
+    (void)icom_task;
+    (void)on_restart;
+    strlcpy(C.radio_name, "IC-705", sizeof C.radio_name);
+    C.civ_addr = CIV_RADIO;
+    model_adopt(model_for(C.radio_name));
+    C.no_modin = C.no_probe = true;
+    C.probing = false;
+    B.keyed = s_bt_keyed == BT_KEYED_MAGIC;
+    if (B.keyed) ESP_LOGW(TAG, "the radio was keyed by us before this start: unkeyed on the link");
+    bt_link_radio_set_cb(bt_poke);
+    if (xTaskCreatePinnedToCore(icom_bt_task, "icom", 6144, NULL, 6, &s_task, 0) != pdPASS) {
+        ESP_LOGE(TAG, "no internal RAM for the icom task (%u free, largest %u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        return ESP_ERR_NO_MEM;
+    }
+    S.link = RADIO_LINK_CONNECTING;
+    return ESP_OK;
+#endif
     s_ctl.keep = heap_caps_calloc(KEEP_N, KEEP_LEN, MALLOC_CAP_SPIRAM);
     s_civ.keep = heap_caps_calloc(KEEP_N, KEEP_LEN, MALLOC_CAP_SPIRAM);
     if (!s_txa) s_txa = heap_caps_malloc(PKT_AUDIO_HDR + AUDIO_FRAME * 2, MALLOC_CAP_SPIRAM);
@@ -2665,6 +3065,40 @@ static void set_level(uint8_t sub, uint8_t pct)
 }
 
 void radio_set_rf_gain(uint8_t pct)  { set_level(0x02, pct); }
+
+#if VFO_BT_RADIO
+/* VOLUME and MIC GAIN to the radio: only once it has said its own, so a
+ * link that opens does not set the radio to the knob's, but the knob to the
+ * radio's (radio_take_levels). */
+static void bt_level(uint8_t sub, uint8_t raw)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    const bool ready = S.link == RADIO_LINK_READY && (sub == 0x01 ? B.af_known : B.mic_known);
+    if (ready) {
+        if (sub == 0x01) { B.af = raw;  B.t_af_set = now_ms(); }
+        else             { B.mic = raw; B.t_mic_set = now_ms(); }
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+    if (!ready) return;
+    CIV_LATER(0x14, sub, bcd(raw / 100), bcd(raw % 100));
+}
+
+void radio_set_af_gain(uint8_t volume)   { bt_level(0x01, civ_level_from(volume, 100)); }
+void radio_set_mic_gain(uint8_t mic)     { bt_level(0x0B, civ_level_from(mic, 200)); }
+
+bool radio_take_levels(uint8_t *volume, uint8_t *mic)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    const bool news = B.lv_new && B.af_known && B.mic_known;
+    if (news) {
+        B.lv_new = false;
+        *volume  = (uint8_t)civ_level_to(B.af, 100);
+        *mic     = (uint8_t)civ_level_to(B.mic, 200);
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+    return news;
+}
+#endif
 void radio_set_rf_power(uint8_t pct) { set_level(0x0A, pct); }
 void radio_set_squelch(uint8_t pct)
 {
@@ -2836,7 +3270,11 @@ void radio_get_status(radio_status_t *o)
     o->ptt_reason = (uint8_t)S.ptt.reason;
     o->ptt_refusals = S.ptt.refusals;
     o->permit     = ptt_permit_now(now_ms());
+#if VFO_BT_RADIO
+    o->pong_age_ms = B.conn ? (int32_t)(now_ms() - C.t_civ_rx) : -1;
+#else
     o->pong_age_ms = s_ctl.fd >= 0 ? (int32_t)(now_ms() - s_ctl.t_rx) : -1;
+#endif
     taskEXIT_CRITICAL(&S_LOCK);
     strlcpy(o->mode, S.mode, sizeof o->mode);
     strlcpy(o->agc, S.agc, sizeof o->agc);

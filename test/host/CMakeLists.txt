@@ -76,13 +76,16 @@ add_library(vfo_core STATIC
     ${CORE}/src/weather.c
     ${CORE}/src/alarm.c
     ${CORE}/src/wifitest.c
+    ${CORE}/src/civ_link.c
 )
 target_include_directories(vfo_core PUBLIC ${CORE}/include)
 target_compile_options(vfo_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(vfo_core PUBLIC m)
 
 enable_testing()
-foreach(t test_tci_parse test_echo_ring test_tune test_ptt_fsm fuzz_tci)
+# test_civ_link: the icombt firmware's CI-V off the IC-705's Bluetooth
+# serial port (components/vfo_core/src/civ_link.c).
+foreach(t test_tci_parse test_echo_ring test_tune test_ptt_fsm fuzz_tci test_civ_link)
     add_executable(${t} src/${t}.c)
     target_link_libraries(${t} PRIVATE vfo_core)
     target_compile_options(${t} PRIVATE -Wall -Wextra)
