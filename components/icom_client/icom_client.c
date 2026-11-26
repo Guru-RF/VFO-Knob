@@ -16,6 +16,13 @@
  * audio ports and the audio format; the radio's own ports in reply. Then the
  * CI-V and audio streams each do their own handshake, and CI-V is opened.
  *
+ * Standby (icom_power.h): a radio switched off to "Standby (for Remote
+ * Control)" keeps its network, and lets the knob log in and open CI-V, but
+ * answers nothing there. Then 18 01 wakes it -- by itself on the knob's first
+ * session, afterwards only on the operator's POWER ON -- and 18 00 puts it
+ * back, from the address card's STANDBY, where the radio says it keeps its
+ * network in standby. Not over Bluetooth (icombt): none of this is there.
+ *
  * Tuning is optimistic, as radio.h promises: the display moves at once, a
  * frequency set goes out at most every SET_PERIOD_MS, and what the radio
  * reports is adopted only once the knob has been quiet for QUIET_MS -- the
@@ -31,6 +38,7 @@
 #include <sys/param.h>
 
 #include "audio_in.h"
+#include "icom_power.h"
 #include "audio_out.h"
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -91,6 +99,8 @@ static const char *TAG = "icom";
 #define CIV_FRESH_MS   1500          /* PTT only while CI-V is answering */
 #define MODIN_RETRY_MS 600           /* modulation inputs not read back: again */
 #define MODIN_TRIES    10            /* ...then left for the next over's end */
+#define STANDBY_ASK_MS 20000         /* KEEP ON or STANDBY, unanswered: withdrawn */
+#define STANDBY_GO_MS  800           /* 18 00 out: its FB or FA, before leaving */
 
 /* Memory channels: groups 00-99 of channels 00-99 (see the memories
  * section). */
@@ -167,7 +177,20 @@ typedef struct {
     bool       ant_rx, have_ant;     /* ...receiving on the RX ANT input */
     int8_t     pending_rx;           /* -1 none */
     int8_t     pending_ant;          /* -1 none; else the antenna, | 0x10 for RX ANT */
+    /* Standby (the LAN's): the radio left there, and not to be woken but by
+     * the operator; the operator's question -- KEEP ON or STANDBY, or POWER
+     * ON -- and its answer; a word for the face. */
+    bool       asleep, waking, has_standby;
+    uint8_t    ask;                  /* ASK_* */
+    uint8_t    n_choices;
+    uint32_t   choices_seq;
+    int8_t     pending_choice;       /* -1 none */
+    uint8_t    pending_standby;
+    char       note[16];
+    uint32_t   note_seq;
 } state_t;
+
+enum { ASK_NONE = 0, ASK_STANDBY, ASK_WAKE };
 
 static state_t      S;
 static portMUX_TYPE S_LOCK = portMUX_INITIALIZER_UNLOCKED;
@@ -231,6 +254,16 @@ static struct {
     uint8_t    sat_phase;
     int64_t    sat_delta;          /* what the turn has still to move it by */
     uint32_t   t_sat, t_sat_deaf;
+    /* Standby (icom_power.h): waking it, this session; whether the knob has
+     * had the radio on since it started; the radio's Power OFF Setting (for
+     * Remote Control), icom_off_t, and whether it will not say; 18 00 out. */
+    icom_wake_t wake;
+    uint32_t   t_civ_first;        /* CI-V opened, this session */
+    bool       ever_ready, wake_asked;
+    uint8_t    off_set;
+    bool       no_off;
+    bool       standby_out, standby_refused;
+    uint32_t   t_standby, t_asked;
 } C;
 
 /* One memory channel, as the radio holds it (see the memories section). */
@@ -503,12 +536,16 @@ static void stream_close(stream_t *s)
 
 /* ------------------------------------------------------------------ CI-V */
 
+#if !VFO_BT_RADIO
+static uint16_t off_menu_now(void);   /* the model's Power OFF Setting number */
+#endif
+
 /* Every CI-V command is answered once, and in order: with its data, or with
  * FB for done and FA for refused. So a queue of what went out says which
  * command a refusal was for. The radio's own reports (transceive) go to 00,
  * not to us, and answer nothing. */
 #define AWAIT_N 32
-static struct { uint8_t cmd, sub, len; } s_await[AWAIT_N];
+static struct { uint8_t cmd, sub, len; uint16_t item; } s_await[AWAIT_N];
 static uint8_t s_aw_head, s_aw_n;
 
 static void await_push(const uint8_t *body, size_t n)
@@ -521,12 +558,13 @@ static void await_push(const uint8_t *body, size_t n)
     s_await[i].cmd = body[0];
     s_await[i].sub = n > 1 ? body[1] : 0xFF;
     s_await[i].len = (uint8_t)n;
+    s_await[i].item = n > 3 ? (uint16_t)(body[2] << 8 | body[3]) : 0;   /* 1A 05's */
     s_aw_n++;
 }
 
 /* What an answer to `cmd` was for: the oldest outstanding command, or for a
  * data reply the oldest with that command -- any before it went unanswered. */
-static bool await_pop(uint8_t cmd, uint8_t *c, uint8_t *sub, uint8_t *len)
+static bool await_pop(uint8_t cmd, uint8_t *c, uint8_t *sub, uint8_t *len, uint16_t *item)
 {
     while (s_aw_n) {
         const unsigned i = s_aw_head;
@@ -536,6 +574,7 @@ static bool await_pop(uint8_t cmd, uint8_t *c, uint8_t *sub, uint8_t *len)
             *c = s_await[i].cmd;
             *sub = s_await[i].sub;
             *len = s_await[i].len;
+            *item = s_await[i].item;
             return true;
         }
     }
@@ -559,8 +598,24 @@ static void log_refused(uint8_t c, uint8_t sub)
  * for again this session: an IC-705 refuses neither of these, but a radio
  * behind wfview's server that only answers like one may lack them. A refused
  * set is left alone -- that can be a matter of the moment. */
-static void on_refused(uint8_t c, uint8_t sub, uint8_t len)
+static void on_refused(uint8_t c, uint8_t sub, uint8_t len, uint16_t item)
 {
+#if !VFO_BT_RADIO
+    /* The Power OFF Setting refused: not a modulation input's, and no
+     * STANDBY offered. 18 00 refused: the radio stays on. */
+    if (c == 0x1A && sub == 0x05 && len == 4 && item && item == off_menu_now()) {
+        if (!C.no_off) ESP_LOGW(TAG, "the radio will not say its Power OFF Setting: no STANDBY");
+        C.no_off = true;
+        C.off_set = ICOM_OFF_UNKNOWN;
+        return;
+    }
+    if (c == 0x18 && sub == 0x00) {
+        C.standby_refused = true;
+        return;
+    }
+#else
+    (void)item;
+#endif
     if (c == 0x1A && sub == 0x00 && !C.no_mem) {                /* 1A 00 g g c c */
         C.no_mem = true;
         C.mem_scan = -1;
@@ -765,6 +820,15 @@ typedef struct model {
     /* wfview's modulation-input numbers on a radio nobody here has tried:
      * read and logged against modin_names, never written (modin_voice 0). */
     uint16_t       probe_voice, probe_data;
+    /* 1A 05: its Power OFF Setting (for Remote Control), from Icom's CI-V
+     * reference guide -- 00 Shutdown only, 01 Standby/Shutdown. 0 where the
+     * guide was not read here, or where the radio is reached over WiFi (the
+     * IC-705, whose WLAN does not stay up in standby): no STANDBY. */
+    uint16_t       off_menu;
+    /* Reached over WiFi (the IC-705): its network does not stay up in
+     * standby, so a silent CI-V is a link's trouble, never standby -- neither
+     * woken nor left asleep, the session started over as ever. */
+    bool           wifi;
 } model_t;
 
 static const char *const MODIN_705[]  = { "MIC", "USB", "MIC+USB", "WLAN" };
@@ -785,7 +849,7 @@ static const model_t MODELS[] = {
       .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
       .modin_voice = 0x0118, .modin_data = 0x0119, .modin_lan = 3,
       .modin_names = MODIN_705, .n_modin_names = 4,
-      .memories = true, .n_rx = 1, .max_w = 10 },
+      .memories = true, .n_rx = 1, .max_w = 10, .wifi = true },
     /* 30 kHz-60 MHz, two receivers, ANT1 and ANT2 each with or without the
      * RX ANT input. Its memories are not the IC-705's groups; the swipe
      * chooses the receiver and the antenna instead. */
@@ -794,7 +858,8 @@ static const model_t MODELS[] = {
       .cal_s = CAL_S_7610, .n_cal_s = NCAL(CAL_S_7610), .po_scale = 10,
       .modin_voice = 0x0091, .modin_data = 0x0092, .modin_lan = 5,
       .modin_names = MODIN_7610, .n_modin_names = 6,
-      .n_rx = 2, .n_ant = 2, .rx_ant = true, .max_w = 100, .tuner = true },
+      .n_rx = 2, .n_ant = 2, .rx_ant = true, .max_w = 100, .tuner = true,
+      .off_menu = 0x0135 },
     /* The IC-7760: 30 kHz-60 MHz and 200 W, two receivers -- MAIN and SUB as
      * on the IC-7610, whose commands, unprefixed, and S-meter it has; its Po
      * about the IC-705's table twenty times over (exact to 100 W and at
@@ -816,7 +881,7 @@ static const model_t MODELS[] = {
     { .name = "IC-R8600", .f_min = 10000, .f_max = 3000000000LL,
       .preamps = 1,
       .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
-      .n_rx = 1, .n_ant = 3, .rx_only = true, .squelch = true },
+      .n_rx = 1, .n_ant = 3, .rx_only = true, .squelch = true, .off_menu = 0x0109 },
     /* The IC-9700: 2 m, 70 cm and 23 cm, an antenna for each -- nothing to
      * choose -- and one preamp. 100 W on 2 m, 75 W on 70 cm, 10 W on 23 cm:
      * POWER and the meter read in the band's watts. Its modulation inputs
@@ -830,7 +895,8 @@ static const model_t MODELS[] = {
       .modin_voice = 0x0115, .modin_data = 0x0116, .modin_lan = 5,
       .modin_names = MODIN_7610, .n_modin_names = 6,
       .memories = true, .mem_by_band = true,
-      .n_rx = 1, .max_w = 100, .max_w_uhf = 75, .max_w_shf = 10, .sat = true },
+      .n_rx = 1, .max_w = 100, .max_w_uhf = 75, .max_w_shf = 10, .sat = true,
+      .off_menu = 0x0146 },
     /* The IC-7300MK2: 30 kHz-74.8 MHz -- HF, 6 m and 4 m -- 100 W, one
      * receiver, P.AMP1 and P.AMP2. Its S-meter is the IC-705's and its Po the
      * IC-705's ten times over (wfview's rig file; 4 m may be 50 W on some
@@ -902,6 +968,10 @@ static float po_w_at(const model_t *m, int64_t f)
 static uint16_t max_w_at(const model_t *m, int64_t f) { return (uint16_t)po_w_at(m, f); }
 
 /* The Po meter, times CAL_PO's 10 W: the band's full scale where it varies. */
+#if !VFO_BT_RADIO
+static uint16_t off_menu_now(void) { return model_now()->off_menu; }
+#endif
+
 static float po_scale_now(void)
 {
     const model_t *m = model_now();
@@ -980,6 +1050,7 @@ static void log_refusal(uint32_t missing)
 
 static void session_end(bool polite, const char *why);
 static void goodbye(void);
+static void civ_hello(uint32_t t);
 #if VFO_BT_RADIO
 static void bt_lost(uint32_t t, const char *why);
 #endif
@@ -1452,11 +1523,12 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
     const size_t   bn  = n - 6;
     C.t_civ_rx = t;
     uint8_t asked = 0, asked_sub = 0xFF, asked_len = 0;
+    uint16_t asked_item = 0;
     /* A frame prefixed 29 <receiver> (the IC-7760's kind, should it report
      * that way) answers nothing we asked: popping for it would drain the
      * queue, and later refusals would go to the wrong command. */
     const bool answer = f[2] == CIV_US && cmd != 0x29 &&
-                        await_pop(cmd, &asked, &asked_sub, &asked_len);
+                        await_pop(cmd, &asked, &asked_sub, &asked_len, &asked_item);
 
     if (cmd == 0x03 && C.sat_phase == SAT_READ && answer && bn >= 5) {
         on_sat_uplink(freq_from_n(b, 5), t);
@@ -1474,6 +1546,17 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
                 S.link = RADIO_LINK_READY;
                 S.t_ready_ms = t;
                 ESP_LOGI(TAG, "ready: %s, %lld Hz", C.radio_name, (long long)S.f_server);
+#if !VFO_BT_RADIO
+                C.ever_ready = true;
+                if (C.wake.sent) {
+                    /* What civ_hello() asked went to a radio in standby,
+                     * unanswered: ask it all again of the radio now on. */
+                    ESP_LOGI(TAG, "the radio is on: asking for its state again");
+                    S.waking = false;
+                    icom_wake_reset(&C.wake);
+                    civ_hello(t);
+                }
+#endif
             }
         }
         return;
@@ -1502,6 +1585,25 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         if (bn >= 2 && b[0] == 0x03) {               /* filter width */
             S.width_idx = (uint8_t)unbcd(b[1]);
             set_edges();
+#if !VFO_BT_RADIO
+        } else if (bn >= 4 && b[0] == 0x05 && model_now()->off_menu &&
+                   (uint16_t)(b[1] << 8 | b[2]) == model_now()->off_menu) {
+            /* The Power OFF Setting (for Remote Control): STANDBY offered
+             * only at Standby/Shutdown. */
+            const uint8_t was = C.off_set;
+            C.off_set = icom_off_setting(b[3]);
+            if (C.off_set != was)
+                ESP_LOGI(TAG, "Power OFF Setting (for Remote Control): %s",
+                         C.off_set == ICOM_OFF_STANDBY  ? "Standby/Shutdown -- STANDBY on the card"
+                         : C.off_set == ICOM_OFF_SHUTDOWN ? "Shutdown only -- no STANDBY: the radio "
+                                                            "could not be woken"
+                                                          : "not known");
+        } else if (b[0] == 0x05 && bn < 4 && answer && asked == 0x1A && asked_item &&
+                   asked_item == model_now()->off_menu) {
+            if (!C.no_off) ESP_LOGW(TAG, "the radio has no Power OFF Setting over CI-V: no STANDBY");
+            C.no_off = true;
+            C.off_set = ICOM_OFF_UNKNOWN;
+#endif
         } else if (b[0] == 0x05 && bn < 4) {
             /* 1A 05 answered with 1A 05 00: no such setting. Stop asking,
              * and stop warning about it. */
@@ -1624,7 +1726,7 @@ static void civ_frame(const uint8_t *f, size_t n, uint32_t t)
         S.rejects++;
         if (answer) {
             log_refused(asked, asked_sub);
-            on_refused(asked, asked_sub, asked_len);
+            on_refused(asked, asked_sub, asked_len, asked_item);
             sat_answered(asked, asked_sub, false, t);
         }
         return;
@@ -1821,6 +1923,12 @@ static bool session_begin(uint32_t t)
     C.no_mem = C.no_modin = C.no_probe = C.probing = false;
     C.waiting_busy = false;
     C.t_session = t;
+#if !VFO_BT_RADIO
+    icom_wake_reset(&C.wake);
+    S.waking = false;
+    C.off_set = ICOM_OFF_UNKNOWN;
+    C.no_off = C.standby_out = C.standby_refused = false;
+#endif
     taskENTER_CRITICAL(&S_LOCK);
     S.link = RADIO_LINK_CONNECTING;
     S.have_freq = false;
@@ -1988,6 +2096,9 @@ static void civ_hello(uint32_t t)
     C.civ_open = true;
     C.t_civ_open = t;
     C.t_civ_rx = t;
+#if !VFO_BT_RADIO
+    if (!C.wake.sent) C.t_civ_first = t;
+#endif
     /* A session lost with the uplink selected left the radio on it. */
     if (C.sat_phase >= SAT_SELECT) CIV(0x07, 0xD0);
     C.sat_phase = SAT_IDLE;
@@ -2030,6 +2141,9 @@ static void civ_hello(uint32_t t)
         modin_read(m->probe_voice);
         modin_read(m->probe_data);
     }
+#if !VFO_BT_RADIO
+    if (m->off_menu && !C.no_off) modin_read(m->off_menu);   /* Power OFF Setting */
+#endif
 }
 
 static void on_civ(const uint8_t *d, int n, uint32_t t)
@@ -2491,6 +2605,11 @@ static void poll_civ(uint32_t t)
                 /* ...and wfview's, where the knob only reads them, the same. */
                 if (m->probe_voice && !C.no_probe && C.modin_off == 0xFF) modin_read(m->probe_voice);
                 if (m->probe_voice && !C.no_probe && C.modin_d1 == 0xFF)  modin_read(m->probe_data);
+#if !VFO_BT_RADIO
+                /* ...and the Power OFF Setting, which the operator may change
+                 * at the radio: STANDBY follows it. */
+                if (m->off_menu && !C.no_off) modin_read(m->off_menu);
+#endif
                 break;
             case 5: if (m->n_rx > 1) CIV(0x07, 0xD2); break;
             case 6: if (m->n_ant) CIV(0x12); break;
@@ -2582,6 +2701,145 @@ static void ptt_step(uint32_t t)
     ptt_dispatch(&o);
 }
 
+/* ------------------------------------------------------------- standby */
+
+#if !VFO_BT_RADIO
+/* A word on the face, for a moment (the status's note). */
+static void say(const char *w)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    strlcpy(S.note, w, sizeof S.note);
+    S.note_seq++;
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+/* The operator's question: ASK_STANDBY, KEEP ON or STANDBY; ASK_WAKE, POWER
+ * ON; ASK_NONE withdraws it. */
+static void ask(uint8_t what, uint32_t t)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    S.ask = what;
+    S.n_choices = what == ASK_STANDBY ? 2 : what == ASK_WAKE ? 1 : 0;
+    S.pending_choice = -1;
+    S.choices_seq++;
+    taskEXIT_CRITICAL(&S_LOCK);
+    C.t_asked = t;
+}
+
+static bool standby_ok(void)
+{
+    return icom_standby_allowed((icom_off_t)C.off_set, S.link == RADIO_LINK_READY,
+                                S.tx || S.ptt.state != PTT_IDLE);
+}
+
+/* Left in standby: the session ended politely, nothing tried again until
+ * the operator taps POWER ON. */
+static void fall_asleep(uint32_t t, const char *why)
+{
+    S.asleep = true;
+    S.waking = false;
+    session_end(true, why);
+    ask(ASK_WAKE, t);
+}
+
+/* 18 01, on the CI-V stream, as wfview sends it over the LAN: no FE
+ * preamble, which is a serial port's. What was outstanding there went to a
+ * radio that answers nothing: forgotten, so the FB pairs with this. */
+static void power_on(uint32_t t)
+{
+    s_aw_n = 0;
+    CIV(0x18, 0x01);
+    S.waking = true;
+    ESP_LOGW(TAG, "CI-V open %lu ms and no frequency: the radio in standby? 18 01 to wake it",
+             (unsigned long)(t - C.t_civ_first));
+}
+
+/* One pass: the operator's question and its answer, 18 00 on its way, and
+ * waking the radio while a session is up. */
+static void power_step(uint32_t t)
+{
+    if (S.pending_standby) {
+        S.pending_standby = 0;
+        if (standby_ok()) {
+            ESP_LOGI(TAG, "standby asked: KEEP ON or STANDBY?");
+            ask(ASK_STANDBY, t);
+        } else {
+            ESP_LOGW(TAG, "standby asked, not possible now (%s)",
+                     S.link != RADIO_LINK_READY ? "no link" :
+                     C.off_set != ICOM_OFF_STANDBY ? "Power OFF Setting not Standby/Shutdown"
+                                                   : "on the air");
+            say("NO STANDBY");
+        }
+    }
+    int8_t a = -1;
+    taskENTER_CRITICAL(&S_LOCK);
+    if (S.pending_choice >= 0) {
+        a = S.pending_choice;
+        S.pending_choice = -1;
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+
+    if (S.ask == ASK_STANDBY) {
+        if (a == 1 && standby_ok()) {
+            ESP_LOGW(TAG, "18 00: the radio to standby");
+            CIV(0x18, 0x00);
+            C.standby_out = true;
+            C.standby_refused = false;
+            C.t_standby = t;
+            ask(ASK_NONE, t);
+        } else if (a >= 0 || !standby_ok() || t - C.t_asked >= STANDBY_ASK_MS) {
+            if (a < 0) ESP_LOGI(TAG, "standby question withdrawn");
+            ask(ASK_NONE, t);
+        }
+    } else if (S.ask == ASK_WAKE && a == 0) {
+        ESP_LOGI(TAG, "POWER ON: connecting, to wake the radio");
+        ask(ASK_NONE, t);
+        S.asleep = false;
+        C.wake_asked = true;
+        C.backoff_ms = 500;
+        C.t_retry = t;
+    }
+
+    /* 18 00 out: its FB, or a moment, and the session goes -- politely, the
+     * modulation inputs put back and the token dropped (goodbye). */
+    if (C.standby_out && (C.standby_refused || t - C.t_standby >= STANDBY_GO_MS)) {
+        C.standby_out = false;
+        if (C.standby_refused) {
+            ESP_LOGW(TAG, "the radio refused 18 00: still on");
+            say("STANDBY REFUSED");
+        } else {
+            fall_asleep(t, "the radio put in standby");
+        }
+        return;
+    }
+
+    /* Waking: while the session is up, until the radio answers -- not a radio
+     * on WiFi, which is never reached in standby. */
+    if (s_ctl.fd < 0 || model_now()->wifi) return;
+    const icom_wake_may_t may = C.wake_asked ? ICOM_WAKE_ASKED
+                              : !C.ever_ready ? ICOM_WAKE_AUTO : ICOM_WAKE_NEVER;
+    switch (icom_wake_step(&C.wake, t, C.civ_open, C.t_civ_first, S.have_freq, may)) {
+    case ICOM_WAKE_SEND:
+        C.wake_asked = false;
+        power_on(t);
+        break;
+    case ICOM_WAKE_GIVE_UP:
+        S.waking = false;
+        session_end(true, "the radio did not wake");
+        break;
+    case ICOM_WAKE_ASLEEP:
+        ESP_LOGW(TAG, "the radio answers nothing on CI-V: in standby -- left there, "
+                      "until POWER ON");
+        fall_asleep(t, "the radio is in standby");
+        break;
+    default:
+        break;
+    }
+}
+#else
+static void power_step(uint32_t t) { (void)t; }
+#endif
+
 static void icom_task(void *arg)
 {
     (void)arg;
@@ -2592,7 +2850,9 @@ static void icom_task(void *arg)
         uint32_t t = now_ms();
 
         if (s_ctl.fd < 0) {
-            if ((int32_t)(t - C.t_retry) >= 0) session_begin(t);
+            power_step(t);
+            /* In standby: no session until the operator asks. */
+            if (!S.asleep && (int32_t)(t - C.t_retry) >= 0) session_begin(t);
             ptt_step(t);
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
@@ -2637,7 +2897,10 @@ static void icom_task(void *arg)
                                                                : "radio went silent");
             continue;
         }
-        if (S.link != RADIO_LINK_READY &&
+        /* Waking the radio has its own deadline (power_step), and a CI-V
+         * stream that opened late is given the time to say it is asleep. */
+        if (S.link != RADIO_LINK_READY && !icom_wake_pending(&C.wake, S.have_freq) &&
+            !(C.civ_open && !model_now()->wifi && t - C.t_civ_first < ICOM_WAKE_AFTER_MS + 500) &&
             t - C.t_session > (C.waiting_busy ? BUSY_TMO_MS : GREET_TMO_MS)) {
             session_end(true, C.waiting_busy ? "the radio kept our last session"
                                              : "no session within 8 s");
@@ -2660,6 +2923,8 @@ static void icom_task(void *arg)
         if (S.link == RADIO_LINK_READY && t - S.t_ready_ms > 30000) C.backoff_ms = 500;
 
         ptt_step(t);
+        power_step(t);
+        if (s_ctl.fd < 0) continue;              /* left the radio in standby */
         sat_step(t);
         /* With the uplink selected nothing else goes out: it would land on it. */
         if (C.sat_phase == SAT_IDLE) {
@@ -3167,6 +3432,7 @@ void radio_atu_tune(void) {}
 void radio_atu_memories(bool on) { (void)on; }
 void radio_set_dsp(uint8_t which, bool on) { (void)which; (void)on; }
 
+#if VFO_BT_RADIO
 /* Nothing to ask. */
 bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
 {
@@ -3174,6 +3440,31 @@ bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
     return false;
 }
 void radio_choose(uint8_t i) { (void)i; }
+#else
+/* Standby's questions: the radio by its name, KEEP ON (the default) or
+ * STANDBY; and, left there, POWER ON. */
+bool radio_get_choice(uint8_t i, char *title, size_t tn, char *name, size_t nn)
+{
+    bool ok = false;
+    taskENTER_CRITICAL(&S_LOCK);
+    if (i < S.n_choices) {
+        strlcpy(title, C.radio_name[0] ? C.radio_name : "RADIO", tn);
+        strlcpy(name, S.ask == ASK_WAKE ? "POWER ON" : i == 0 ? "KEEP ON" : "STANDBY", nn);
+        ok = true;
+    }
+    taskEXIT_CRITICAL(&S_LOCK);
+    return ok;
+}
+
+void radio_choose(uint8_t i)
+{
+    taskENTER_CRITICAL(&S_LOCK);
+    if (i < S.n_choices) S.pending_choice = (int8_t)i;
+    taskEXIT_CRITICAL(&S_LOCK);
+}
+
+void radio_standby(void) { S.pending_standby = 1; }
+#endif
 
 /* A radio has no talkgroup to lock or mute. */
 void radio_tg_lock(bool locked) { (void)locked; }
@@ -3225,6 +3516,16 @@ void radio_get_status(radio_status_t *o)
     o->have_tuner   = S.have_tuner;
     o->tuner_on     = S.tuner != 0;
     o->has_memories = s_mem != NULL && !C.no_mem && m->memories;
+#if !VFO_BT_RADIO
+    o->has_standby  = icom_standby_allowed((icom_off_t)C.off_set, S.link == RADIO_LINK_READY,
+                                           S.tx || S.ptt.state != PTT_IDLE);
+    o->n_choices    = S.n_choices;
+    o->choices_seq  = S.choices_seq;
+    o->note_seq     = S.note_seq;
+    memcpy(o->note, S.note, sizeof o->note);
+    if (S.asleep)      strlcpy(o->link_why, "RADIO STANDBY", sizeof o->link_why);
+    else if (S.waking) strlcpy(o->link_why, "WAKING RADIO", sizeof o->link_why);
+#endif
     o->n_rx       = m->n_rx;
     o->rx         = S.rx;
     if (m->n_rx > 1 && S.rx) strlcpy(o->tx_why, "SUB: RX ONLY", sizeof o->tx_why);

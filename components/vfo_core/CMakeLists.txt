@@ -14,6 +14,7 @@ idf_component_register(
         "src/alarm.c"
         "src/wifitest.c"
         "src/civ_link.c"
+        "src/icom_power.c"
         "src/tag.c"
         "src/tag_hist.c"
     INCLUDE_DIRS "include"

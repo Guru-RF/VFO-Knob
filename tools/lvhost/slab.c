@@ -997,6 +997,81 @@ SOME static void lock_sweep(const char *dir, const char *face)
 }
 #endif
 
+#if VFO_RADIO_ICOM
+/* STANDBY (the icom firmware's over the network, has_standby): beside LOCK
+ * on the card, each half the S-meter's row, both inside the glass's margin
+ * and clear of each other; not without has_standby, nor locked, nor with no
+ * link. A tap in its first moments does nothing; once it has been up, it puts
+ * the card away and commits UI_ACT_STANDBY -- the client asks the operator
+ * next. LOCK, narrowed, still locks. Pictures: the card with both pills. */
+#define SBY_X (180 + 54)                   /* ui.c SBY_DX */
+#define SBY_LOCK_X (180 - 69)              /* ui.c SBY_LOCK_DX */
+static void standby_sweep(const char *dir)
+{
+    const ui_state_t keep = st;
+    ui_commit_t c;
+    ui_set_netinfo(CARD);
+    settle(); quiet();
+
+    where = "standby: none without has_standby";
+    card_up();
+    CHECK(card_label() && shown("LOCK") && !shown("STANDBY"));
+    tap_at(W / 2, 174, 80); settle(); quiet();
+
+    where = "...has_standby: STANDBY beside LOCK, each inside the glass, apart";
+    st.has_standby = true; run(100);
+    card_up();
+    lv_obj_t *sb = label_from(lv_screen_active(), "STANDBY");
+    lv_obj_t *lk = label_from(lv_screen_active(), "LOCK");
+    CHECK(card_label() && sb && lk);
+    if (sb && lk) {
+        lv_obj_t *ps = lv_obj_get_parent(sb), *pl = lv_obj_get_parent(lk);
+        lv_area_t as, al, ts, tl;
+        lv_obj_get_coords(ps, &as);
+        lv_obj_get_coords(pl, &al);
+        lv_obj_get_coords(sb, &ts);
+        lv_obj_get_coords(lk, &tl);
+        const box_t bs = { as.x1, as.y1, as.x2, as.y2 }, bl = { al.x1, al.y1, al.x2, al.y2 };
+        CHECK(in_glass(&bs) && in_glass(&bl));
+        CHECK(al.x2 + 6 <= as.x1);                      /* apart */
+        CHECK(ts.x1 >= as.x1 + 6 && ts.x2 <= as.x2 - 6); /* the word inside its pill */
+        CHECK(tl.x1 >= al.x1 + 6 && tl.x2 <= al.x2 - 6);
+        printf("  ...LOCK %d-%d, STANDBY %d-%d (its word %d-%d), rows %d-%d\n",
+               (int)al.x1, (int)al.x2, (int)as.x1, (int)as.x2, (int)ts.x1, (int)ts.x2,
+               (int)as.y1, (int)as.y2);
+    }
+    picture(dir, "icom-standby-card");
+    where = "...a tap on it in its first moments: nothing";
+    tap_at(SBY_X, LOCK_Y, 60); run(60);
+    CHECK(!commit(&c) && card_label());
+    run(700);
+    where = "...once it has been up a moment: the card away, UI_ACT_STANDBY";
+    tap_at(SBY_X, LOCK_Y, 60); run(60);
+    CHECK(commit(&c) && c.action == UI_ACT_STANDBY);
+    CHECK(!card_label() && !shown("STANDBY") && !ui_locked());
+    settle(); quiet();
+
+    where = "...LOCK, narrowed beside it, still locks; locked, no STANDBY";
+    card_up(); run(700);
+    tap_at(SBY_LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(ui_locked() && shown("UNLOCK") && !shown("STANDBY"));
+    CHECK(!commit(&c) || c.action != UI_ACT_STANDBY);
+    where = "...UNLOCK, back at the row's middle, and STANDBY again";
+    run(700);
+    tap_at(W / 2, LOCK_Y, 60); run(100);
+    CHECK(!ui_locked() && shown("LOCK") && shown("STANDBY"));
+    tap_at(W / 2, 174, 80); settle(); quiet();
+
+    where = "...no link: no STANDBY";
+    st.has_standby = false; st.link_ok = false; st.warn = "RADIO STANDBY"; run(100);
+    card_up();
+    CHECK(!shown("STANDBY"));
+    st = keep;
+    settle(); quiet();
+    run(100);
+}
+#endif
+
 /* ...and on a radio's face, or the receiver's, over the S-units at their
  * widest and at nothing, the bar and its peak at the top of the arc, right
  * over it, a web SDR's line outside the arc and its reading, and a device's
@@ -1808,6 +1883,7 @@ static void runs(const char *dir)
     batt_radio(dir, "icom");
     knob_sweep(dir, "icom");
     lock_sweep(dir, "icom");
+    standby_sweep(dir);
     knob_radio(dir, "icom");
 
     ic7610();

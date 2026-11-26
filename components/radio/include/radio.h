@@ -154,6 +154,10 @@ typedef struct {
      * that one stands, and in dsp_on while it is on. The swipe from the right
      * offers them. */
     uint8_t    dsp_has, dsp_on;
+    /* The radio may be put in standby from the dial (radio_standby): the
+     * icom firmware's, over the network, once the radio has said that it
+     * keeps its network up in standby. */
+    bool       has_standby;
     /* Something to say once, for a moment ("ATU FAILED"): shown whenever
      * note_seq moves on. */
     char       note[16];
@@ -324,6 +328,10 @@ void radio_tune(void);
 void radio_atu_tune(void);
 /* Whether the tuner recalls a setting it has tuned before (has_atu). */
 void radio_atu_memories(bool on);
+/* Put the radio in standby (has_standby): the client asks the operator
+ * first, with a question (radio_get_choice), and then lets the radio go --
+ * and asks again, POWER ON, to wake it. A no-op for a radio without. */
+void radio_standby(void);
 #if VFO_RADIO_ICOMBT
 /* The icombt firmware's: the knob's VOLUME (0-100) is the IC-705's AF gain,
  * its MIC GAIN (0-200, 100 the knob's unity) the radio's MIC gain (100 its

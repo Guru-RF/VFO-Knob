@@ -1428,6 +1428,10 @@ static void ui_task(void *arg)
                 ESP_LOGI(TAG, "menu -> transmitter %s", c.on ? "blocked" : "open");
                 radio_mute(c.on);
                 break;
+            case UI_ACT_STANDBY:            /* the card's: the client asks first */
+                ESP_LOGI(TAG, "card -> STANDBY");
+                radio_standby();
+                break;
 #if VFO_RADIO_TAILCHASER
             case UI_ACT_SPK_MUTE:           /* TailChaser's audio, every repeater's */
                 ESP_LOGI(TAG, "speaker -> %s", c.on ? "muted" : "on");
@@ -2211,6 +2215,7 @@ static void ui_task(void *arg)
             .have_squelch  = st.have_squelch,
             .squelch_pct   = st.squelch_pct,
             .dsp_has       = st.dsp_has,
+            .has_standby   = st.has_standby,
             .dsp_on        = st.dsp_on,
             .reflector     = st.reflector,
             .connecting    = (st.link == RADIO_LINK_CONNECTING ||

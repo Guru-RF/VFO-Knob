@@ -52,6 +52,10 @@ What most often stands in the way:
   change the knob's **Port** with the radio's.
 - **One remote client at a time.** With RS-BA1, RS-R8600 or wfview connected,
   the radio has no room for the knob: close the other one first.
+- **Standby, to be switched on from the knob** (on a network cable: IC-7610,
+  IC-9700, IC-R8600). Set **Power OFF Setting (for Remote Control)** to
+  **Standby/Shutdown** (*SET » Network*), and switch the radio off with
+  **Standby (for Remote Control)**: see [Standby](#standby-switching-the-radio-on-and-off).
 - **After a restart.** When the knob went away without saying goodbye — the
   power pulled — the radio keeps that session for a while. The knob waits for
   it to let go, and shows **NO LINK** until then: a minute or so.
@@ -82,7 +86,7 @@ Until the radio answers, the knob says so, with its own addresses:
 
 | Part | Tap | |
 |---|---|---|
-| **S-meter** | hold: the address card, and **LOCK** | S-units, peak held a second; dBm under the reading |
+| **S-meter** | hold: the address card, **LOCK** and, where the radio can be woken again, **STANDBY** | S-units, peak held a second; dBm under the reading |
 | **Battery** | — | the knob's own, over the reading, while it runs on it: full to empty by the quarter, green from half its charge up, yellow under that, red at a fifth and below. None on USB power, nor on the air |
 | **AGC** | the AGC editor | FAST, MID, SLOW |
 | **P.AMP** | the preamp editor | OFF, 1, 2 — or ON where the band has only one |
@@ -336,6 +340,49 @@ you key.
 
 Nothing vibrates on the air — the motor sits beside the microphone and would be
 heard — and the radio's own transmit time-out is the backstop: set it.
+
+## Standby: switching the radio on and off
+
+As RS-BA1 does, the knob can switch on a radio that is in standby, and put it
+back there: a radio on a network cable — the IC-7610, the IC-9700 and the
+IC-R8600. The IC-705 on WiFi does not keep its network up in standby, so the
+knob cannot reach it there, and offers it no **STANDBY**. This is the network
+firmware's; `vfo-knob-icombt` does neither.
+
+**On the radio.** Set **Power OFF Setting (for Remote Control)** to
+**Standby/Shutdown** (*SET » Network*) and switch the radio off by holding
+POWER and choosing **Standby (for Remote Control)**. The radio keeps its
+network up, its power LED blinking orange. Switched off with
+**Shutdown**, or with the setting at **Shutdown only**, it leaves the network,
+and only its own POWER key brings it back.
+
+**Switching it on.** In standby the radio lets the knob log in, but answers
+nothing. When the knob starts and finds it like that, it sends Icom's
+power-on command (CI-V `18 01`) and shows **WAKING RADIO** until the radio
+answers, up to half a minute. Then the dial comes back as ever. The knob does
+this by itself only once after it starts. If the radio goes to standby later
+while the knob is running (you switched it off at the radio), the knob leaves
+it alone and asks: **POWER ON**. Tap the panel to switch it on.
+
+**Putting it in standby.** Hold the S-meter for the address card: beside
+**LOCK** is **STANDBY**. Tap it, turn to **STANDBY** (the knob offers **KEEP
+ON** first) and tap the panel. The knob sends `18 00`, logs out, and asks
+**POWER ON** until you want the radio back. **STANDBY** is only on the card
+while the radio is on and receiving, the knob unlocked, and the radio has said
+that its Power OFF Setting is **Standby/Shutdown**. That way the knob never
+switches off a radio it could not switch on again. The knob reads that setting
+on the IC-7610, IC-9700 and IC-R8600. The IC-7300MK2, IC-7760 and IC-905 can
+be woken, but get no **STANDBY**: their setting's number has not been checked
+here.
+
+| The card | The question | In standby | Waking |
+|---|---|---|---|
+| ![STANDBY beside LOCK on the address card](icom/30-standby.svg) | ![KEEP ON or STANDBY](icom/31-standby-ask.svg) | ![POWER ON](icom/32-power-on.svg) | ![WAKING RADIO](icom/33-waking.svg) |
+
+A restart of the knob forgets that it put the radio in standby: it wakes it
+as it starts. **Not yet tried on a radio**: the commands are Icom's own, from
+the radios' CI-V reference guides, sent as wfview sends them over the network.
+A log from your radio is very welcome.
 
 ## Over Bluetooth (IC-705)
 
