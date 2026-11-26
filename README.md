@@ -119,6 +119,12 @@ and their signal; what the repeater transmits on the jack or a Bluetooth
 speaker; its receiver and transmitter blocked from the knob. See
 [TailChaser](#tailchaser).
 
+With the **TailChaser Tag** firmware (a beta) the knob listens, through its
+own microphone, to a TailChaser repeater played in the room, and reads the
+callsign tag hidden under its audio: who is talking, and a list of who was.
+No API and no network path to the repeater, only its sound. See
+[TailChaser Tag](#tailchaser-tag).
+
 ---
 
 ## Reporting a problem
@@ -852,6 +858,28 @@ API, on SVXConnect's face. The knob itself never transmits. Step by step:
 | **Blocking** | Hold **STANDBY**: the repeater's receiver or transmitter blocked, or opened again, a tap each. A block stays on the repeater until it is released, on the knob, the page or the repeater's admin portal. |
 | **Kept** | The repeaters, their names and keys (never shown again), the hold, the muted speaker, the volume and the repeater shown, across a restart. |
 
+## TailChaser Tag
+
+The TailChaser Tag firmware (`vfo-knob-tctag`, a beta) reads who is talking
+on a [TailChaser](https://github.com/Guru-RF/TailChaser) repeater from the
+callsign tag the repeater hides under its audio, about 38 dB under the
+speech, heard through the knob's own microphone from a radio or speaker
+nearby. The knob never transmits, and nothing it hears leaves it: only the
+callsigns read are kept. Step by step:
+[the TailChaser Tag guide](docs/tctag.md).
+
+<p align="center">
+  <img src="docs/tctag/03-on-air.svg" width="320" alt="The TailChaser Tag face: ON4ABC on the air, NETWORK, heard for 12 s">
+</p>
+
+| | |
+|---|---|
+| **What it needs** | A TailChaser repeater sending the tag (format v0, which may still change), played near the knob; an SD card for the list; WiFi for the page, the updates and the clock. |
+| **The face** | The list, an over at a time, newest first: **LISTENING** or **ON THE AIR**, the callsign, **LOCAL** or **NETWORK**, when and for how long, and how well the tag is heard now. The dial goes back through the older ones. |
+| **Placement** | Tap the microphone: the level in the tag's band against the room and the loudest of the last seconds, and what to do — closer, further, or a good place. |
+| **Speech** | Optional: each new callsign said out loud on the jack or a Bluetooth speaker, in a voice made by ElevenLabs with your own key, kept on the card. |
+| **Kept** | The last 100 overs, on the SD card. Nothing heard is recorded. |
+
 ## A Bluetooth headset
 
 The board carries an ESP32 beside the ESP32-S3, with the classic Bluetooth the
@@ -1034,7 +1062,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-icombt`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather`, `vfo-knob-wifitest` and `vfo-knob-tailchaser` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-icombt`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather`, `vfo-knob-wifitest`, `vfo-knob-tailchaser` and `vfo-knob-tctag` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice
