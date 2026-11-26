@@ -19,7 +19,14 @@ static const char *TAG = "mic";
 /* ~340 ms of mono int16 at 24 kHz, in PSRAM. Generous, because the consumer is
  * paced by the server's chrono and a WiFi hiccup should cost latency, not a
  * hole in the transmitted audio. */
+#if VFO_RADIO_TCTAG
+/* Listening for good, the decoder a task of low priority: 2 s at 16 kHz, so a
+ * busy moment elsewhere costs it no samples -- a hole would move every frame
+ * after it. */
+#define MIC_RING_BYTES (64 * 1024)
+#else
 #define MIC_RING_BYTES (16 * 1024)
+#endif
 #define MIC_READ_SAMPLES 512
 /* The PDM element is quiet: speech close to the knob peaked at 1-5% of full
  * scale, and the S3 has no PDM gain stage of its own. This fixed boost sets
@@ -55,6 +62,7 @@ static SemaphoreHandle_t  s_mx;         /* keying, against the source changing *
 static volatile bool      s_ext;        /* a headset's microphone, not the PDM one */
 static volatile bool      s_pdm_on;     /* the PDM channel is enabled */
 static void             (*s_ext_hook)(bool active);
+static volatile bool      s_listen;     /* audio_in_listen: on for good, as it comes */
 
 bool audio_in_active(void) { return s_active; }
 bool audio_in_ext(void) { return s_ext; }
@@ -110,6 +118,7 @@ void audio_in_set_active(bool on)
 
 void audio_in_use_ext(bool on)
 {
+    if (s_listen) return;        /* the room is what is listened to, never a headset */
     if (!s_mx) {                 /* no microphone here: see audio_in_set_active */
         s_ext = on;
         return;
@@ -196,6 +205,27 @@ static void mic_task(void *arg)
             settle = (size_t)s_settle_ms * 24;      /* 24 kHz */
         }
         const float g = MIC_PREGAIN * (float)s_gain / 100.0f;
+        if (s_listen) {
+            /* As it comes, the offset taken out: a level of the room, not
+             * of a voice to transmit. */
+            for (size_t i = 0; i < count; i++) {
+                const float x = buf[i];
+                const float y = x - x1 + MIC_DC_POLE * y1;
+                x1 = x;
+                y1 = y;
+                buf[i] = (int16_t)(y > 32767.0f ? 32767.0f : y < -32768.0f ? -32768.0f : y);
+            }
+            int32_t pk = 0;
+            for (size_t i = 0; i < count; i++) {
+                const int32_t a = buf[i] < 0 ? -buf[i] : buf[i];
+                if (a > pk) pk = a;
+            }
+            const float pkf = (float)pk / 32768.0f;
+            if (pkf > s_stats.peak) s_stats.peak = pkf;
+            if (xRingbufferSend(s_ring, buf, got, 0) != pdTRUE) s_stats.overruns++;
+            else                                                s_stats.blocks++;
+            continue;
+        }
         for (size_t i = 0; i < count; i++) {
             const float x = buf[i];
             const float y = x - x1 + MIC_DC_POLE * y1;
@@ -293,4 +323,25 @@ bool audio_in_take(int16_t *out, size_t samples)
         s_stats.starved++;
     }
     return have > 0;
+}
+
+esp_err_t audio_in_listen(void)
+{
+    if (!s_mx) return ESP_ERR_INVALID_STATE;
+    s_listen = true;
+    audio_in_set_active(true);
+    return ESP_OK;
+}
+
+size_t audio_in_listen_read(int16_t *out, size_t max, uint32_t wait_ms)
+{
+    if (!s_listen || !out || !max) return 0;
+    /* One run of the byte ring: whole samples always, as every block put in
+     * it is, and the ring's size, even. */
+    size_t got = 0;
+    uint8_t *p = xRingbufferReceiveUpTo(s_ring, &got, pdMS_TO_TICKS(wait_ms), max * sizeof(int16_t));
+    if (!p) return 0;
+    memcpy(out, p, got);
+    vRingbufferReturnItem(s_ring, p);
+    return got / sizeof(int16_t);
 }

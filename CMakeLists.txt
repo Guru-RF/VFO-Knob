@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom icombt openx6x00 openx6bt jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather wifitest tailchaser)
+set(_vfo_radios aethersdr icom icombt openx6x00 openx6bt jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather wifitest tailchaser tctag)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -71,7 +71,9 @@ endif()
 # the internet -- for a knob whose links drop. tailchaser is no radio either:
 # TailChaser repeaters watched and steered through their API, over the LAN,
 # the internet or the owner's tailnet (Tailscale, components/microlink), on
-# SVXConnect's face.
+# SVXConnect's face. tctag is no radio either: it listens, through the knob's
+# own microphone, to a TailChaser repeater played in the room, and reads the
+# callsign tag hidden under its audio -- who is talking, and who was.
 if(VFO_RADIO MATCHES "^(aethersdr|openx6x00|openx6bt|jupitersdr)$")
     set(_vfo_client tci_client)
 elseif(VFO_RADIO STREQUAL "svxconnect")
@@ -104,12 +106,14 @@ elseif(VFO_RADIO STREQUAL "wifitest")
     set(_vfo_client wifitest_client)
 elseif(VFO_RADIO STREQUAL "tailchaser")
     set(_vfo_client tailchaser_client)
+elseif(VFO_RADIO STREQUAL "tctag")
+    set(_vfo_client tctag_client)
 else()
     set(_vfo_client icom_client)
 endif()
 foreach(_c tci_client icom_client svx_client flex_client k4_client uber_client kiwi_client owrx_client wsdr_client
            setup_client phone_client epi_client adsb_client clock_client weather_client wifitest_client
-           tailchaser_client)
+           tailchaser_client tctag_client)
     if(NOT _c STREQUAL _vfo_client)
         list(APPEND EXCLUDE_COMPONENTS ${_c})
     endif()
@@ -134,7 +138,7 @@ endif()
 # VFO_RADIO_UBERSDR, VFO_RADIO_KIWI, VFO_RADIO_OWRX, VFO_RADIO_WEBSDR,
 # VFO_RADIO_SETUP, VFO_RADIO_PHONE,
 # VFO_RADIO_EPIBEAM, VFO_RADIO_ADSB, VFO_RADIO_CLOCK, VFO_RADIO_WEATHER,
-# VFO_RADIO_WIFITEST or VFO_RADIO_TAILCHASER is defined as 1.
+# VFO_RADIO_WIFITEST, VFO_RADIO_TAILCHASER or VFO_RADIO_TCTAG is defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)
 idf_build_set_property(COMPILE_DEFINITIONS "VFO_RADIO_${_vfo_radio_uc}=1" APPEND)

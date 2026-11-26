@@ -77,6 +77,8 @@ add_library(vfo_core STATIC
     ${CORE}/src/alarm.c
     ${CORE}/src/wifitest.c
     ${CORE}/src/civ_link.c
+    ${CORE}/src/tag.c
+    ${CORE}/src/tag_hist.c
 )
 target_include_directories(vfo_core PUBLIC ${CORE}/include)
 target_compile_options(vfo_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -244,6 +246,23 @@ add_executable(test_wifitest src/test_wifitest.c)
 target_link_libraries(test_wifitest PRIVATE vfo_core)
 target_compile_options(test_wifitest PRIVATE -Wall -Wextra)
 add_test(NAME test_wifitest COMMAND test_wifitest)
+
+# TailChaser's callsign tag (components/vfo_core/src/tag.c): the format against
+# TailChaser's vectors.json (src/tag_vectors.h), and the decoder on tags made
+# here and on noise alone. TailChaser's recordings are not in the repository:
+# -D TAG_WAV_DIR=<their folder> reads them too.
+set(TAG_WAV_DIR "" CACHE PATH "TailChaser's tag recordings (optional)")
+add_executable(test_tag src/test_tag.c)
+target_link_libraries(test_tag PRIVATE vfo_core)
+target_compile_options(test_tag PRIVATE -Wall -Wextra -O2)
+add_test(NAME test_tag COMMAND test_tag)
+if(TAG_WAV_DIR)
+    set_tests_properties(test_tag PROPERTIES ENVIRONMENT "TAG_WAV_DIR=${TAG_WAV_DIR}")
+endif()
+# ...and a tool that reads it in any WAV: tag_wav FILE... (-v: every reading).
+add_executable(tag_wav src/tag_wav.c)
+target_link_libraries(tag_wav PRIVATE vfo_core)
+target_compile_options(tag_wav PRIVATE -Wall -Wextra -O2)
 
 # The TailChaser firmware's API without the network
 # (components/tailchaser_client/tc_proto.c): a node's status as TailChaser

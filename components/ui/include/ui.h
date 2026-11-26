@@ -495,6 +495,15 @@ void ui_wifitest_data(const wt_t *w);
 void ui_wifitest_turn(int32_t detents);
 #endif
 
+/* The TailChaser Tag firmware's face (VFO_RADIO=tctag; components/vfo_core
+ * tag_view.h, components/tctag_client). From any task: who was heard and how
+ * the listening goes; the dial's turns, back through the list and on. */
+#if VFO_RADIO_TCTAG
+#include "tag_view.h"
+void ui_tctag_data(const tag_view_t *v);
+void ui_tctag_turn(int32_t detents);
+#endif
+
 /* The ADS-B Radar firmware's radar (VFO_RADIO=adsb; components/vfo_core
  * adsb.h, components/adsb_client). */
 #if VFO_RADIO_ADSB
