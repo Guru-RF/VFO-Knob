@@ -888,7 +888,7 @@ static const model_t MODELS[] = {
      * are the IC-7610's under other numbers (wfview's rig file; read back
      * from the radio: MIC). Its memories are a group per band. It refuses
      * 07 D2, so the dial works whichever band the radio has selected, MAIN
-     * or SUB. */
+     * or SUB -- its squelch (14 03) too: that band's. */
     { .name = "IC-9700", .f_min = 144000000, .f_max = 1300000000,
       .preamps = 1,
       .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 10,
@@ -896,7 +896,7 @@ static const model_t MODELS[] = {
       .modin_names = MODIN_7610, .n_modin_names = 6,
       .memories = true, .mem_by_band = true,
       .n_rx = 1, .max_w = 100, .max_w_uhf = 75, .max_w_shf = 10, .sat = true,
-      .off_menu = 0x0146 },
+      .squelch = true, .off_menu = 0x0146 },
     /* The IC-7300MK2: 30 kHz-74.8 MHz -- HF, 6 m and 4 m -- 100 W, one
      * receiver, P.AMP1 and P.AMP2. Its S-meter is the IC-705's and its Po the
      * IC-705's ten times over (wfview's rig file; 4 m may be 50 W on some

@@ -945,7 +945,7 @@ with **Use now** — see [SmartLink](#smartlink).
 With the radio connected, the page opens on its **controls** instead, in the
 knob's own colours: the frequency, typed or stepped, band, mode, filter, AGC,
 the preamp or RF gain, power, the tuner, the squelch where the receiver has
-one (the IC-R8600, a Kiwi), MAIN/SUB and the antenna, RIT, the
+one (the IC-9700, the IC-R8600, a Kiwi), MAIN/SUB and the antenna, RIT, the
 [web SDR](#web-sdrs) and its balance, and the knob's volume and mic gain —
 everything the knob can set on the radio, and
 nothing that transmits. **Config** leads to the settings above, the radio
