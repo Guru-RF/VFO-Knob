@@ -132,7 +132,7 @@ Tap a part of the face and its editor comes up; turn the knob to choose.
 | Swipe | Opens |
 |---|---|
 | **From the left** | RF GAIN, then — a tap on it — POWER, in watts: the band's, on the IC-9700 (100 W on 2 m, 75 on 70 cm, 10 on 23 cm). Not on the IC-R8600. With a web SDR playing, BALANCE comes first |
-| **From the right** | the IC-7610's TUNER: in the line, or out; the IC-R8600's SQUELCH |
+| **From the right** | the IC-7610's TUNER: in the line, or out; the SQUELCH of the IC-9700 (the band the radio has selected) and the IC-R8600: 0 % is OPEN, and it applies as the knob turns |
 | **Down** | RX — LOCAL or a web SDR — then, on the IC-7610, MAIN or SUB and the antenna; on the IC-R8600 the antenna; on the IC-705 and the IC-9700, V/M. The antenna is a press held on the slab away, too |
 | **Up** | RADIO: another of the knob's radios |
 
@@ -497,10 +497,10 @@ anything setting it with a URL:
 GET /api/radio                        the state, as JSON
 GET /api/radio/set?freq=14074000      Hz, or MHz with a point (14.074)
     ...&mode=usb&filter=2&agc=mid&rfgain=80&power=50&tuner=on&rit=-120
-    ...&squelch=30                    the IC-R8600's, 0-100 %
+    ...&squelch=30                    the IC-9700's and IC-R8600's, 0-100 %
 ```
 
-With the IC-R8600 the page has a slider for its squelch as well.
+With the IC-9700 and the IC-R8600 the page has a slider for the squelch as well.
 
 Nothing there transmits, and no setting is taken while the radio is on the air.
 
