@@ -583,7 +583,8 @@ bool ui_take_card_shown(void);
 
 /* The operator asks for the firmware picker (the setup firmware): with the
  * addresses on screen, a finger held three seconds on the S-meter or on them.
- * Once per press; consumed here. */
+ * With no link's warning in the card's place, only on the warning itself:
+ * the S-meter round it asks for nothing then. Once per press; consumed here. */
 bool ui_take_picker_request(void);
 
 /* The setup firmware's screen: a title and a few lines over the whole face,

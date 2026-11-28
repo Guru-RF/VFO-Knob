@@ -147,7 +147,8 @@ and WiFi Test, hold anywhere on the glass for three seconds.
 
 With something wrong — **NO LINK**, say, on a knob with another radio's
 firmware — the warning panel shows the addresses in the card's place: hold
-that until the knob buzzes. Without the setup firmware on its SD card it needs
+the red warning itself until the knob buzzes. The S-meter round it (the knob's
+battery or charging bolt there too) does nothing while the link is down. Without the setup firmware on its SD card it needs
 WiFi: on the USB cable the knob then says **Needs WiFi** and carries on as it
 was.
 

@@ -2847,9 +2847,11 @@ static volatile bool s_card_shown;        /* ...and did: the click is owed */
  * and the question comes up under the finger, where it cannot be seen. With
  * something wrong -- no link, as on a knob with another radio's firmware --
  * the warning panel carries the addresses in the card's place, and counts as
- * the card. */
+ * the card where it is: held on the warning, not on the S-meter round it
+ * (nolink_warn_up). */
 #define PICKER_HOLD_MS 3000
 static bool          s_press_picker;      /* this press may ask for the picker */
+static bool          s_press_picker_off;  /* ...only for the card: off the card, the warning, the gear */
 static volatile bool s_picker_req;
 
 /* Taps act when the finger lifts, not when it lands -- all but PTT and the
@@ -2882,6 +2884,18 @@ static bool addresses_up(void)
 {
     return (s_netinfo && !lv_obj_has_flag(s_netinfo, LV_OBJ_FLAG_HIDDEN)) ||
            !lv_obj_has_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* The warning up for a link that is not there -- NO LINK, or the reason
+ * the client gives. It counts as the card only where it is: held on the
+ * S-meter (the knob's battery or its charging bolt there too), or anywhere
+ * on the radar, it asks for no picker -- a hand reaching for the face of a
+ * knob that is not connected yet is not choosing another firmware. Held on
+ * the warning itself, the picker as ever. A warning over a link that is
+ * there (TX DISABLED, VFO LOCKED, a note) stands for the card as before. */
+static bool nolink_warn_up(void)
+{
+    return !s_last.link_ok && s_warn_panel && !lv_obj_has_flag(s_warn_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void klock_follow(void);
@@ -7223,6 +7237,14 @@ static void pressing_cb(lv_event_t *e)
     }
     if (!s_press_picker || held < PICKER_HOLD_MS) return;
     s_press_picker = false;
+    /* Armed by the card, off it -- the S-meter, the radar -- and the link
+     * lost under the finger meanwhile: the warning, up now, hid the card,
+     * and stands for it only on itself. */
+    if (s_press_picker_off && nolink_warn_up()) {
+        note("press at %d,%d: no picker, the card gone under no link's warning",
+             (int)s_press_pt.x, (int)s_press_pt.y);
+        return;
+    }
     s_press_tap    = false;
     netinfo_show(false);
     s_picker_req   = true;
@@ -7447,22 +7469,35 @@ static void touch_cb(lv_event_t *e)
      * on any face. */
     s_press_picker = gear_at(p) ||
                      (addresses_up() && (shown_at(s_netinfo, p) || shown_at(s_warn_panel, p)));
+    s_press_picker_off = false;
     s_press_card   = false;
 #if ADSB_FACE
     /* The radar: held anywhere, the card, as on a radio's S-meter; with it
      * up, held anywhere, the picker -- not only on the gear, which by the
-     * rim did not answer on a knob (2026-11-21). */
-    if (addresses_up()) s_press_picker = true;
-    else                s_press_card   = !s_press_picker;
+     * rim did not answer on a knob (2026-11-21). With no link the warning
+     * stands for the card only on itself (nolink_warn_up): held elsewhere,
+     * nothing -- the card would go under the warning at once. */
+    if (addresses_up() && !nolink_warn_up()) {
+        s_press_picker_off = !s_press_picker;
+        s_press_picker     = true;
+    } else if (!addresses_up()) {
+        s_press_card = !s_press_picker;
+    }
 #endif
 #else
     /* With the addresses up, on the S-meter or on them: see PICKER_HOLD_MS.
-     * On TailChaser's face also the repeater's name, held as long. */
-    s_press_picker = (addresses_up() &&
-                      (p.y < 104 || shown_at(s_netinfo, p) || shown_at(s_warn_panel, p))) ||
-                     (TC_FACE && s_edit == ED_NONE && !s_asking && shown_at(s_mem_big, p));
-    /* Or, with them not up yet, on the S-meter: see NETINFO_HOLD_MS. */
-    s_press_card = p.y < 104 && !s_press_picker && !aux_spot(p);
+     * On TailChaser's face also the repeater's name, held as long. With no
+     * link, not the S-meter: the warning only on itself (nolink_warn_up). */
+    {
+        const bool on_them = shown_at(s_netinfo, p) || shown_at(s_warn_panel, p);
+        const bool meter   = p.y < 104 && !nolink_warn_up();
+        const bool name    = TC_FACE && s_edit == ED_NONE && !s_asking && shown_at(s_mem_big, p);
+        s_press_picker     = (addresses_up() && (meter || on_them)) || name;
+        s_press_picker_off = s_press_picker && !on_them && !name;
+        /* Or, with them not up yet, on the S-meter: see NETINFO_HOLD_MS --
+         * nor with no link's warning up, which would hide the card at once. */
+        s_press_card = meter && !s_press_picker && !aux_spot(p);
+    }
 #endif
 
     /* A question is up: this tap answers it and goes nowhere else. On the
@@ -7531,7 +7566,8 @@ static void touch_cb(lv_event_t *e)
         }
         /* The radar's hold anywhere, as above: the card, with UNLOCK -- and
          * the padlock still nudged, a tap on an aircraft being refused. */
-        s_press_card = (ADSB_FACE ? s_press_card : !GEAR_FACE && p.y < 104) && !s_press_picker;
+        s_press_card = (ADSB_FACE ? s_press_card : !GEAR_FACE && p.y < 104 && !nolink_warn_up()) &&
+                       !s_press_picker;
         if ((ADSB_FACE || !s_press_card) && !s_press_picker) klock_nudge();
         return;
     }
