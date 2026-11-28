@@ -23,6 +23,10 @@
 #if VFO_RADIO_WEATHER
 #include "weather.h"
 #endif
+#if VFO_RADIO_AIS
+#include "adsb.h"
+#include "ais.h"
+#endif
 #include "lwip/netdb.h"
 #include "mdns.h"
 #include "nvs.h"
@@ -108,6 +112,19 @@
 #define KEY_PORT     "abport"
 #define KEY_USER     "abuser"
 #define KEY_PASS     "abpass"
+#define DEFAULT_HOST ""
+#define DEFAULT_PORT 80
+#define DEFAULT_USER ""
+#define DEFAULT_PASS ""
+#elif VFO_RADIO_AIS
+/* No radio: the ships come from the radar's own source (net_prov_ais). Keys
+ * of its own all the same, so it never writes another firmware's. */
+#define KEY_HOST     "aihost"
+#define KEY_RLIST    "ailist"
+#define KEY_RSEL     "aisel"
+#define KEY_PORT     "aiport"
+#define KEY_USER     "aiuser"
+#define KEY_PASS     "aipass"
 #define DEFAULT_HOST ""
 #define DEFAULT_PORT 80
 #define DEFAULT_USER ""
@@ -353,6 +370,12 @@ static bool     s_has_batt;         /* this knob has run on its battery */
 EXT_RAM_BSS_ATTR static net_adsb_t s_adsb;
 static portMUX_TYPE s_adsb_lock = portMUX_INITIALIZER_UNLOCKED;
 static void adsb_load(kv_handle_t h);
+#endif
+#if VFO_RADIO_AIS
+/* AIS Radar's radar: in PSRAM, as ADS-B Radar's. */
+EXT_RAM_BSS_ATTR static net_ais_t s_ais;
+static portMUX_TYPE s_ais_lock = portMUX_INITIALIZER_UNLOCKED;
+static void ais_load(kv_handle_t h);
 #endif
 #if VFO_RADIO_CLOCK
 static net_alarms_t s_alarms = { .snooze_min = 9, .ring_min = 10, .volume = 60 };
@@ -871,6 +894,9 @@ void net_prov_load_settings(void)
 #if VFO_RADIO_ADSB
     adsb_load(h);
 #endif
+#if VFO_RADIO_AIS
+    ais_load(h);
+#endif
 #if VFO_RADIO_WEATHER
     weather_load(h);
 #endif
@@ -1377,6 +1403,85 @@ void net_prov_save_adsb(const net_adsb_t *in)
     if (a.show != was.show)           kv_set_u8(h, "adshow", a.show);
     if (a.opts != was.opts)           kv_set_u8(h, "adopt", a.opts);
     if (a.refresh_s != was.refresh_s) kv_set_u8(h, "adrefr", a.refresh_s);
+    kv_commit_now(h);
+}
+#endif
+
+#if VFO_RADIO_AIS
+/* Each its own key, so a page that changes one writes one. */
+static void ais_load(kv_handle_t h)
+{
+    net_ais_t a = {
+        .lat_e6 = NET_AIS_HOME_LAT_E6, .lon_e6 = NET_AIS_HOME_LON_E6, .place = NET_AIS_HOME,
+        .source = AIS_SRC_AISSTREAM, .range = 5, .opts = NET_AIS_OPTS_DEFAULT, .refresh_s = 5,
+    };
+    int32_t la, lo;
+    if (kv_get_i32(h, "ailat", &la) == ESP_OK && kv_get_i32(h, "ailon", &lo) == ESP_OK &&
+        la >= -90000000 && la <= 90000000 && lo >= -180000000 && lo <= 180000000) {
+        a.lat_e6 = la;
+        a.lon_e6 = lo;
+    }
+    size_t len = sizeof a.place;  kv_get_str(h, "aiplace", a.place, &len);
+    len = sizeof a.key;           kv_get_str(h, "aikey", a.key, &len);
+    len = sizeof a.url;           kv_get_str(h, "aiurl", a.url, &len);
+    len = sizeof a.watch;         kv_get_str(h, "aiwatch", a.watch, &len);
+    uint8_t v;
+    if (kv_get_u8(h, "aisrc", &v) == ESP_OK && ais_src_ok(v))       a.source = v;
+    if (kv_get_u8(h, "aiunit", &v) == ESP_OK && adsb_units_ok(v))   a.units = v;
+    if (kv_get_u8(h, "airng", &v) == ESP_OK && v < AIS_RANGES)      a.range = v;
+    if (kv_get_u8(h, "aishow", &v) == ESP_OK && ais_show_ok(v))     a.show = v;
+    if (kv_get_u8(h, "aiopt", &v) == ESP_OK && v < 8)               a.opts = v;
+    if (kv_get_u8(h, "airefr", &v) == ESP_OK && v >= NET_AIS_REFRESH_MIN && v <= NET_AIS_REFRESH_MAX)
+        a.refresh_s = v;
+    portENTER_CRITICAL(&s_ais_lock);
+    s_ais = a;
+    portEXIT_CRITICAL(&s_ais_lock);
+}
+
+void net_prov_ais(net_ais_t *out)
+{
+    portENTER_CRITICAL(&s_ais_lock);
+    *out = s_ais;
+    portEXIT_CRITICAL(&s_ais_lock);
+}
+
+void net_prov_save_ais(const net_ais_t *in)
+{
+    net_ais_t was, a = *in;
+    net_prov_ais(&was);
+    const bool pos = a.lat_e6 >= -90000000 && a.lat_e6 <= 90000000 &&
+                     a.lon_e6 >= -180000000 && a.lon_e6 <= 180000000;
+    if (!pos) { a.lat_e6 = was.lat_e6; a.lon_e6 = was.lon_e6; memcpy(a.place, was.place, sizeof a.place); }
+    if (!ais_src_ok(a.source))    a.source = was.source;
+    if (!adsb_units_ok(a.units))  a.units = was.units;
+    if (a.range >= AIS_RANGES)    a.range = was.range;
+    if (!ais_show_ok(a.show))     a.show = was.show;
+    if (a.opts >= 8)              a.opts = was.opts;
+    if (a.refresh_s < NET_AIS_REFRESH_MIN || a.refresh_s > NET_AIS_REFRESH_MAX) a.refresh_s = was.refresh_s;
+    a.place[sizeof a.place - 1] = 0;
+    a.key[sizeof a.key - 1] = 0;
+    a.url[sizeof a.url - 1] = 0;
+    a.watch[sizeof a.watch - 1] = 0;
+    if (!memcmp(&a, &was, sizeof a)) return;
+    portENTER_CRITICAL(&s_ais_lock);
+    s_ais = a;
+    portEXIT_CRITICAL(&s_ais_lock);
+
+    kv_handle_t h = kv();
+    if (a.lat_e6 != was.lat_e6 || a.lon_e6 != was.lon_e6) {
+        kv_set_i32(h, "ailat", a.lat_e6);
+        kv_set_i32(h, "ailon", a.lon_e6);
+    }
+    if (strcmp(a.place, was.place))   kv_set_str(h, "aiplace", a.place);
+    if (strcmp(a.key, was.key))       kv_set_str(h, "aikey", a.key);
+    if (strcmp(a.url, was.url))       kv_set_str(h, "aiurl", a.url);
+    if (strcmp(a.watch, was.watch))   kv_set_str(h, "aiwatch", a.watch);
+    if (a.source != was.source)       kv_set_u8(h, "aisrc", a.source);
+    if (a.units != was.units)         kv_set_u8(h, "aiunit", a.units);
+    if (a.range != was.range)         kv_set_u8(h, "airng", a.range);
+    if (a.show != was.show)           kv_set_u8(h, "aishow", a.show);
+    if (a.opts != was.opts)           kv_set_u8(h, "aiopt", a.opts);
+    if (a.refresh_s != was.refresh_s) kv_set_u8(h, "airefr", a.refresh_s);
     kv_commit_now(h);
 }
 #endif

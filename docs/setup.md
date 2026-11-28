@@ -84,6 +84,7 @@ A name too long for the panel is shown in smaller type, so it fits.
 | **Telephone** | a SIP telephone account: the knob is the handset |
 | **EpiBeam** | a phased array's beam switch, a 4-square or 8 directions, for EpiCenter: a beta |
 | **ADS-B Radar** | a radar of the aircraft round you, from an ADS-B feed or your own receiver |
+| **AIS Radar** | a radar of the ships round you, from AISStream.io or your own AIS-catcher: a beta |
 | **Clock** | a clock for the shack: local time, UTC, four faces, ten alarms |
 | **Weather** | a weather station for one place, from Open-Meteo's forecast |
 | **WiFi Test** | the WiFi network measured, for a knob whose links drop: its signal, every drop and why, pings, the channels |
@@ -139,9 +140,9 @@ To install another radio's firmware, go back to the list from the knob itself.
 
    ![REBOOTING into update mode](setup/13-rebooting.svg)
 
-A firmware with no S-meter on its face asks it another way. On EpiBeam and
-ADS-B Radar, hold the gear at the foot of the face for three seconds; ADS-B
-Radar also takes the two holds above anywhere on its radar (see
+A firmware with no S-meter on its face asks it another way. On EpiBeam, ADS-B
+Radar and AIS Radar, hold the gear at the foot of the face for three seconds;
+the two radars also take the two holds above anywhere on its radar (see
 [its guide](adsb.md#back-to-the-firmware-picker)). On the Clock, the Weather
 and WiFi Test, hold anywhere on the glass for three seconds.
 

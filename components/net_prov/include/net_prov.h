@@ -213,6 +213,41 @@ void     net_prov_adsb(net_adsb_t *out);
 void     net_prov_save_adsb(const net_adsb_t *a);
 #endif
 
+/* The AIS Radar firmware's radar (components/ais_client): its middle, the
+ * source -- AISStream.io with the owner's own key, or an AIS-catcher of
+ * their own -- the units, the range on the dial, what it shows, and the
+ * ships it calls out. The key is kept with the rest on the card and never
+ * shown back on the page. Copied out and in whole, under a lock, as ADS-B
+ * Radar's is. Only that firmware has it. */
+#if VFO_RADIO_AIS
+#define NET_AIS_NO_POS INT32_MIN
+/* The middle until one is set, and when the page empties it: the coast at
+ * Westende, the North Sea's traffic in sight. */
+#define NET_AIS_HOME        "Westende"
+#define NET_AIS_HOME_LAT_E6 51160000
+#define NET_AIS_HOME_LON_E6 2760000
+enum { NET_AIS_PORTS = 1, NET_AIS_COUNTRIES = 2, NET_AIS_SWEEP = 4 };
+#define NET_AIS_OPTS_DEFAULT (NET_AIS_PORTS | NET_AIS_COUNTRIES | NET_AIS_SWEEP)
+#define NET_AIS_REFRESH_MIN  2
+#define NET_AIS_REFRESH_MAX  60
+typedef struct {
+    int32_t lat_e6, lon_e6;     /* the middle; NET_AIS_HOME's until set */
+    char    place[24];          /* what the page called it, "" for a bare position */
+    uint8_t source;             /* AIS_SRC_* (components/vfo_core ais.h) */
+    char    key[72];            /* AISStream's API key: "" none */
+    char    url[128];           /* an AIS-catcher of one's own */
+    uint8_t units;              /* ADSB_NM, ADSB_KM, ADSB_MI */
+    uint8_t range;              /* the dial's, 0 to AIS_RANGES - 1 */
+    uint8_t show;               /* AIS_SHOW_* */
+    uint8_t opts;               /* NET_AIS_* */
+    uint8_t refresh_s;          /* the AIS-catcher asked every so many seconds */
+    char    watch[96];          /* the ships called out: MMSIs and names, by comma */
+} net_ais_t;
+void     net_prov_ais(net_ais_t *out);
+/* What differs from what is kept is written; anything out of bounds is not. */
+void     net_prov_save_ais(const net_ais_t *a);
+#endif
+
 /* The Weather firmware's place and units (components/weather_client):
  * the forecast's place, as the page found it; the units shown; how often
  * Open-Meteo is asked; how often the faces go on to the next by themselves;

@@ -328,6 +328,59 @@ body.pwforce .wrap>:not(.pwkeep){display:none!important}
      and OurAirports, both public domain.</p>
 </section>
 
+<section id="aissec" hidden>
+  <h2>Radar</h2>
+  <label for="aiport">Middle: a harbour (its name)</label>
+  <input id="aiport" maxlength="23" placeholder="Oostende" autocorrect="off" spellcheck="false">
+  <div class="grid">
+    <div><label for="ailat">&hellip;or a place: latitude</label>
+      <input id="ailat" inputmode="decimal" placeholder="51.1600"></div>
+    <div><label for="ailon">longitude</label>
+      <input id="ailon" inputmode="decimal" placeholder="2.7600"></div>
+  </div>
+  <label for="aiplace">The place's name</label>
+  <input id="aiplace" maxlength="23" placeholder="Westende" autocorrect="off" spellcheck="false">
+  <p class="note">The radar's middle: a harbour by its name, from the knob's own list of
+     Natural Earth's ports; or a place in degrees, north and east positive &mdash; your
+     station's, say, or a stretch of coast. Left empty, it is Westende. North is up.</p>
+  <label for="aisrc">Ships from</label>
+  <select id="aisrc"><option value="0">AISStream.io (a free key of your own)</option>
+    <option value="1">Your own AIS-catcher</option></select>
+  <div id="aikeyrow"><label for="aikey">Your AISStream API key</label>
+    <input id="aikey" type="password" maxlength="71" autocomplete="off" autocapitalize="none"
+           autocorrect="off" spellcheck="false">
+    <label class="chk"><input type="checkbox" id="aikeyclr"> Forget the key</label></div>
+  <div id="aiurlrow" hidden><label for="aiurl">Your AIS-catcher's address</label>
+    <input id="aiurl" maxlength="127" placeholder="http://192.168.1.20:8100" autocapitalize="none"
+           autocorrect="off" spellcheck="false"></div>
+  <p class="note" id="aisrcnote"></p>
+  <div class="grid">
+    <div><label for="aiunit">Distances in</label>
+      <select id="aiunit"><option value="0">nautical miles</option><option value="1">kilometres</option>
+        <option value="2">miles</option></select></div>
+    <div><label for="aishow">Show</label>
+      <select id="aishow"><option value="0">every ship and aid</option><option value="1">ships only</option>
+        <option value="2">ships under way</option></select></div>
+    <div id="airefrrow"><label for="airefr">Asked every (seconds)</label>
+      <input id="airefr" type="number" min="2" max="60"></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="aiprt"> Harbours</label>
+  <label class="chk"><input type="checkbox" id="aicty"> Coasts and borders</label>
+  <label class="chk"><input type="checkbox" id="aiswp"> The sweep</label>
+  <label for="aiwatch">Call out these ships</label>
+  <input id="aiwatch" maxlength="95" placeholder="205123000, PRINS FILIP, MSC*" autocapitalize="characters"
+         autocorrect="off" spellcheck="false">
+  <p class="note">MMSIs or names, by comma; a <b>*</b> at the end for every name starting so.
+     One coming into range is called out at the top in gold, and the knob clicks; an emergency
+     &mdash; an AIS-SART, a man overboard device or an EPIRB &mdash; is always called out, in red,
+     and the knob buzzes. The range is the dial's: a detent a range, from 1 to 50 NM (2 to 90 km).
+     A tap on a ship shows its card: what it is, where it is bound, its speed and course.</p>
+  <p class="note" id="aifeed"></p>
+  <p class="note">The ships: <a href="https://aisstream.io">AISStream.io</a>, from receivers all over
+     the world, or <a href="https://github.com/jvde-github/AIS-catcher">AIS-catcher</a> on a receiver of
+     your own. The map: Natural Earth, public domain.</p>
+</section>
+
 <section id="wxsec" hidden>
   <h2>Weather</h2>
   <label for="wxfind">Where: a town or a city</label>
@@ -1312,17 +1365,20 @@ async function load(){
   PHONE = c.radio === 'phone';            /* a telephone: its SIP account is its own */
   EPI = c.radio === 'epibeam';            /* an array's beam: no radio, no audio */
   ADSB = c.radio === 'adsb';              /* a radar of the aircraft: no radio, no audio */
+  AIS = c.radio === 'ais';                /* ...of the ships, the same way */
   CLOCK = c.radio === 'clock';            /* a clock: no radio; its alarms' sound alone */
   WX = c.radio === 'weather';             /* Open-Meteo's forecast: no radio, no audio */
   WT = c.radio === 'wifitest';            /* the WiFi network measured: no radio, no audio */
   TG = c.radio === 'tctag';               /* a repeater's callsign tag, heard in the room: no radio */
   TC = c.radio === 'tailchaser';          /* TailChaser repeaters: their API, the one shown heard */
-  SCREEN = EPI || ADSB || CLOCK || WX || WT || TG;
+  SCREEN = EPI || ADSB || AIS || CLOCK || WX || WT || TG;
   /* The setup firmware has no radio: it installs one of the others. */
   $('radiosec').hidden = c.radio === 'setup' || PHONE || KIWI || SCREEN || TC;
   $('episec').hidden = !EPI; $('beamn').value = String(c.beamn ?? 4);
   $('adsbsec').hidden = !ADSB;
   if (ADSB) adsbLoad();
+  $('aissec').hidden = !AIS;
+  if (AIS) aisLoad();
   $('wxsec').hidden = !WX;
   if (WX) wxLoad();
   $('wtsec').hidden = !WT;
@@ -2225,7 +2281,7 @@ function pwHint(d,x){
 let PHONE=false, phoneLoaded=false, FAVS=[];
 let EPI=false;                          /* the EpiBeam firmware's page */
 let TC=false, tcLoaded=false, TCN=[];     /* the tailchaser firmware's page; its repeaters' rows */
-let ADSB=false, CLOCK=false, WX=false, WT=false, TG=false, SCREEN=false; /* ADS-B Radar's, the Clock's, the Weather's, the WiFi Test's, TailChaser Tag's; any, a face with no radio */
+let ADSB=false, AIS=false, CLOCK=false, WX=false, WT=false, TG=false, SCREEN=false; /* ADS-B Radar's, AIS Radar's, the Clock's, the Weather's, the WiFi Test's, TailChaser Tag's; any, a face with no radio */
 
 /* ---- ADS-B Radar: the radar's middle, its feed, what it shows ---- */
 const ADOPT={adapt:1, adcty:2, adswp:4, adgnd:8};    /* net_prov.h NET_ADSB_* */
@@ -2256,6 +2312,55 @@ async function adsbSave(){
   let o=0; for(const [id,bit] of Object.entries(ADOPT)) if($(id).checked) o|=bit;
   b.append('opts',String(o));
   let r; try{ r=await fetch('/api/adsb',{method:'POST',body:b}) }catch(e){ return 'the knob did not answer' }
+  return r.ok?'':await r.text();
+}
+/* ---- AIS Radar: the radar's middle, its source, what it shows ---- */
+const AIOPT={aiprt:1, aicty:2, aiswp:4};             /* net_prov.h NET_AIS_* */
+let aiHasKey=false;
+function aisSrc(){
+  const own=$('aisrc').value==='1';
+  $('aiurlrow').hidden=!own; $('aikeyrow').hidden=own; $('airefrrow').hidden=!own;
+  $('aikey').placeholder=aiHasKey?'set: leave empty to keep it':'from aisstream.io, signed in with GitHub';
+  $('aisrcnote').innerHTML=own
+    ?'Your AIS-catcher is asked for its <b>ships.json</b>, every few seconds: its address, and <b>/ships.json</b> is added when no path is given.'
+    :'AISStream.io sends the ships round the middle as they report, over one connection kept open. Its key is free: sign in at <a href="https://aisstream.io/apikeys">aisstream.io</a> with GitHub and make one. The knob keeps it on its card, never shows it again here, and never logs it.';
+}
+$('aisrc').onchange=aisSrc;
+/* A place typed: the harbour is no longer the middle. */
+$('ailat').oninput=$('ailon').oninput=()=>{ $('aiport').value='' };
+async function aisLoad(){
+  let a; try{ a=await (await fetch('/api/ais',{cache:'no-store'})).json() }catch(e){ return }
+  $('aiport').value='';
+  $('ailat').value=a.lat!==undefined?a.lat.toFixed(4):''; $('ailon').value=a.lon!==undefined?a.lon.toFixed(4):'';
+  $('aiplace').value=a.place||'';
+  aiHasKey=!!a.key; $('aikey').value=''; $('aikeyclr').checked=false;
+  $('aisrc').value=String(a.src??0); $('aiurl').value=a.url||''; aisSrc();
+  $('aiunit').value=String(a.units??0); $('aishow').value=String(a.show??0); $('airefr').value=a.refresh??5;
+  for(const [id,bit] of Object.entries(AIOPT)) $(id).checked=!!((a.opts??7)&bit);
+  $('aiwatch').value=a.watch||'';
+  const n=a.known?` ${a.known} ship${a.known===1?'':'s'} known, ${a.permin} message${a.permin===1?'':'s'} a minute.`:'';
+  $('aifeed').textContent=a.lat===undefined?'No middle yet: the radar is empty until one is set.'
+                         :a.ok?`${a.feed} answers.${n}`:`The source: ${a.feed}.`;
+  $('aifeed').style.color=a.lat!==undefined&&a.ok?'var(--ok)':'var(--accent)';
+}
+/* Saved after the rest, as ADS-B Radar's is: '' or why not. */
+async function aisSave(){
+  const b=new URLSearchParams(), p=$('aiport').value.trim();
+  if(p) b.append('port',p);
+  else {
+    b.append('lat',$('ailat').value.trim().replace(',','.')); b.append('lon',$('ailon').value.trim().replace(',','.'));
+    b.append('place',$('aiplace').value.trim());
+  }
+  b.append('src',$('aisrc').value); b.append('url',$('aiurl').value.trim());
+  const k=$('aikey').value.trim();
+  if(k) b.append('key',k);
+  if($('aikeyclr').checked) b.append('keyclear','1');
+  b.append('units',$('aiunit').value); b.append('show',$('aishow').value);
+  b.append('refresh',$('airefr').value||'5'); b.append('watch',$('aiwatch').value.trim());
+  let o=0; for(const [id,bit] of Object.entries(AIOPT)) if($(id).checked) o|=bit;
+  b.append('opts',String(o));
+  let r; try{ r=await fetch('/api/ais',{method:'POST',body:b}) }catch(e){ return 'the knob did not answer' }
+  if(r.ok) aisLoad();
   return r.ok?'':await r.text();
 }
 /* ---- WiFi Test: what the knob finds of its network ---- */
@@ -2864,6 +2969,11 @@ $('save').onclick=async()=>{
     if(e) say('Radar not saved: '+e,false);
     else  $('msg').textContent='Saved. The radar shows it at once.';
   }
+  if(r.ok && AIS){
+    const e=await aisSave();
+    if(e) say('Radar not saved: '+e,false);
+    else  $('msg').textContent='Saved. The radar shows it at once.';
+  }
   if(r.ok && CLOCK){
     const e=await alSave();
     if(e) say('Alarms not saved: '+e,false);
@@ -3027,6 +3137,7 @@ const RADIOS=[{id:'aethersdr', name:'AetherSDR (TCI)'},
               {id:'websdr',    name:'WebSDR (the receivers on websdr.org)'},
               {id:'epibeam',   name:'EpiBeam (an array\'s beam, through EpiCenter)', beta:true},
               {id:'adsb',      name:'ADS-B Radar (the aircraft round you)'},
+              {id:'ais',       name:'AIS Radar (the ships round you)'},
               {id:'clock',     name:'Clock (the knob as a clock)'},
               {id:'weather',   name:'Weather (Open-Meteo\'s forecast)'},
               {id:'wifitest',  name:'WiFi Test (what the WiFi network does, for links that drop)'},

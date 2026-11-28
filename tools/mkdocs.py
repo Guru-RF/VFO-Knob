@@ -2115,6 +2115,243 @@ def adsb_pictures():
     return {k: v.replace("adglass", f"adsb-{k[:2]}-glass") for k, v in out.items()}
 
 
+# --- the AIS Radar firmware ----------------------------------------------------------
+
+AI_MIDDLE = (51.160, 2.760)                # ais.c: Westende, when the page names none
+AI_RANGES = (1, 2, 3, 5, 8, 12, 20, 30, 50)  # ais.c: NM, a detent each
+AI_KIND = dict(other="#9CA3AF", cargo="#4ADE80", tanker="#D9534F", passenger="#3B9BF5", hsc="#FFE15C",
+               special="#2DD4BF", fishing="#FFA07A", pleasure="#D36BF2", aton="#F472B6", base="#B0B7C3",
+               sar="#FFFFFF", emergency="#FF3030")   # ui.c AD_KIND
+# Sample ships, none of them real: name, kind, distance (NM), bearing, speed (kn, None at rest),
+# course, the status said at rest.
+AI_SEA = (
+    ("NORTH MERIDIAN", "cargo", 7.5, 330, 12.4, 62, ""),
+    ("SEA LANTERN", "tanker", 9.0, 15, None, 0, "at anchor"),
+    ("CHANNEL SPIRIT", "passenger", 5.5, 300, 18.2, 240, ""),
+    ("BLUE HERON", "fishing", 3.2, 345, 4.1, 290, ""),
+    ("SANDPIPER", "pleasure", 1.8, 20, 5.6, 210, ""),
+    ("PILOT TWO", "special", 4.6, 40, 9.8, 110, ""),
+    ("KESTREL", "cargo", 10.5, 290, 11.0, 70, ""),
+    ("WEST BANK BUOY", "aton", 6.2, 350, None, 0, ""),
+    ("GULL", "hsc", 8.4, 50, 24.5, 230, ""),
+)
+AI_SART = ("SART 970000001", "emergency", 4.0, 325, None, 0, "")
+AI_PORTS = (("NIEUWPOORT", 51.150, 2.722), ("OOSTENDE", 51.233, 2.918), ("DUNKERQUE", 51.050, 2.367))
+
+
+def ais_face(range_i=5, sea=AI_SEA, show="", sel=None, sweep=40, feed="AISStream", ok=True,
+             watch=None, sart=False, nopos=False):
+    """AIS Radar's face (ui.c AIS_FACE, the radar shared with ADS-B Radar's):
+    the coasts and the harbours, the rings and the compass; the ships over
+    them -- an arrow along the course under way, a dot at rest, a diamond
+    for an aid to navigation -- coloured by their kind, labelled with name
+    and speed (or moored, at anchor); the range at the top, the source and
+    how many at the foot, the gear; an alert's banner."""
+    nm = AI_RANGES[range_i]
+    rng = f"{nm} NM"
+    plate = ad_plate(rng)
+    s = [f'<rect x="0" y="0" width="360" height="360" fill="{AD_BG}"/>',
+         f'<clipPath id="adglass"><circle cx="180" cy="180" r="{AD_R}"/></clipPath>']
+    ln = []
+    if not nopos:
+        ln.append(f'<path d="M180,{180 - AD_R}V{180 + AD_R}M{180 - AD_R},180H{180 + AD_R}" '
+                  f'stroke="{AD_AXIS}" stroke-width="1"/>')
+        runs, _ = adsb_tables()
+        half = nm * 1.05
+        dlat, dlon = half / 60, half / (60 * math.cos(math.radians(AI_MIDDLE[0])))
+        paths = {0: [], 1: []}
+        for kind, (la0, la1, lo0, lo1), pts in runs:
+            if la1 / 100 < AI_MIDDLE[0] - dlat or la0 / 100 > AI_MIDDLE[0] + dlat:
+                continue
+            if lo1 / 100 < AI_MIDDLE[1] - dlon or lo0 / 100 > AI_MIDDLE[1] + dlon:
+                continue
+            xy = [ad_project(la / 1e4, lo / 1e4, nm, AI_MIDDLE) for la, lo in pts]
+            paths[kind].append("M" + "L".join(f"{180 + x:.1f},{180 + y:.1f}" for x, y in xy))
+        for kind, col in ((0, AD_COAST), (1, AD_BORDER)):
+            if paths[kind]:
+                ln.append(f'<path d="{"".join(paths[kind])}" fill="none" stroke="{col}" '
+                          f'stroke-width="1" stroke-linejoin="round"/>')
+        for r, col in ((AD_R // 4, AD_RING), (AD_R // 2, AD_RING_HALF), (AD_R * 3 // 4, AD_RING), (AD_R, AD_RING_HALF)):
+            ln.append(f'<circle cx="180" cy="180" r="{r}" fill="none" stroke="{col}" stroke-width="1"/>')
+        for deg in range(0, 360, 10):
+            t = 12 if deg % 90 == 0 else 8 if deg % 30 == 0 else 4
+            a = math.radians(deg)
+            ln.append(f'<line x1="{180 + math.sin(a) * (AD_R - t):.1f}" y1="{180 - math.cos(a) * (AD_R - t):.1f}" '
+                      f'x2="{180 + math.sin(a) * AD_R:.1f}" y2="{180 - math.cos(a) * AD_R:.1f}" '
+                      f'stroke="{AD_TICK}" stroke-width="1"/>')
+        ln.append(f'<path d="M177,180H184M180,177V184" stroke="{AD_TICK}" stroke-width="1"/>')
+    s.append(f'<g clip-path="url(#adglass)">{"".join(ln)}</g>')
+    s.append(f'<rect x="{plate[0]}" y="0" width="{plate[2] - plate[0] + 1}" height="{plate[3] + 1}" fill="{AD_BG}"/>')
+
+    ships = []
+    for ship in ([] if nopos else list(sea) + ([AI_SART] if sart else [])):
+        name, kind, dist, brg, sog, cog, rest = ship
+        if show == "moving" and sog is None:
+            continue
+        if show == "ships" and kind == "aton":
+            continue
+        la, lo = ad_at(dist, brg, AI_MIDDLE)
+        x, y = ad_project(la, lo, nm, AI_MIDDLE)
+        if x * x + y * y > (AD_R - 3) ** 2:
+            continue
+        line2 = "" if kind == "aton" else f"{sog:.1f} kn" if sog is not None else rest or "stopped"
+        ships.append((180 + round(x), 180 + round(y), name, kind, sog, cog, line2))
+    alerts = [p for p in ships if p[3] == "emergency"] + [p for p in ships if watch and p[2] == watch]
+    boxes = [plate, (100, AD_GEAR_Y - 24, 260, 359)]
+    over = ""
+    if alerts and sel is None:
+        b = alerts[0]
+        em = b[3] == "emergency"
+        what = ("AIS-SART" if em else "Cargo") + "  " + b[2] + (f"  +{len(alerts) - 1}" if len(alerts) > 1 else "")
+        w = montserrat(14).width(what) + 20
+        bg, fg = (AD_EMERGENCY, md.TEXT) if em else ("#3A2C08", md.ACCENT)
+        over += (f'<rect x="{180 - w / 2:.1f}" y="{AD_BANNER_Y}" width="{w}" height="22" rx="10" fill="{bg}"/>'
+                 + md.text(180, AD_BANNER_Y + 16, esc(what), 14, fg))
+        boxes.append((40, AD_BANNER_Y - 2, 320, AD_BANNER_Y + 26))
+    texts = []
+    if not nopos:
+        hv = nm / 2
+        t = f"{hv:g}"
+        hx, hy = 180 + int(AD_R / 2 * 0.707) + 3, 180 - int(AD_R / 2 * 0.707) - 14
+        texts.append(md.text(hx, hy + 11, t, 12, "#36784C", anchor="start"))
+        boxes.append((hx, hy, hx + 30, hy + 14))
+        texts.append(md.text(180 + AD_R - 22, 180 + 3, "E", 12, AD_TICK, anchor="start"))
+        texts.append(md.text(180 - AD_R + 10, 180 + 3, "W", 12, AD_TICK, anchor="start"))
+        boxes += [(180 + AD_R - 24, 171, 180 + AD_R, 188), (180 - AD_R, 171, 180 - AD_R + 26, 188)]
+    f12 = montserrat(12)
+    for x, y, name, kind, sog, cog, line2 in sorted(ships, key=lambda p: (p[0] - 180) ** 2 + (p[1] - 180) ** 2):
+        col = AI_KIND[kind]
+        if kind == "aton":
+            s.append(f'<polygon points="{x - 5},{y} {x},{y - 5} {x + 5},{y} {x},{y + 5}" fill="{col}"/>')
+        elif sog is not None:
+            a = math.radians(cog)
+            pts = " ".join(f"{x + r * math.sin(a + o):.1f},{y - r * math.cos(a + o):.1f}"
+                           for r, o in ((10, 0), (6, 2.7), (6, -2.7)))
+            s.append(f'<polygon points="{pts}" fill="{col}"/>')
+        else:
+            s.append(f'<circle cx="{x}" cy="{y}" r="3.5" fill="{col}"/>')
+        if name == sel:
+            s.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" stroke="{md.TEXT}" stroke-width="2"/>')
+        elif kind == "emergency":
+            s.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" stroke="{AD_EMERGENCY}" stroke-width="2"/>')
+        shown = name[:14]
+        w = max(f12.width(shown), f12.width(line2)) + 2
+        hgt = 29 if line2 else 15
+        box = (x + 8, y - 15, x + 8 + w, y - 15 + hgt)
+        left = False
+        if not ad_in_glass(box) or not ad_free(boxes, box):
+            box, left = (x - 8 - w, y - 15, x - 8, y - 15 + hgt), True
+            if not ad_in_glass(box) or not ad_free(boxes, box):
+                continue
+        boxes.append(box)
+        tx, anchor = (box[2], "end") if left else (box[0], "start")
+        texts.append(md.text(tx, box[1] + 12, esc(shown), 12, col, anchor=anchor)
+                     + (md.text(tx, box[1] + 27, esc(line2), 12, col, anchor=anchor) if line2 else ""))
+    if not nopos:
+        for pname, la, lo in AI_PORTS:
+            x, y = ad_project(la, lo, nm, AI_MIDDLE)
+            if x * x + y * y > (AD_R - 6) ** 2:
+                continue
+            ix, iy = 180 + round(x), 180 + round(y)
+            s.append(f'<rect x="{ix - 1}" y="{iy - 1}" width="3" height="3" fill="{AD_APT}"/>')
+            box = (ix + 4, iy - 7, ix + 4 + f12.width(pname), iy + 7)
+            if ad_in_glass(box) and ad_free(boxes, box):
+                boxes.append(box)
+                texts.append(md.text(ix + 4, iy + 5, pname, 12, "#305638", anchor="start"))
+    s += texts
+    if sweep is not None and not nopos and sel is None:
+        wedges = []
+        for i, opa in enumerate((64, 50, 38, 28, 20, 13, 8, 4)):
+            a1, a0 = math.radians(sweep - i * 5), math.radians(sweep - i * 5 - 5)
+            wedges.append(f'<path d="M180,180L{180 + AD_R * math.sin(a0):.1f},{180 - AD_R * math.cos(a0):.1f}'
+                          f'A{AD_R},{AD_R} 0 0 1 {180 + AD_R * math.sin(a1):.1f},{180 - AD_R * math.cos(a1):.1f}Z" '
+                          f'fill="{AD_SWEEP}" fill-opacity="{opa / 255:.3f}"/>')
+        a = math.radians(sweep)
+        wedges.append(f'<line x1="180" y1="180" x2="{180 + AD_R * math.sin(a):.1f}" '
+                      f'y2="{180 - AD_R * math.cos(a):.1f}" stroke="{AD_SWEEP}" stroke-opacity="0.59" stroke-width="2"/>')
+        s.append(f'<g clip-path="url(#adglass)">{"".join(wedges)}'
+                 f'<rect x="{plate[0]}" y="0" width="{plate[2] - plate[0] + 1}" height="{plate[3] + 1}" '
+                 f'fill="{AD_BG}"/></g>')
+    s.append(md.text(180, 12 + 17, esc(rng), 20, AD_TEXT))
+    word = {"ships": " ships", "moving": " moving"}.get(show, "")
+    foot = feed if (nopos or not ok) else f"{feed} • {len(ships)}{word}"
+    fw = montserrat(14).width(foot) + 12
+    s.append(f'<rect x="{180 - fw / 2:.1f}" y="{AD_FOOT_Y - 8}" width="{fw}" height="16" rx="6" fill="{AD_BG}"/>'
+             + centred(180, AD_FOOT_Y, foot, 14, md.LABEL if ok and not nopos else md.WARN))
+    if nopos:
+        s.append(centred(180, 180 - 24, "NO LOCATION", 20, md.WARN))
+        s.append(lines(180, 180 + 14, "Set the radar's middle\non the configuration page", 14, md.TEXT2, 17))
+    s.append(f'<circle cx="180" cy="{AD_GEAR_Y}" r="20" fill="{md.BG1}" stroke="{md.SUBTLE}" '
+             f'stroke-width="2"/>' + gear(180, AD_GEAR_Y, md.TEXT2))
+    s.append(over)
+    return "".join(s)
+
+
+def ais_card(name, kind, dest, speed, status, where, ident, em=False):
+    """ad_card_rows() (AIS): a ship's card, as an aircraft's: its name at
+    28 px; its kind and size; where it is bound and when, in gold; speed
+    and course at 20 px; its status and draught; where it is; its MMSI and
+    call sign -- or the emergency, in red."""
+    s = (f'<rect x="55" y="78" width="250" height="196" rx="18" fill="{md.BG1}" '
+         f'stroke="{md.ACCENT}" stroke-width="2"/>'
+         + centred(180, 78 + 10 + 16, name, 28, md.TEXT))
+    rows = ((46, kind, 14, md.LABEL), (68, dest, 14, md.ACCENT), (91, speed, 20, md.TEXT),
+            (120, status, 14, md.TEXT2), (142, where, 14, md.TEXT2), (164, ident, 14, md.DANGER if em else md.LABEL))
+    for y, t, size, col in rows:
+        if t:
+            s += centred(180, 78 + y + montserrat(size).line_height // 2, t, size, col)
+    return s
+
+
+def ais_pictures():
+    md.use_palette("svxconnect")         # the radar's ink and gold, as ADS-B Radar's
+    f = ais_face()
+
+    def at(name, nm=AI_RANGES[5]):
+        ship = next(x for x in AI_SEA if x[0] == name)
+        x, y = ad_project(*ad_at(ship[2], ship[3], AI_MIDDLE), nm, AI_MIDDLE)
+        return 180 + round(x), 180 + round(y)
+    hx, hy = at("BLUE HERON")
+    lx, ly = at("SEA LANTERN")
+    bx, by = at("WEST BANK BUOY")
+    left = [(144, 22, "the range  \u00b7  turn the dial"), (hx, hy, "a ship under way: name, speed"),
+            (bx, by, "an aid to navigation: a diamond"), (160, AD_GEAR_Y, "the gear"),
+            (130, AD_FOOT_Y, "the source  \u00b7  ships shown")]
+    right = [(257, 88, "the sweep"), (lx, ly, "at rest: a dot"), (240, 114, "half the range, on its ring"),
+             (333, 176, "the compass"), (200, AD_GEAR_Y, "tap: card \u00b7 hold 3 s: picker")]
+    left.sort(key=lambda c: c[1])
+    right.sort(key=lambda c: c[1])
+    out = {}
+    out["01-face"] = callouts("ais-01", "The AIS Radar firmware's face", f, left, right)
+    out["02-turn"] = knob("ais-02", "Turn: the next range", ais_face(range_i=6), turn(),
+                          "a range a detent, 1 to 50 NM  ·  a click each")
+    x, y = at("KESTREL")
+    card = ais_card("KESTREL", "Cargo  \u2022  180 x 28 m", "\u203a  ROTTERDAM  29/11 06:00",
+                    "11.0 kn  \u2022  070\u00b0", "under way  \u2022  8.2 m draught",
+                    "10.5 NM at 290\u00b0", "MMSI 205900101  \u2022  ONAA")
+    out["03-card"] = knob("ais-03", "Tap a ship: its card",
+                          ais_face(sel="KESTREL", sweep=None) + card, tap(x, y),
+                          "tap a ship: its card, where it is bound  ·  tap again: away")
+    out["04-emergency"] = knob("ais-04", "An AIS-SART: called out in red",
+                               ais_face(sart=True), "",
+                               "an AIS-SART, a man-overboard device or an EPIRB: red, and the knob buzzes")
+    out["05-watch"] = knob("ais-05", "A ship you watch for: called out in gold",
+                           ais_face(watch="NORTH MERIDIAN"), "",
+                           "Call out these ships: by MMSI or name  ·  the knob clicks")
+    out["06-moving"] = knob("ais-06", "Ships under way only", ais_face(show="moving"), "",
+                            "Show: ships under way  ·  an emergency always shows")
+    out["07-nokey"] = knob("ais-07", "No AISStream key yet", ais_face(sea=(), feed="no key", ok=False), "",
+                           "set your AISStream key on the configuration page")
+    acard = address_card(f"AIS Radar {VERSION}\n{POWER}\n{ADDRESSES}")
+    out["08-card"] = knob("ais-08", "The gear: the address card, for the configuration page",
+                          f + acard + lock_pill(False), tap(180, AD_GEAR_Y),
+                          "tap the gear: the address card  ·  again: away")
+    picker = dimmed(f) + question("FIRMWARE?", "turn the knob for the picker\ntap to cancel; WiFi is kept")
+    out["09-picker"] = knob("ais-09", "The gear held three seconds: back to the setup firmware?",
+                            picker, tap(180, AD_GEAR_Y, ring=24), "hold the gear 3 s until it buzzes, then turn")
+    return {k: v.replace("adglass", f"ais-{k[:2]}-glass") for k, v in out.items()}
+
+
 # --- the Clock firmware --------------------------------------------------------------
 
 # Wednesday 4 November 2026, 14:52:08 in Brussels: 13:52 UTC.
@@ -3222,7 +3459,7 @@ FIRMWARES = {"setup": setup_pictures, "icom": icom_pictures, "multiflex": multif
              "aethersdr": aethersdr_pictures, "openx6x00": openx6x00_pictures,
              "jupitersdr": jupitersdr_pictures, "svxconnect": svxconnect_pictures,
              "ubersdr": ubersdr_pictures, "kiwi": kiwi_pictures, "phone": phone_pictures,
-             "epibeam": epibeam_pictures, "adsb": adsb_pictures, "clock": clock_pictures,
+             "epibeam": epibeam_pictures, "adsb": adsb_pictures, "ais": ais_pictures, "clock": clock_pictures,
              "weather": weather_pictures, "wifitest": wifitest_pictures, "tailchaser": tailchaser_pictures,
              "tctag": tctag_pictures,
              "screensaver": saver_pictures,
