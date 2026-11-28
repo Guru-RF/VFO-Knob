@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-jupitersdr",
-  "version": "1.28.0",
-  "file": "vfo-knob-jupitersdr-1.28.0.bin",
-  "sha256": "545c9847dc3fcde29f5e4bf79e6ad767f855a6d3871425e38ee8811d7d0b5e48",
+  "version": "1.32.0",
+  "file": "vfo-knob-jupitersdr-1.32.0.bin",
+  "sha256": "efa8f1ae474f1d0fdd1f8533bf3797f610958c7672d126eced7160dc7d9eab63",
   "size": 2297856
 }
