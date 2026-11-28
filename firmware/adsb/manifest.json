@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-adsb",
-  "version": "1.28.0",
-  "file": "vfo-knob-adsb-1.28.0.bin",
-  "sha256": "d55efc061fd02f46ae015f73f85b1b8a3098212092a79fdb0612dc8b4e57a96c",
+  "version": "1.32.0",
+  "file": "vfo-knob-adsb-1.32.0.bin",
+  "sha256": "a5094695e2766660aad8d464e6f0ba38b4f2ff835fd49a7591bda135b7dd6057",
   "size": 2756608
 }
