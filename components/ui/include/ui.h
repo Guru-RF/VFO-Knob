@@ -544,6 +544,35 @@ int  ui_take_adsb_alert(void);
 void ui_take_adsb_draw_ms(int *map, int *scene, int *sweep);
 #endif
 
+/* The AIS Radar firmware's radar (VFO_RADIO=ais; components/vfo_core ais.h,
+ * components/ais_client): ADS-B Radar's, for ships. */
+#if VFO_RADIO_AIS
+#include "adsb.h"                  /* the units, the map's arithmetic */
+#include "ais.h"
+#include "net_prov.h"
+#define AIS_UI_MAX 400             /* ships the face holds: ais_client's AIS_KEEP */
+/* The map's tables (ais_client_tables), before ui_init. */
+void ui_ais_tables(const uint8_t *map, size_t mn, const uint8_t *ports, size_t pn);
+/* The radar's settings: its middle, the units, the range, what it shows.
+ * Before ui_init, kept for it; after, drawn again at once. */
+void ui_ais_set(const net_ais_t *a);
+/* The newest ships, nearest first. */
+void ui_ais_ships(const ais_ship_t *s, int n);
+/* The source's state for the radar's foot (ais_client_feed). */
+void ui_ais_feed(const char *what, bool ok);
+/* From the knob's task: detents, a range each, applied in the LVGL task. */
+void ui_ais_turn(int32_t detents);
+/* The range the dial settled on, once: -1, none. */
+int  ui_take_ais_range(void);
+/* Ranges stepped since last asked: a click for them. */
+int  ui_take_ais_steps(void);
+/* An alert new since last asked, its AIS_AL_*: an emergency, or a ship on
+ * the page's list. */
+int  ui_take_ais_alert(void);
+/* The longest map, scene and sweep step the face drew since last asked, ms. */
+void ui_take_ais_draw_ms(int *map, int *scene, int *sweep);
+#endif
+
 void ui_updating_show(void);
 /* The same screen for the moment before a restart that installs at boot:
  * REBOOTING, into update mode -- no percentage yet, which read as a download

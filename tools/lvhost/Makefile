@@ -47,7 +47,7 @@ FONT_OBJS := obj/fonts/lv_font_montserrat_20.o obj/fonts/lv_font_montserrat_28.o
 WFLAGS := -O2 -g -DLV_CONF_INCLUDE_SIMPLE -I. -isystem $(LVGL) -I$(UI)/include $(FONTS) -Wall -Wextra
 OUT ?= .
 SLABS := slab_flex slab_icom slab_svx slab_phone slab_uber slab_aether slab_setup slab_kiwi slab_owrx \
-         slab_websdr slab_epibeam slab_adsb slab_clock slab_weather slab_wifitest slab_tc slab_tctag
+         slab_websdr slab_epibeam slab_adsb slab_ais slab_clock slab_weather slab_wifitest slab_tc slab_tctag
 all: vu_compare chooser kiwi_face readout clockfaces $(SLABS)
 obj/%.o: $(LVGL)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
@@ -150,6 +150,14 @@ obj/fonts/lv_font_montserrat_12.o: $(LVGL)/src/font/lv_font_montserrat_12.c lv_c
 slab_adsb: slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/adsb.c $(wildcard stub/*.h) $(FONT_OBJS) \
            obj/fonts/lv_font_montserrat_12.o $(OBJS)
 	$(CC) $(SLAB_FLAGS) $(ADSB_FLAGS) slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/adsb.c $(FONT_OBJS) \
+	    obj/fonts/lv_font_montserrat_12.o $(OBJS) -lm -o $@
+# AIS Radar's: the same, its harbours beside ADS-B Radar's map.
+AIS_FLAGS := -DVFO_RADIO_AIS=1 -DLV_FONT_MONTSERRAT_12=1 \
+             -DADSB_TABLES='"$(ROOT)/components/adsb_client/tables"' \
+             -DAIS_TABLES='"$(ROOT)/components/ais_client/tables"'
+AIS_C := $(ROOT)/components/vfo_core/src/adsb.c $(ROOT)/components/vfo_core/src/ais.c
+slab_ais: slab.c $(UI_SRCS) $(AIS_C) $(wildcard stub/*.h) $(FONT_OBJS) obj/fonts/lv_font_montserrat_12.o $(OBJS)
+	$(CC) $(SLAB_FLAGS) $(AIS_FLAGS) slab.c $(UI_SRCS) $(AIS_C) $(FONT_OBJS) \
 	    obj/fonts/lv_font_montserrat_12.o $(OBJS) -lm -o $@
 slab_weather: slab.c $(UI_SRCS) $(ROOT)/components/vfo_core/src/weather.c $(wildcard stub/*.h) $(FONT_OBJS) $(OBJS)
 	$(CC) $(SLAB_FLAGS) -DVFO_RADIO_WEATHER=1 -I$(ROOT)/components/vfo_core/include slab.c $(UI_SRCS) \

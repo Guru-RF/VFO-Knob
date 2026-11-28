@@ -10,10 +10,13 @@
 #include "saver.h"
 #include "clockface.h"
 #include "wallclock.h"
-#if VFO_RADIO_ADSB
-#include "adsb.h"
+#if VFO_RADIO_ADSB || VFO_RADIO_AIS
+#include "adsb.h"                            /* the radar's map and arithmetic, ships' too */
 #endif
-#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK
+#if VFO_RADIO_AIS
+#include "ais.h"
+#endif
+#if VFO_RADIO_ADSB || VFO_RADIO_AIS || VFO_RADIO_CLOCK
 #include "src/core/lv_obj_event_private.h"   /* the radar's and the clock's canvas cover check */
 #endif
 
@@ -292,7 +295,7 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #define C_GREEN     lv_color_hex(0x22FF2F)   /* its meter's green          */
 #define PWR_HEX     0x22FF2F
 #define SDR_HEX     0x5CA8FF                 /* its links' blue            */
-#elif SVX_LOOK || VFO_RADIO_SETUP || VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB || VFO_RADIO_TCTAG
+#elif SVX_LOOK || VFO_RADIO_SETUP || VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB || VFO_RADIO_AIS || VFO_RADIO_TCTAG
 /* --- SvxConnect palette -----------------------------------------------------
  * svxconnect.app's ink and gold, with the status colours the SvxConnect
  * clients use: green connected, amber (re)connecting, red transmitting.
@@ -404,6 +407,14 @@ LV_FONT_DECLARE(font_svx_icons_24);
 #else
 #define ADSB_FACE 0
 #endif
+/* The ais firmware's: the same radar, of the ships round the knob (see
+ * "ADS-B Radar" below, which both wear: RADAR_FACE). */
+#if VFO_RADIO_AIS
+#define AIS_FACE 1
+#else
+#define AIS_FACE 0
+#endif
+#define RADAR_FACE (ADSB_FACE || AIS_FACE)
 /* The clock firmware's: a clock, over a face it leaves unseen too (see
  * "Clock" below). */
 #if VFO_RADIO_CLOCK
@@ -2506,8 +2517,8 @@ void ui_volume_turn(int32_t detents)
 #if EPI_FACE
 static void beam_tick(void);
 #endif
-#if ADSB_FACE
-static void adsb_tick(void);
+#if RADAR_FACE
+static void radar_tick(void);
 #endif
 
 static void detents_cb(lv_timer_t *t)
@@ -2520,8 +2531,8 @@ static void detents_cb(lv_timer_t *t)
 #if EPI_FACE
     beam_tick();                        /* the beam's detents, and its settling */
 #endif
-#if ADSB_FACE
-    adsb_tick();                        /* the range's detents, and its settling */
+#if RADAR_FACE
+    radar_tick();                       /* the range's detents, and its settling */
 #endif
 }
 
@@ -3364,7 +3375,7 @@ int  ui_take_beam(void)       { return atomic_exchange(&s_beam_taken, -1); }
 bool ui_take_beam_moved(void) { return atomic_exchange(&s_beam_stirred, false); }
 #endif /* EPI_FACE */
 
-#if ADSB_FACE || CLOCK_FACE
+#if RADAR_FACE || CLOCK_FACE
 /* A canvas shown hides all under it, its pixels opaque. LVGL 9.3 asks an
  * image's background first, transparent, and so drew the face's under it on
  * every chunk of every refresh. */
@@ -3379,7 +3390,7 @@ static void canvas_cover_cb(lv_event_t *e)
 }
 #endif
 
-#if ADSB_FACE
+#if RADAR_FACE
 /* --- ADS-B Radar: the aircraft round the knob, on a radar ------------------
  * The whole glass is the radar: north up, the page's middle in the middle,
  * the range on the dial at its edge -- a detent a range, ten of them
@@ -3414,7 +3425,12 @@ static void canvas_cover_cb(lv_event_t *e)
  * Built over the radio's face, which goes on under it unseen: the card, the
  * warnings, the questions and the lock are that face's, and come up over
  * this, as over EpiBeam's compass. Not clickable: every touch is the
- * screen's own (touch_cb, tap). */
+ * screen's own (touch_cb, tap).
+ *
+ * AIS Radar's is the same radar, for ships (AIS_FACE): everything here but
+ * what a contact is -- an aircraft or a ship, its shape, colour, label,
+ * card and alerts -- and the places on the map, airports or harbours; those
+ * are each firmware's below ("a contact"). */
 #define AD_W          360
 #define AD_R          172                 /* the radar's edge, from the middle */
 #define AD_LABELS     12                  /* aircraft labelled, nearest first */
@@ -3426,6 +3442,7 @@ static void canvas_cover_cb(lv_event_t *e)
 #define AD_GEAR_R     30                  /* px from the gear's middle a tap may land */
 #define AD_GEAR_W     80                  /* ...or below it, this far either side, to the rim */
 #define AD_FOOT_Y     (CY + 136)          /* the feed's state, under the gear */
+#define AD_FOOT_TEXT_W 160                /* ...its text inside the glass, 8 px under it */
 #define AD_BANNER_Y   62                  /* an alert, under the battery's row */
 #define AD_SWEEP_MS   50
 #define AD_SWEEP_STEP 5                   /* degrees a tick: 3.6 s a turn */
@@ -3433,7 +3450,11 @@ static void canvas_cover_cb(lv_event_t *e)
 #define AD_SLICES     (360 / AD_SWEEP_STEP)
 #define AD_HUB        24                  /* px round the middle redone each step: the slices narrower than the line */
 #define AD_BATCH      40                  /* LVGL draws to a layer at most */
+#if ADSB_FACE
 #define AD_STALE_S    20.0f               /* a position this old drawn dim */
+#else
+#define AD_STALE_S    360.0f              /* ...a ship's: twice an anchored one's report */
+#endif
 #define AD_SEEN       16                  /* alerts remembered, so each buzzes once */
 
 /* The radar's colours, ADSB-Radar's where it has them; under 2000 ft pink
@@ -3449,9 +3470,48 @@ static void canvas_cover_cb(lv_event_t *e)
 #define AD_TEXT       0x8CFF9E
 #define AD_SWEEP      0x35DB5F
 #define AD_EMERGENCY  0xFF3030
+#define AD_WATCHED    0xE5A823            /* on the page's list: gold */
+
+/* --- a contact: each firmware's ------------------------------------------- */
+#if ADSB_FACE
 static const uint32_t AD_BAND[ADSB_BANDS] = {
     0x9CA3AF, 0xFF6EC7, 0xFFA22D, 0xFFE15C, 0x4ADE80, 0x38BDF8, 0xA78BFA,
 };
+typedef adsb_ac_t  ad_c_t;                /* an aircraft */
+typedef net_adsb_t ad_cfg_t;
+#define AD_UI_MAX     ADSB_UI_MAX
+#define AD_NO_POS     NET_ADSB_NO_POS
+#define AD_OPT_PLACES NET_ADSB_AIRPORTS
+#define AD_OPT_COAST  NET_ADSB_COUNTRIES
+#define AD_OPT_SWEEP  NET_ADSB_SWEEP
+#define AD_AL_NONE    ADSB_AL_NONE
+#define AD_AL_EMERG   ADSB_AL_EMERGENCY
+#define AD_KEY_N      7                   /* its key: the ICAO hex */
+#define AD_NAME_MAX   9                   /* a label's name, at most */
+#define AD_PLACE_N    5                   /* a place's label: an ICAO code */
+#else
+/* The ships' colours as the chart plotters and MarineTraffic have them, by
+ * kind (components/vfo_core ais.h AIS_K_*); a tanker a deeper red than an
+ * emergency's. */
+static const uint32_t AD_KIND[AIS_KINDS] = {
+    [AIS_K_OTHER] = 0x9CA3AF, [AIS_K_CARGO] = 0x4ADE80, [AIS_K_TANKER] = 0xD9534F,
+    [AIS_K_PASSENGER] = 0x3B9BF5, [AIS_K_HSC] = 0xFFE15C, [AIS_K_SPECIAL] = 0x2DD4BF,
+    [AIS_K_FISHING] = 0xFFA07A, [AIS_K_PLEASURE] = 0xD36BF2, [AIS_K_ATON] = 0xF472B6,
+    [AIS_K_BASE] = 0xB0B7C3, [AIS_K_SAR_AIRCRAFT] = 0xFFFFFF, [AIS_K_EMERGENCY] = 0xFF3030,
+};
+typedef ais_ship_t ad_c_t;                /* a ship, an aid, a base station */
+typedef net_ais_t  ad_cfg_t;
+#define AD_UI_MAX     AIS_UI_MAX
+#define AD_NO_POS     NET_AIS_NO_POS
+#define AD_OPT_PLACES NET_AIS_PORTS
+#define AD_OPT_COAST  NET_AIS_COUNTRIES
+#define AD_OPT_SWEEP  NET_AIS_SWEEP
+#define AD_AL_NONE    AIS_AL_NONE
+#define AD_AL_EMERG   AIS_AL_EMERGENCY
+#define AD_KEY_N      11                  /* its key: the MMSI, nine digits (30 bits: ten at most) */
+#define AD_NAME_MAX   14
+#define AD_PLACE_N    14                  /* a harbour's name, cut */
+#endif
 
 typedef struct { int16_t x, y; bool on; } ad_xy_t;
 
@@ -3467,33 +3527,35 @@ static uint8_t    *s_ad_slice;
 static bool        s_ad_swept;               /* the trail is on the picture shown */
 static bool        s_ad_alert_up;            /* an alert to call out, card or not */
 static lv_timer_t *s_ad_timer;
-EXT_RAM_BSS_ATTR static net_adsb_t s_ad_cfg;
-EXT_RAM_BSS_ATTR static adsb_ac_t  s_ad_ac[ADSB_UI_MAX];
-EXT_RAM_BSS_ATTR static ad_xy_t    s_ad_xy[ADSB_UI_MAX];
+EXT_RAM_BSS_ATTR static ad_cfg_t   s_ad_cfg;
+EXT_RAM_BSS_ATTR static ad_c_t     s_ad_ac[AD_UI_MAX];
+EXT_RAM_BSS_ATTR static ad_xy_t    s_ad_xy[AD_UI_MAX];
 static int         s_ad_n = -1;              /* -1: nothing from the feed yet */
 static adsb_view_t s_ad_view;
-static const uint8_t *s_ad_tmap, *s_ad_tapt; /* the image's tables, checked */
+static const uint8_t *s_ad_tmap, *s_ad_tapt; /* the image's tables, checked: the map, the places */
 static bool        s_ad_map_dirty = true, s_ad_scene_dirty = true, s_ad_have_cfg;
 static int         s_ad_sweep_deg;
 static uint32_t    s_ad_moved;               /* the last range change: 0, settled */
 static atomic_int  s_ad_detents;             /* from the knob's task, applied in detents_cb */
 static atomic_int  s_ad_taken = -1;          /* the range settled on, for app_main: -1, none */
 static atomic_int  s_ad_steps;               /* ranges stepped, a click each for app_main */
-static atomic_int  s_ad_alert_new;           /* ADSB_AL_* of an alert new since asked */
-static char        s_ad_sel[7];              /* the card's aircraft, by its hex: "" none */
+static atomic_int  s_ad_alert_new;           /* AD_AL_* of an alert new since asked */
+static char        s_ad_sel[AD_KEY_N];       /* the card's contact, by its key: "" none */
 static uint32_t    s_ad_sel_at;
 static char        s_ad_feed[24] = "asking";
 static bool        s_ad_feed_ok;
-EXT_RAM_BSS_ATTR static char s_ad_seen[AD_SEEN][7];
+EXT_RAM_BSS_ATTR static char s_ad_seen[AD_SEEN][AD_KEY_N];
+#if ADSB_FACE
 static char        s_ad_route_cs[9], s_ad_route[56];
 static bool        s_ad_route_pending;
+#endif
 /* The top of the glass the map leaves clear: the range's label, and the row
  * under it where the knob's battery and the padlock come. */
 static lv_area_t   s_ad_plate;
 static atomic_int  s_ad_map_ms, s_ad_scene_ms, s_ad_sweep_ms;   /* the longest draws since app_main asked */
-/* The airports the map named, to label in the scene where no aircraft's
- * label is. */
-typedef struct { int16_t x, y; int32_t d2; char code[5]; } ad_apt_lab_t;
+/* The places the map named -- airports, harbours -- to label in the scene
+ * where no contact's label is. */
+typedef struct { int16_t x, y; int32_t d2; char code[AD_PLACE_N]; } ad_apt_lab_t;
 EXT_RAM_BSS_ATTR static ad_apt_lab_t s_ad_apt_lab[AD_APT_LABELS];
 static int         s_ad_apt_n;
 
@@ -3573,9 +3635,107 @@ static void ad_circle(uint16_t *b, int r, uint16_t c)
     }
 }
 
-static float ad_range_nm(void) { return adsb_range_nm(s_ad_cfg.units, s_ad_cfg.range); }
+#if ADSB_FACE
+static uint16_t ad_rng_val(void)  { return adsb_range_val(s_ad_cfg.units, s_ad_cfg.range); }
+static float    ad_range_nm(void) { return adsb_range_nm(s_ad_cfg.units, s_ad_cfg.range); }
+static uint8_t  ad_rng_step(uint8_t i, int32_t d) { return adsb_range_step(i, d); }
 
-static bool ad_have_pos(void) { return s_ad_have_cfg && s_ad_cfg.lat_e6 != NET_ADSB_NO_POS; }
+/* The filter, on the range's label at the top; nothing at the foot. */
+static const char *ad_show_name(void)
+{
+    static const char *const SHOW[] = { "", "  " LV_SYMBOL_BULLET "  MIL", "  " LV_SYMBOL_BULLET "  INT" };
+    return SHOW[s_ad_cfg.show < ADSB_SHOWS ? s_ad_cfg.show : 0];
+}
+static const char *ad_show_foot(void) { return ""; }
+#define AD_FOOT_SEP "  " LV_SYMBOL_BULLET "  "
+
+static void    ad_key(const ad_c_t *a, char *k)        { strlcpy(k, a->hex, AD_KEY_N); }
+static bool    ad_is(const ad_c_t *a, const char *k)   { return !strcmp(a->hex, k); }
+static uint8_t ad_alert(const ad_c_t *a)               { return adsb_alert(a, s_ad_cfg.types); }
+static bool    ad_shown(const ad_c_t *a)
+{
+    return adsb_shown(a, s_ad_cfg.show, s_ad_cfg.opts & NET_ADSB_GROUND, s_ad_cfg.types);
+}
+static uint32_t ad_base_colour(const ad_c_t *a) { return AD_BAND[adsb_band(a)]; }
+static bool     ad_places_ok(const uint8_t *p, size_t n) { return adsb_apt_ok(p, n); }
+
+static const char *ad_name(const ad_c_t *a, char *b, size_t n)
+{
+    (void)b;
+    (void)n;
+    return a->flight[0] ? a->flight : a->reg[0] ? a->reg : a->hex;
+}
+
+static void ad_level(const adsb_ac_t *a, char *t, size_t n)
+{
+    const char *arrow = a->vrate_fpm == ADSB_VR_NONE ? "" : a->vrate_fpm > 300 ? " " LV_SYMBOL_UP
+                      : a->vrate_fpm < -300 ? " " LV_SYMBOL_DOWN : "";
+    if (a->ground)                         snprintf(t, n, "GND");
+    else if (a->alt_ft == ADSB_ALT_NONE)   snprintf(t, n, "---");
+    else if (a->alt_ft >= 10000)           snprintf(t, n, "FL%03d%s", (int)((a->alt_ft + 50) / 100) % 1000, arrow);
+    else                                   snprintf(t, n, "%d ft%s", (int)a->alt_ft % 10000, arrow);
+}
+
+/* A label's second line: the level. */
+static void ad_line2(const ad_c_t *a, char *t, size_t n) { ad_level(a, t, n); }
+
+/* The banner's word for an alert: the emergency, or the type called out. */
+static const char *ad_alert_what(const ad_c_t *a, uint8_t al)
+{
+    return al == ADSB_AL_EMERGENCY ? adsb_emergency_name(a) : a->type;
+}
+#else
+static uint16_t ad_rng_val(void)  { return ais_range_val(s_ad_cfg.units, s_ad_cfg.range); }
+static float    ad_range_nm(void) { return ais_range_nm(s_ad_cfg.units, s_ad_cfg.range); }
+static uint8_t  ad_rng_step(uint8_t i, int32_t d) { return ais_range_step(i, d); }
+
+/* The filter at the foot, after the count -- its words too wide for the
+ * top of the glass beside the range. */
+static const char *ad_show_name(void) { return ""; }
+#define AD_FOOT_SEP " " LV_SYMBOL_BULLET " "      /* "AIS-catcher · 12 moving" inside the glass */
+static const char *ad_show_foot(void)
+{
+    static const char *const SHOW[] = { "", " ships", " moving" };
+    return SHOW[s_ad_cfg.show < AIS_SHOWS ? s_ad_cfg.show : 0];
+}
+
+static void    ad_key(const ad_c_t *a, char *k)        { snprintf(k, AD_KEY_N, "%09lu", (unsigned long)a->mmsi); }
+static bool    ad_is(const ad_c_t *a, const char *k)   { return a->mmsi == (uint32_t)strtoul(k, NULL, 10); }
+static uint8_t ad_alert(const ad_c_t *a)               { return ais_alert(a, s_ad_cfg.watch); }
+static bool    ad_shown(const ad_c_t *a)               { return ais_shown(a, s_ad_cfg.show, s_ad_cfg.watch); }
+static uint32_t ad_base_colour(const ad_c_t *a)        { return AD_KIND[ais_kind(a)]; }
+static bool     ad_places_ok(const uint8_t *p, size_t n) { return ais_port_ok(p, n); }
+
+static const char *ad_name(const ad_c_t *a, char *b, size_t n)
+{
+    if (a->name[0]) return a->name;
+    snprintf(b, n, "%09lu", (unsigned long)a->mmsi);
+    return b;
+}
+
+/* A label's second line: its speed under way; else moored, at anchor,
+ * aground, or stopped; nothing for an aid or a base station. */
+static void ad_line2(const ad_c_t *a, char *t, size_t n)
+{
+    const uint8_t k = ais_kind(a);
+    if (k == AIS_K_ATON || k == AIS_K_BASE)  t[0] = 0;
+    else if (ais_moving(a))                  snprintf(t, n, "%d.%d kn", a->sog_dk / 10, a->sog_dk % 10);
+    else if (a->nav == 5)                    snprintf(t, n, "moored");
+    else if (a->nav == 1)                    snprintf(t, n, "at anchor");
+    else if (a->nav == 6)                    snprintf(t, n, "aground");
+    else if (a->sog_dk >= 0)                 snprintf(t, n, "stopped");
+    else                                     t[0] = 0;
+}
+
+static const char *ad_alert_what(const ad_c_t *a, uint8_t al)
+{
+    if (al == AIS_AL_EMERGENCY) return ais_emergency_name(a);
+    const char *t = ais_type_name(a);
+    return t[0] ? t : "Ship";
+}
+#endif
+
+static bool ad_have_pos(void) { return s_ad_have_cfg && s_ad_cfg.lat_e6 != AD_NO_POS; }
 
 static void ad_set_view(void)
 {
@@ -3626,9 +3786,7 @@ static void ad_text(ad_layer_t *l, const lv_font_t *f, uint32_t hex, int x, int 
 /* The range's label: "50 NM", and the filter if one is on. */
 static void ad_range_text(char *t, size_t n)
 {
-    static const char *const SHOW[] = { "", "  " LV_SYMBOL_BULLET "  MIL", "  " LV_SYMBOL_BULLET "  INT" };
-    snprintf(t, n, "%u %s%s", (unsigned)adsb_range_val(s_ad_cfg.units, s_ad_cfg.range),
-             adsb_unit_name(s_ad_cfg.units), SHOW[s_ad_cfg.show < ADSB_SHOWS ? s_ad_cfg.show : 0]);
+    snprintf(t, n, "%u %s%s", (unsigned)ad_rng_val(), adsb_unit_name(s_ad_cfg.units), ad_show_name());
 }
 
 /* The plate as wide as the range's label is now, or the battery's row with
@@ -3643,6 +3801,79 @@ static void ad_set_plate(void)
     if (half < BATT_W / 2 + 30) half = BATT_W / 2 + 30;
     s_ad_plate = (lv_area_t){ CX - half, 0, CX + half, KNOB_BATT_Y + 24 };
 }
+
+/* A place's label kept among the nearest AD_APT_LABELS: a nearer one in
+ * the farthest's place. */
+static void ad_keep_place(int ix, int iy, const char *name)
+{
+    const int32_t d2 = (ix - CX) * (ix - CX) + (iy - CY) * (iy - CY);
+    int at = s_ad_apt_n;
+    if (at == AD_APT_LABELS) {
+        at = 0;
+        for (int j = 1; j < AD_APT_LABELS; j++)
+            if (s_ad_apt_lab[j].d2 > s_ad_apt_lab[at].d2) at = j;
+        if (s_ad_apt_lab[at].d2 <= d2) return;
+    } else {
+        s_ad_apt_n++;
+    }
+    ad_apt_lab_t *k = &s_ad_apt_lab[at];
+    k->x = (int16_t)ix;
+    k->y = (int16_t)iy;
+    k->d2 = d2;
+    strlcpy(k->code, name, sizeof k->code);
+}
+
+#if ADSB_FACE
+/* The airports: every one near, from close in; only the large far out,
+ * and the nearest named -- in the scene, where nothing else is. */
+static void ad_draw_places(uint16_t *b, float nm)
+{
+    s_ad_apt_n = 0;
+    if (!s_ad_tapt || !(s_ad_cfg.opts & NET_ADSB_AIRPORTS)) return;
+    const uint16_t dot = ad_565(AD_APT);
+    const int32_t dlat = (int32_t)(nm / 60.0f * 1e4f);
+    const size_t n = adsb_apt_count(s_ad_tapt);
+    for (size_t i = adsb_apt_from(s_ad_tapt, (int32_t)(s_ad_view.lat0 * 1e4) - dlat); i < n; i++) {
+        adsb_apt_t a;
+        adsb_apt_get(s_ad_tapt, i, &a);
+        if (a.lat > (int32_t)(s_ad_view.lat0 * 1e4) + dlat) break;
+        if (!a.large && nm > 100) continue;
+        float x, y;
+        adsb_project(&s_ad_view, a.lat / 1e4, a.lon / 1e4, &x, &y);
+        if (x * x + y * y > (AD_R - 6) * (AD_R - 6)) continue;
+        const int ix = CX + (int)lroundf(x), iy = CY + (int)lroundf(y);
+        if (ix >= s_ad_plate.x1 - 44 && ix <= s_ad_plate.x2 && iy <= s_ad_plate.y2 + 8) continue;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) ad_px(b, ix + dx, iy + dy, dot);
+        if (!a.large && nm > 50) continue;
+        ad_keep_place(ix, iy, a.code);
+    }
+}
+#else
+/* The harbours: every one near, and the nearest named -- in the scene,
+ * where nothing else is. */
+static void ad_draw_places(uint16_t *b, float nm)
+{
+    s_ad_apt_n = 0;
+    if (!s_ad_tapt || !(s_ad_cfg.opts & NET_AIS_PORTS)) return;
+    const uint16_t dot = ad_565(AD_APT);
+    const int32_t dlat = (int32_t)(nm / 60.0f * 1e4f) + 1;
+    const size_t n = ais_port_count(s_ad_tapt);
+    for (size_t i = ais_port_from(s_ad_tapt, (int32_t)(s_ad_view.lat0 * 1e4) - dlat); i < n; i++) {
+        ais_port_t p;
+        ais_port_get(s_ad_tapt, i, &p);
+        if (p.lat > (int32_t)(s_ad_view.lat0 * 1e4) + dlat) break;
+        float x, y;
+        adsb_project(&s_ad_view, p.lat / 1e4, p.lon / 1e4, &x, &y);
+        if (x * x + y * y > (AD_R - 6) * (AD_R - 6)) continue;
+        const int ix = CX + (int)lroundf(x), iy = CY + (int)lroundf(y);
+        if (ix >= s_ad_plate.x1 - 44 && ix <= s_ad_plate.x2 && iy <= s_ad_plate.y2 + 8) continue;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) ad_px(b, ix + dx, iy + dy, dot);
+        ad_keep_place(ix, iy, p.name);
+    }
+}
+#endif
 
 static void ad_draw_map(void)
 {
@@ -3660,7 +3891,7 @@ static void ad_draw_map(void)
     ad_line(b, CX - AD_R, CY, CX + AD_R, CY, axis);
 
     /* The coasts and borders near: a run's box round the middle first. */
-    if (s_ad_tmap && (s_ad_cfg.opts & NET_ADSB_COUNTRIES)) {
+    if (s_ad_tmap && (s_ad_cfg.opts & AD_OPT_COAST)) {
         const uint16_t coast = ad_565(AD_COAST), border = ad_565(AD_BORDER);
         const size_t runs = adsb_map_runs(s_ad_tmap);
         for (size_t r = 0; r < runs; r++) {
@@ -3700,44 +3931,7 @@ static void ad_draw_map(void)
         ad_px(b, CX, CY + d, tick);
     }
 
-    /* The airports: every one near, from close in; only the large far out,
-     * and the nearest named -- in the scene, where nothing else is. */
-    s_ad_apt_n = 0;
-    if (s_ad_tapt && (s_ad_cfg.opts & NET_ADSB_AIRPORTS)) {
-        const uint16_t dot = ad_565(AD_APT);
-        const int32_t dlat = (int32_t)(nm / 60.0f * 1e4f);
-        const size_t n = adsb_apt_count(s_ad_tapt);
-        for (size_t i = adsb_apt_from(s_ad_tapt, (int32_t)(s_ad_view.lat0 * 1e4) - dlat); i < n; i++) {
-            adsb_apt_t a;
-            adsb_apt_get(s_ad_tapt, i, &a);
-            if (a.lat > (int32_t)(s_ad_view.lat0 * 1e4) + dlat) break;
-            if (!a.large && nm > 100) continue;
-            float x, y;
-            adsb_project(&s_ad_view, a.lat / 1e4, a.lon / 1e4, &x, &y);
-            if (x * x + y * y > (AD_R - 6) * (AD_R - 6)) continue;
-            const int ix = CX + (int)lroundf(x), iy = CY + (int)lroundf(y);
-            if (ix >= s_ad_plate.x1 - 44 && ix <= s_ad_plate.x2 && iy <= s_ad_plate.y2 + 8) continue;
-            for (int dy = -1; dy <= 1; dy++)
-                for (int dx = -1; dx <= 1; dx++) ad_px(b, ix + dx, iy + dy, dot);
-            if (!a.large && nm > 50) continue;
-            /* The nearest AD_APT_LABELS kept: a nearer one in the farthest's place. */
-            const int32_t d2 = (ix - CX) * (ix - CX) + (iy - CY) * (iy - CY);
-            int at = s_ad_apt_n;
-            if (at == AD_APT_LABELS) {
-                at = 0;
-                for (int j = 1; j < AD_APT_LABELS; j++)
-                    if (s_ad_apt_lab[j].d2 > s_ad_apt_lab[at].d2) at = j;
-                if (s_ad_apt_lab[at].d2 <= d2) continue;
-            } else {
-                s_ad_apt_n++;
-            }
-            ad_apt_lab_t *k = &s_ad_apt_lab[at];
-            k->x = (int16_t)ix;
-            k->y = (int16_t)iy;
-            k->d2 = d2;
-            memcpy(k->code, a.code, sizeof k->code);
-        }
-    }
+    ad_draw_places(b, nm);
 }
 
 static bool ad_box_free(const lv_area_t *boxes, int n, const lv_area_t *a)
@@ -3748,26 +3942,11 @@ static bool ad_box_free(const lv_area_t *boxes, int n, const lv_area_t *a)
     return true;
 }
 
-static void ad_level(const adsb_ac_t *a, char *t, size_t n)
+static uint32_t ad_colour(const ad_c_t *a)
 {
-    const char *arrow = a->vrate_fpm == ADSB_VR_NONE ? "" : a->vrate_fpm > 300 ? " " LV_SYMBOL_UP
-                      : a->vrate_fpm < -300 ? " " LV_SYMBOL_DOWN : "";
-    if (a->ground)                         snprintf(t, n, "GND");
-    else if (a->alt_ft == ADSB_ALT_NONE)   snprintf(t, n, "---");
-    else if (a->alt_ft >= 10000)           snprintf(t, n, "FL%03d%s", (int)((a->alt_ft + 50) / 100) % 1000, arrow);
-    else                                   snprintf(t, n, "%d ft%s", (int)a->alt_ft % 10000, arrow);
-}
-
-static const char *ad_name(const adsb_ac_t *a)
-{
-    return a->flight[0] ? a->flight : a->reg[0] ? a->reg : a->hex;
-}
-
-static uint32_t ad_colour(const adsb_ac_t *a)
-{
-    const uint8_t al = adsb_alert(a, s_ad_cfg.types);
-    const uint32_t c = al == ADSB_AL_EMERGENCY ? AD_EMERGENCY : al == ADSB_AL_TYPE ? 0xE5A823 : AD_BAND[adsb_band(a)];
-    return a->seen_s > AD_STALE_S && al != ADSB_AL_EMERGENCY ? ad_dim(c) : c;
+    const uint8_t al = ad_alert(a);
+    const uint32_t c = al == AD_AL_EMERG ? AD_EMERGENCY : al != AD_AL_NONE ? AD_WATCHED : ad_base_colour(a);
+    return a->seen_s > AD_STALE_S && al != AD_AL_EMERG ? ad_dim(c) : c;
 }
 
 /* A label's box inside the radar, every corner of it. */
@@ -3784,12 +3963,11 @@ static bool ad_in_glass(const lv_area_t *a)
 static void ad_place(void)
 {
     for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) {
-        const adsb_ac_t *a = &s_ad_ac[i];
+        const ad_c_t *a = &s_ad_ac[i];
         ad_xy_t *p = &s_ad_xy[i];
         float x, y;
         adsb_project(&s_ad_view, a->lat, a->lon, &x, &y);
-        p->on = adsb_shown(a, s_ad_cfg.show, s_ad_cfg.opts & NET_ADSB_GROUND, s_ad_cfg.types) &&
-                x * x + y * y <= (AD_R - 3) * (AD_R - 3);
+        p->on = ad_shown(a) && x * x + y * y <= (AD_R - 3) * (AD_R - 3);
         p->x = (int16_t)(CX + lroundf(x));
         p->y = (int16_t)(CY + lroundf(y));
     }
@@ -3809,6 +3987,81 @@ static void ad_ring(ad_layer_t *l, int x, int y, lv_color_t c)
     lv_draw_arc(&l->layer, &d);
     ad_layer_count(l);
 }
+
+#if ADSB_FACE
+/* An aircraft: an arrow along its track -- the tip ahead, the tail's
+ * corners either side behind -- or, without one, a square. */
+static void ad_shape(ad_layer_t *l, const ad_c_t *a, int x, int y, lv_color_t col)
+{
+    if (a->track >= 0) {
+        const float t = (float)a->track * (3.14159265f / 180.0f);
+        lv_draw_triangle_dsc_t d;
+        lv_draw_triangle_dsc_init(&d);
+        d.color = col;
+        d.opa = LV_OPA_COVER;
+        const float r[3] = { 8, 6, 6 }, off[3] = { 0, 2.44f, -2.44f };
+        for (int k = 0; k < 3; k++) {
+            d.p[k].x = x + (int32_t)lroundf(r[k] * sinf(t + off[k]));
+            d.p[k].y = y - (int32_t)lroundf(r[k] * cosf(t + off[k]));
+        }
+        lv_draw_triangle(&l->layer, &d);
+    } else {
+        lv_draw_rect_dsc_t d;
+        lv_draw_rect_dsc_init(&d);
+        d.bg_color = col;
+        d.radius = 2;
+        const lv_area_t sq = { x - 3, y - 3, x + 3, y + 3 };
+        lv_draw_rect(&l->layer, &d, &sq);
+    }
+    ad_layer_count(l);
+}
+#else
+/* A ship under way: a slim arrow along its course; at rest, a dot. An aid
+ * to navigation a diamond, a base station a square, a SAR aircraft an
+ * aircraft's arrow. */
+static void ad_shape(ad_layer_t *l, const ad_c_t *a, int x, int y, lv_color_t col)
+{
+    const uint8_t k = ais_kind(a);
+    const int c = ais_course(a);
+    if (k == AIS_K_ATON) {
+        lv_draw_triangle_dsc_t d;
+        lv_draw_triangle_dsc_init(&d);
+        d.color = col;
+        d.opa = LV_OPA_COVER;
+        for (int h = -1; h <= 1; h += 2) {
+            d.p[0] = (lv_point_precise_t){ x - 5, y };
+            d.p[1] = (lv_point_precise_t){ x + 5, y };
+            d.p[2] = (lv_point_precise_t){ x, y + 5 * h };
+            lv_draw_triangle(&l->layer, &d);
+            ad_layer_count(l);
+        }
+        return;
+    }
+    if (c >= 0 && (ais_moving(a) || k == AIS_K_SAR_AIRCRAFT)) {
+        const float t = (float)c * (3.14159265f / 180.0f);
+        lv_draw_triangle_dsc_t d;
+        lv_draw_triangle_dsc_init(&d);
+        d.color = col;
+        d.opa = LV_OPA_COVER;
+        const bool air = k == AIS_K_SAR_AIRCRAFT;
+        const float r[3] = { air ? 8.0f : 10.0f, 6, 6 }, w = air ? 2.44f : 2.7f, off[3] = { 0, w, -w };
+        for (int j = 0; j < 3; j++) {
+            d.p[j].x = x + (int32_t)lroundf(r[j] * sinf(t + off[j]));
+            d.p[j].y = y - (int32_t)lroundf(r[j] * cosf(t + off[j]));
+        }
+        lv_draw_triangle(&l->layer, &d);
+    } else {
+        lv_draw_rect_dsc_t d;
+        lv_draw_rect_dsc_init(&d);
+        d.bg_color = col;
+        d.radius = k == AIS_K_BASE ? 0 : LV_RADIUS_CIRCLE;
+        const int h = k == AIS_K_BASE ? 3 : 3;
+        const lv_area_t sq = { x - h, y - h, x + h, y + h };
+        lv_draw_rect(&l->layer, &d, &sq);
+    }
+    ad_layer_count(l);
+}
+#endif
 
 static void ad_banner(void);
 static void ad_show_all(void);
@@ -3834,7 +4087,7 @@ static void ad_draw_scene(void)
         /* The half ring's distance, on it to the north-east of the middle;
          * east and west at the edge (north is the range's, south the gear's). */
         char t[12];
-        const uint16_t half = adsb_range_val(s_ad_cfg.units, s_ad_cfg.range);
+        const uint16_t half = ad_rng_val();
         if (half % 2) snprintf(t, sizeof t, "%u.5", (unsigned)(half / 2));
         else          snprintf(t, sizeof t, "%u", (unsigned)(half / 2));
         const int hx = CX + (int)(AD_R / 2 * 0.707f) + 3, hy = CY - (int)(AD_R / 2 * 0.707f) - 14;
@@ -3846,41 +4099,18 @@ static void ad_draw_scene(void)
         boxes[nb++] = (lv_area_t){ CX - AD_R, CY - 9, CX - AD_R + 26, CY + 8 };
     }
     for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) {
-        const adsb_ac_t *a = &s_ad_ac[i];
+        const ad_c_t *a = &s_ad_ac[i];
         const ad_xy_t *p = &s_ad_xy[i];
         if (!p->on) continue;
-        const lv_color_t col = lv_color_hex(ad_colour(a));
-        if (a->track >= 0) {
-            /* An arrow along its track: the tip ahead, the tail's corners
-             * either side behind. */
-            const float t = (float)a->track * (3.14159265f / 180.0f);
-            lv_draw_triangle_dsc_t d;
-            lv_draw_triangle_dsc_init(&d);
-            d.color = col;
-            d.opa = LV_OPA_COVER;
-            const float r[3] = { 8, 6, 6 }, off[3] = { 0, 2.44f, -2.44f };
-            for (int k = 0; k < 3; k++) {
-                d.p[k].x = p->x + (int32_t)lroundf(r[k] * sinf(t + off[k]));
-                d.p[k].y = p->y - (int32_t)lroundf(r[k] * cosf(t + off[k]));
-            }
-            lv_draw_triangle(&l.layer, &d);
-        } else {
-            lv_draw_rect_dsc_t d;
-            lv_draw_rect_dsc_init(&d);
-            d.bg_color = col;
-            d.radius = 2;
-            const lv_area_t sq = { p->x - 3, p->y - 3, p->x + 3, p->y + 3 };
-            lv_draw_rect(&l.layer, &d, &sq);
-        }
-        ad_layer_count(&l);
-        /* An emergency ringed red; the card's aircraft white, by s_ad_selring. */
-        if (adsb_alert(a, s_ad_cfg.types) == ADSB_AL_EMERGENCY) ad_ring(&l, p->x, p->y, lv_color_hex(AD_EMERGENCY));
+        ad_shape(&l, a, p->x, p->y, lv_color_hex(ad_colour(a)));
+        /* An emergency ringed red; the card's contact white, by s_ad_selring. */
+        if (ad_alert(a) == AD_AL_EMERG) ad_ring(&l, p->x, p->y, lv_color_hex(AD_EMERGENCY));
         if (labelled >= AD_LABELS) continue;
         /* Its label right of it, else left; none where it would leave the
          * radar or cover another. As wide as its longer line. */
-        char t[48], lv[24];
-        ad_level(a, lv, sizeof lv);
-        snprintf(t, sizeof t, "%.9s\n%s", ad_name(a), lv);
+        char t[48], lv[24], nm_b[12];
+        ad_line2(a, lv, sizeof lv);
+        snprintf(t, sizeof t, "%.*s\n%s", AD_NAME_MAX, ad_name(a, nm_b, sizeof nm_b), lv);
         const char *nl = strchr(t, '\n');
         const int32_t w = LV_MAX(lv_text_get_width(t, (uint32_t)(nl - t), AD_FONT_S, 0),
                                  lv_text_get_width(nl + 1, (uint32_t)strlen(nl + 1), AD_FONT_S, 0)) + 2;
@@ -3896,7 +4126,7 @@ static void ad_draw_scene(void)
         labelled++;
         ad_text(&l, AD_FONT_S, ad_colour(a), box.x1, box.y1, w + 1, left ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, t);
     }
-    /* The airports' codes, clear of every label and every aircraft. */
+    /* The places' names, clear of every label and every contact. */
     for (int i = 0; i < s_ad_apt_n; i++) {
         const ad_apt_lab_t *k = &s_ad_apt_lab[i];
         const int32_t w = lv_text_get_width(k->code, strlen(k->code), AD_FONT_S, 0);
@@ -4102,7 +4332,7 @@ static void ad_show_all(void)
 
 static void ad_sweep_step(void)
 {
-    const bool on = s_ad_slice && (s_ad_cfg.opts & NET_ADSB_SWEEP) && ad_have_pos() && !screen_dark() &&
+    const bool on = s_ad_slice && (s_ad_cfg.opts & AD_OPT_SWEEP) && ad_have_pos() && !screen_dark() &&
                     s_edit == ED_NONE && !s_asking && !addresses_up() && !s_ad_sel[0];
     if (!on) {
         /* Stopped: its trail and line taken off, once. */
@@ -4125,28 +4355,22 @@ static void ad_sweep_step(void)
     if (ms > atomic_load(&s_ad_sweep_ms)) atomic_store(&s_ad_sweep_ms, ms);
 }
 
-static const adsb_ac_t *ad_find(const char *hex)
+static const ad_c_t *ad_find(const char *key)
 {
     for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++)
-        if (!strcmp(s_ad_ac[i].hex, hex)) return &s_ad_ac[i];
+        if (ad_is(&s_ad_ac[i], key)) return &s_ad_ac[i];
     return NULL;
 }
 
 static void ad_card_close(void);
 
-static void ad_card_fill(void)
+#if ADSB_FACE
+/* An aircraft's card: its callsign; type and registration; its route;
+ * level; speed and track; distance and bearing; squawk. */
+static void ad_card_rows(const ad_c_t *a)
 {
-    const adsb_ac_t *a = s_ad_sel[0] ? ad_find(s_ad_sel) : NULL;
-    if (!a) {                                         /* gone from the feed */
-        ad_card_close();
-        return;
-    }
-    /* Its ring where it is now, over the picture. */
-    const ad_xy_t *p = &s_ad_xy[a - s_ad_ac];
-    if (p->on) lv_obj_set_pos(s_ad_selring, p->x - 12, p->y - 12);
-    vis(s_ad_selring, p->on);
     char t[64], lv[24];
-    set_text(s_ad_cs, ad_name(a));
+    set_text(s_ad_cs, ad_name(a, NULL, 0));
     if (a->type[0] && a->reg[0])  snprintf(t, sizeof t, "%s  " LV_SYMBOL_BULLET "  %s", a->type, a->reg);
     else                          snprintf(t, sizeof t, "%s", a->type[0] ? a->type : a->reg[0] ? a->reg : a->hex);
     set_text(s_ad_c[0], t);
@@ -4173,18 +4397,85 @@ static void ad_card_fill(void)
     else                     t[0] = 0;
     set_text(s_ad_c[5], t);
     set_text_color(s_ad_c[5], em[0] ? C_DANGER : C_LABEL);
+}
+#else
+/* A ship's card: its name; its kind and size; where it is bound and when;
+ * speed and course; its status and draught; distance and bearing; its MMSI
+ * and call sign -- or the emergency, in red. */
+static void ad_card_rows(const ad_c_t *a)
+{
+    char t[72], nb[12];
+    set_text(s_ad_cs, ad_name(a, nb, sizeof nb));
+    const char *ty = ais_type_name(a);
+    if (a->len_m && a->beam_m) snprintf(t, sizeof t, "%s%s%u x %u m", ty, ty[0] ? "  " LV_SYMBOL_BULLET "  " : "",
+                                        (unsigned)a->len_m, (unsigned)a->beam_m);
+    else if (a->len_m)         snprintf(t, sizeof t, "%s%s%u m", ty, ty[0] ? "  " LV_SYMBOL_BULLET "  " : "",
+                                        (unsigned)a->len_m);
+    else                       snprintf(t, sizeof t, "%s", ty);
+    set_text(s_ad_c[0], t);
+    if (a->dest[0] && a->eta_mon && a->eta_day && a->eta_h < 24 && a->eta_m < 60)
+        snprintf(t, sizeof t, LV_SYMBOL_RIGHT "  %s  %02u/%02u %02u:%02u", a->dest, (unsigned)a->eta_day,
+                 (unsigned)a->eta_mon, (unsigned)a->eta_h, (unsigned)a->eta_m);
+    else if (a->dest[0])
+        snprintf(t, sizeof t, LV_SYMBOL_RIGHT "  %s", a->dest);
+    else
+        t[0] = 0;
+    set_text(s_ad_c[1], t);
+    char sp[16] = "--- kn", co[16] = "";
+    if (a->sog_dk >= 0) snprintf(sp, sizeof sp, "%d.%d kn", a->sog_dk / 10, a->sog_dk % 10);
+    const int c = ais_course(a);
+    if (c >= 0 && ais_moving(a)) snprintf(co, sizeof co, "%03d\xC2\xB0", c);
+    snprintf(t, sizeof t, "%s%s%s", sp, co[0] ? "  " LV_SYMBOL_BULLET "  " : "", co);
+    set_text(s_ad_c[2], t);
+    const char *nav = ais_nav_name(a->nav);
+    if (nav[0] && a->draught_dm)
+        snprintf(t, sizeof t, "%s  " LV_SYMBOL_BULLET "  %u.%u m draught", nav, a->draught_dm / 10u, a->draught_dm % 10u);
+    else if (a->draught_dm)
+        snprintf(t, sizeof t, "%u.%u m draught", a->draught_dm / 10u, a->draught_dm % 10u);
+    else
+        snprintf(t, sizeof t, "%s", nav);
+    set_text(s_ad_c[3], t);
+    const float d = adsb_nm_in(s_ad_cfg.units, a->dist_nm);
+    const int brg = (int)lroundf(a->brg) % 360;
+    if (d < 10) snprintf(t, sizeof t, "%.1f %s at %03d\xC2\xB0", (double)d, adsb_unit_name(s_ad_cfg.units), brg);
+    else        snprintf(t, sizeof t, "%.0f %s at %03d\xC2\xB0", (double)d, adsb_unit_name(s_ad_cfg.units), brg);
+    set_text(s_ad_c[4], t);
+    const char *em = ais_emergency_name(a);
+    if (em[0])               snprintf(t, sizeof t, "%s  %09lu", em, (unsigned long)a->mmsi);
+    else if (a->callsign[0]) snprintf(t, sizeof t, "MMSI %09lu  " LV_SYMBOL_BULLET "  %s", (unsigned long)a->mmsi,
+                                      a->callsign);
+    else                     snprintf(t, sizeof t, "MMSI %09lu", (unsigned long)a->mmsi);
+    set_text(s_ad_c[5], t);
+    set_text_color(s_ad_c[5], em[0] ? C_DANGER : C_LABEL);
+}
+#endif
+
+static void ad_card_fill(void)
+{
+    const ad_c_t *a = s_ad_sel[0] ? ad_find(s_ad_sel) : NULL;
+    if (!a) {                                         /* gone from the feed */
+        ad_card_close();
+        return;
+    }
+    /* Its ring where it is now, over the picture. */
+    const ad_xy_t *p = &s_ad_xy[a - s_ad_ac];
+    if (p->on) lv_obj_set_pos(s_ad_selring, p->x - 12, p->y - 12);
+    vis(s_ad_selring, p->on);
+    ad_card_rows(a);
     vis(s_ad_card, true);
 }
 
 /* A card comes and goes over the picture as it is: its ring an object, the
  * banner hidden and back, the scene not drawn again. */
-static void ad_card_open(const char *hex)
+static void ad_card_open(const char *key)
 {
-    strlcpy(s_ad_sel, hex, sizeof s_ad_sel);
+    strlcpy(s_ad_sel, key, sizeof s_ad_sel);
     s_ad_sel_at = lv_tick_get();
+#if ADSB_FACE
     s_ad_route[0] = 0;
     s_ad_route_cs[0] = 0;
     s_ad_route_pending = false;
+#endif
     vis(s_ad_banner, false);
     ad_card_fill();
 }
@@ -4200,43 +4491,43 @@ static void ad_card_close(void)
 
 static void ad_banner(void)
 {
-    const adsb_ac_t *best = NULL;
-    uint8_t best_al = ADSB_AL_NONE;
+    const ad_c_t *best = NULL;
+    uint8_t best_al = AD_AL_NONE;
     int more = 0;
     for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) {
-        const uint8_t al = adsb_alert(&s_ad_ac[i], s_ad_cfg.types);
-        if (al == ADSB_AL_NONE || !s_ad_xy[i].on) continue;
+        const uint8_t al = ad_alert(&s_ad_ac[i]);
+        if (al == AD_AL_NONE || !s_ad_xy[i].on) continue;
         if (al > best_al) { best = &s_ad_ac[i]; best_al = al; }  /* nearest first: the first of its kind */
         more++;
     }
     s_ad_alert_up = best != NULL;
     vis(s_ad_banner, best && !s_ad_sel[0]);          /* not over an aircraft's card */
     if (!best) return;
-    char t[48];
-    const char *what = best_al == ADSB_AL_EMERGENCY ? adsb_emergency_name(best) : best->type;
-    if (more > 1) snprintf(t, sizeof t, "%s  %s  +%d", what, ad_name(best), more - 1);
-    else          snprintf(t, sizeof t, "%s  %s", what, ad_name(best));
+    char t[56], nb[12];
+    const char *what = ad_alert_what(best, best_al);
+    if (more > 1) snprintf(t, sizeof t, "%s  %s  +%d", what, ad_name(best, nb, sizeof nb), more - 1);
+    else          snprintf(t, sizeof t, "%s  %s", what, ad_name(best, nb, sizeof nb));
     set_text(s_ad_banner, t);
-    lv_obj_set_style_bg_color(s_ad_banner, best_al == ADSB_AL_EMERGENCY ? lv_color_hex(AD_EMERGENCY)
-                                                                         : lv_color_hex(0x3A2C08), 0);
-    set_text_color(s_ad_banner, best_al == ADSB_AL_EMERGENCY ? C_TEXT : C_ACCENT);
+    lv_obj_set_style_bg_color(s_ad_banner, best_al == AD_AL_EMERG ? lv_color_hex(AD_EMERGENCY)
+                                                                   : lv_color_hex(0x3A2C08), 0);
+    set_text_color(s_ad_banner, best_al == AD_AL_EMERG ? C_TEXT : C_ACCENT);
 }
 
 /* The alerts in this snapshot: one not in the last is new, and buzzes. */
 static void ad_alerts(void)
 {
-    static char now[AD_SEEN][7];
-    int k = 0, fresh = ADSB_AL_NONE;
+    static char now[AD_SEEN][AD_KEY_N];
+    int k = 0, fresh = AD_AL_NONE;
     for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0) && k < AD_SEEN; i++) {
-        const adsb_ac_t *a = &s_ad_ac[i];
-        const uint8_t al = adsb_alert(a, s_ad_cfg.types);
-        if (al == ADSB_AL_NONE || !adsb_shown(a, s_ad_cfg.show, s_ad_cfg.opts & NET_ADSB_GROUND, s_ad_cfg.types) ||
-            a->dist_nm > ad_range_nm())
-            continue;
+        const ad_c_t *a = &s_ad_ac[i];
+        const uint8_t al = ad_alert(a);
+        if (al == AD_AL_NONE || !ad_shown(a) || a->dist_nm > ad_range_nm()) continue;
+        char key[AD_KEY_N];
+        ad_key(a, key);
         bool seen = false;
-        for (int j = 0; j < AD_SEEN && !seen; j++) seen = !strcmp(s_ad_seen[j], a->hex);
+        for (int j = 0; j < AD_SEEN && !seen; j++) seen = !strcmp(s_ad_seen[j], key);
         if (!seen && al > fresh) fresh = al;
-        strlcpy(now[k++], a->hex, sizeof now[0]);
+        strlcpy(now[k++], key, sizeof now[0]);
     }
     for (int j = 0; j < AD_SEEN; j++) {
         if (j < k) memcpy(s_ad_seen[j], now[j], sizeof s_ad_seen[j]);
@@ -4252,8 +4543,15 @@ static void ad_labels(void)
     set_text(s_ad_range, t);
     int shown = 0;
     for (int i = 0; i < (s_ad_n > 0 ? s_ad_n : 0); i++) shown += s_ad_xy[i].on;
-    if (s_ad_feed_ok && s_ad_n >= 0) snprintf(t, sizeof t, "%s  " LV_SYMBOL_BULLET "  %d", s_ad_feed, shown);
-    else                             snprintf(t, sizeof t, "%s", s_ad_feed);
+    if (s_ad_feed_ok && s_ad_n >= 0) {
+        snprintf(t, sizeof t, "%s" AD_FOOT_SEP "%d%s", s_ad_feed, shown, ad_show_foot());
+        /* Too wide for the glass so low (its pill's padding aside): the
+         * count and the filter alone. */
+        if (lv_text_get_width(t, strlen(t), &lv_font_montserrat_14, 0) > AD_FOOT_TEXT_W)
+            snprintf(t, sizeof t, "%d%s", shown, ad_show_foot());
+    } else {
+        snprintf(t, sizeof t, "%s", s_ad_feed);
+    }
     set_text(s_ad_foot, t);
     set_text_color(s_ad_foot, s_ad_feed_ok ? C_LABEL : C_WARN);
     vis(s_ad_hint, !ad_have_pos());
@@ -4303,7 +4601,7 @@ static lv_obj_t *ad_label(lv_obj_t *parent, const lv_font_t *f, lv_color_t c)
     return l;
 }
 
-static void adsb_build(void)
+static void radar_build(void)
 {
     s_ad = lv_obj_create(s_scr);
     lv_obj_remove_style_all(s_ad);
@@ -4408,7 +4706,7 @@ static void adsb_build(void)
     s_ad_timer = lv_timer_create(ad_timer_cb, AD_SWEEP_MS, NULL);
 }
 
-static void adsb_update(const ui_state_t *st)
+static void radar_update(const ui_state_t *st)
 {
     (void)st;
     if (!s_ad_card) return;
@@ -4418,11 +4716,11 @@ static void adsb_update(const ui_state_t *st)
 
 /* Every 15 ms, on the LVGL task (detents_cb): the knob's detents, a range
  * each, and a range at rest long enough taken. */
-static void adsb_tick(void)
+static void radar_tick(void)
 {
     const int d = atomic_exchange(&s_ad_detents, 0);
     if (d && s_ad_card) {
-        const uint8_t r = adsb_range_step(s_ad_cfg.range, d);
+        const uint8_t r = ad_rng_step(s_ad_cfg.range, d);
         if (r != s_ad_cfg.range) {
             s_ad_cfg.range = r;
             atomic_fetch_add(&s_ad_steps, 1);
@@ -4438,15 +4736,15 @@ static void adsb_tick(void)
 
 /* The gear, or anywhere under its middle to the rim: the feed's state, and
  * a finger aimed at the gear that the glass places low. */
-static bool adsb_gear_at(lv_point_t p)
+static bool radar_gear_at(lv_point_t p)
 {
     const int32_t dx = p.x - CX, dy = p.y - AD_GEAR_Y;
     return dx * dx + dy * dy <= AD_GEAR_R * AD_GEAR_R || (dy >= 0 && LV_ABS(dx) <= AD_GEAR_W);
 }
 
-/* A tap: the aircraft under it, its card; the card itself, or nothing near,
+/* A tap: the contact under it, its card; the card itself, or nothing near,
  * puts a card away. */
-static void adsb_tap(lv_point_t p)
+static void radar_tap(lv_point_t p)
 {
     if (!s_ad_card) return;
     if (s_ad_sel[0] && shown_at(s_ad_card, p)) { ad_card_close(); return; }
@@ -4456,17 +4754,22 @@ static void adsb_tap(lv_point_t p)
         const int dx = p.x - s_ad_xy[i].x, dy = p.y - s_ad_xy[i].y, d2 = dx * dx + dy * dy;
         if (d2 < best_d2) { best = i; best_d2 = d2; }
     }
-    if (best >= 0) ad_card_open(s_ad_ac[best].hex);
-    else           ad_card_close();
+    if (best >= 0) {
+        char key[AD_KEY_N];
+        ad_key(&s_ad_ac[best], key);
+        ad_card_open(key);
+    } else {
+        ad_card_close();
+    }
 }
 
-void ui_adsb_tables(const uint8_t *map, size_t mn, const uint8_t *apt, size_t an)
+static void ad_tables(const uint8_t *map, size_t mn, const uint8_t *places, size_t pn)
 {
     s_ad_tmap = adsb_map_ok(map, mn) ? map : NULL;
-    s_ad_tapt = adsb_apt_ok(apt, an) ? apt : NULL;
+    s_ad_tapt = ad_places_ok(places, pn) ? places : NULL;
 }
 
-void ui_adsb_set(const net_adsb_t *a)
+static void ad_set(const ad_cfg_t *a)
 {
     const bool lock = s_ad_card != NULL;
     if (lock && !lvgl_port_lock(200)) return;
@@ -4488,10 +4791,10 @@ void ui_adsb_set(const net_adsb_t *a)
     }
 }
 
-void ui_adsb_aircraft(const adsb_ac_t *ac, int n)
+static void ad_contacts(const ad_c_t *ac, int n)
 {
     if (!s_ad_card || !lvgl_port_lock(200)) return;
-    if (n > ADSB_UI_MAX) n = ADSB_UI_MAX;
+    if (n > AD_UI_MAX) n = AD_UI_MAX;
     memcpy(s_ad_ac, ac, (size_t)n * sizeof ac[0]);
     s_ad_n = n;
     ad_place();                 /* the taps need it before the scene is drawn again */
@@ -4500,7 +4803,7 @@ void ui_adsb_aircraft(const adsb_ac_t *ac, int n)
     lvgl_port_unlock();
 }
 
-void ui_adsb_feed(const char *what, bool ok)
+static void ad_feed(const char *what, bool ok)
 {
     if (!s_ad_card || !lvgl_port_lock(200)) return;
     if (strcmp(s_ad_feed, what) || ok != s_ad_feed_ok) {
@@ -4511,6 +4814,7 @@ void ui_adsb_feed(const char *what, bool ok)
     lvgl_port_unlock();
 }
 
+#if ADSB_FACE
 bool ui_adsb_card_callsign(char *cs, size_t n)
 {
     if (!s_ad_card || !lvgl_port_lock(20)) return false;
@@ -4534,22 +4838,37 @@ void ui_adsb_route(const char *cs, const char *from, const char *to, bool pendin
     if (s_ad_sel[0]) ad_card_fill();
     lvgl_port_unlock();
 }
+#endif
 
-void ui_adsb_turn(int32_t detents)
-{
-    if (detents) atomic_fetch_add(&s_ad_detents, (int)detents);
-}
-
-int  ui_take_adsb_range(void) { return atomic_exchange(&s_ad_taken, -1); }
-int  ui_take_adsb_steps(void) { return atomic_exchange(&s_ad_steps, 0); }
-int  ui_take_adsb_alert(void) { return atomic_exchange(&s_ad_alert_new, ADSB_AL_NONE); }
-void ui_take_adsb_draw_ms(int *map, int *scene, int *sweep)
+static void ad_take_draw_ms(int *map, int *scene, int *sweep)
 {
     *map = atomic_exchange(&s_ad_map_ms, 0);
     *scene = atomic_exchange(&s_ad_scene_ms, 0);
     *sweep = atomic_exchange(&s_ad_sweep_ms, 0);
 }
-#endif /* ADSB_FACE */
+
+#if ADSB_FACE
+void ui_adsb_tables(const uint8_t *map, size_t mn, const uint8_t *apt, size_t an) { ad_tables(map, mn, apt, an); }
+void ui_adsb_set(const net_adsb_t *a)              { ad_set(a); }
+void ui_adsb_aircraft(const adsb_ac_t *ac, int n)  { ad_contacts(ac, n); }
+void ui_adsb_feed(const char *what, bool ok)       { ad_feed(what, ok); }
+void ui_adsb_turn(int32_t detents)                 { if (detents) atomic_fetch_add(&s_ad_detents, (int)detents); }
+int  ui_take_adsb_range(void) { return atomic_exchange(&s_ad_taken, -1); }
+int  ui_take_adsb_steps(void) { return atomic_exchange(&s_ad_steps, 0); }
+int  ui_take_adsb_alert(void) { return atomic_exchange(&s_ad_alert_new, AD_AL_NONE); }
+void ui_take_adsb_draw_ms(int *map, int *scene, int *sweep) { ad_take_draw_ms(map, scene, sweep); }
+#else
+void ui_ais_tables(const uint8_t *map, size_t mn, const uint8_t *ports, size_t pn) { ad_tables(map, mn, ports, pn); }
+void ui_ais_set(const net_ais_t *a)                { ad_set(a); }
+void ui_ais_ships(const ais_ship_t *s, int n)      { ad_contacts(s, n); }
+void ui_ais_feed(const char *what, bool ok)        { ad_feed(what, ok); }
+void ui_ais_turn(int32_t detents)                  { if (detents) atomic_fetch_add(&s_ad_detents, (int)detents); }
+int  ui_take_ais_range(void)  { return atomic_exchange(&s_ad_taken, -1); }
+int  ui_take_ais_steps(void)  { return atomic_exchange(&s_ad_steps, 0); }
+int  ui_take_ais_alert(void)  { return atomic_exchange(&s_ad_alert_new, AD_AL_NONE); }
+void ui_take_ais_draw_ms(int *map, int *scene, int *sweep)  { ad_take_draw_ms(map, scene, sweep); }
+#endif
+#endif /* RADAR_FACE */
 
 #if CLOCK_FACE
 /* --- Clock: the knob as a clock --------------------------------------------
@@ -6877,13 +7196,13 @@ void ui_tctag_turn(int32_t detents)
 /* The faces that own the glass whole, with a gear at their foot for the
  * card and the picker: EpiBeam's compass, ADS-B Radar's radar -- and the
  * clock and the weather, the whole of their glass the gear. */
-#define GEAR_FACE (EPI_FACE || ADSB_FACE || CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE || TAG_FACE)
+#define GEAR_FACE (EPI_FACE || RADAR_FACE || CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE || TAG_FACE)
 __attribute__((unused)) static bool gear_at(lv_point_t p)
 {
 #if EPI_FACE
     return beam_gear_at(p);
-#elif ADSB_FACE
-    return adsb_gear_at(p);
+#elif RADAR_FACE
+    return radar_gear_at(p);
 #elif CLOCK_FACE || WEATHER_FACE || WIFITEST_FACE || TAG_FACE
     /* TailChaser Tag's microphone is the tap's first (tg_tap): a hold there
      * is the picker's as anywhere. */
@@ -7068,8 +7387,8 @@ static void tap(lv_point_t p, uint32_t held)
     beam_tap(p);                                 /* a direction; elsewhere nothing */
     return;
 #endif
-#if ADSB_FACE
-    adsb_tap(p);                                 /* an aircraft's card; elsewhere it goes */
+#if RADAR_FACE
+    radar_tap(p);                                /* an aircraft's card, a ship's; elsewhere it goes */
     return;
 #endif
 #if REFLECTOR_FACE
@@ -7471,7 +7790,7 @@ static void touch_cb(lv_event_t *e)
                      (addresses_up() && (shown_at(s_netinfo, p) || shown_at(s_warn_panel, p)));
     s_press_picker_off = false;
     s_press_card   = false;
-#if ADSB_FACE
+#if RADAR_FACE
     /* The radar: held anywhere, the card, as on a radio's S-meter; with it
      * up, held anywhere, the picker -- not only on the gear, which by the
      * rim did not answer on a knob (2026-11-21). With no link the warning
@@ -7566,9 +7885,9 @@ static void touch_cb(lv_event_t *e)
         }
         /* The radar's hold anywhere, as above: the card, with UNLOCK -- and
          * the padlock still nudged, a tap on an aircraft being refused. */
-        s_press_card = (ADSB_FACE ? s_press_card : !GEAR_FACE && p.y < 104 && !nolink_warn_up()) &&
+        s_press_card = (RADAR_FACE ? s_press_card : !GEAR_FACE && p.y < 104 && !nolink_warn_up()) &&
                        !s_press_picker;
-        if ((ADSB_FACE || !s_press_card) && !s_press_picker) klock_nudge();
+        if ((RADAR_FACE || !s_press_card) && !s_press_picker) klock_nudge();
         return;
     }
 #endif
@@ -8374,10 +8693,10 @@ static void build(void)
     beam_build();
     lv_obj_move_foreground(s_knob_batt);
 #endif
-#if ADSB_FACE
+#if RADAR_FACE
     /* The radar, the same way: under the card, the warning, the questions
      * and the lock; the knob's battery over it, under the range. */
-    adsb_build();
+    radar_build();
     lv_obj_move_foreground(s_knob_batt);
 #endif
 #if CLOCK_FACE
@@ -9615,8 +9934,8 @@ void ui_update(const ui_state_t *st)
 #if EPI_FACE
     beam_update(st);
 #endif
-#if ADSB_FACE
-    adsb_update(st);
+#if RADAR_FACE
+    radar_update(st);
 #endif
     /* While an editor is open its panel owns the screen; leave the rest of the
      * face alone so the value the operator is choosing does not jitter -- nor,
@@ -10635,7 +10954,7 @@ static bool screen_hidden(void)
     return s_level == LVL_DARK || atomic_load(&s_saver_want) || atomic_load(&s_saver_shown);
 }
 
-#if ADSB_FACE
+#if RADAR_FACE
 /* Gone dark or under a screensaver: the radar's sweep rests. */
 static bool screen_dark(void) { return screen_hidden(); }
 #endif
@@ -10735,8 +11054,8 @@ void ui_saver_text(char *big, size_t nb, char *small, size_t ns)
 #if EPI_FACE
     label_copy(s_beam_big, big, nb);
     label_copy(s_beam_deg, small, ns);
-#elif ADSB_FACE
-    snprintf(big, nb, "ADS-B");
+#elif RADAR_FACE
+    snprintf(big, nb, ADSB_FACE ? "ADS-B" : "AIS");
     label_copy(s_ad_range, small, ns);
 #elif WEATHER_FACE
     label_copy(s_wx_temp, big, nb);

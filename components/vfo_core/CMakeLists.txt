@@ -10,6 +10,7 @@ idf_component_register(
         "src/ptt_fsm.c"
         "src/beam.c"
         "src/adsb.c"
+        "src/ais.c"
         "src/weather.c"
         "src/alarm.c"
         "src/wifitest.c"

@@ -31,7 +31,7 @@ endif()
 # vfo-knob-<radio>. That name is how a knob tells its own updates from another
 # radio's firmware, and which update channel it follows (components/ota).
 set(VFO_RADIO "aethersdr" CACHE STRING "The radio this firmware is built for")
-set(_vfo_radios aethersdr icom icombt openx6x00 openx6bt jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb clock weather wifitest tailchaser tctag)
+set(_vfo_radios aethersdr icom icombt openx6x00 openx6bt jupitersdr svxconnect multiflex k4 ubersdr kiwi owrx websdr setup phone epibeam adsb ais clock weather wifitest tailchaser tctag)
 if(NOT VFO_RADIO IN_LIST _vfo_radios)
     message(FATAL_ERROR "VFO_RADIO=${VFO_RADIO}: there is firmware for ${_vfo_radios}")
 endif()
@@ -64,7 +64,9 @@ endif()
 # -- a 4-square, or 8 directions -- through EpiCenter, the station's brain,
 # its client the link to it. adsb is no radio either: a radar of the aircraft
 # round the knob, from an ADS-B feed on the internet or a receiver of one's
-# own, after Alex-developer's ADSB-Radar. clock is a clock: its faces, the
+# own, after Alex-developer's ADSB-Radar. ais is the same radar for ships:
+# their AIS positions from AISStream.io or an AIS-catcher of one's own. clock
+# is a clock: its faces, the
 # time from SNTP. weather is the weather: Open-Meteo's forecast for a place.
 # wifitest is no radio either: it measures the WiFi network the knob is on --
 # the signal, every drop and why, pings to the router, the radios' hosts and
@@ -98,6 +100,8 @@ elseif(VFO_RADIO STREQUAL "epibeam")
     set(_vfo_client epi_client)
 elseif(VFO_RADIO STREQUAL "adsb")
     set(_vfo_client adsb_client)
+elseif(VFO_RADIO STREQUAL "ais")
+    set(_vfo_client ais_client)
 elseif(VFO_RADIO STREQUAL "clock")
     set(_vfo_client clock_client)
 elseif(VFO_RADIO STREQUAL "weather")
@@ -112,7 +116,7 @@ else()
     set(_vfo_client icom_client)
 endif()
 foreach(_c tci_client icom_client svx_client flex_client k4_client uber_client kiwi_client owrx_client wsdr_client
-           setup_client phone_client epi_client adsb_client clock_client weather_client wifitest_client
+           setup_client phone_client epi_client adsb_client ais_client clock_client weather_client wifitest_client
            tailchaser_client tctag_client)
     if(NOT _c STREQUAL _vfo_client)
         list(APPEND EXCLUDE_COMPONENTS ${_c})
@@ -137,7 +141,7 @@ endif()
 # VFO_RADIO_JUPITERSDR, VFO_RADIO_SVXCONNECT, VFO_RADIO_MULTIFLEX, VFO_RADIO_K4,
 # VFO_RADIO_UBERSDR, VFO_RADIO_KIWI, VFO_RADIO_OWRX, VFO_RADIO_WEBSDR,
 # VFO_RADIO_SETUP, VFO_RADIO_PHONE,
-# VFO_RADIO_EPIBEAM, VFO_RADIO_ADSB, VFO_RADIO_CLOCK, VFO_RADIO_WEATHER,
+# VFO_RADIO_EPIBEAM, VFO_RADIO_ADSB, VFO_RADIO_AIS, VFO_RADIO_CLOCK, VFO_RADIO_WEATHER,
 # VFO_RADIO_WIFITEST, VFO_RADIO_TAILCHASER or VFO_RADIO_TCTAG is defined as 1.
 idf_build_set_property(VFO_RADIO_CLIENT ${_vfo_client})
 string(TOUPPER "${VFO_RADIO}" _vfo_radio_uc)

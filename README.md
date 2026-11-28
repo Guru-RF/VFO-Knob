@@ -100,6 +100,11 @@ receiver: the range on the dial, each aircraft coloured by its altitude,
 an emergency or a type you watch for called out, and a tap for an
 aircraft's route. See [ADS-B Radar](#ads-b-radar).
 
+With the **AIS Radar** firmware (a beta) the knob is the same radar for the
+ships round you, from AISStream.io with a free key of your own, or your own
+AIS-catcher: each ship coloured by its kind, an AIS-SART or a ship you watch
+for called out, and a tap for where it is bound. See [AIS Radar](#ais-radar).
+
 With the **Clock** firmware the knob is a clock for the shack: local
 time on the hands, UTC on a 24-hour ring, four faces on the dial, ten alarms. See
 [Clock](#clock).
@@ -785,6 +790,22 @@ step: [the ADS-B Radar guide](docs/adsb.md).
 | **The gear** | A tap: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
 | **Kept** | The settings and the range, across a restart. No PTT, no swipes, no audio and no Bluetooth: the glass is the radar's. |
 
+## AIS Radar
+
+The AIS Radar firmware (`vfo-knob-ais`, a beta) is ADS-B Radar's radar for
+ships, north up, the middle a harbour or a place you choose. Step by step:
+[the AIS Radar guide](docs/ais.md).
+
+| | |
+|---|---|
+| **Radar** | On the configuration page: the middle, a harbour by its name or a place in degrees, Westende until set; the ships from AISStream.io, with a free key of your own (kept on the SD card, never shown again), or from your own AIS-catcher; the units; every ship and aid, ships only, or ships under way; harbours, coasts and borders, the sweep; the ships to call out, by MMSI or name. |
+| **The dial** | The range, a detent a range with a click: 1 to 50 NM or miles, 2 to 90 km. |
+| **The ships** | Under way an arrow along the course, at rest a dot, an aid to navigation a diamond; coloured by kind, labelled with name and speed, or moored, at anchor. A tap on one: its card — kind and size, where it is bound and when, speed and course, status and draught, where it is, its MMSI and call sign. |
+| **Alerts** | An AIS-SART, a man-overboard device or an EPIRB always shows, ringed in red, called out at the top, with a buzz; a ship on the list in gold, with a click. |
+| **The map** | Coasts, borders and ports from Natural Earth, public domain and in the firmware; rings at a quarter, half and three quarters of the range; the sweep. |
+| **The gear** | A tap: the address card, for the configuration page. Held three seconds: **FIRMWARE?**, the way back to the setup firmware's list. |
+| **Kept** | The settings and the range, across a restart. No PTT, no swipes, no audio and no Bluetooth: the glass is the radar's. |
+
 ## Clock
 
 The Clock firmware (`vfo-knob-clock`) turns the knob into a clock
@@ -1067,7 +1088,7 @@ row and the face's **NO SD CARD** and **SD CARD FAULT** say when the card
 it again should it answer later.
 
 There is one firmware per radio, `vfo-knob-<radio>` — `vfo-knob-aethersdr`,
-`vfo-knob-icom`, `vfo-knob-icombt`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-clock`, `vfo-knob-weather`, `vfo-knob-wifitest`, `vfo-knob-tailchaser` and `vfo-knob-tctag` — and each has its own update
+`vfo-knob-icom`, `vfo-knob-icombt`, `vfo-knob-openx6x00`, `vfo-knob-multiflex`, `vfo-knob-k4`, `vfo-knob-jupitersdr`, `vfo-knob-svxconnect`, `vfo-knob-ubersdr`, `vfo-knob-kiwi`, `vfo-knob-owrx`, `vfo-knob-websdr`, `vfo-knob-phone`, `vfo-knob-epibeam`, `vfo-knob-adsb`, `vfo-knob-ais`, `vfo-knob-clock`, `vfo-knob-weather`, `vfo-knob-wifitest`, `vfo-knob-tailchaser` and `vfo-knob-tctag` — and each has its own update
 channel, `firmware/<radio>/`,
 so a knob is only ever offered its own releases. It also refuses to install
 another radio's firmware as an update; switching radios is a deliberate choice

@@ -31,6 +31,9 @@
 #if VFO_RADIO_ADSB
 #include "adsb_client.h"
 #endif
+#if VFO_RADIO_AIS
+#include "ais_client.h"
+#endif
 #if VFO_RADIO_WEATHER
 #include "weather_client.h"
 #endif
@@ -200,6 +203,8 @@ static void firmware_line(char *out, size_t cap)
     const char *name = "EpiBeam";
 #elif VFO_RADIO_ADSB
     const char *name = "ADS-B Radar";
+#elif VFO_RADIO_AIS
+    const char *name = "AIS Radar";
 #elif VFO_RADIO_CLOCK
     const char *name = "Clock";
 #elif VFO_RADIO_WEATHER
@@ -498,6 +503,11 @@ static void encoder_task(void *arg)
 #if VFO_RADIO_ADSB
         /* The dial is the radar's range, a range a detent (ui.c's radar). */
         ui_adsb_turn(detents);
+        continue;
+#endif
+#if VFO_RADIO_AIS
+        /* The same radar, for ships. */
+        ui_ais_turn(detents);
         continue;
 #endif
 #if VFO_RADIO_CLOCK
@@ -1982,6 +1992,53 @@ static void ui_task(void *arg)
             }
         }
 #endif
+#if VFO_RADIO_AIS
+        /* The radar of the ships, as ADS-B Radar's: a click a range
+         * stepped; the range it settled on kept, and the stream subscribed
+         * again for it; the ships and the source's state to the face, and a
+         * new alert felt -- a buzz for an emergency, a click for a ship on
+         * the list. Settings saved on the page drawn at once. */
+        {
+            if (ais_client_take_settings()) {
+                net_ais_t a;
+                net_prov_ais(&a);
+                ui_ais_set(&a);
+            }
+            if (ui_take_ais_steps()) haptic(1);
+            const int r = ui_take_ais_range();
+            if (r >= 0) {
+                net_ais_t a;
+                net_prov_ais(&a);
+                a.range = (uint8_t)r;
+                net_prov_save_ais(&a);
+                ais_client_poke();
+            }
+            EXT_RAM_BSS_ATTR static ais_ship_t sh[AIS_KEEP];
+            static uint32_t gen;
+            ais_snap_t sn;
+            if (ais_client_take(sh, AIS_KEEP, &sn, gen)) {
+                gen = sn.gen;
+                ui_ais_ships(sh, sn.n);
+            }
+            char f[24];
+            bool ok;
+            ais_client_feed(f, sizeof f, &ok);
+            ui_ais_feed(f, ok);
+            const int al = ui_take_ais_alert();
+            if (al == AIS_AL_EMERGENCY) haptic(14);     /* strong buzz */
+            else if (al)                haptic(1);      /* strong click */
+            static int64_t drawn_said;
+            const int64_t t = esp_timer_get_time();
+            if (t - drawn_said > 60LL * 1000 * 1000) {
+                drawn_said = t;
+                int map_ms, scene_ms, sweep_ms;
+                ui_take_ais_draw_ms(&map_ms, &scene_ms, &sweep_ms);
+                if (map_ms || scene_ms || sweep_ms)
+                    ESP_LOGI(TAG, "radar: the longest draw this minute, map %d ms, scene %d ms, sweep step %d ms",
+                             map_ms, scene_ms, sweep_ms);
+            }
+        }
+#endif
         /* The antennas, up under a finger held on the slab: a buzz says the
          * slab has not keyed, and the editor is there. (Never on the air:
          * haptic() keeps the motor still then, and no hold opens it.) */
@@ -2144,7 +2201,7 @@ static void ui_task(void *arg)
          * nothing goes over it. */
         else if (!link_ok) { }
 #endif
-#if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR || VFO_RADIO_ADSB || VFO_RADIO_WEATHER
+#if VFO_RADIO_KIWI || VFO_RADIO_OWRX || VFO_RADIO_WEBSDR || VFO_RADIO_ADSB || VFO_RADIO_AIS || VFO_RADIO_WEATHER
         /* A receiver on its way, with nothing said against it: no warning
          * over the face -- its slab says "connecting...", the radar's foot
          * "asking", the weather's "asking Open-Meteo". */
@@ -2760,6 +2817,11 @@ static const char *pick_transport(const vfo_cfg_t *cfg, char *ip, size_t iplen,
      * itself, and says NO LOCATION until the radar has a middle. */
     strlcpy(ip, "ADSB", iplen);
     ESP_LOGI(TAG, "--- transport: WiFi (ADS-B) ---");
+#elif VFO_RADIO_AIS
+    /* The same: the stream or the AIS-catcher is the radar's own, and the
+     * client says NO API KEY until AISStream has one. */
+    strlcpy(ip, "AIS", iplen);
+    ESP_LOGI(TAG, "--- transport: WiFi (AIS) ---");
 #elif VFO_RADIO_CLOCK
     /* Nothing to connect to: the time is SNTP's (wallclock_start). */
     strlcpy(ip, "CLOCK", iplen);
@@ -3003,6 +3065,7 @@ static const struct { const char *radio, *name; bool beta; } FIRMWARES[] = {
     { "phone",      "Telephone",  false },
     { "epibeam",    "EpiBeam",    true  },
     { "adsb",       "ADS-B Radar", false },
+    { "ais",        "AIS Radar",  true  },
     { "clock",      "Clock",      false },
     { "weather",    "Weather",    false },
     { "wifitest",   "WiFi Test",  false },
@@ -4552,6 +4615,17 @@ void app_main(void)
         net_adsb_t a;
         net_prov_adsb(&a);
         ui_adsb_set(&a);
+    }
+#endif
+#if VFO_RADIO_AIS
+    {
+        const uint8_t *map, *ports;
+        size_t mn, pn;
+        ais_client_tables(&map, &mn, &ports, &pn);
+        ui_ais_tables(map, mn, ports, pn);
+        net_ais_t a;
+        net_prov_ais(&a);
+        ui_ais_set(&a);
     }
 #endif
     bool have_ui = have_panel && bring_up("ui", ui_init);

@@ -588,7 +588,7 @@ SOME static void batt_radio(const char *dir, const char *face)
 #if VFO_RADIO_EPIBEAM
 #define KNOB_INK_TOP  56                   /* inside the ring of directions, 48 at the top */
 #define KNOB_INK_FOOT 92                   /* ...and over the caption's 99 */
-#elif VFO_RADIO_ADSB
+#elif VFO_RADIO_ADSB || VFO_RADIO_AIS
 #define KNOB_INK_TOP  34                   /* under the range's label, the padlock's from 35 */
 #define KNOB_INK_FOOT 61                   /* ...within the plate the map leaves clear */
 #else
@@ -4556,6 +4556,452 @@ static void runs(const char *dir)
     st.knob_batt = false; run(60);
     quiet();
 }
+#elif VFO_RADIO_AIS
+/* AIS Radar's radar (ui.c AIS_FACE, ADS-B Radar's for ships): a sea off
+ * Westende, made-up ships nearest first as the client hands them over. The
+ * map under them from the image's own tables, the harbours named; the
+ * range on the dial, a detent a range, held at either end, taken once the
+ * knob has rested; an AIS-SART called out at the top and buzzed once, a
+ * ship on the page's list after it; each kind its shape and colour -- an
+ * arrow under way, a dot at rest, a diamond for an aid; a tap on a ship
+ * its card, on the card away; the filters; the gear, its card and the
+ * picker, the rim under it and a hold anywhere as ADS-B Radar's; locked,
+ * no card of a ship; the knob's battery and the padlock clear of the map.
+ * Pictures of each. */
+#define GEAR_X 180                       /* ui.c AD_GEAR_Y: CY + 102 */
+#define GEAR_Y 282
+#define RIM_Y  332
+#define AD_R   172                       /* ui.c: the radar's edge */
+#define LAT0   51.160                    /* Westende, Lombardsijde */
+#define LON0   2.760
+
+typedef struct {
+    uint32_t mmsi;
+    const char *name, *call, *dest;
+    uint8_t type, nav, cls;
+    float nm, brg;                       /* where, from the middle */
+    int16_t sog, cog, hdg;               /* 0.1 kn, 0.1 degree, degrees; -1 none */
+    uint16_t len, beam;
+    uint8_t draught;
+    float seen;
+} sea_t;
+
+static const sea_t SEA[] = {
+    { 205123000, "NORDIC STAR",    "ONAB",  "ANTWERP",   70, 0,  AIS_CLS_A,    3.0f, 330, 124, 600,  61, 180, 28, 92, 4 },
+    { 244567000, "BALTIC TRADER",  "PDBT",  "ROTTERDAM", 80, 0,  AIS_CLS_A,    7.0f, 322, 108, 2400, 241, 228, 32, 121, 6 },
+    { 235777000, "OCEAN BREEZE",   "MOBZ",  "DOVER",     60, 0,  AIS_CLS_A,    9.0f, 20,  210, 2200, 221, 186, 28, 65, 3 },
+    { 227900000, "SEA SWIFT",      "FSSW",  "",          40, 0,  AIS_CLS_A,    6.0f, 300, 320, 700,  71, 42, 12, 0, 2 },
+    { 205444000, "ZEEHOND",        "OPZH",  "",          30, 7,  AIS_CLS_A,    4.0f, 310, 35,  1800, -1, 24, 7, 0, 5 },
+    { 205555000, "WESTWIND",       "",      "",          36, 15, AIS_CLS_B,    2.0f, 0,   55,  900,  -1, 11, 4, 0, 20 },
+    { 205666000, "LITTLE GULL",    "",      "",          37, 15, AIS_CLS_B,    1.5f, 40,  0,   -1,   -1, 8, 3, 0, 30 },
+    { 205777000, "PILOT 12",       "OPPL",  "",          50, 0,  AIS_CLS_A,    8.0f, 40,  150, 3000, -1, 24, 6, 0, 2 },
+    { 205888000, "TUG ATLAS",      "OPTA",  "",          52, 5,  AIS_CLS_A,    7.5f, 57,  0,   -1,   58, 30, 11, 0, 60 },
+    { 636012345, "ATLANTIC DAWN",  "D5AD",  "ZEEBRUGGE", 70, 1,  AIS_CLS_A,    10.0f, 345, 2,  -1,   212, 199, 32, 108, 120 },
+    { 992051234, "NOORDPAS 2",     "",      "",          0,  15, AIS_CLS_ATON, 5.0f, 15,  -1,  -1,   -1, 0, 0, 0, 90 },
+    { 2050480,   "",               "",      "",          0,  15, AIS_CLS_BASE, 7.9f, 61,  -1,  -1,   -1, 0, 0, 0, 10 },
+    { 111205100, "",               "",      "",          0,  15, AIS_CLS_SAR_AIRCRAFT, 6.0f, 268, 1200, 900, -1, 0, 0, 0, 2 },
+    { 970123456, "",               "",      "",          0,  14, AIS_CLS_SART, 5.0f, 290, 0,   -1,   -1, 0, 0, 0, 1 },
+    { 211998877, "",               "",      "",          0,  15, AIS_CLS_A,    11.0f, 320, 80, 1350, -1, 0, 0, 0, 8 },
+    { 538009999, "NORTHERN LIGHT", "V7NL",  "LE HAVRE",  79, 0,  AIS_CLS_A,    11.5f, 10, 140, 2000, 200, 229, 32, 118, 3 },
+    { 205999000, "GREY HERON",     "OPGH",  "",          30, 0,  AIS_CLS_A,    9.0f, 280, 60,  1200, -1, 20, 6, 0, 400 },
+    { 255806000, "MADEIRA SUN",    "CQMS",  "LONDON",    70, 0,  AIS_CLS_A,    16.0f, 330, 115, 450, 45, 140, 22, 80, 5 },
+};
+#define N_SEA (int)(sizeof SEA / sizeof SEA[0])
+static ais_ship_t sea[N_SEA];
+
+static void sea_make(void)
+{
+    for (int i = 0; i < N_SEA; i++) {
+        const sea_t *s = &SEA[i];
+        ais_ship_t  *a = &sea[i];
+        ais_ship_init(a, s->mmsi);
+        strlcpy(a->name, s->name, sizeof a->name);
+        strlcpy(a->callsign, s->call, sizeof a->callsign);
+        strlcpy(a->dest, s->dest, sizeof a->dest);
+        a->type = s->type;
+        a->nav = s->nav;
+        a->cls = s->cls;
+        a->sog_dk = s->sog;
+        a->cog_dd = s->cog;
+        a->hdg = s->hdg;
+        a->len_m = s->len;
+        a->beam_m = s->beam;
+        a->draught_dm = s->draught;
+        if (s->dest[0]) { a->eta_mon = 11; a->eta_day = 21; a->eta_h = 18; a->eta_m = 30; }
+        a->seen_s = s->seen;
+        a->pos = true;
+        const double b = s->brg * M_PI / 180.0;
+        a->lat = LAT0 + s->nm * cos(b) / 60.0;
+        a->lon = LON0 + s->nm * sin(b) / (60.0 * cos(LAT0 * M_PI / 180.0));
+        adsb_dist_brg(LAT0, LON0, a->lat, a->lon, &a->dist_nm, &a->brg);
+    }
+}
+
+/* A table of the image's, from the disk. */
+static uint8_t *table(const char *dir, const char *name, size_t *n)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    *n = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *p = malloc(*n);
+    if (p && fread(p, 1, *n, f) != *n) { free(p); p = NULL; }
+    fclose(f);
+    return p;
+}
+
+static net_ais_t cfg;
+static void set(void) { ui_ais_set(&cfg); run(120); }
+
+/* Where a ship of the sea is on the glass, at the range set now. */
+static void sea_xy(int i, int *x, int *y)
+{
+    adsb_view_t v;
+    adsb_view_set(&v, LAT0, LON0, ais_range_nm(cfg.units, cfg.range), AD_R);
+    float px, py;
+    adsb_project(&v, sea[i].lat, sea[i].lon, &px, &py);
+    *x = W / 2 + (int)lroundf(px);
+    *y = H / 2 + (int)lroundf(py);
+}
+static int sea_find(uint32_t mmsi)
+{
+    for (int i = 0; i < N_SEA; i++)
+        if (SEA[i].mmsi == mmsi) return i;
+    return -1;
+}
+static void sea_tap(uint32_t mmsi)
+{
+    int x, y;
+    sea_xy(sea_find(mmsi), &x, &y);
+    tap_at(x, y, 80);
+    run(120);
+}
+static bool moving(void)
+{
+    render(with_b);
+    run(200);
+    render(without_b);
+    return memcmp(with_b, without_b, sizeof with_b) != 0;
+}
+
+/* Whether a ship is drawn in this colour: some of its pixels, within 3 px
+ * of its place. */
+static bool drawn_in(uint32_t mmsi, uint32_t rgb)
+{
+    int x, y;
+    sea_xy(sea_find(mmsi), &x, &y);
+    lv_obj_invalidate(lv_screen_active());
+    lv_refr_now(disp);
+    const uint16_t c = lv_color_to_u16(lv_color_hex(rgb));
+    int n = 0;
+    for (int dy = -3; dy <= 3; dy++)
+        for (int dx = -3; dx <= 3; dx++)
+            n += x + dx >= 0 && x + dx < W && y + dy >= 0 && y + dy < H && fb[(y + dy) * W + x + dx] == c;
+    return n >= 4;
+}
+
+static void runs(const char *dir)
+{
+    base();
+    size_t mn = 0, pn = 0;
+    const uint8_t *map = table(ADSB_TABLES, "map.bin", &mn), *ports = table(AIS_TABLES, "ports.bin", &pn);
+    CHECK(map && ports);
+    ui_ais_tables(map, mn, ports, pn);
+    ui_set_netinfo("AIS Radar 1.28.0\nUSB power\nUSB   -\nWiFi  192.168.254.248\nsetup  http://192.168.254.248");
+    sea_make();
+
+    where = "no middle yet: an empty radar, the source asking";
+    memset(&cfg, 0, sizeof cfg);
+    cfg.lat_e6 = cfg.lon_e6 = NET_AIS_NO_POS;
+    cfg.range = 5;
+    cfg.opts = NET_AIS_OPTS_DEFAULT;
+    cfg.refresh_s = 5;
+    strlcpy(cfg.watch, "northern*, 244999000", sizeof cfg.watch);
+    set();
+    CHECK(shown("12 NM") && shown("asking"));
+    CHECK(!moving());
+    picture(dir, "ais-nopos");
+
+    where = "the middle on Westende: the coast round it, Oostende named, the sweep going round";
+    cfg.lat_e6 = (int32_t)lround(LAT0 * 1e6);
+    cfg.lon_e6 = (int32_t)lround(LON0 * 1e6);
+    strlcpy(cfg.place, "Westende", sizeof cfg.place);
+    set();
+    CHECK(moving());
+    picture(dir, "ais-map");
+
+    where = "the ships: on the radar, the source's name and how many at the foot";
+    ui_ais_feed("AISStream", true);
+    ui_ais_ships(sea, N_SEA);
+    run(120);
+    /* MADEIRA SUN past 12 NM: one fewer than the source's. */
+    char foot[48];
+    snprintf(foot, sizeof foot, "AISStream " LV_SYMBOL_BULLET " %d", N_SEA - 1);
+    CHECK(shown(foot));
+    where = "...the AIS-SART called out at the top, buzzed once";
+    CHECK(label_from(lv_screen_active(), "AIS-SART  970123456"));
+    CHECK(ui_take_ais_alert() == AIS_AL_EMERGENCY);
+    ui_ais_ships(sea, N_SEA); run(120);
+    CHECK(ui_take_ais_alert() == AIS_AL_NONE);
+    picture(dir, "ais-radar");
+    where = "...each in its kind's colour: cargo green, a tanker red, a ferry blue, the list's gold, the SART's red";
+    cfg.opts = NET_AIS_PORTS | NET_AIS_COUNTRIES; set();          /* the sweep still, for the pixels */
+    CHECK(drawn_in(205123000, 0x4ADE80) && drawn_in(244567000, 0xD9534F) && drawn_in(235777000, 0x3B9BF5));
+    CHECK(drawn_in(538009999, 0xE5A823) && drawn_in(970123456, 0xFF3030) && drawn_in(992051234, 0xF472B6));
+    where = "...one not heard for six minutes dimmed";
+    CHECK(!drawn_in(205999000, 0xFFA07A));
+    cfg.opts = NET_AIS_OPTS_DEFAULT; set();
+    CHECK(moving());
+
+    for (int k = 0; k < 8; k++) {
+        where = "the sweep round a turn: each step's change sent, nothing of it left when stopped";
+        run(450);
+        memcpy(with_b, fb, sizeof fb);
+        render(without_b);
+        CHECK(!memcmp(with_b, without_b, sizeof fb));
+        tap_at(GEAR_X, GEAR_Y, 80); run(120);
+        render(with_b);
+        ui_ais_ships(sea, N_SEA); run(120);
+        render(without_b);
+        CHECK(!memcmp(with_b, without_b, sizeof fb));
+        tap_at(GEAR_X, GEAR_Y, 80); run(120);
+    }
+
+    where = "a detent: 20 NM at once, a click, taken once the knob has rested";
+    (void)ui_take_ais_steps(); (void)ui_take_ais_range();
+    ui_ais_turn(1); run(60);
+    CHECK(shown("20 NM") && ui_take_ais_steps() == 1);
+    CHECK(ui_take_ais_range() == -1);
+    run(650);
+    CHECK(ui_take_ais_range() == 6 && ui_take_ais_range() == -1);
+    cfg.range = 6;
+    snprintf(foot, sizeof foot, "AISStream " LV_SYMBOL_BULLET " %d", N_SEA);
+    CHECK(shown(foot));
+    picture(dir, "ais-20");
+    where = "...turned on before it rests: taken once, where it stopped";
+    ui_ais_turn(-1); run(300);
+    ui_ais_turn(-1); run(300);
+    CHECK(ui_take_ais_range() == -1 && shown("8 NM") && ui_take_ais_steps() == 2);
+    run(400);
+    CHECK(ui_take_ais_range() == 4);
+    where = "...held at either end: 50 NM, and no click past it";
+    ui_ais_turn(20); run(60);
+    CHECK(shown("50 NM") && ui_take_ais_steps() == 1);
+    ui_ais_turn(1); run(60);
+    CHECK(ui_take_ais_steps() == 0);
+    run(650);
+    CHECK(ui_take_ais_range() == 8);
+    ui_ais_turn(-20); run(700);
+    CHECK(shown("1 NM") && ui_take_ais_range() == 0);
+    cfg.range = 0;
+    picture(dir, "ais-1");
+    ui_ais_turn(5); run(700);
+    CHECK(shown("12 NM") && ui_take_ais_range() == 5);
+    cfg.range = 5;
+    (void)ui_take_ais_steps();
+    snprintf(foot, sizeof foot, "AISStream " LV_SYMBOL_BULLET " %d", N_SEA - 1);
+
+    where = "a tap on a ship: its card -- kind and size, bound for, speed and course; the sweep still";
+    sea_tap(205123000);
+    CHECK(shown("NORDIC STAR") && shown("Cargo  " LV_SYMBOL_BULLET "  180 x 28 m"));
+    CHECK(shown(LV_SYMBOL_RIGHT "  ANTWERP  21/11 18:30"));
+    CHECK(shown("12.4 kn  " LV_SYMBOL_BULLET "  060\xC2\xB0"));
+    CHECK(shown("under way  " LV_SYMBOL_BULLET "  9.2 m draught"));
+    CHECK(shown("3.0 NM at 330\xC2\xB0"));
+    CHECK(shown("MMSI 205123000  " LV_SYMBOL_BULLET "  ONAB"));
+    CHECK(!moving());
+    picture(dir, "ais-card");
+    where = "...a tap on the card: away, the sweep on again";
+    tap_at(W / 2, H / 2, 80); run(60);
+    CHECK(!shown("MMSI 205123000  " LV_SYMBOL_BULLET "  ONAB"));
+    CHECK(moving());
+    where = "...the AIS-SART's card: what it is, in red";
+    sea_tap(970123456);
+    CHECK(shown("970123456") && shown("AIS-SART  970123456"));
+    picture(dir, "ais-card-sart");
+    where = "...a tap where no ship is: away";
+    tap_at(W / 2 + 120, H / 2 + 60, 80); run(60);
+    CHECK(!shown("AIS-SART  970123456"));
+    where = "...left open: gone on its own after 20 s";
+    sea_tap(244567000);
+    CHECK(shown("BALTIC TRADER"));
+    run(20500);
+    CHECK(!shown("MMSI 244567000  " LV_SYMBOL_BULLET "  PDBT"));
+    where = "...one without a name: its MMSI, and nothing it did not send";
+    sea_tap(211998877);
+    CHECK(shown("MMSI 211998877") && shown("8.0 kn  " LV_SYMBOL_BULLET "  135\xC2\xB0"));
+    tap_at(W / 2, H / 2, 80); run(60);
+    where = "...an aid to navigation: what it is, no speed";
+    sea_tap(992051234);
+    CHECK(shown("NOORDPAS 2") && shown("Aid to navigation") && shown("--- kn"));
+    tap_at(W / 2, H / 2, 80); run(60);
+
+    where = "the ship on the page's list: gold, called out when no emergency is";
+    const int sart = sea_find(970123456);
+    sea[sart].mmsi = 205000970;                         /* the SART gone: a ship of no kind */
+    sea[sart].nav = AIS_NAV_NONE;
+    ui_ais_ships(sea, N_SEA); run(120);
+    CHECK(label_from(lv_screen_active(), "Cargo  NORTHERN LIGHT"));
+    CHECK(ui_take_ais_alert() == AIS_AL_NONE);          /* seen before, as an alert */
+    picture(dir, "ais-watch");
+    sea[sart].mmsi = 970123456;
+    sea[sart].nav = 14;
+
+    where = "ships only: no aid, no base station; the SART always shows";
+    cfg.show = AIS_SHOW_SHIPS; set();
+    ui_ais_ships(sea, N_SEA); run(120);
+    CHECK(shown("12 NM"));
+    snprintf(foot, sizeof foot, "AISStream " LV_SYMBOL_BULLET " %d ships", N_SEA - 3);
+    CHECK(shown(foot));
+    where = "...under way only: those making half a knot, the SART and the list's";
+    cfg.show = AIS_SHOW_MOVING; set();
+    ui_ais_ships(sea, N_SEA); run(120);
+    CHECK(shown("12 NM"));
+    /* At rest: LITTLE GULL, TUG ATLAS, ATLANTIC DAWN; aid and base out; the SART kept. */
+    snprintf(foot, sizeof foot, "AISStream " LV_SYMBOL_BULLET " %d moving", N_SEA - 1 - 2 - 3);
+    CHECK(shown(foot));
+    where = "...the foot and the filter inside the glass, at their widest";
+    ui_ais_feed("AIS-catcher", true);
+    ui_ais_ships(sea, N_SEA); run(120);
+    snprintf(foot, sizeof foot, "AIS-catcher " LV_SYMBOL_BULLET " %d moving", N_SEA - 1 - 2 - 3);
+    if (!shown(foot)) snprintf(foot, sizeof foot, "%d moving", N_SEA - 1 - 2 - 3);   /* too wide: the count alone */
+    {
+        lv_obj_t *rl = label_from(lv_screen_active(), foot);
+        box_t k;
+        int room = 0;
+        CHECK(rl && ink_of(rl, &k, &room) && in_glass(&k));
+        if (rl && ink_of(rl, &k, &room))
+            printf("  %-62s ink %d-%d, %d-%d  %2d px clear\n", where, k.x1, k.x2, k.y1, k.y2, room);
+    }
+    ui_ais_feed("AISStream", true);
+    ui_ais_ships(sea, N_SEA); run(120);
+    picture(dir, "ais-moving");
+    cfg.show = AIS_SHOW_ALL;
+    where = "...no harbours, no coast, no sweep: the rings and the ships";
+    cfg.opts = 0; set();
+    ui_ais_ships(sea, N_SEA); run(120);
+    CHECK(!moving());
+    picture(dir, "ais-plain");
+    cfg.opts = NET_AIS_OPTS_DEFAULT;
+    where = "...in kilometres: 25 km";
+    cfg.units = ADSB_KM; set();
+    CHECK(shown("25 km"));
+    cfg.units = ADSB_NM; set();
+    where = "...the source failing: said so at the foot, in the warning's colour";
+    ui_ais_feed("key refused", false); run(60);
+    CHECK(shown("key refused"));
+    picture(dir, "ais-down");
+    ui_ais_feed("AISStream", true);
+    ui_ais_ships(sea, N_SEA); run(120);
+    (void)ui_take_ais_alert();
+    snprintf(foot, sizeof foot, "AISStream " LV_SYMBOL_BULLET " %d", N_SEA - 1);
+
+    where = "a new middle from the page: the ships round the old one gone, and their card";
+    sea_tap(205123000);
+    cfg.lat_e6 += 500000; set();
+    CHECK(shown("AISStream") && !label_from(lv_screen_active(), "AIS-SART"));
+    CHECK(!shown("MMSI 205123000  " LV_SYMBOL_BULLET "  ONAB"));
+    where = "...the same middle again: the ships stay";
+    cfg.lat_e6 -= 500000; set();
+    ui_ais_ships(sea, N_SEA); run(120);
+    set();
+    CHECK(shown(foot) && label_from(lv_screen_active(), "AIS-SART"));
+    (void)ui_take_ais_alert();
+
+    where = "the gear off the rim, the source's state under it, inside the glass";
+    {
+        lv_obj_t *fl = label_from(lv_screen_active(), foot);
+        box_t k;
+        int room = 0;
+        CHECK(fl && ink_of(fl, &k, &room));
+        if (fl && ink_of(fl, &k, &room)) {
+            CHECK(in_glass(&k) && k.y1 > GEAR_Y + 20);
+            printf("  %-62s ink %d-%d, %d-%d  %2d px clear\n", where, k.x1, k.x2, k.y1, k.y2, room);
+        }
+    }
+
+    where = "the gear: a tap, the card and its click; again, away";
+    tap_at(GEAR_X, GEAR_Y, 80); run(30);
+    CHECK(label_from(lv_screen_active(), "AIS Radar 1.28.0") && ui_take_card_shown());
+    picture(dir, "ais-gear");
+    tap_at(GEAR_X, GEAR_Y, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), "AIS Radar 1.28.0"));
+    where = "...a tap by the rim under it: the gear's too";
+    tap_at(GEAR_X, RIM_Y, 80); run(30);
+    CHECK(label_from(lv_screen_active(), "AIS Radar 1.28.0") && ui_take_card_shown());
+    tap_at(GEAR_X - 40, 316, 80); run(30);
+    CHECK(!label_from(lv_screen_active(), "AIS Radar 1.28.0"));
+    where = "...held three seconds: the firmware picker asked for, and no card";
+    down(GEAR_X, GEAR_Y); run(3100);
+    CHECK(ui_take_picker_request());
+    up(); run(SEEN); run(60);
+    CHECK(!label_from(lv_screen_active(), "AIS Radar 1.28.0"));
+
+    where = "a hold on the radar, on a ship even: the card and its click, not the ship's";
+    {
+        int x, y;
+        sea_xy(sea_find(205123000), &x, &y);
+        down(x, y); run(700);
+        CHECK(label_from(lv_screen_active(), "AIS Radar 1.28.0") && ui_take_card_shown());
+        up(); run(SEEN); run(60);
+        CHECK(label_from(lv_screen_active(), "AIS Radar 1.28.0") &&
+              !shown("MMSI 205123000  " LV_SYMBOL_BULLET "  ONAB"));
+        CHECK(!ui_take_picker_request());
+        where = "...with the card up, held three seconds anywhere: the firmware picker";
+        down(90, 150); run(3100);
+        CHECK(ui_take_picker_request());
+        up(); run(SEEN); run(60);
+        CHECK(!label_from(lv_screen_active(), "AIS Radar 1.28.0"));
+        where = "...a tap is still a ship's card, not the address card";
+        sea_tap(205123000);
+        CHECK(shown("MMSI 205123000  " LV_SYMBOL_BULLET "  ONAB") && !label_from(lv_screen_active(), "AIS Radar 1.28.0"));
+        tap_at(W / 2, H / 2, 80); run(60);
+        CHECK(!shown("MMSI 205123000  " LV_SYMBOL_BULLET "  ONAB"));
+    }
+    where = "...no PTT, nor a swipe that does anything";
+    tap_at(W / 2 + 110, 280, 80);
+    swipe(340, 180, 140, 180); run(60);
+    swipe(180, 20, 180, 220); run(60);
+    CHECK(!ptt() && !ui_edit_active());
+
+    where = "locked, from the card's LOCK: a tap on a ship no card";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    CHECK(shown("LOCK"));
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(ui_locked());
+    run(10500);
+    sea_tap(205123000);
+    CHECK(!shown("MMSI 205123000  " LV_SYMBOL_BULLET "  ONAB"));
+    where = "...the padlock under the range, clear of the map";
+    {
+        lv_obj_t *lk = padlock();
+        box_t k;
+        int room = 0;
+        CHECK(lk && ink_of(lk, &k, &room));
+        if (lk && ink_of(lk, &k, &room)) {
+            CHECK(k.y1 >= KNOB_INK_TOP && k.y2 <= KNOB_INK_FOOT && room >= ROOM);
+            printf("  %-62s ink %d-%d, %d-%d  %2d px clear\n", where, k.x1, k.x2, k.y1, k.y2, room);
+        }
+    }
+    picture(dir, "ais-locked");
+    where = "...the gear still brings the card, and UNLOCK on it";
+    tap_at(GEAR_X, GEAR_Y, 80); run(700);
+    CHECK(shown("UNLOCK"));
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    CHECK(!ui_locked());
+    run(10500);
+
+    where = "the knob's battery, on its own power: under the range, clear of the map";
+    st.knob_batt = true; st.knob_pct = 85; run(60);
+    knob_check(dir, "ais-batt");
+    where = "...at every charge";
+    knob_levels(dir);
+    st.knob_batt = false; run(60);
+    quiet();
+}
 #elif VFO_RADIO_WIFITEST
 /* The WiFi Test's pages (ui.c WIFITEST_FACE): an hour on a home network --
  * one drop for lost beacons, a host on the LAN, the internet -- each page in
@@ -5106,7 +5552,7 @@ static void brightness(void)
 static uint16_t dial[W * H], saver_fb[W * H];
 /* The radar's sweep moves by itself, and the clock's hands: there the dial
  * is only checked to be back, not to be the picture it was. */
-#if VFO_RADIO_ADSB || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST || VFO_RADIO_TCTAG
+#if VFO_RADIO_ADSB || VFO_RADIO_AIS || VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST || VFO_RADIO_TCTAG
 #define SAME_DIAL() (memcmp(saver_fb, fb, sizeof fb) != 0)
 #elif VFO_RADIO_TAILCHASER
 /* TailChaser's clock under the slab ticks on meanwhile: the rest of the dial
@@ -5227,7 +5673,7 @@ int main(int argc, char **argv)
      * not sweep it themselves. */
 #if VFO_RADIO_TAILCHASER
     nolink_sweep(dir, "tc");
-#elif VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB
+#elif VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB || VFO_RADIO_AIS
     gear_nolink_sweep(GEAR_X, GEAR_Y, false);
 #elif VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST || VFO_RADIO_TCTAG
     gear_nolink_sweep(-1, -1, true);

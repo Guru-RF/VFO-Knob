@@ -73,6 +73,7 @@ add_library(vfo_core STATIC
     ${CORE}/src/ptt_fsm.c
     ${CORE}/src/beam.c
     ${CORE}/src/adsb.c
+    ${CORE}/src/ais.c
     ${CORE}/src/weather.c
     ${CORE}/src/alarm.c
     ${CORE}/src/wifitest.c
@@ -773,5 +774,38 @@ if(Python3_FOUND)
                              --mock ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_kiwi.py)
             set_tests_properties(${_t}_tls PROPERTIES TIMEOUT 900 LABELS "mock;tls" SKIP_RETURN_CODE 77)
         endforeach()
+    endif()
+endif()
+
+# AIS Radar's arithmetic (components/vfo_core/src/ais.c): AISStream's
+# messages and an AIS-catcher's ship list, the kinds, the alerts, the ranges,
+# and the harbours' committed table (components/ais_client/tables).
+add_executable(test_ais src/test_ais.c)
+target_link_libraries(test_ais PRIVATE vfo_core)
+target_compile_options(test_ais PRIVATE -Wall -Wextra)
+target_compile_definitions(test_ais PRIVATE
+    AIS_TABLES="${CMAKE_CURRENT_SOURCE_DIR}/../../components/ais_client/tables")
+add_test(NAME test_ais COMMAND test_ais)
+
+# AIS Radar's stream on the PC: components/ais_client/ais_ws.c -- its TLS
+# kiwi_tls.c's, as above -- and vfo_core ais.c reading what comes, against
+# tools/mock_aisstream.py (ais_stream, below) or AISStream.io itself with a
+# key of one's own in $AIS_KEY (never in a file). zlib stands in for the
+# S3 ROM's tinfl.
+find_package(ZLIB)
+if(ZLIB_FOUND)
+    set(AISC ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ais_client)
+    add_executable(ais_host src/ais_host.c shim/shim.c ${AISC}/ais_ws.c ${KIWI_TLS_SRCS})
+    target_include_directories(ais_host PRIVATE shim ${AISC}/include ${KIWI}/include)
+    target_compile_definitions(ais_host PRIVATE _GNU_SOURCE KIWI_RTC_SHIM)
+    target_link_libraries(ais_host PRIVATE vfo_core kiwi_proto ${KIWI_TLS_LIBS} ZLIB::ZLIB Threads::Threads m)
+    target_compile_options(ais_host PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME ais_stream
+                 COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/ais_stream.py
+                         --host $<TARGET_FILE:ais_host>
+                         --mock ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mock_aisstream.py)
+        set_tests_properties(ais_stream PROPERTIES TIMEOUT 180 LABELS mock)
     endif()
 endif()
