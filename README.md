@@ -282,7 +282,9 @@ knob clicks and the address card comes up, and let go. Then hold the S-meter
 no. The knob restarts, installs the setup firmware over WiFi and shows the list
 again, keeping the WiFi settings. With something wrong — **NO LINK**, say, on a
 knob with another radio's firmware — the warning panel shows the addresses in
-the card's place: hold that until the knob buzzes. It needs WiFi: on the cable
+the card's place: hold the red warning itself until the knob buzzes. The S-meter
+round it does nothing while the link is down, so a hand reaching for a knob that
+is not connected yet asks for no other firmware. It needs WiFi: on the cable
 the knob says so and carries on as it was.
 
 ## AetherSDR over the cable

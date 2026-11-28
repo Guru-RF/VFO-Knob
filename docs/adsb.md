@@ -201,6 +201,9 @@ the same:
 
      ![The card up, held three seconds: FIRMWARE?](adsb/13-hold-picker.svg)
 
+With the feed down and its warning over the radar, the radar's holds do
+nothing: hold the gear, or the red warning itself, for three seconds.
+
 Either way the knob asks **FIRMWARE?**. **Turn the knob** for yes: it
 restarts into the setup firmware's list, the WiFi settings kept, and you
 choose the next firmware there. A tap, or ten seconds of nothing, says no,

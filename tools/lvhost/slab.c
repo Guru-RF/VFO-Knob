@@ -997,6 +997,184 @@ SOME static void lock_sweep(const char *dir, const char *face)
 }
 #endif
 
+/* A hold `ms` long at x, y: the picker asked for, or not -- and no PTT, no
+ * card's click, whichever. */
+SOME static bool held_picks(int x, int y, uint32_t ms)
+{
+    (void)ui_take_picker_request();
+    down(x, y); run(ms);
+    const bool r = ui_take_picker_request();
+    up(); run(SEEN); run(100);
+    return ui_take_picker_request() || r;
+}
+
+/* The picker's question, as app_main.c asks it, and the knob's turn its yes. */
+SOME static bool turn_says_yes(void)
+{
+    if (!ui_ask_turn("FIRMWARE?", "turn the knob for the picker\ntap to cancel; WiFi is kept")) return false;
+    run(1000);                                  /* past its first 0.8 s */
+    const bool spent = ui_ask_knob_moved();
+    run(60);
+    return spent && ui_take_update_answer() == 1;
+}
+
+#if !VFO_RADIO_SETUP
+/* No link's warning up: held on the S-meter -- the knob's charging bolt
+ * there too, by itself or on the S-meter's row while locked -- no firmware
+ * picker, nor the card's click under the warning; held on the warning, the
+ * named one where it reaches over the S-meter's foot too, the picker, and a
+ * turn of the knob says yes. The link lost under a finger the card armed:
+ * none either, the card gone under the warning. With the link -- the card
+ * up, or a warning of another kind over it -- the S-meter's hold still asks
+ * for it. No PTT in any of it. Picture: the warning with the bolt. */
+SOME static void nolink_sweep(const char *dir, const char *face)
+{
+    char pic[64];
+    const ui_state_t keep = st;
+    ui_set_netinfo(CARD);
+    st.warn = NULL; st.link_ok = true; st.warn_name[0] = 0; run(100);
+    settle(); quiet();
+    (void)ui_take_card_shown();
+
+    where = "no link: the warning up";
+    st.link_ok = false; st.warn = "NO LINK"; run(100);
+    CHECK(shown("NO LINK"));
+    where = "...held on the S-meter past three seconds: no picker, no card";
+    CHECK(!held_picks(W / 2, 66, 3500));
+    CHECK(!ui_take_card_shown() && !ptt() && shown("NO LINK"));
+    where = "...held at the S-meter's ends and top: none either";
+    CHECK(!held_picks(W / 2 - 90, 92, 3500));
+    CHECK(!held_picks(W / 2 + 90, 92, 3500));
+    CHECK(!held_picks(W / 2, 30, 3500));
+    CHECK(!ui_take_card_shown() && !ptt());
+
+    where = "...the knob charging: held on its bolt, no picker";
+    st.knob_batt = false; st.knob_charging = true; run(100);
+    {
+        lv_obj_t *b = label_from(lv_screen_active(), LV_SYMBOL_CHARGE);
+        CHECK(b != NULL);
+        if (b) {
+            lv_area_t a;
+            lv_obj_get_coords(b, &a);
+            CHECK(!held_picks((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2, 3500));
+            printf("  ...the bolt at %d,%d held: no picker\n", (int)(a.x1 + a.x2) / 2, (int)(a.y1 + a.y2) / 2);
+        }
+        snprintf(pic, sizeof pic, "%s-nolink-charging", face);
+        picture(dir, pic);
+    }
+    st.knob_charging = false; run(100);
+
+    where = "...held on the warning three seconds: the picker, and the knob's turn its yes";
+    CHECK(held_picks(PANEL_X, PANEL_Y, 3200));
+    CHECK(!ptt());
+    CHECK(turn_says_yes());
+    run(100);
+    where = "...a short hold on the warning: none";
+    CHECK(!held_picks(PANEL_X, PANEL_Y, 1500));
+
+    where = "...a receiver named under it: the panel over the S-meter's foot, held there the picker";
+    snprintf(st.warn_name, sizeof st.warn_name, "%s", "Sample Receiver");
+    run(100);
+    CHECK(shown("NO LINK"));
+    CHECK(held_picks(W / 2, 98, 3200));
+    where = "...above the panel, on the S-meter: none";
+    CHECK(!held_picks(W / 2, 66, 3500));
+    st.warn_name[0] = 0; run(100);
+
+    where = "...the link lost under a finger the card armed: no picker";
+    st.link_ok = true; st.warn = NULL; run(100);
+    card_up();
+    (void)ui_take_card_shown();
+    (void)ui_take_picker_request();
+    down(W / 2, 66); run(800);
+    st.link_ok = false; st.warn = "NO LINK"; run(2700);
+    CHECK(!ui_take_picker_request());
+    up(); run(SEEN); run(100);
+    CHECK(!ui_take_picker_request() && shown("NO LINK"));
+
+    where = "...locked: held on the S-meter's row, no picker; on the warning, the picker";
+    st.link_ok = true; st.warn = NULL; run(100);
+    card_up(); run(700);
+    tap_at(LOCK_X, LOCK_Y, 60); run(60);
+    if (ui_locked()) {
+        st.link_ok = false; st.warn = "NO LINK"; run(100);
+        CHECK(shown("UNLOCK"));
+        /* Beside the pill (ui.c KLOCK_BTN_W, 204 px), and over it: a hold
+         * on the pill itself is a tap on it, UNLOCK. */
+        CHECK(!held_picks(W / 2 - 115, 92, 3500));
+        CHECK(!held_picks(W / 2 + 115, 92, 3500));
+        CHECK(!held_picks(W / 2, 40, 3500));
+        CHECK(ui_locked());
+        CHECK(held_picks(PANEL_X, PANEL_Y + 30, 3200));
+        CHECK(!ptt());
+        st.link_ok = true; st.warn = NULL; run(100);
+        /* UNLOCK, still over the S-meter as the warning goes, or the card's. */
+        if (!shown("UNLOCK")) { card_up(); run(700); }
+        tap_at(LOCK_X, LOCK_Y, 60); run(60);
+        CHECK(!ui_locked());
+        tap_at(W / 2, 174, 80); settle();
+    } else {
+        printf("  ...no lock on this face\n");
+    }
+
+    where = "with the link: the card up, held on the S-meter three seconds, the picker";
+    st.link_ok = true; st.warn = NULL; run(100);
+    settle(); quiet();
+    card_up();
+    CHECK(ui_take_card_shown());
+    CHECK(held_picks(W / 2, 66, 3200));
+    where = "...with the link and a warning of another kind: the S-meter's hold, the picker";
+    st.warn = "TX DISABLED"; run(100);
+    CHECK(shown("TX DISABLED"));
+    CHECK(held_picks(W / 2, 66, 3200));
+    CHECK(!ptt());
+    st = keep;
+    st.warn = NULL;
+    run(100); settle(); quiet();
+}
+#endif
+
+/* The gear's faces, the same: no link's warning up, a hold off it -- the
+ * top of the arc, the radar anywhere -- asks for no picker; on the warning,
+ * the picker and the knob's turn its yes; on the gear, where it stands off
+ * the warning (gx >= 0), the picker as ever -- and on a face that is all
+ * gear (`anywhere`), held anywhere, as ever. */
+SOME static void gear_nolink_sweep(int gx, int gy, bool anywhere)
+{
+    const ui_state_t keep = st;
+    settle(); quiet();
+    (void)ui_take_card_shown();
+    where = "gear face, no link: the warning up";
+    st.link_ok = false; st.warn = "NO LINK"; st.warn_name[0] = 0; run(100);
+    CHECK(shown("NO LINK"));
+    if (anywhere) {
+        /* The clock's, the weather's, WiFi Test's and the Tag's: the whole
+         * face is the gear, and held anywhere the picker -- their one way
+         * to it, kept. */
+        where = "...a face that is all gear: held off the warning, the picker as ever";
+        CHECK(held_picks(W / 2, 40, 3200));
+        CHECK(held_picks(W / 2 - 90, 92, 3200));
+    } else {
+        where = "...held off the warning past three seconds: no picker, no card";
+        CHECK(!held_picks(W / 2, 40, 3500));
+        CHECK(!held_picks(W / 2 - 90, 92, 3500));
+        CHECK(!held_picks(W / 2 + 90, 92, 3500));
+    }
+    CHECK(!ui_take_card_shown() && !ptt());
+    where = "...held on the warning: the picker, and the knob's turn its yes";
+    CHECK(held_picks(PANEL_X, PANEL_Y, 3200));
+    CHECK(turn_says_yes());
+    run(100);
+    if (gx >= 0) {
+        where = "...held on the gear: the picker as ever";
+        CHECK(shown("NO LINK"));
+        CHECK(held_picks(gx, gy, 3200));
+    }
+    st = keep;
+    st.warn = NULL;
+    run(100); settle(); quiet();
+}
+
 #if VFO_RADIO_ICOM
 /* STANDBY (the icom firmware's over the network, has_standby): beside LOCK
  * on the card, each half the S-meter's row, both inside the glass's margin
@@ -1670,6 +1848,7 @@ static void runs(const char *dir)
     batt_radio(dir, "flex");
     knob_sweep(dir, "flex");
     lock_sweep(dir, "flex");
+    nolink_sweep(dir, "flex");
     knob_radio(dir, "flex");
     where = "...the memory face";
     st.knob_batt = true; st.knob_pct = 85;
@@ -1883,6 +2062,7 @@ static void runs(const char *dir)
     batt_radio(dir, "icom");
     knob_sweep(dir, "icom");
     lock_sweep(dir, "icom");
+    nolink_sweep(dir, "icom");
     standby_sweep(dir);
     knob_radio(dir, "icom");
 
@@ -1902,6 +2082,7 @@ static void runs(const char *dir)
     batt_radio(dir, "svx");
     knob_sweep(dir, "svx");
     lock_sweep(dir, "svx");
+    nolink_sweep(dir, "svx");
     where = "...over the talker, the longest call, and where he is";
     st.knob_batt = true; st.knob_pct = 85;
     st.tg = 2622; strcpy(st.tg_name, "Belgium");
@@ -1914,6 +2095,7 @@ static void runs(const char *dir)
     batt_radio(dir, "aether");
     knob_sweep(dir, "aether");
     lock_sweep(dir, "aether");
+    nolink_sweep(dir, "aether");
     knob_radio(dir, "aether");
 #endif
 }
@@ -2160,6 +2342,7 @@ static void runs(const char *dir)
      * keypad; over the calls' history. */
     knob_sweep(dir, "tel");
     lock_sweep(dir, "tel");
+    nolink_sweep(dir, "tel");
     where = "...a call ringing in, its slab in halves";
     st.knob_batt = true; st.knob_pct = 85;
     st.call = 2; strcpy(st.peer, "Office"); strcpy(st.peer_num, "+441632960123"); run(60);
@@ -2470,6 +2653,7 @@ static void runs(const char *dir)
      * it; none under the SSTV viewer, whose title is there. */
     knob_sweep(dir, "uber");
     lock_sweep(dir, "uber");
+    nolink_sweep(dir, "uber");
     knob_radio(dir, "uber");
     where = "...the SSTV viewer, over the whole face: no ink of it";
     st.knob_batt = true; st.knob_pct = 85; st.n_sstv = 3; run(60);
@@ -2699,6 +2883,7 @@ static void runs(const char *dir)
      * OV after it -- and the right ear's "can't reach" in its place. */
     knob_sweep(dir, "kiwi");
     lock_sweep(dir, "kiwi");
+    nolink_sweep(dir, "kiwi");
     knob_radio(dir, "kiwi");
     {
         const ui_state_t keep = st;
@@ -2967,6 +3152,7 @@ static void runs(const char *dir)
     /* The knob's own battery over this face, as on every face. */
     knob_sweep(dir, "owrx");
     lock_sweep(dir, "owrx");
+    nolink_sweep(dir, "owrx");
     knob_radio(dir, "owrx");
 
     /* The receiver's name on the slab beside a device's logo and battery. */
@@ -3133,6 +3319,7 @@ static void runs(const char *dir)
     /* The knob's own battery over this face, as on every face. */
     knob_sweep(dir, "websdr");
     lock_sweep(dir, "websdr");
+    nolink_sweep(dir, "websdr");
     knob_radio(dir, "websdr");
 
     st.headset = true; st.have_batt = true; st.batt = 80; run(60);
@@ -5036,6 +5223,15 @@ int main(int argc, char **argv)
     if (ui_init() != ESP_OK) { printf("ui_init failed\n"); return 2; }
     run(100);
     runs(dir);
+    /* No link's warning and the firmware picker, on the faces whose runs do
+     * not sweep it themselves. */
+#if VFO_RADIO_TAILCHASER
+    nolink_sweep(dir, "tc");
+#elif VFO_RADIO_EPIBEAM || VFO_RADIO_ADSB
+    gear_nolink_sweep(GEAR_X, GEAR_Y, false);
+#elif VFO_RADIO_CLOCK || VFO_RADIO_WEATHER || VFO_RADIO_WIFITEST || VFO_RADIO_TCTAG
+    gear_nolink_sweep(-1, -1, true);
+#endif
     brightness();
     screensaver(dir);
     turned();
