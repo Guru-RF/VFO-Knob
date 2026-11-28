@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-wifitest",
-  "version": "1.28.0",
-  "file": "vfo-knob-wifitest-1.28.0.bin",
-  "sha256": "d296605faeca908a86037711d9e5d51a0906882b8652fcf5b99b74ac4c5c9c21",
+  "version": "1.32.0",
+  "file": "vfo-knob-wifitest-1.32.0.bin",
+  "sha256": "da70acc3b9e063eeb1cc9c21183053cd3bd61059bf6e7debbd0020b8ba777072",
   "size": 2232320
 }
