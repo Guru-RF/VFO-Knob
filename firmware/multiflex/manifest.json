@@ -1,7 +1,7 @@
 {
   "project": "vfo-knob-multiflex",
-  "version": "1.28.1",
-  "file": "vfo-knob-multiflex-1.28.1.bin",
-  "sha256": "2627472d1979c23a7d889a72aa6182468879bab35027149ebf6030c59b6e6e66",
+  "version": "1.32.0",
+  "file": "vfo-knob-multiflex-1.32.0.bin",
+  "sha256": "2a941894d344d47a0f4d25e0fb7cfbaf25ebfd1733594cfed35679f65a76f0bf",
   "size": 2560000
 }
