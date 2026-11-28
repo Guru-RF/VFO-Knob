@@ -843,13 +843,13 @@ static const char *const MODIN_7760[]    = { "MIC", "USB", "LINE", "ACC", "MIC+U
 static const model_t MODELS[] = {
     /* 30 kHz-470 MHz; two preamps on HF and 6 m, a single one on 2 m and
      * 70 cm -- should it refuse one it answers NG and keeps what it had, and
-     * the dial shows that. */
+     * the dial shows that. Its squelch, 14 03; no tuner of its own. */
     { .name = "IC-705", .f_min = 30000, .f_max = 470000000,
       .preamps = 2, .one_preamp_hz = 100000000,
       .cal_s = CAL_S, .n_cal_s = NCAL(CAL_S), .po_scale = 1,
       .modin_voice = 0x0118, .modin_data = 0x0119, .modin_lan = 3,
       .modin_names = MODIN_705, .n_modin_names = 4,
-      .memories = true, .n_rx = 1, .max_w = 10, .wifi = true },
+      .memories = true, .n_rx = 1, .max_w = 10, .wifi = true, .squelch = true },
     /* 30 kHz-60 MHz, two receivers, ANT1 and ANT2 each with or without the
      * RX ANT input. Its memories are not the IC-705's groups; the swipe
      * chooses the receiver and the antenna instead. */
